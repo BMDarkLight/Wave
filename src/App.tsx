@@ -15,6 +15,7 @@ import {
   type PlaybackState,
   type Track,
 } from "./utils/player";
+import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 function App() {
@@ -50,9 +51,59 @@ function App() {
 
   useEffect(() => {
     console.log("App mounted, setting up intervals");
-    const interval = setInterval(updatePlaybackState, 500);
-    updatePlaybackState();
-    loadPlaylist();
+    
+    // Wait for Tauri to be ready with retries
+    const initApp = async () => {
+      let retries = 10;
+      let tauriReady = false;
+      
+      // Retry checking for Tauri
+      while (retries > 0 && !tauriReady) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Try to call a Tauri command to see if it's available
+        try {
+          await getPlaybackState();
+          tauriReady = true;
+          console.log("✓ Tauri API is available");
+        } catch (err: any) {
+          // Check if it's a Tauri availability error or a real command error
+          if (err?.message?.includes('not available') || err?.message?.includes('undefined')) {
+            retries--;
+            console.log(`Waiting for Tauri... (${retries} retries left)`);
+          } else {
+            // If it's a different error, Tauri is available but command failed
+            tauriReady = true;
+            console.log("✓ Tauri API is available (command error is expected)");
+          }
+        }
+      }
+      
+      if (tauriReady) {
+        try {
+          await updatePlaybackState();
+          await loadPlaylist();
+          console.log("✓ App initialized successfully");
+        } catch (err) {
+          console.error("Error initializing app:", err);
+          // Don't set error for initialization failures, just log them
+        }
+      } else {
+        console.error("✗ Tauri not detected after retries");
+        setError("Tauri API not available. Make sure you're running 'npm run tauri dev' and not just 'npm run dev'.");
+      }
+    };
+    
+    initApp();
+    
+    const interval = setInterval(() => {
+      updatePlaybackState().catch(err => {
+        // Silently fail if Tauri isn't ready yet
+        if (!err?.message?.includes('not available')) {
+          console.error("Error updating playback state:", err);
+        }
+      });
+    }, 500);
 
     return () => {
       console.log("App unmounting, clearing intervals");
@@ -61,17 +112,22 @@ function App() {
   }, []);
 
   const handleAddTrack = async (multiple: boolean = false) => {
+    console.log("handleAddTrack called", { multiple });
     try {
       setError(null);
       setIsLoading(true);
+      console.log("Opening file dialog...");
       const paths = await selectAudioFile(multiple);
+      console.log("File dialog result:", paths);
       if (paths && paths.length > 0) {
         let successCount = 0;
         let failCount = 0;
         for (const path of paths) {
           try {
+            console.log("Adding track to playlist:", path);
             await addTrackToPlaylist(path);
             successCount++;
+            console.log("Track added successfully");
           } catch (err) {
             failCount++;
             console.error(`Failed to add track ${path}:`, err);
@@ -83,6 +139,8 @@ function App() {
           );
         }
         await loadPlaylist();
+      } else {
+        console.log("No files selected");
       }
     } catch (err) {
       const errorMessage =
@@ -105,10 +163,13 @@ function App() {
   };
 
   const handlePlayTrack = async (index: number) => {
+    console.log("handlePlayTrack called", { index });
     try {
       setError(null);
       setIsLoading(true);
+      console.log("Playing track from playlist at index:", index);
       await playTrackFromPlaylist(index);
+      console.log("Track play command sent, updating state");
       await updatePlaybackState();
     } catch (err) {
       const errorMessage =
@@ -121,20 +182,26 @@ function App() {
   };
 
   const handlePlayPause = async () => {
+    console.log("handlePlayPause called", { playbackState, playlistLength: playlist.length });
     try {
       setError(null);
       setIsLoading(true);
       if (playbackState.is_playing) {
+        console.log("Pausing track");
         await pauseTrack();
       } else if (playbackState.is_paused) {
+        console.log("Resuming track");
         await resumeTrack();
       } else if (playbackState.current_path) {
+        console.log("Playing current path:", playbackState.current_path);
         await playTrack(playbackState.current_path);
       } else if (playlist.length > 0) {
+        console.log("Playing first track from playlist");
         await handlePlayTrack(0);
         return;
       } else {
-        await handleAddTrack();
+        console.log("No tracks, opening file dialog");
+        await handleAddTrack(false);
         return;
       }
       await updatePlaybackState();
@@ -239,8 +306,14 @@ function App() {
           <div className="header-actions">
             <button
               className="btn-secondary"
-              onClick={() => handleAddTrack(false)}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log("Add Track button clicked");
+                handleAddTrack(false);
+              }}
               disabled={isLoading}
+              type="button"
             >
               <svg
                 width="16"
@@ -254,8 +327,14 @@ function App() {
             </button>
             <button
               className="btn-secondary"
-              onClick={() => handleAddTrack(true)}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log("Add Multiple button clicked");
+                handleAddTrack(true);
+              }}
               disabled={isLoading}
+              type="button"
             >
               <svg
                 width="16"
@@ -268,7 +347,16 @@ function App() {
               Add Multiple
             </button>
             {playlist.length > 0 && (
-              <button className="btn-secondary" onClick={handleClearPlaylist}>
+              <button 
+                className="btn-secondary" 
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  console.log("Clear button clicked");
+                  handleClearPlaylist();
+                }}
+                type="button"
+              >
                 Clear
               </button>
             )}
@@ -331,7 +419,11 @@ function App() {
                   className={`track-item ${
                     isCurrentTrack(track) ? "active" : ""
                   }`}
-                  onClick={() => handlePlayTrack(index)}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    console.log("Track clicked:", index, track.name);
+                    handlePlayTrack(index);
+                  }}
                 >
                   <div className="track-col-index">
                     {isCurrentTrack(track) && playbackState.is_playing ? (
@@ -386,8 +478,14 @@ function App() {
           <div className="player-controls">
             <button
               className="control-btn"
-              onClick={handleStop}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log("Stop button clicked");
+                handleStop();
+              }}
               disabled={!playbackState.current_path}
+              type="button"
               title="Stop"
             >
               <svg
@@ -401,8 +499,14 @@ function App() {
             </button>
             <button
               className="control-btn play-pause-btn"
-              onClick={handlePlayPause}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log("Play/Pause button clicked");
+                handlePlayPause();
+              }}
               disabled={isLoading}
+              type="button"
               title={
                 playbackState.is_playing
                   ? "Pause"

@@ -178,6 +178,9 @@ body {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .btn-primary {
@@ -491,6 +494,9 @@ body {
   align-items: center;
   justify-content: center;
   transition: all 0.2s;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .control-btn:hover:not(:disabled) {

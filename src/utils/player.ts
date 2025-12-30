@@ -1,6 +1,26 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
+// Helper to check if Tauri is available
+const isTauriAvailable = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  // Check multiple ways Tauri might be available
+  return !!(window as any).__TAURI__ || !!(window as any).__TAURI_INTERNALS__;
+};
+
+// Wrapper for invoke that checks Tauri availability
+const safeInvoke = async <T = any>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+  try {
+    return await invoke<T>(cmd, args);
+  } catch (error: any) {
+    // If it's a Tauri API error, check if it's because Tauri isn't available
+    if (error?.message?.includes('undefined') || error?.message?.includes('invoke')) {
+      throw new Error("Tauri API is not available. Please run this app using 'npm run tauri dev'");
+    }
+    throw error;
+  }
+};
+
 export interface PlaybackState {
   is_playing: boolean;
   is_paused: boolean;
@@ -8,27 +28,30 @@ export interface PlaybackState {
 }
 
 export const playTrack = (path: string): Promise<void> => {
-  return invoke("play_track", { path });
+  console.log("playTrack called with path:", path);
+  return safeInvoke("play_track", { path });
 };
 
 export const pauseTrack = (): Promise<void> => {
-  return invoke("pause_track");
+  return safeInvoke("pause_track");
 };
 
 export const resumeTrack = (): Promise<void> => {
-  return invoke("resume_track");
+  return safeInvoke("resume_track");
 };
 
 export const stopTrack = (): Promise<void> => {
-  return invoke("stop_track");
+  return safeInvoke("stop_track");
 };
 
 export const getPlaybackState = (): Promise<PlaybackState> => {
-  return invoke("get_playback_state");
+  return safeInvoke<PlaybackState>("get_playback_state");
 };
 
 export const selectAudioFile = async (multiple: boolean = false): Promise<string[] | null> => {
+  console.log("selectAudioFile called", { multiple });
   try {
+    console.log("Calling open dialog...");
     const selected = await open({
       multiple,
       filters: [
@@ -39,19 +62,24 @@ export const selectAudioFile = async (multiple: boolean = false): Promise<string
       ],
       title: multiple ? "Select Audio Files" : "Select Audio File",
     });
+    console.log("Dialog returned:", selected);
 
     if (selected === null) {
+      console.log("User cancelled file selection");
       return null;
     }
 
     if (Array.isArray(selected)) {
+      console.log("Multiple files selected:", selected.length);
       return selected;
     }
 
     if (typeof selected === "string") {
+      console.log("Single file selected:", selected);
       return [selected];
     }
 
+    console.warn("Unexpected return type from dialog:", typeof selected);
     return null;
   } catch (error) {
     console.error("Error selecting file:", error);
@@ -71,21 +99,22 @@ export interface Track {
 }
 
 export const addTrackToPlaylist = (path: string): Promise<Track> => {
-  return invoke("add_track_to_playlist", { path });
+  console.log("addTrackToPlaylist called with path:", path);
+  return safeInvoke<Track>("add_track_to_playlist", { path });
 };
 
 export const removeTrackFromPlaylist = (index: number): Promise<void> => {
-  return invoke("remove_track_from_playlist", { index });
+  return safeInvoke("remove_track_from_playlist", { index });
 };
 
 export const getPlaylist = (): Promise<Track[]> => {
-  return invoke("get_playlist");
+  return safeInvoke<Track[]>("get_playlist");
 };
 
 export const clearPlaylist = (): Promise<void> => {
-  return invoke("clear_playlist");
+  return safeInvoke("clear_playlist");
 };
 
 export const playTrackFromPlaylist = (index: number): Promise<void> => {
-  return invoke("play_track_from_playlist", { index });
+  return safeInvoke("play_track_from_playlist", { index });
 };
