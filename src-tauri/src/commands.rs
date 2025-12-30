@@ -77,3 +77,4 @@ pub fn play_track_from_playlist(
         .ok_or("Track not found")?;
     player.0.lock().unwrap().play(&track.path)
 }
+

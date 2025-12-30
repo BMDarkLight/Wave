@@ -1,13 +1,11 @@
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub struct AudioPlayer {
-    _stream: OutputStream,
-    _handle: OutputStreamHandle,
+    handle: &'static OutputStreamHandle,
     sink: Arc<Mutex<Option<Sink>>>,
     current_path: Arc<Mutex<Option<PathBuf>>>,
 }
@@ -17,9 +15,13 @@ impl AudioPlayer {
         let (_stream, handle) = OutputStream::try_default()
             .map_err(|e| format!("Failed to create output stream: {}", e))?;
         
+        // Leak the stream to keep it alive for the program lifetime
+        // The handle is Send + Sync, so we can safely store a static reference
+        Box::leak(Box::new(_stream));
+        let handle = Box::leak(Box::new(handle));
+        
         Ok(Self {
-            _stream,
-            _handle: handle,
+            handle,
             sink: Arc::new(Mutex::new(None)),
             current_path: Arc::new(Mutex::new(None)),
         })
@@ -35,7 +37,7 @@ impl AudioPlayer {
         let source = Decoder::new(BufReader::new(file))
             .map_err(|e| format!("Failed to decode audio: {}", e))?;
 
-        let sink = Sink::try_new(&self._handle)
+        let sink = Sink::try_new(self.handle)
             .map_err(|e| format!("Failed to create sink: {}", e))?;
 
         sink.append(source);
