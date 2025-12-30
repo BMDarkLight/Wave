@@ -50,57 +50,37 @@ function App() {
   };
 
   useEffect(() => {
-    console.log("App mounted, setting up intervals");
+    console.log("App mounted, initializing...");
     
-    // Wait for Tauri to be ready with retries
+    // Initialize the app - try to load data, but don't fail if Tauri isn't ready yet
     const initApp = async () => {
-      let retries = 10;
-      let tauriReady = false;
+      // Wait a moment for Tauri to initialize
+      await new Promise(resolve => setTimeout(resolve, 300));
       
-      // Retry checking for Tauri
-      while (retries > 0 && !tauriReady) {
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Try to call a Tauri command to see if it's available
-        try {
-          await getPlaybackState();
-          tauriReady = true;
-          console.log("✓ Tauri API is available");
-        } catch (err: any) {
-          // Check if it's a Tauri availability error or a real command error
-          if (err?.message?.includes('not available') || err?.message?.includes('undefined')) {
-            retries--;
-            console.log(`Waiting for Tauri... (${retries} retries left)`);
-          } else {
-            // If it's a different error, Tauri is available but command failed
-            tauriReady = true;
-            console.log("✓ Tauri API is available (command error is expected)");
-          }
+      try {
+        await updatePlaybackState();
+        await loadPlaylist();
+        console.log("✓ App initialized successfully");
+      } catch (err: any) {
+        // Only show error if it's a Tauri availability issue
+        if (err?.message?.includes('not available') || err?.message?.includes('undefined')) {
+          console.error("✗ Tauri API not available:", err.message);
+          setError("Tauri API not available. Make sure you're running 'npm run tauri dev' (not just 'npm run dev').");
+        } else {
+          // Other errors are fine (like no tracks in playlist)
+          console.log("App initialized (some features may not be available yet)");
         }
-      }
-      
-      if (tauriReady) {
-        try {
-          await updatePlaybackState();
-          await loadPlaylist();
-          console.log("✓ App initialized successfully");
-        } catch (err) {
-          console.error("Error initializing app:", err);
-          // Don't set error for initialization failures, just log them
-        }
-      } else {
-        console.error("✗ Tauri not detected after retries");
-        setError("Tauri API not available. Make sure you're running 'npm run tauri dev' and not just 'npm run dev'.");
       }
     };
     
     initApp();
     
+    // Set up polling for playback state
     const interval = setInterval(() => {
       updatePlaybackState().catch(err => {
-        // Silently fail if Tauri isn't ready yet
-        if (!err?.message?.includes('not available')) {
-          console.error("Error updating playback state:", err);
+        // Only log non-availability errors
+        if (!err?.message?.includes('not available') && !err?.message?.includes('undefined')) {
+          // Silently handle other errors
         }
       });
     }, 500);

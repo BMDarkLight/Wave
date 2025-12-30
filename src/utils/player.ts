@@ -1,22 +1,38 @@
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+// Use dynamic imports to handle cases where Tauri API might not be available
+let invokeFn: typeof import("@tauri-apps/api/core").invoke;
+let openFn: typeof import("@tauri-apps/plugin-dialog").open;
 
-// Helper to check if Tauri is available
-const isTauriAvailable = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  // Check multiple ways Tauri might be available
-  return !!(window as any).__TAURI__ || !!(window as any).__TAURI_INTERNALS__;
+// Initialize Tauri APIs
+const initTauri = async () => {
+  try {
+    const core = await import("@tauri-apps/api/core");
+    const dialog = await import("@tauri-apps/plugin-dialog");
+    invokeFn = core.invoke;
+    openFn = dialog.open;
+    console.log("✓ Tauri APIs initialized");
+    return true;
+  } catch (error) {
+    console.error("✗ Failed to initialize Tauri APIs:", error);
+    return false;
+  }
 };
 
-// Wrapper for invoke that checks Tauri availability
+// Initialize immediately
+let tauriInitialized = initTauri();
+
+// Wrapper for invoke that ensures Tauri is initialized
 const safeInvoke = async <T = any>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+  // Wait for Tauri to be initialized
+  await tauriInitialized;
+  
+  if (!invokeFn) {
+    throw new Error("Tauri API is not available. Make sure you're running 'npm run tauri dev' (not just 'npm run dev')");
+  }
+  
   try {
-    return await invoke<T>(cmd, args);
+    return await invokeFn<T>(cmd, args);
   } catch (error: any) {
-    // If it's a Tauri API error, check if it's because Tauri isn't available
-    if (error?.message?.includes('undefined') || error?.message?.includes('invoke')) {
-      throw new Error("Tauri API is not available. Please run this app using 'npm run tauri dev'");
-    }
+    // Re-throw errors as-is
     throw error;
   }
 };
@@ -50,9 +66,17 @@ export const getPlaybackState = (): Promise<PlaybackState> => {
 
 export const selectAudioFile = async (multiple: boolean = false): Promise<string[] | null> => {
   console.log("selectAudioFile called", { multiple });
+  
+  // Wait for Tauri to be initialized
+  await tauriInitialized;
+  
+  if (!openFn) {
+    throw new Error("Tauri API is not available. Make sure you're running 'npm run tauri dev' (not just 'npm run dev')");
+  }
+  
   try {
     console.log("Calling open dialog...");
-    const selected = await open({
+    const selected = await openFn({
       multiple,
       filters: [
         {
