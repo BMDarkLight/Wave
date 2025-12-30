@@ -15,7 +15,6 @@ import {
   type PlaybackState,
   type Track,
 } from "./utils/player";
-import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 function App() {
@@ -51,35 +50,45 @@ function App() {
 
   useEffect(() => {
     console.log("App mounted, initializing...");
-    
+
     // Initialize the app - try to load data, but don't fail if Tauri isn't ready yet
     const initApp = async () => {
       // Wait a moment for Tauri to initialize
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
       try {
         await updatePlaybackState();
         await loadPlaylist();
         console.log("✓ App initialized successfully");
       } catch (err: any) {
         // Only show error if it's a Tauri availability issue
-        if (err?.message?.includes('not available') || err?.message?.includes('undefined')) {
+        if (
+          err?.message?.includes("not available") ||
+          err?.message?.includes("undefined")
+        ) {
           console.error("✗ Tauri API not available:", err.message);
-          setError("Tauri API not available. Make sure you're running 'npm run tauri dev' (not just 'npm run dev').");
+          setError(
+            "Tauri API not available. Make sure you're running 'npm run tauri dev' (not just 'npm run dev')."
+          );
         } else {
           // Other errors are fine (like no tracks in playlist)
-          console.log("App initialized (some features may not be available yet)");
+          console.log(
+            "App initialized (some features may not be available yet)"
+          );
         }
       }
     };
-    
+
     initApp();
-    
+
     // Set up polling for playback state
     const interval = setInterval(() => {
-      updatePlaybackState().catch(err => {
+      updatePlaybackState().catch((err) => {
         // Only log non-availability errors
-        if (!err?.message?.includes('not available') && !err?.message?.includes('undefined')) {
+        if (
+          !err?.message?.includes("not available") &&
+          !err?.message?.includes("undefined")
+        ) {
           // Silently handle other errors
         }
       });
@@ -162,7 +171,10 @@ function App() {
   };
 
   const handlePlayPause = async () => {
-    console.log("handlePlayPause called", { playbackState, playlistLength: playlist.length });
+    console.log("handlePlayPause called", {
+      playbackState,
+      playlistLength: playlist.length,
+    });
     try {
       setError(null);
       setIsLoading(true);
@@ -238,9 +250,6 @@ function App() {
     <div className="app-container">
       {/* Sidebar */}
       <aside className="sidebar">
-        <div className="sidebar-header">
-          <h1 className="logo">Wave</h1>
-        </div>
         <nav className="sidebar-nav">
           <button className="nav-item active">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
@@ -248,16 +257,10 @@ function App() {
             </svg>
             <span>Home</span>
           </button>
-          <button className="nav-item">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-            </svg>
-            <span>Search</span>
-          </button>
         </nav>
         <div className="sidebar-playlist-section">
           <div className="playlist-header">
-            <span>Your Library</span>
+            <span>Library</span>
             <button
               className="icon-btn"
               onClick={(e) => {
@@ -282,29 +285,8 @@ function App() {
       {/* Main Content */}
       <main className="main-content">
         <div className="content-header">
-          <h2>Your Playlist</h2>
+          <h2>Playlist</h2>
           <div className="header-actions">
-            <button
-              className="btn-secondary"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                console.log("Add Track button clicked");
-                handleAddTrack(false);
-              }}
-              disabled={isLoading}
-              type="button"
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
-                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
-              </svg>
-              {isLoading ? "Adding..." : "Add Track"}
-            </button>
             <button
               className="btn-secondary"
               onClick={(e) => {
@@ -324,11 +306,11 @@ function App() {
               >
                 <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
               </svg>
-              Add Multiple
+              Add
             </button>
             {playlist.length > 0 && (
-              <button 
-                className="btn-secondary" 
+              <button
+                className="btn-secondary"
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -353,12 +335,6 @@ function App() {
             >
               ×
             </button>
-          </div>
-        )}
-        {isLoading && (
-          <div className="loading-indicator">
-            <div className="spinner"></div>
-            <span>Loading...</span>
           </div>
         )}
 
@@ -444,6 +420,12 @@ function App() {
             </div>
           )}
         </div>
+        {isLoading && (
+          <div className="loading-indicator">
+            <div className="spinner"></div>
+            <span>Loading...</span>
+          </div>
+        )}
       </main>
 
       {/* Bottom Player Bar */}
@@ -451,7 +433,7 @@ function App() {
         <div className="player-left">
           <div className="now-playing-info">
             <div className="now-playing-name">{currentTrackName}</div>
-            <div className="now-playing-artist">Wave Player</div>
+            <div className="now-playing-artist">[Artist]</div>
           </div>
         </div>
         <div className="player-center">
@@ -521,10 +503,24 @@ function App() {
         <div className="player-right">
           <div className="player-status">
             {playbackState.is_playing && (
-              <span className="status-badge playing">Playing</span>
+              <span className="status-badge playing">
+                <div className="playing-indicator">
+                  <div className="wave-bar"></div>
+                  <div className="wave-bar"></div>
+                  <div className="wave-bar"></div>
+                  <div className="wave-bar"></div>
+                </div>
+              </span>
             )}
             {playbackState.is_paused && (
-              <span className="status-badge paused">Paused</span>
+              <span className="status-badge paused">
+                <div className="playing-indicator">
+                  <div className="wave-bar"></div>
+                  <div className="wave-bar"></div>
+                  <div className="wave-bar"></div>
+                  <div className="wave-bar"></div>
+                </div>
+              </span>
             )}
           </div>
         </div>

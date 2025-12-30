@@ -248,6 +248,7 @@ body {
   margin-bottom: 24px;
   color: var(--text-secondary);
   font-size: 14px;
+  bottom: 0;
 }
 
 .spinner {
