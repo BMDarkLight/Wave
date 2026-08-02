@@ -89,7 +89,6 @@ import {
   setShuffle,
   stopTrack,
   toggleFavorite,
-  clearMediaSession,
   updateMediaMetadata,
   updateMediaPosition,
   listOutputDevices,
@@ -121,7 +120,10 @@ import {
 import { isAndroid } from "./utils/platform";
 import AlbumPage from "./components/AlbumPage";
 import ArtistPage from "./components/ArtistPage";
-import MobileNowPlaying from "./components/MobileNowPlaying";
+import ContextMenu from "./components/ContextMenu";
+import MobileNowPlaying, {
+  type MobileNowPlayingView,
+} from "./components/MobileNowPlaying";
 import MobileSettings from "./components/MobileSettings";
 import "./App.css";
 
@@ -507,11 +509,22 @@ function App() {
   // Mobile-only fullscreen "Now Playing" page (replaces the desktop lyrics
   // sidebar on responsive/mobile layouts) and its lyrics/menu sub-views.
   const [mobilePlayerOpen, setMobilePlayerOpen] = useState(false);
-  const [mobilePlayerLyrics, setMobilePlayerLyrics] = useState(false);
+  const [mobilePlayerClosing, setMobilePlayerClosing] = useState(false);
+  const mobilePlayerClosingRef = useRef(false);
+  const mobilePlayerCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const [mobilePlayerView, setMobilePlayerView] =
+    useState<MobileNowPlayingView>("cover");
   const [mobilePlayerMenuOpen, setMobilePlayerMenuOpen] = useState(false);
 
   // Mobile-only Settings page (media source folders, playlists, EQ, crossfade).
   const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
+  const [mobileSettingsClosing, setMobileSettingsClosing] = useState(false);
+  const mobileSettingsClosingRef = useRef(false);
+  const mobileSettingsCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const [isScanningFolder, setIsScanningFolder] = useState(false);
   const [folderScanIsSync, setFolderScanIsSync] = useState(false);
 
@@ -539,6 +552,7 @@ function App() {
     top: number;
     right?: number;
     left?: number;
+    flipAbove?: number;
   } | null>(null);
   const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<string | null>(
     null,
@@ -550,6 +564,7 @@ function App() {
     top: number;
     right?: number;
     left?: number;
+    flipAbove?: number;
   } | null>(null);
 
   // Sort state — cycles asc → desc → off on repeated header clicks
@@ -685,7 +700,29 @@ function App() {
     };
   }, [lyricsPanelTrack?.path]);
 
-  // ── Mobile-only fullscreen Now Playing page ─────────────────────────────
+  // ── Mobile-only Settings / Now Playing page open-close ──────────────────
+  const forceCloseMobileSettings = () => {
+    if (mobileSettingsCloseTimer.current) {
+      clearTimeout(mobileSettingsCloseTimer.current);
+      mobileSettingsCloseTimer.current = null;
+    }
+    mobileSettingsClosingRef.current = false;
+    setMobileSettingsClosing(false);
+    setMobileSettingsOpen(false);
+  };
+
+  const forceCloseMobilePlayer = () => {
+    if (mobilePlayerCloseTimer.current) {
+      clearTimeout(mobilePlayerCloseTimer.current);
+      mobilePlayerCloseTimer.current = null;
+    }
+    mobilePlayerClosingRef.current = false;
+    setMobilePlayerClosing(false);
+    setMobilePlayerOpen(false);
+    setMobilePlayerView("cover");
+    setMobilePlayerMenuOpen(false);
+  };
+
   const handleOpenMobilePlayer = () => {
     if (!currentTrack) return;
     setMobileNavOpen(false);
@@ -693,17 +730,31 @@ function App() {
     setShowQueue(false);
     setShowDeviceList(false);
     setLyricsPanelTrack(null);
-    setMobileSettingsOpen(false);
-    setMobilePlayerLyrics(false);
+    forceCloseMobileSettings();
+    if (mobilePlayerCloseTimer.current) {
+      clearTimeout(mobilePlayerCloseTimer.current);
+      mobilePlayerCloseTimer.current = null;
+    }
+    mobilePlayerClosingRef.current = false;
+    setMobilePlayerClosing(false);
+    setMobilePlayerView("cover");
     setMobilePlayerMenuOpen(false);
     setMobilePlayerOpen(true);
     void loadEqSettings();
   };
 
   const handleCloseMobilePlayer = () => {
-    setMobilePlayerOpen(false);
-    setMobilePlayerLyrics(false);
+    if (!mobilePlayerOpen || mobilePlayerClosingRef.current) return;
+    mobilePlayerClosingRef.current = true;
     setMobilePlayerMenuOpen(false);
+    setMobilePlayerClosing(true);
+    mobilePlayerCloseTimer.current = setTimeout(() => {
+      mobilePlayerClosingRef.current = false;
+      setMobilePlayerClosing(false);
+      setMobilePlayerOpen(false);
+      setMobilePlayerView("cover");
+      mobilePlayerCloseTimer.current = null;
+    }, 360);
   };
 
   /** Album art / track name tap in the mini player bar: mobile gets the
@@ -713,25 +764,33 @@ function App() {
     else handleOpenLyrics();
   };
 
-  const handleMobilePlayerOpenQueue = () => {
-    handleCloseMobilePlayer();
-    handleToggleQueue();
-  };
-
-  // ── Mobile-only Settings page ───────────────────────────────────────────
   const handleOpenMobileSettings = () => {
     setMobileNavOpen(false);
     closeMainSearch();
     setShowQueue(false);
     setShowDeviceList(false);
     setLyricsPanelTrack(null);
-    handleCloseMobilePlayer();
+    forceCloseMobilePlayer();
+    if (mobileSettingsCloseTimer.current) {
+      clearTimeout(mobileSettingsCloseTimer.current);
+      mobileSettingsCloseTimer.current = null;
+    }
+    mobileSettingsClosingRef.current = false;
+    setMobileSettingsClosing(false);
     setMobileSettingsOpen(true);
     void loadEqSettings();
   };
 
   const handleCloseMobileSettings = () => {
-    setMobileSettingsOpen(false);
+    if (!mobileSettingsOpen || mobileSettingsClosingRef.current) return;
+    mobileSettingsClosingRef.current = true;
+    setMobileSettingsClosing(true);
+    mobileSettingsCloseTimer.current = setTimeout(() => {
+      mobileSettingsClosingRef.current = false;
+      setMobileSettingsClosing(false);
+      setMobileSettingsOpen(false);
+      mobileSettingsCloseTimer.current = null;
+    }, 320);
   };
 
   const handleToggleDevice = () => {
@@ -793,9 +852,21 @@ function App() {
       if (!media.matches) {
         setMobileNavOpen(false);
         // Mobile-only pages never make sense once the layout goes wide again.
+        if (mobilePlayerCloseTimer.current) {
+          clearTimeout(mobilePlayerCloseTimer.current);
+          mobilePlayerCloseTimer.current = null;
+        }
+        mobilePlayerClosingRef.current = false;
+        setMobilePlayerClosing(false);
         setMobilePlayerOpen(false);
-        setMobilePlayerLyrics(false);
+        setMobilePlayerView("cover");
         setMobilePlayerMenuOpen(false);
+        if (mobileSettingsCloseTimer.current) {
+          clearTimeout(mobileSettingsCloseTimer.current);
+          mobileSettingsCloseTimer.current = null;
+        }
+        mobileSettingsClosingRef.current = false;
+        setMobileSettingsClosing(false);
         setMobileSettingsOpen(false);
       }
     };
@@ -1075,12 +1146,13 @@ function App() {
       setSeekValue(state.position_seconds ?? 0);
     }
     // Keep the OS media controls position in sync during playback and pause.
+    // Never clear the session just because a poll saw no path — that tears down
+    // the live notification / FGS and causes flicker + empty "wave" cards during
+    // startup and folder sync. Backend stop/auto-advance already call clear.
     if (state.current_path) {
       updateMediaPosition(state.position_seconds, state.is_playing).catch(
         console.error,
       );
-    } else {
-      clearMediaSession().catch(console.error);
     }
   };
 
@@ -1219,14 +1291,16 @@ function App() {
 
   // Push track metadata to OS media controls (Control Center, SMTC, MPRIS).
   // Fires on track change regardless of play state so the flyout updates immediately.
+  // Cover art is intentionally omitted here — the Rust play bridge already pushes
+  // higher-res media-session artwork, and re-sending the 96px UI thumb would
+  // overwrite it with the blurry notification art.
   useEffect(() => {
     if (currentTrack && playbackState.current_path) {
       updateMediaMetadata({
-        title: currentTrack.title,
+        title: currentTrack.title || currentTrack.name || "Unknown",
         artist: currentTrack.artist,
         album: currentTrack.album,
         duration_seconds: currentTrack.duration_seconds,
-        cover_url: currentTrack.cover_art_data_url,
       }).catch(console.error);
     }
   }, [currentTrack?.path, playbackState.current_path]);
@@ -2063,6 +2137,17 @@ function App() {
     }
   };
 
+  const handleEqBandsChange = async (bands: number[]) => {
+    setEqSettings((s) => ({ ...s, bands, enabled: true }));
+    try {
+      await setEqBands(bands);
+      if (!eqSettings.enabled) await setEqEnabled(true);
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to update equalizer"));
+      await loadEqSettings();
+    }
+  };
+
   const handleEqPreset = async (presetId: string) => {
     const preset = EQ_PRESETS.find((p) => p.id === presetId);
     if (!preset) return;
@@ -2413,7 +2498,7 @@ function App() {
 
   const openTrackContextMenu = (
     path: string,
-    anchor: { top: number; right?: number; left?: number },
+    anchor: { top: number; right?: number; left?: number; flipAbove?: number },
   ) => {
     setQueueMenuIndex(null);
     setQueueMenuAnchor(null);
@@ -2434,7 +2519,7 @@ function App() {
 
   const openQueueContextMenu = (
     index: number,
-    anchor: { top: number; right?: number; left?: number },
+    anchor: { top: number; right?: number; left?: number; flipAbove?: number },
   ) => {
     setMenuTrackPath(null);
     setMenuAnchor(null);
@@ -2536,7 +2621,7 @@ function App() {
     showAddFromLibrary,
     deletePlaylistConfirm,
     addToPlaylistTrack,
-    mobilePlayerLyrics,
+    mobilePlayerLyrics: mobilePlayerView !== "cover",
     rightPanelOpen,
     mobilePlayerOpen,
     mobileSettingsOpen,
@@ -2555,7 +2640,7 @@ function App() {
     showAddFromLibrary,
     deletePlaylistConfirm,
     addToPlaylistTrack,
-    mobilePlayerLyrics,
+    mobilePlayerLyrics: mobilePlayerView !== "cover",
     rightPanelOpen,
     mobilePlayerOpen,
     mobileSettingsOpen,
@@ -2630,7 +2715,7 @@ function App() {
       return true;
     }
     if (s.mobilePlayerLyrics) {
-      setMobilePlayerLyrics(false);
+      setMobilePlayerView("cover");
       return true;
     }
     if (s.rightPanelOpen) {
@@ -3222,6 +3307,7 @@ function App() {
                             openTrackContextMenu(track.path, {
                               top: event.clientY,
                               left: event.clientX,
+                              flipAbove: event.clientY,
                             });
                           }}
                         >
@@ -3384,6 +3470,7 @@ function App() {
                       openTrackContextMenu(track.path, {
                         top: event.clientY,
                         left: event.clientX,
+                        flipAbove: event.clientY,
                       });
                     }}
                   >
@@ -3477,6 +3564,7 @@ function App() {
                                 event.currentTarget.getBoundingClientRect();
                               openTrackContextMenu(track.path, {
                                 top: rect.bottom + 4,
+                                flipAbove: rect.top - 4,
                                 right: window.innerWidth - rect.right,
                               });
                             }
@@ -3589,6 +3677,7 @@ function App() {
                       openQueueContextMenu(index, {
                         top: event.clientY,
                         left: event.clientX,
+                        flipAbove: event.clientY,
                       });
                     }}
                   >
@@ -3619,6 +3708,7 @@ function App() {
                               event.currentTarget.getBoundingClientRect();
                             openQueueContextMenu(index, {
                               top: rect.bottom + 4,
+                              flipAbove: rect.top - 4,
                               right: window.innerWidth - rect.right,
                             });
                           }
@@ -3857,29 +3947,21 @@ function App() {
           const addToPlaylistOptions = playlists.filter(
             (p) => p.id !== selectedPlaylistId && p.name !== "Favorites",
           );
-          return createPortal(
-            <div
-              className="track-context-menu"
-              style={{
-                position: "fixed",
-                top: `${menuAnchor.top}px`,
-                ...(menuAnchor.left != null
-                  ? { left: `${menuAnchor.left}px` }
-                  : { right: `${menuAnchor.right ?? 0}px` }),
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
+          return (
+            <ContextMenu anchor={menuAnchor} onClose={closeTrackContextMenu}>
               <button
                 type="button"
+                role="menuitem"
                 onClick={() => {
                   closeTrackContextMenu();
                   handlePlayNext(menuTrack.path);
                 }}
               >
-                <BiListPlus /> Play Next
+                <BiSkipNext /> Play Next
               </button>
               <button
                 type="button"
+                role="menuitem"
                 onClick={() => {
                   closeTrackContextMenu();
                   handleAddToQueue(menuTrack.path);
@@ -3890,6 +3972,7 @@ function App() {
               {addToPlaylistOptions.length > 0 && (
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => {
                     closeTrackContextMenu();
                     setAddToPlaylistTrack(menuTrack.path);
@@ -3901,9 +3984,13 @@ function App() {
               {menuTrack.album && (
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => {
                     closeTrackContextMenu();
-                    openAlbumPage(menuTrack.album, menuTrack.album_artist || menuTrack.artist,);
+                    openAlbumPage(
+                      menuTrack.album,
+                      menuTrack.album_artist || menuTrack.artist,
+                    );
                   }}
                 >
                   <BiAlbum /> Go to Album
@@ -3912,6 +3999,7 @@ function App() {
               {menuTrack.artist && (
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => {
                     closeTrackContextMenu();
                     openArtistPage(menuTrack.artist);
@@ -3924,6 +4012,7 @@ function App() {
                 <button
                   className="delete-action"
                   type="button"
+                  role="menuitem"
                   onClick={() => {
                     closeTrackContextMenu();
                     void handleRemoveFromPlaylist(menuTrack.path);
@@ -3935,6 +4024,7 @@ function App() {
               <button
                 className="delete-action"
                 type="button"
+                role="menuitem"
                 onClick={() => {
                   closeTrackContextMenu();
                   void handleRemoveFromLibrary(menuTrack.path);
@@ -3942,78 +4032,46 @@ function App() {
               >
                 <BiTrash /> Remove from Library
               </button>
-            </div>,
-            document.body,
+            </ContextMenu>
           );
         })()}
 
-      {queueMenuIndex != null &&
-        queueMenuAnchor &&
-        createPortal(
-          <div
-            className="track-context-menu"
-            style={{
-              position: "fixed",
-              top: `${queueMenuAnchor.top}px`,
-              ...(queueMenuAnchor.left != null
-                ? { left: `${queueMenuAnchor.left}px` }
-                : { right: `${queueMenuAnchor.right ?? 0}px` }),
+      {queueMenuIndex != null && queueMenuAnchor && (
+        <ContextMenu anchor={queueMenuAnchor} onClose={closeQueueContextMenu}>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={queueMenuIndex <= 0}
+            onClick={() => {
+              closeQueueContextMenu();
+              handleMoveQueueTrack(queueMenuIndex, queueMenuIndex - 1);
             }}
-            onClick={(e) => e.stopPropagation()}
           >
-            <button
-              type="button"
-              disabled={queueMenuIndex <= 0}
-              onClick={() => {
-                closeQueueContextMenu();
-                handleMoveQueueTrack(queueMenuIndex, queueMenuIndex - 1);
-              }}
-            >
-              <BiChevronUp /> Move Up
-            </button>
-            <button
-              type="button"
-              disabled={queueMenuIndex >= queueData.tracks.length - 1}
-              onClick={() => {
-                closeQueueContextMenu();
-                handleMoveQueueTrack(queueMenuIndex, queueMenuIndex + 1);
-              }}
-            >
-              <BiChevronDown /> Move Down
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                const index = queueMenuIndex;
-                closeQueueContextMenu();
-                handleRemoveFromQueue(index);
-              }}
-            >
-              <BiX /> Remove
-            </button>
-          </div>,
-          document.body,
-        )}
-
-      {(menuTrackPath || queueMenuIndex != null) && (
-        <div
-          className="context-menu-backdrop"
-          onClick={() => {
-            setMenuTrackPath(null);
-            setMenuAnchor(null);
-            setAddToPlaylistTrack(null);
-            setQueueMenuIndex(null);
-            setQueueMenuAnchor(null);
-          }}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            setMenuTrackPath(null);
-            setMenuAnchor(null);
-            setAddToPlaylistTrack(null);
-            setQueueMenuIndex(null);
-            setQueueMenuAnchor(null);
-          }}
-        />
+            <BiChevronUp /> Move Up
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={queueMenuIndex >= queueData.tracks.length - 1}
+            onClick={() => {
+              closeQueueContextMenu();
+              handleMoveQueueTrack(queueMenuIndex, queueMenuIndex + 1);
+            }}
+          >
+            <BiChevronDown /> Move Down
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const index = queueMenuIndex;
+              closeQueueContextMenu();
+              handleRemoveFromQueue(index);
+            }}
+          >
+            <BiX /> Remove
+          </button>
+        </ContextMenu>
       )}
 
       {playlistDialog && (
@@ -4352,7 +4410,19 @@ function App() {
         </div>
       )}
 
-      <footer className="player-bar">
+      <footer
+        className={`player-bar${currentTrack && !mobilePlayerOpen ? " player-bar-tappable" : ""}`}
+        onClick={(event) => {
+          // Tapping empty space in the mini player (mobile only) opens the
+          // fullscreen Now Playing page. Clicks on any actual control
+          // (buttons, the seek slider, etc.) are left alone.
+          if (!isMobileLayout()) return;
+          if (mobilePlayerOpen) return;
+          const target = event.target as HTMLElement;
+          if (target.closest("button, input, a, select")) return;
+          handleOpenMobilePlayer();
+        }}
+      >
         <div className="player-left">
           <button
             className="album-art-btn"
@@ -4571,32 +4641,40 @@ function App() {
           onNext={handleNext}
           onToggleShuffle={handleToggleShuffle}
           onCycleRepeat={handleCycleRepeat}
+          closing={mobilePlayerClosing}
           onClose={handleCloseMobilePlayer}
           onOpenArtist={(name) => {
-            handleCloseMobilePlayer();
+            forceCloseMobilePlayer();
             openArtistPage(name);
           }}
           onOpenAlbum={(name, albumArtist) => {
-            handleCloseMobilePlayer();
+            forceCloseMobilePlayer();
             openAlbumPage(name, albumArtist);
           }}
-          onOpenQueue={handleMobilePlayerOpenQueue}
           volumeValue={volumeValue}
           onVolumeChange={handleVolume}
           eqSettings={eqSettings}
           onEqEnabledChange={handleEqEnabled}
           onEqBandChange={handleEqBandChange}
+          onEqBandsChange={handleEqBandsChange}
           onEqPreset={handleEqPreset}
           onEqReset={handleEqReset}
-          showLyrics={mobilePlayerLyrics}
-          onShowLyricsChange={setMobilePlayerLyrics}
+          view={mobilePlayerView}
+          onViewChange={setMobilePlayerView}
           menuOpen={mobilePlayerMenuOpen}
           onMenuOpenChange={setMobilePlayerMenuOpen}
+          queueTracks={queueData.tracks}
+          queueCurrentIndex={queueData.current_index}
+          onPlayFromQueue={handlePlayFromQueue}
+          onRemoveFromQueue={handleRemoveFromQueue}
+          onReorderQueue={handleMoveQueueTrack}
+          onClearQueue={handleClearQueue}
         />
       )}
 
       {mobileSettingsOpen && (
         <MobileSettings
+          closing={mobileSettingsClosing}
           onClose={handleCloseMobileSettings}
           playlists={playlists}
           isScanningFolder={isScanningFolder}

@@ -19,13 +19,15 @@ import androidx.media3.exoplayer.ExoPlayer;
  * Owns decode/output only. MediaSession notifications stay with
  * tauri-plugin-media-session + MediaNativeBridge.
  *
- * Transport methods (play/pause/volume) are fire-and-forget on the main
- * looper so JNI callers never block. Position/playing state is cached from
- * player listeners for non-blocking queries.
+ * Play/pause/stop/uri load run on the main looper and block the JNI caller
+ * briefly so transport state is consistent when Rust returns. Position is
+ * cached from player listeners and a 250ms ticker while playing.
  */
 public final class WaveExoPlayer {
     private static final String TAG = "WaveExoPlayer";
-    private static final long BLOCKING_TIMEOUT_MS = 500L;
+    /** Allow slower main-thread work during library sync / WebView load. */
+    private static final long BLOCKING_TIMEOUT_MS = 1500L;
+    private static final long POSITION_TICK_MS = 250L;
 
     private static volatile WaveExoPlayer INSTANCE;
 
@@ -36,6 +38,15 @@ public final class WaveExoPlayer {
     private volatile boolean playingCached;
     private volatile long positionMsCached;
     private volatile long durationMsCached;
+    private final Runnable positionTicker = new Runnable() {
+        @Override
+        public void run() {
+            if (player != null && player.isPlaying()) {
+                refreshCacheFromPlayer();
+                mainHandler.postDelayed(this, POSITION_TICK_MS);
+            }
+        }
+    };
 
     private WaveExoPlayer(Context context) {
         this.appContext = context.getApplicationContext();
@@ -65,6 +76,9 @@ public final class WaveExoPlayer {
                 .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
                 .build();
 
+        // ExoPlayer owns audio focus. MediaSessionCleanupService must NOT also
+        // request AUDIOFOCUS_GAIN — that steals focus back from Exo right after
+        // play starts and leaves playback paused until the user retries.
         player = new ExoPlayer.Builder(appContext)
                 .setAudioAttributes(attrs, /* handleAudioFocus= */ true)
                 .setHandleAudioBecomingNoisy(true)
@@ -75,12 +89,14 @@ public final class WaveExoPlayer {
             public void onPlaybackStateChanged(int playbackState) {
                 ended = playbackState == Player.STATE_ENDED;
                 refreshCacheFromPlayer();
+                syncPositionTicker();
             }
 
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
                 playingCached = isPlaying;
                 refreshCacheFromPlayer();
+                syncPositionTicker();
             }
 
             @Override
@@ -88,6 +104,7 @@ public final class WaveExoPlayer {
                 Log.e(TAG, "Playback error: " + error.getMessage());
                 ended = true;
                 playingCached = false;
+                stopPositionTicker();
             }
         });
     }
@@ -100,6 +117,17 @@ public final class WaveExoPlayer {
         positionMsCached = player.getCurrentPosition();
         long d = player.getDuration();
         durationMsCached = d == C.TIME_UNSET ? 0L : d;
+    }
+
+    private void syncPositionTicker() {
+        stopPositionTicker();
+        if (player != null && player.isPlaying()) {
+            mainHandler.postDelayed(positionTicker, POSITION_TICK_MS);
+        }
+    }
+
+    private void stopPositionTicker() {
+        mainHandler.removeCallbacks(positionTicker);
     }
 
     public void playUri(String uriString) {
@@ -115,32 +143,39 @@ public final class WaveExoPlayer {
             player.play();
             playingCached = true;
             refreshCacheFromPlayer();
+            syncPositionTicker();
         });
     }
 
     public void play() {
-        runOnMainAsync(() -> {
+        // Blocking so resume() doesn't return before Exo has actually started
+        // (async fire-and-forget raced the UI poll and looked "stuck").
+        runOnMainBlocking(() -> {
             if (player != null) {
                 ended = false;
                 player.play();
                 playingCached = true;
+                refreshCacheFromPlayer();
+                syncPositionTicker();
             }
         });
     }
 
     public void pause() {
-        runOnMainAsync(() -> {
+        runOnMainBlocking(() -> {
             if (player != null) {
                 refreshCacheFromPlayer();
                 player.pause();
                 playingCached = false;
+                stopPositionTicker();
             }
         });
     }
 
     public void stop() {
-        runOnMainAsync(() -> {
+        runOnMainBlocking(() -> {
             if (player != null) {
+                stopPositionTicker();
                 player.stop();
                 player.clearMediaItems();
                 ended = false;

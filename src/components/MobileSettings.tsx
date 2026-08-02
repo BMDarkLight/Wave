@@ -31,6 +31,7 @@ const isLibraryPlaylistName = (name?: string | null) =>
   name === LIBRARY_PLAYLIST_NAME || name === "All Local Files";
 
 interface MobileSettingsProps {
+  closing?: boolean;
   onClose: () => void;
   playlists: PlaylistInfo[];
   isScanningFolder: boolean;
@@ -53,6 +54,7 @@ interface MobileSettingsProps {
 }
 
 export default function MobileSettings({
+  closing = false,
   onClose,
   playlists,
   isScanningFolder,
@@ -76,6 +78,7 @@ export default function MobileSettings({
   const [mediaFolders, setMediaFolders] = useState<string[]>([]);
   const [addingSource, setAddingSource] = useState(false);
   const [outputDevices, setOutputDevices] = useState<string[]>([]);
+  const [entered, setEntered] = useState(false);
 
   const refreshMediaFolders = () => {
     listMediaFolders().then(setMediaFolders).catch(() => {});
@@ -84,6 +87,13 @@ export default function MobileSettings({
   useEffect(() => {
     refreshMediaFolders();
     listOutputDevices().then(setOutputDevices).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => setEntered(true));
+    });
+    return () => cancelAnimationFrame(id);
   }, []);
 
   const libraryPlaylist = playlists.find((p) => isLibraryPlaylistName(p.name));
@@ -115,7 +125,9 @@ export default function MobileSettings({
   });
 
   return (
-    <div className="mobile-settings-page">
+    <div
+      className={`mobile-settings-page${entered && !closing ? " mset-open" : ""}${closing ? " mset-closing" : ""}`}
+    >
       <div className="mset-header">
         <button
           className="page-back-btn mset-back-btn"

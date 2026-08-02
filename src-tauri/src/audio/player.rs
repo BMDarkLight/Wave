@@ -1113,6 +1113,13 @@ impl AudioPlayer {
     pub fn position_seconds(&self) -> f64 {
         #[cfg(target_os = "android")]
         {
+            // Prefer the wall clock while playing. Exo's JNI position is only
+            // refreshed on the main looper; polls from Rust worker threads used
+            // to return a frozen cache so the in-app seek bar stuck while the
+            // MediaSession notification (which extrapolates) kept advancing.
+            if self.clock.started_at.is_some() {
+                return self.clock.position().as_secs_f64();
+            }
             if self.current_path.is_some() {
                 if let Ok(ms) = crate::android::audio::exo_get_position() {
                     return ms as f64 / 1000.0;

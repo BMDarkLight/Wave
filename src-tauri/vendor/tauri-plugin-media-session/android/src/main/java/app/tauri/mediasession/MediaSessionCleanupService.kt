@@ -6,8 +6,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
@@ -20,8 +18,11 @@ import android.util.Log
  * Acquired on session start, released only on session clear:
  * - Foreground service: prevents process kill and network throttling
  * - PARTIAL_WAKE_LOCK: keeps CPU alive so native playback / tick can run between tracks
- * - AudioFocus: pauses on real focus loss; ignores CAN_DUCK (notification sounds)
  * - AUDIO_BECOMING_NOISY receiver: pauses when headphones are unplugged
+ *
+ * Audio focus is owned by WaveExoPlayer (Media3 handleAudioFocus). This service
+ * must not also request AUDIOFOCUS_GAIN — doing so steals focus from Exo right
+ * after play starts and leaves playback paused until the user retries.
  *
  * Transport actions are dispatched through [MediaSessionPlugin.handleMediaAction],
  * which prefers the host app's native Rust bridge so controls work while the
@@ -70,10 +71,7 @@ class MediaSessionCleanupService : Service() {
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
-    private var audioFocusRequest: AudioFocusRequest? = null  // API 26+
     private var noisyReceiver: BroadcastReceiver? = null
-    /** True when we paused because of audio-focus loss (so GAIN can resume). */
-    private var pausedForFocus = false
 
     // ── Service lifecycle ────────────────────────────────────────────────────
 
@@ -100,7 +98,6 @@ class MediaSessionCleanupService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
         acquireWakeLock()
-        requestAudioFocus()
         registerNoisyReceiver()
         Log.d(TAG, "Foreground started, locks acquired")
         // START_STICKY: ask the system to recreate us after low-memory kills
@@ -149,8 +146,6 @@ class MediaSessionCleanupService : Service() {
     private fun releaseResources() {
         unregisterNoisyReceiver()
         releaseWakeLock()
-        abandonAudioFocus()
-        pausedForFocus = false
     }
 
     // ── WakeLock ─────────────────────────────────────────────────────────────
@@ -171,77 +166,6 @@ class MediaSessionCleanupService : Service() {
         Log.d(TAG, "WakeLock released")
     }
 
-    // ── AudioFocus ───────────────────────────────────────────────────────────
-
-    private fun onAudioFocusChange(change: Int) {
-        when (change) {
-            AudioManager.AUDIOFOCUS_LOSS,
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                Log.d(TAG, "AudioFocus lost (change=$change) — pausing")
-                pausedForFocus = true
-                MediaSessionPlugin.handleMediaAction("pause")
-            }
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                // Notification sounds / brief duckable focus — keep playing.
-                Log.d(TAG, "AudioFocus CAN_DUCK — ignoring (keep playing)")
-            }
-            AudioManager.AUDIOFOCUS_GAIN -> {
-                if (pausedForFocus) {
-                    Log.d(TAG, "AudioFocus gained — resuming after focus loss")
-                    pausedForFocus = false
-                    MediaSessionPlugin.handleMediaAction("play")
-                } else {
-                    Log.d(TAG, "AudioFocus gained — already playing / user-paused")
-                }
-            }
-            else -> Log.d(TAG, "AudioFocus change: $change")
-        }
-    }
-
-    private fun requestAudioFocus() {
-        val am = getSystemService(AUDIO_SERVICE) as AudioManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (audioFocusRequest != null) return
-            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                .setAcceptsDelayedFocusGain(true)
-                .setOnAudioFocusChangeListener { change -> onAudioFocusChange(change) }
-                .build()
-            val result = am.requestAudioFocus(req)
-            if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED ||
-                result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED) {
-                audioFocusRequest = req
-                Log.d(TAG, "AudioFocus granted (result=$result)")
-            } else {
-                Log.w(TAG, "AudioFocus denied (result=$result)")
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            am.requestAudioFocus(
-                { change -> onAudioFocusChange(change) },
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN
-            )
-        }
-    }
-
-    private fun abandonAudioFocus() {
-        val am = getSystemService(AUDIO_SERVICE) as AudioManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
-            audioFocusRequest = null
-        } else {
-            @Suppress("DEPRECATION")
-            am.abandonAudioFocus(null)
-        }
-        Log.d(TAG, "AudioFocus abandoned")
-    }
-
     // ── Becoming Noisy (headphone unplug / BT disconnect) ────────────────────
 
     private fun registerNoisyReceiver() {
@@ -250,7 +174,6 @@ class MediaSessionCleanupService : Service() {
             override fun onReceive(context: Context, intent: Intent?) {
                 if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
                     Log.d(TAG, "Audio becoming noisy (headphones unplugged) — pausing")
-                    pausedForFocus = false
                     MediaSessionPlugin.handleMediaAction("pause")
                 }
             }

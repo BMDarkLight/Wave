@@ -1176,10 +1176,13 @@ img.track-thumb {
   z-index: 220;
   display: grid;
   gap: 2px;
-  min-width: 180px;
+  min-width: 196px;
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: min(70vh, calc(100vh - 120px));
+  overflow-y: auto;
   padding: 6px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: #282828;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
@@ -1187,21 +1190,28 @@ img.track-thumb {
 .track-context-menu button {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 12px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text);
   font-size: 14px;
   font-weight: 600;
+  line-height: 1.2;
   text-align: left;
   transition: background 0.16s ease;
 }
 
 .track-context-menu button svg {
-  font-size: 16px;
-  opacity: 0.8;
+  flex-shrink: 0;
+  width: 1.15em;
+  height: 1.15em;
+  font-size: 18px;
+  opacity: 0.85;
+  display: block;
 }
 
 .track-context-menu button:hover {
@@ -3428,6 +3438,10 @@ img.queue-thumb {
     box-shadow: none;
   }
 
+  .player-bar.player-bar-tappable {
+    cursor: pointer;
+  }
+
   .player-left {
     grid-column: 1;
     grid-row: 1;
@@ -3613,11 +3627,33 @@ img.queue-thumb {
   z-index: 100;
   display: flex;
   flex-direction: column;
-  padding: max(14px, env(safe-area-inset-top, 0px)) 20px
-    calc(max(14px, env(safe-area-inset-bottom, 0px)) + 8px);
-  background: linear-gradient(180deg, #1c1c1c 0%, #0a0a0a 55%, #000 100%);
+  padding: max(12px, env(safe-area-inset-top, 0px)) 20px
+    calc(max(12px, env(safe-area-inset-bottom, 0px)) + 6px);
+  background: rgba(12, 12, 12, 0.72);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(28px) saturate(1.6);
+  -webkit-backdrop-filter: blur(28px) saturate(1.6);
   color: var(--text);
   overflow: hidden;
+  transform: translateY(100%);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 0.36s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.28s ease;
+  will-change: transform, opacity;
+}
+
+.mobile-now-playing.mnp-open {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.mobile-now-playing.mnp-closing {
+  transform: translateY(100%);
+  opacity: 0;
+  pointer-events: none;
 }
 
 .mnp-header {
@@ -3625,7 +3661,7 @@ img.queue-thumb {
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  padding-bottom: 4px;
+  padding-bottom: 2px;
 }
 
 .mnp-header-label {
@@ -3658,43 +3694,79 @@ img.queue-thumb {
 }
 
 .mnp-body {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 0 12px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.mobile-now-playing.mnp-expanded .mnp-body {
+  align-items: stretch;
+}
+
+.mnp-layer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px) scale(0.985);
+  transition:
+    opacity 0.28s ease,
+    transform 0.28s ease;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  overscroll-behavior-x: none;
+  touch-action: pan-y;
+}
+
+.mnp-layer.mnp-layer-active {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
 }
 
 .mnp-cover-wrap {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
   width: 100%;
   height: 100%;
+  padding: clamp(10px, 2.2vh, 20px) clamp(6px, 2.5vw, 14px);
+  box-sizing: border-box;
+  container-type: size;
 }
 
 .mnp-cover {
-  width: min(80vw, 340px);
-  height: min(80vw, 340px);
+  /* Square that grows to the shorter side of the art area. */
+  width: min(100cqi, 100cqb);
+  height: min(100cqi, 100cqb);
+  aspect-ratio: 1;
   border-radius: 14px;
   object-fit: cover;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
   display: grid;
   place-items: center;
-  font-size: 64px;
+  font-size: clamp(40px, 14cqi, 72px);
   font-weight: 800;
   background: linear-gradient(135deg, #2a2a2a, #101010);
   color: rgba(255, 255, 255, 0.35);
 }
 
-.mnp-lyrics-scroll {
-  flex: 1;
-  min-height: 0;
+.mnp-lyrics-scroll,
+.mnp-queue-scroll {
   width: 100%;
   height: 100%;
-  overflow-y: auto;
   padding: 4px 2px 8px;
+  box-sizing: border-box;
+}
+
+.mnp-lyrics-scroll.mnp-layer-active,
+.mnp-queue-scroll.mnp-layer-active {
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .mnp-lyrics-scroll .lyrics-lines {
@@ -3702,6 +3774,8 @@ img.queue-thumb {
   flex-direction: column;
   gap: 18px;
   padding: 14px 0 30px;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .mnp-lyrics-scroll .lyrics-line {
@@ -3713,6 +3787,9 @@ img.queue-thumb {
   font-weight: 700;
   line-height: 1.4;
   padding: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   transition: color 0.2s ease, transform 0.2s ease;
 }
 
@@ -3724,6 +3801,10 @@ img.queue-thumb {
 
 .mnp-lyrics-scroll pre {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+  overflow-x: hidden;
   font-family: inherit;
   font-size: 16px;
   line-height: 1.6;
@@ -3740,6 +3821,107 @@ img.queue-thumb {
   margin-top: 16px;
   color: var(--quiet);
   font-size: 12px;
+}
+
+.mnp-queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 2px 2px 8px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mnp-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.mnp-queue-scroll .queue-item.mnp-queue-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px 42px minmax(0, 1fr) 36px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  max-width: 100%;
+  padding: 8px 4px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.mnp-queue-scroll .queue-item-info {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mnp-queue-scroll .queue-item-name,
+.mnp-queue-scroll .queue-item-artist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mnp-queue-scroll .queue-item-duration {
+  display: none;
+}
+
+.mnp-queue-scroll .queue-item-actions {
+  position: static;
+  inset: auto;
+  top: auto;
+  right: auto;
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  justify-content: flex-end;
+}
+
+.mnp-queue-handle {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 42px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 20px;
+  cursor: grab;
+  touch-action: none;
+  flex-shrink: 0;
+}
+
+.mnp-queue-handle:active {
+  cursor: grabbing;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.mnp-queue-item.is-dragging {
+  opacity: 0.45;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mnp-queue-item.drop-target {
+  box-shadow: inset 0 2px 0 0 rgba(255, 255, 255, 0.55);
+}
+
+.mnp-queue-list.is-reordering {
+  user-select: none;
+}
+
+.mnp-queue-scroll:has(.is-reordering) {
+  overflow-y: hidden;
+  touch-action: none;
 }
 
 .mnp-meta {
@@ -3818,7 +4000,7 @@ img.queue-thumb {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 2px 16px;
+  padding: 4px 2px 12px;
 }
 
 .mnp-controls .control-btn {
@@ -3868,6 +4050,14 @@ img.queue-thumb {
   z-index: 105;
   border: 0;
   background: rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.28s ease;
+}
+
+.mnp-sheet-backdrop.mnp-sheet-open {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .mnp-sheet {
@@ -3883,6 +4073,13 @@ img.queue-thumb {
   border-radius: 20px 20px 0 0;
   background: #161616;
   box-shadow: 0 -16px 48px rgba(0, 0, 0, 0.55);
+  transform: translateY(100%);
+  transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+
+.mnp-sheet.mnp-sheet-open {
+  transform: translateY(0);
 }
 
 .mnp-sheet-handle {
@@ -3916,14 +4113,17 @@ img.queue-thumb {
 
 .mnp-volume-section {
   display: flex;
-  justify-content: center;
-  padding: 12px 0 20px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0 18px;
 }
 
 .mnp-dial {
   position: relative;
-  width: 128px;
-  height: 128px;
+  width: 104px;
+  height: 104px;
+  flex: 0 0 auto;
   cursor: pointer;
   touch-action: none;
 }
@@ -3942,15 +4142,28 @@ img.queue-thumb {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  font-size: 22px;
+  font-size: 18px;
   color: var(--text);
   pointer-events: none;
 }
 
 .mnp-dial-center span {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--muted);
+  line-height: 1.1;
+}
+
+.mnp-dial-label {
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text) !important;
+}
+
+.mnp-dial-tone .mnp-dial-center {
+  font-size: 16px;
 }
 
 .mnp-eq-section {
@@ -4007,8 +4220,25 @@ img.queue-thumb {
   z-index: 100;
   display: flex;
   flex-direction: column;
-  background: #000;
+  background: rgba(12, 12, 12, 0.78);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(28px) saturate(1.6);
+  -webkit-backdrop-filter: blur(28px) saturate(1.6);
   color: var(--text);
+  transform: translateX(100%);
+  pointer-events: none;
+  transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+
+.mobile-settings-page.mset-open {
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.mobile-settings-page.mset-closing {
+  transform: translateX(100%);
+  pointer-events: none;
 }
 
 .mset-header {

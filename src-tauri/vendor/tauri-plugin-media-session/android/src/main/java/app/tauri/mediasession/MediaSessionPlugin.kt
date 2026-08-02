@@ -762,7 +762,7 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
     companion object {
         private const val TAG = "plugin/media-session"
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 9402
-        private const val MAX_ARTWORK_SIZE = 512
+        private const val MAX_ARTWORK_SIZE = 1024
         private const val RC_PLAY = 1
         private const val RC_PAUSE = 2
         private const val RC_NEXT = 3

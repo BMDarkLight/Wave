@@ -230,11 +230,31 @@ fn sync_bridge_now_playing_at(app: &tauri::AppHandle, track: &Track, position_se
             artist: Some(track.artist.clone()),
             album: Some(track.album.clone()),
             duration_seconds: track.duration_seconds,
-            cover_url: track.cover_art_data_url.clone(),
+            cover_url: resolve_os_cover_url(app, track),
         },
         position_secs,
     );
     sync_bridge_playback_mode(app, &bridge);
+}
+
+/// Prefer 512px media-session art over the 96px UI list thumb.
+fn resolve_os_cover_url(app: &tauri::AppHandle, track: &Track) -> Option<String> {
+    if let Some(id) = track.album_art_id.as_deref().filter(|s| !s.is_empty()) {
+        if let Some(path) = crate::cover_art::media_path_for_id(app, id) {
+            return Some(path.to_string_lossy().into_owned());
+        }
+        // Lazily build media art from the embedded cover once per album.
+        if let Ok(Some(full)) =
+            crate::metadata::extract_full_cover_data_url(Some(app), &track.path)
+        {
+            if let Ok((bytes, _)) = crate::cover_art::decode_data_url(&full) {
+                if let Some(path) = crate::cover_art::ensure_media_art(app, id, &bytes) {
+                    return Some(path.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    crate::cover_art::prefer_media_artwork_url(track.cover_art_data_url.as_deref())
 }
 
 /// GUI-side auto-advance (matches the playback daemon tick).

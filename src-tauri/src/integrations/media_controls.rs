@@ -260,9 +260,9 @@ impl MediaBridge {
         {
             use tauri_plugin_media_session::{MediaSessionExt, MediaState};
 
-            let artwork_url = self
-                .cover_art_cache
-                .resolve_artwork_url(meta.cover_url.as_deref());
+            let artwork_url = self.cover_art_cache.resolve_artwork_url(
+                crate::cover_art::prefer_media_artwork_url(meta.cover_url.as_deref()).as_deref(),
+            );
 
             if let Err(error) = self.app.media_session().update_state(MediaState {
                 title: meta.title.clone(),
