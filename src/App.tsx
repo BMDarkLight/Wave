@@ -37,6 +37,7 @@ import {
   BiImage,
   BiAlignLeft,
   BiSearch,
+  BiCog,
 } from "react-icons/bi";
 import {
   addTrackToPlaylistById,
@@ -120,6 +121,8 @@ import {
 import { isAndroid } from "./utils/platform";
 import AlbumPage from "./components/AlbumPage";
 import ArtistPage from "./components/ArtistPage";
+import MobileNowPlaying from "./components/MobileNowPlaying";
+import MobileSettings from "./components/MobileSettings";
 import "./App.css";
 
 function formatInvokeError(err: unknown, fallback: string): string {
@@ -500,6 +503,15 @@ function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [androidHost, setAndroidHost] = useState(false);
   const [showFolderSetup, setShowFolderSetup] = useState(false);
+
+  // Mobile-only fullscreen "Now Playing" page (replaces the desktop lyrics
+  // sidebar on responsive/mobile layouts) and its lyrics/menu sub-views.
+  const [mobilePlayerOpen, setMobilePlayerOpen] = useState(false);
+  const [mobilePlayerLyrics, setMobilePlayerLyrics] = useState(false);
+  const [mobilePlayerMenuOpen, setMobilePlayerMenuOpen] = useState(false);
+
+  // Mobile-only Settings page (media source folders, playlists, EQ, crossfade).
+  const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
   const [isScanningFolder, setIsScanningFolder] = useState(false);
   const [folderScanIsSync, setFolderScanIsSync] = useState(false);
 
@@ -673,6 +685,55 @@ function App() {
     };
   }, [lyricsPanelTrack?.path]);
 
+  // ── Mobile-only fullscreen Now Playing page ─────────────────────────────
+  const handleOpenMobilePlayer = () => {
+    if (!currentTrack) return;
+    setMobileNavOpen(false);
+    closeMainSearch();
+    setShowQueue(false);
+    setShowDeviceList(false);
+    setLyricsPanelTrack(null);
+    setMobileSettingsOpen(false);
+    setMobilePlayerLyrics(false);
+    setMobilePlayerMenuOpen(false);
+    setMobilePlayerOpen(true);
+    void loadEqSettings();
+  };
+
+  const handleCloseMobilePlayer = () => {
+    setMobilePlayerOpen(false);
+    setMobilePlayerLyrics(false);
+    setMobilePlayerMenuOpen(false);
+  };
+
+  /** Album art / track name tap in the mini player bar: mobile gets the
+   *  fullscreen Now Playing page, desktop keeps the lyrics sidebar. */
+  const handleOpenNowPlaying = () => {
+    if (isMobileLayout()) handleOpenMobilePlayer();
+    else handleOpenLyrics();
+  };
+
+  const handleMobilePlayerOpenQueue = () => {
+    handleCloseMobilePlayer();
+    handleToggleQueue();
+  };
+
+  // ── Mobile-only Settings page ───────────────────────────────────────────
+  const handleOpenMobileSettings = () => {
+    setMobileNavOpen(false);
+    closeMainSearch();
+    setShowQueue(false);
+    setShowDeviceList(false);
+    setLyricsPanelTrack(null);
+    handleCloseMobilePlayer();
+    setMobileSettingsOpen(true);
+    void loadEqSettings();
+  };
+
+  const handleCloseMobileSettings = () => {
+    setMobileSettingsOpen(false);
+  };
+
   const handleToggleDevice = () => {
     setMobileNavOpen(false);
     setRightPanelWidth((width) => clampRightPanelWidth(width));
@@ -729,7 +790,14 @@ function App() {
   useEffect(() => {
     const media = window.matchMedia("(max-width: 900px)");
     const onChange = () => {
-      if (!media.matches) setMobileNavOpen(false);
+      if (!media.matches) {
+        setMobileNavOpen(false);
+        // Mobile-only pages never make sense once the layout goes wide again.
+        setMobilePlayerOpen(false);
+        setMobilePlayerLyrics(false);
+        setMobilePlayerMenuOpen(false);
+        setMobileSettingsOpen(false);
+      }
     };
     onChange();
     media.addEventListener("change", onChange);
@@ -1563,6 +1631,56 @@ function App() {
     }
   };
 
+  /** Mobile Settings "Media Source Folders" — Android uses the SAF folder
+   *  picker; a desktop window narrowed into the mobile layout falls back to
+   *  the regular directory picker, mirroring handleAddFolderAndroid. */
+  const handleAddMediaSource = async () => {
+    if (androidHost) {
+      await handleAddFolderAndroid();
+      return;
+    }
+    try {
+      setError(null);
+      const directory = await selectAudioFolder();
+      if (!directory) return;
+      setIsScanningFolder(true);
+      setFolderScanIsSync(false);
+      const paths = await scanDirectory(directory);
+      if (!paths.length) {
+        setError("No audio files found in the selected folder.");
+        setIsScanningFolder(false);
+        return;
+      }
+      const list = playlists.length > 0 ? playlists : await loadPlaylists();
+      const playlistId =
+        list.find((p) => isLibraryPlaylistName(p.name))?.id ??
+        getDefaultPlaylistId(list);
+      if (!playlistId) {
+        setIsScanningFolder(false);
+        return;
+      }
+      await setPlaylistSyncFolder(playlistId, directory);
+      await saveMediaFolder(directory).catch(() => {});
+      setIsScanningFolder(false);
+      await runFolderImport(paths, playlistId);
+      setActivePlaylistId(playlistId);
+      await loadPlaylistTracks(playlistId);
+      await loadPlaylists();
+    } catch (err) {
+      setIsScanningFolder(false);
+      setError(formatInvokeError(err, "Failed to add media folder"));
+    }
+  };
+
+  const handleSelectOutputDeviceSettings = async (name: string) => {
+    try {
+      await setOutputDevice(name);
+      await updatePlaybackState();
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to change audio device"));
+    }
+  };
+
   const handleAddFolderAsPlaylist = async () => {
     try {
       setError(null);
@@ -1596,18 +1714,24 @@ function App() {
   };
 
   const handleSyncPlaylistFolder = async (playlistId: string) => {
-    if (!selectedPlaylist?.sync_folder) return;
+    // Look the folder up by the passed playlist id (not the currently viewed
+    // playlist) so syncing works from lists like the mobile Settings page,
+    // where the tapped playlist may not be the one currently open.
+    const target = playlists.find((p) => p.id === playlistId);
+    if (!target?.sync_folder) return;
     try {
       setError(null);
       setIsScanningFolder(true);
       setFolderScanIsSync(true);
-      const folder = selectedPlaylist.sync_folder;
+      const folder = target.sync_folder;
       // Android SAF folders need a JS-side recursive scan; desktop Rust walks the path.
       const paths = androidHost
         ? await scanDirectoryRecursive(folder)
         : null;
       await syncPlaylistFolder(playlistId, paths);
-      await loadPlaylistTracks(playlistId);
+      if (selectedPlaylistIdRef.current === playlistId) {
+        await loadPlaylistTracks(playlistId);
+      }
       await loadPlaylists();
     } catch (err) {
       setError(formatInvokeError(err, "Failed to sync folder"));
@@ -2406,13 +2530,17 @@ function App() {
     queueMenuIndex,
     showAddTrackMenu,
     showEqPanel,
+    mobilePlayerMenuOpen,
     playlistDialog,
     showClearConfirm,
     showAddFromLibrary,
     deletePlaylistConfirm,
     addToPlaylistTrack,
-    mobileNavOpen,
+    mobilePlayerLyrics,
     rightPanelOpen,
+    mobilePlayerOpen,
+    mobileSettingsOpen,
+    mobileNavOpen,
     mainSearchOpen,
     browseDepth: browseStack.length,
   });
@@ -2421,13 +2549,17 @@ function App() {
     queueMenuIndex,
     showAddTrackMenu,
     showEqPanel,
+    mobilePlayerMenuOpen,
     playlistDialog,
     showClearConfirm,
     showAddFromLibrary,
     deletePlaylistConfirm,
     addToPlaylistTrack,
-    mobileNavOpen,
+    mobilePlayerLyrics,
     rightPanelOpen,
+    mobilePlayerOpen,
+    mobileSettingsOpen,
+    mobileNavOpen,
     mainSearchOpen,
     browseDepth: browseStack.length,
   };
@@ -2438,12 +2570,16 @@ function App() {
     if (s.menuTrackPath || s.queueMenuIndex != null) depth += 1;
     if (s.showAddTrackMenu) depth += 1;
     if (s.showEqPanel) depth += 1;
+    if (s.mobilePlayerMenuOpen) depth += 1;
     if (s.playlistDialog) depth += 1;
     if (s.showClearConfirm) depth += 1;
     if (s.showAddFromLibrary) depth += 1;
     if (s.deletePlaylistConfirm) depth += 1;
     if (s.addToPlaylistTrack) depth += 1;
+    if (s.mobilePlayerLyrics) depth += 1;
     if (s.rightPanelOpen) depth += 1;
+    if (s.mobilePlayerOpen) depth += 1;
+    if (s.mobileSettingsOpen) depth += 1;
     if (s.mobileNavOpen) depth += 1;
     if (s.mainSearchOpen) depth += 1;
     depth += s.browseDepth;
@@ -2469,6 +2605,10 @@ function App() {
       setEqAnchor(null);
       return true;
     }
+    if (s.mobilePlayerMenuOpen) {
+      setMobilePlayerMenuOpen(false);
+      return true;
+    }
     if (s.playlistDialog) {
       closePlaylistDialog();
       return true;
@@ -2489,8 +2629,20 @@ function App() {
       setAddToPlaylistTrack(null);
       return true;
     }
+    if (s.mobilePlayerLyrics) {
+      setMobilePlayerLyrics(false);
+      return true;
+    }
     if (s.rightPanelOpen) {
       closeRightPanelDelayed();
+      return true;
+    }
+    if (s.mobilePlayerOpen) {
+      handleCloseMobilePlayer();
+      return true;
+    }
+    if (s.mobileSettingsOpen) {
+      handleCloseMobileSettings();
       return true;
     }
     if (s.mobileNavOpen) {
@@ -2805,6 +2957,13 @@ function App() {
             )}
           </div>
         </div>
+        <button
+          className="sidebar-settings-btn"
+          onClick={handleOpenMobileSettings}
+          type="button"
+        >
+          <BiCog /> Settings
+        </button>
       </aside>
 
       <div
@@ -3484,99 +3643,6 @@ function App() {
                   </div>
                 ))
               )}
-            </div>
-            <div className="queue-eq-mini">
-              <div className="queue-mobile-transport">
-                <label className="queue-mobile-volume">
-                  <span>Volume</span>
-                  <input
-                    className="range-slider"
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={volumeValue}
-                    onChange={(event) =>
-                      handleVolume(Number(event.target.value))
-                    }
-                  />
-                  <span>{Math.round(volumeValue * 100)}%</span>
-                  <br />
-                </label>
-              </div>
-              <div className="queue-eq-mini-header">
-                <span>Equalizer</span>
-                <label className="eq-enable">
-                  <input
-                    type="checkbox"
-                    checked={eqSettings.enabled}
-                    onChange={(event) => handleEqEnabled(event.target.checked)}
-                  />
-                  On
-                </label>
-                <select
-                  className="eq-preset-select eq-preset-select-mini"
-                  value=""
-                  onChange={(event) => {
-                    if (event.target.value)
-                      void handleEqPreset(event.target.value);
-                  }}
-                  aria-label="EQ preset"
-                >
-                  <option value="" disabled>
-                    Presets
-                  </option>
-                  {EQ_PRESETS.map((preset) => (
-                    <option key={preset.id} value={preset.id}>
-                      {preset.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div
-                className={`queue-eq-mini-bands ${eqSettings.enabled ? "" : "disabled"}`}
-              >
-                {EQ_BAND_LABELS.map((label, index) => (
-                  <div className="eq-band eq-band-mini" key={label}>
-                    <input
-                      type="range"
-                      min={-12}
-                      max={12}
-                      step={0.5}
-                      value={eqSettings.bands[index] ?? 0}
-                      onChange={(event) =>
-                        handleEqBandChange(index, Number(event.target.value))
-                      }
-                      aria-label={`${label} Hz`}
-                      title={`${label} Hz: ${(eqSettings.bands[index] ?? 0).toFixed(1)} dB`}
-                    />
-                    <span className="eq-band-label">{label}</span>
-                  </div>
-                ))}
-              </div>
-              <div
-                className="queue-eq-mini-crossfade"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => event.stopPropagation()}
-              >
-                <span className="queue-eq-mini-crossfade-label">Crossfade</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={8}
-                  step={0.5}
-                  value={crossfadeDuration}
-                  onChange={(event) =>
-                    handleCrossfadeChange(Number(event.target.value))
-                  }
-                  aria-label="Crossfade duration in seconds"
-                />
-                <span className="queue-eq-mini-crossfade-value">
-                  {crossfadeDuration === 0
-                    ? "Off"
-                    : `${crossfadeDuration.toFixed(1)}s`}
-                </span>
-              </div>
             </div>
           </div>
         )}
@@ -4290,10 +4356,10 @@ function App() {
         <div className="player-left">
           <button
             className="album-art-btn"
-            onClick={handleOpenLyrics}
+            onClick={handleOpenNowPlaying}
             disabled={!currentTrack}
             type="button"
-            title={currentTrack ? "Show lyrics" : undefined}
+            title={currentTrack ? "Open now playing" : undefined}
           >
             <Artwork
               track={currentTrack}
@@ -4305,9 +4371,9 @@ function App() {
             <button
               type="button"
               className="now-playing-name"
-              onClick={handleOpenLyrics}
+              onClick={handleOpenNowPlaying}
               disabled={!currentTrack}
-              title={currentTrack ? "Show lyrics" : undefined}
+              title={currentTrack ? "Open now playing" : undefined}
             >
               {getTrackTitle(currentTrack, playbackState.current_path)}
             </button>
@@ -4487,6 +4553,71 @@ function App() {
           </div>
         </div>
       </footer>
+
+      {mobilePlayerOpen && currentTrack && (
+        <MobileNowPlaying
+          track={currentTrack}
+          isPlaying={playbackState.is_playing}
+          isFavorite={favoritePaths.has(currentTrack.path)}
+          onToggleFavorite={() => handleToggleFavorite(currentTrack.path)}
+          displayPosition={displayPosition}
+          displayDuration={displayDuration}
+          onSeekChange={setSeekValue}
+          onSeekCommit={handleSeek}
+          playbackMode={playbackMode}
+          canSkip={canSkip}
+          onPlayPause={handlePlayPause}
+          onPrevious={handlePrevious}
+          onNext={handleNext}
+          onToggleShuffle={handleToggleShuffle}
+          onCycleRepeat={handleCycleRepeat}
+          onClose={handleCloseMobilePlayer}
+          onOpenArtist={(name) => {
+            handleCloseMobilePlayer();
+            openArtistPage(name);
+          }}
+          onOpenAlbum={(name, albumArtist) => {
+            handleCloseMobilePlayer();
+            openAlbumPage(name, albumArtist);
+          }}
+          onOpenQueue={handleMobilePlayerOpenQueue}
+          volumeValue={volumeValue}
+          onVolumeChange={handleVolume}
+          eqSettings={eqSettings}
+          onEqEnabledChange={handleEqEnabled}
+          onEqBandChange={handleEqBandChange}
+          onEqPreset={handleEqPreset}
+          onEqReset={handleEqReset}
+          showLyrics={mobilePlayerLyrics}
+          onShowLyricsChange={setMobilePlayerLyrics}
+          menuOpen={mobilePlayerMenuOpen}
+          onMenuOpenChange={setMobilePlayerMenuOpen}
+        />
+      )}
+
+      {mobileSettingsOpen && (
+        <MobileSettings
+          onClose={handleCloseMobileSettings}
+          playlists={playlists}
+          isScanningFolder={isScanningFolder}
+          onCreatePlaylist={openCreatePlaylistDialog}
+          onImportPlaylist={handleImportPlaylist}
+          onRenamePlaylist={openRenamePlaylistDialog}
+          onDeletePlaylist={handleDeletePlaylist}
+          onExportPlaylist={handleExportPlaylistById}
+          onSyncPlaylist={handleSyncPlaylistFolder}
+          onAddMediaSource={handleAddMediaSource}
+          eqSettings={eqSettings}
+          onEqEnabledChange={handleEqEnabled}
+          onEqBandChange={handleEqBandChange}
+          onEqPreset={handleEqPreset}
+          onEqReset={handleEqReset}
+          crossfadeDuration={crossfadeDuration}
+          onCrossfadeChange={handleCrossfadeChange}
+          currentOutputDevice={playbackState.output_device_name}
+          onSelectOutputDevice={handleSelectOutputDeviceSettings}
+        />
+      )}
 
       {showEqPanel &&
         eqAnchor &&
