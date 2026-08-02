@@ -1290,23 +1290,27 @@ impl AudioPlayer {
             }
         }
 
-        // Prefer adopting sink-prefetched audio — never tear down and restart
-        // a track that is already coming out of the speakers.
+        // Sink prefetch appends the next track *after* the current source.
+        // Adopting it mid-song only updates current_path (UI) while the
+        // previous source keeps playing — so only adopt when that source
+        // has actually finished. Manual Next must tear down and restart.
         if let Some((prefetched, duration)) = self.prefetched_next.take() {
-            let peeked = self.queue.peek_next(&self.repeat).map(str::to_string);
-            if peeked.as_deref() == Some(prefetched.as_str()) {
-                let _ = self.queue.next(&self.repeat);
-                self.adopt_prefetched(&prefetched, duration);
-                return Ok(Some(prefetched));
+            if self.prefetched_is_now_audible() {
+                let peeked = self.queue.peek_next(&self.repeat).map(str::to_string);
+                if peeked.as_deref() == Some(prefetched.as_str()) {
+                    let _ = self.queue.next(&self.repeat);
+                    self.adopt_prefetched(&prefetched, duration);
+                    return Ok(Some(prefetched));
+                }
+                if let Some(idx) = self.queue.tracks().iter().position(|p| p == &prefetched) {
+                    let _ = self.queue.jump(idx);
+                    self.adopt_prefetched(&prefetched, duration);
+                    return Ok(Some(prefetched));
+                }
+                // Prefetch no longer matches the queue — fall through.
             }
-            // Queue diverged from what we buffered. Jump to the buffered path
-            // if it's still in the queue; otherwise fall through to a fresh play.
-            if let Some(idx) = self.queue.tracks().iter().position(|p| p == &prefetched) {
-                let _ = self.queue.jump(idx);
-                self.adopt_prefetched(&prefetched, duration);
-                return Ok(Some(prefetched));
-            }
-            // Stale buffer — rebuild for the real next track below.
+            // Mid-song skip (or stale buffer): rebuild from the real next track.
+            // prefetched_next was cleared by take(); play() also clears the sink.
         }
 
         let path = self.queue.next(&self.repeat).map(str::to_string);
@@ -1314,6 +1318,19 @@ impl AudioPlayer {
             self.play(next_path)?;
         }
         Ok(path)
+    }
+
+    /// True when sink-prefetched audio is what speakers are hearing now
+    /// (outgoing source drained), so adopting it is safe.
+    fn prefetched_is_now_audible(&self) -> bool {
+        let sink_len = self.sink.as_ref().map(|s| s.len()).unwrap_or(0);
+        let past_start = self.clock.raw_elapsed() >= Duration::from_millis(500);
+        let at_duration_end = self.clock.duration.is_some_and(|duration| {
+            let grace = Duration::from_millis(350);
+            self.clock.raw_elapsed() >= duration.saturating_add(grace)
+        });
+        // len <= 1 ⇒ only the follow-up (or empty) remains in the sink.
+        (sink_len <= 1 && past_start) || (at_duration_end && sink_len <= 1) || self.sink_exhausted()
     }
 
     pub fn play_previous(&mut self) -> Result<Option<String>, AudioError> {
