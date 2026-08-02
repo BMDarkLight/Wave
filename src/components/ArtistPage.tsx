@@ -4,7 +4,12 @@ import {
   BiChevronDown,
   BiChevronRight,
 } from "react-icons/bi";
-import { getArtistTracks, getArtistAlbums } from "../utils/player";
+import {
+  getArtistTracks,
+  getArtistAlbums,
+  getTrackFullCover,
+  resolveCoverSrc,
+} from "../utils/player";
 import type { Track, PlaybackState, AlbumSummary } from "../utils/player";
 
 const formatTime = (seconds?: number | null) => {
@@ -31,11 +36,21 @@ const Artwork = ({
   fallback: string;
   className: string;
 }) => {
-  if (track?.cover_art_data_url) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void resolveCoverSrc(track?.cover_art_data_url).then((resolved) => {
+      if (!cancelled) setSrc(resolved);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [track?.cover_art_data_url]);
+  if (src) {
     return (
       <img
         className={className}
-        src={track.cover_art_data_url}
+        src={src}
         alt={`${fallback} cover`}
         draggable={false}
       />
@@ -51,11 +66,36 @@ const AlbumArt = ({
   album: AlbumSummary;
   className: string;
 }) => {
-  if (album.cover_art_data_url) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setSrc(null);
+
+    void (async () => {
+      if (album.cover_art_data_url) {
+        const resolved = await resolveCoverSrc(album.cover_art_data_url);
+        if (!cancelled && resolved) setSrc(resolved);
+      }
+      const path = album.cover_track_path;
+      if (!path) return;
+      try {
+        const full = await getTrackFullCover(path);
+        if (!cancelled && full) setSrc(full);
+      } catch {
+        // Keep thumb / letter fallback.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [album.cover_art_data_url, album.cover_track_path]);
+
+  if (src) {
     return (
       <img
         className={className}
-        src={album.cover_art_data_url}
+        src={src}
         alt={`${album.name} cover`}
         draggable={false}
       />

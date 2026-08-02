@@ -2,14 +2,15 @@
 //!
 //! The media-session plugin dispatches play/pause/next/… into
 //! `MediaNativeBridge.dispatch`, which calls this module over JNI.
-//! Actions are queued and applied on the GUI tick thread so transport
-//! keeps working when the WebView is frozen in the background.
+//! Actions are applied on a dedicated worker thread immediately so transport
+//! stays responsive when the WebView is frozen in the background.
 
 #![cfg(target_os = "android")]
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use jni::objects::{JClass, JObject, JString};
 use jni::{JNIEnv, JavaVM, NativeMethod};
@@ -18,35 +19,47 @@ use tauri::AppHandle;
 use crate::android::jni as android_jni;
 use crate::commands;
 
-static PENDING: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
-static NATIVES_READY: AtomicBool = AtomicBool::new(false);
+struct PendingQueue {
+    actions: VecDeque<(String, Instant)>,
+}
 
-/// Queue a media action from the JNI callback (any thread).
+static PENDING: Mutex<PendingQueue> = Mutex::new(PendingQueue {
+    actions: VecDeque::new(),
+});
+static PENDING_CV: Condvar = Condvar::new();
+static NATIVES_READY: AtomicBool = AtomicBool::new(false);
+static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Queue a media action from the JNI callback (any thread) and wake the worker.
 pub fn push_action(action: String) {
     let action = action.trim().to_string();
     if action.is_empty() {
         return;
     }
     if let Ok(mut queue) = PENDING.lock() {
-        // Coalesce bursty duplicate transport presses.
-        if queue.back().is_some_and(|last| last == &action)
-            && matches!(action.as_str(), "play" | "pause" | "stop")
-        {
-            return;
+        let now = Instant::now();
+        // Coalesce only identical transport presses within 50ms (not toggles).
+        if let Some((last, at)) = queue.actions.back() {
+            if last == &action
+                && now.duration_since(*at) < Duration::from_millis(50)
+                && matches!(action.as_str(), "play" | "pause" | "stop")
+            {
+                return;
+            }
         }
-        queue.push_back(action);
+        queue.actions.push_back((action, now));
+        PENDING_CV.notify_one();
     }
 }
 
-/// Apply any pending native media actions. Called from the GUI tick loop.
+/// Apply any pending native media actions (best-effort drain; worker is primary).
 pub fn drain_actions(app: &AppHandle) {
-    // Setup may run before tao has published the Activity — retry here.
     if !NATIVES_READY.load(Ordering::Acquire) {
         try_install();
     }
 
     let actions: Vec<String> = match PENDING.lock() {
-        Ok(mut queue) => queue.drain(..).collect(),
+        Ok(mut queue) => queue.actions.drain(..).map(|(a, _)| a).collect(),
         Err(_) => return,
     };
     for action in actions {
@@ -56,9 +69,46 @@ pub fn drain_actions(app: &AppHandle) {
     }
 }
 
+/// Start the dedicated media-action worker (idempotent).
+pub fn start_worker(app: AppHandle) {
+    if WORKER_STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("wave-android-media".into())
+        .spawn(move || {
+            loop {
+                let action = {
+                    let mut queue = match PENDING.lock() {
+                        Ok(q) => q,
+                        Err(_) => break,
+                    };
+                    while queue.actions.is_empty() {
+                        queue = match PENDING_CV.wait(queue) {
+                            Ok(q) => q,
+                            Err(_) => return,
+                        };
+                    }
+                    queue.actions.pop_front().map(|(a, _)| a)
+                };
+                let Some(action) = action else {
+                    continue;
+                };
+                if !NATIVES_READY.load(Ordering::Acquire) {
+                    try_install();
+                }
+                if let Err(error) = commands::handle_native_media_action(&app, &action) {
+                    tracing::warn!("Android native media action '{action}' failed: {error}");
+                }
+            }
+        })
+        .ok();
+}
+
 /// Register JNI natives for [`MediaNativeBridge`] (best-effort; retried from tick).
-pub fn install(_app: &AppHandle) {
+pub fn install(app: &AppHandle) {
     try_install();
+    start_worker(app.clone());
 }
 
 fn try_install() {

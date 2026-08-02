@@ -21,7 +21,19 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://musicbrainz.org https://lrclib.net https://coverartarchive.org; font-src 'self' data:"
+      "csp": "default-src 'self'; img-src 'self' data: blob: asset: http://asset.localhost https://asset.localhost https:; media-src 'self' asset: http://asset.localhost https://asset.localhost; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://musicbrainz.org https://lrclib.net https://coverartarchive.org; font-src 'self' data:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": [
+            "$APPDATA/**",
+            "$APPCONFIG/**",
+            "$APPLOCALDATA/**",
+            "$RESOURCE/**"
+          ],
+          "requireLiteralLeadingDot": false
+        }
+      }
     }
   },
   "bundle": {

@@ -125,6 +125,33 @@ struct DaemonMedia {
 struct DaemonMedia;
 
 #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
+fn normalize_daemon_cover_url(cover_url: Option<&str>) -> Option<String> {
+    let url = cover_url?.trim();
+    if url.is_empty() {
+        return None;
+    }
+    if url.starts_with("http://")
+        || url.starts_with("https://")
+        || url.starts_with("data:")
+        || url.starts_with("file://")
+    {
+        return Some(url.to_string());
+    }
+    let path = std::path::Path::new(url);
+    if !path.is_absolute() {
+        return None;
+    }
+    let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if !abs.is_file() {
+        return None;
+    }
+    url::Url::from_file_path(&abs)
+        .ok()
+        .map(|u| u.to_string())
+        .or_else(|| Some(format!("file://{}", abs.to_string_lossy())))
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
 impl DaemonMedia {
     fn new() -> Self {
         use souvlaki::{MediaControls, PlatformConfig};
@@ -140,13 +167,14 @@ impl DaemonMedia {
     fn set_metadata(&mut self, meta: &TrackMetadata) {
         use souvlaki::MediaMetadata;
         let duration = meta.duration_seconds.map(Duration::from_secs_f64);
+        let cover_url = normalize_daemon_cover_url(meta.cover_url.as_deref());
         if let Some(controls) = &mut self.controls {
             let _ = controls.set_metadata(MediaMetadata {
                 title: meta.title.as_deref(),
                 artist: meta.artist.as_deref(),
                 album: meta.album.as_deref(),
                 duration,
-                cover_url: meta.cover_url.as_deref(),
+                cover_url: cover_url.as_deref(),
             });
         }
     }

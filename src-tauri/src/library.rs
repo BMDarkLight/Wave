@@ -1,21 +1,33 @@
-use crate::dto::{AlbumSummaryDto, ArtistSummaryDto};
+use crate::dto::{AlbumSummaryDto, ArtistSummaryDto, SearchHitDto};
 use crate::metadata::{extract_track, is_supported_audio_file, Track};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+/// Lean list/playlist select: no lyrics / acoustid blobs; cover is album_art thumb path.
 pub(crate) const TRACK_SELECT_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.artist, t.album, t.album_artist, t.genre,
                         t.year, t.track_number, t.disc_number, t.format, t.duration_seconds,
+                        t.sample_rate, t.channels, t.bit_depth,
+                        NULL AS lyrics, NULL AS lyrics_source,
+                        aa.thumb_path, COALESCE(aa.mime, t.cover_art_mime), t.cover_art_source,
+                        t.fingerprint_sha256, NULL AS acoustid_fingerprint, t.musicbrainz_recording_id,
+                        t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri, t.album_art_id";
+
+/// Full track row including lyrics (lyrics panel / detail).
+pub(crate) const TRACK_DETAIL_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.artist, t.album, t.album_artist, t.genre,
+                        t.year, t.track_number, t.disc_number, t.format, t.duration_seconds,
                         t.sample_rate, t.channels, t.bit_depth, t.lyrics, t.lyrics_source,
-                        t.cover_art_data_url, t.cover_art_mime, t.cover_art_source,
+                        aa.thumb_path, COALESCE(aa.mime, t.cover_art_mime), t.cover_art_source,
                         t.fingerprint_sha256, t.acoustid_fingerprint, t.musicbrainz_recording_id,
-                        t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri";
+                        t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri, t.album_art_id";
+
+pub(crate) const TRACK_FROM: &str = "tracks t LEFT JOIN album_art aa ON aa.id = t.album_art_id";
 
 /// Default virtual playlist that mirrors the full track table.
 pub const LIBRARY_PLAYLIST_NAME: &str = "Library";
@@ -60,7 +72,8 @@ struct TrackExportJson {
 /// database on every single read operation.
 pub struct Library {
     db_path: PathBuf,
-    connection: Mutex<Connection>,
+    connection: RwLock<Connection>,
+    cover_root: PathBuf,
     default_playlist_id_cache: OnceLock<String>,
     favorites_playlist_id_cache: OnceLock<String>,
     app_handle: Option<tauri::AppHandle>,
@@ -76,11 +89,15 @@ impl Library {
             .map_err(|error| format!("Failed to create application data directory: {error}"))?;
 
         let db_path = app_dir.join("wave-library.sqlite");
+        let cover_root = app_dir.join("cover_art");
+        std::fs::create_dir_all(cover_root.join("thumbs"))
+            .map_err(|error| format!("Failed to create cover art directory: {error}"))?;
         let connection = Connection::open(&db_path)
             .map_err(|error| format!("Failed to open library database: {error}"))?;
         let library = Self {
             db_path,
-            connection: Mutex::new(connection),
+            connection: RwLock::new(connection),
+            cover_root,
             default_playlist_id_cache: OnceLock::new(),
             favorites_playlist_id_cache: OnceLock::new(),
             app_handle: Some(app_handle.clone()),
@@ -95,11 +112,17 @@ impl Library {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create database directory: {e}"))?;
         }
+        let cover_root = db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("cover_art");
+        let _ = std::fs::create_dir_all(cover_root.join("thumbs"));
         let connection = Connection::open(db_path)
             .map_err(|e| format!("Failed to open library database: {e}"))?;
         let library = Self {
             db_path: db_path.to_path_buf(),
-            connection: std::sync::Mutex::new(connection),
+            connection: RwLock::new(connection),
+            cover_root,
             default_playlist_id_cache: OnceLock::new(),
             favorites_playlist_id_cache: OnceLock::new(),
             app_handle: None,
@@ -112,10 +135,21 @@ impl Library {
         self.db_path.to_string_lossy().to_string()
     }
 
-    pub(crate) fn lock_connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
-        self.connection
-            .lock()
-            .map_err(|_| "Failed to lock database connection".to_string())
+    pub fn cover_root(&self) -> &Path {
+        &self.cover_root
+    }
+
+    pub(crate) fn read_connection(&self) -> RwLockReadGuard<'_, Connection> {
+        self.connection.read()
+    }
+
+    pub(crate) fn write_connection(&self) -> RwLockWriteGuard<'_, Connection> {
+        self.connection.write()
+    }
+
+    /// Write lock (mutates). Prefer [`read_connection`] for SELECT-only paths.
+    pub(crate) fn lock_connection(&self) -> Result<RwLockWriteGuard<'_, Connection>, String> {
+        Ok(self.write_connection())
     }
 
     fn initialize(&self) -> Result<(), String> {
@@ -189,6 +223,14 @@ impl Library {
                 CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
                 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_position
                     ON playlist_tracks(playlist_id, position);
+
+                CREATE TABLE IF NOT EXISTS album_art (
+                    id TEXT PRIMARY KEY,
+                    thumb_path TEXT NOT NULL,
+                    mime TEXT NOT NULL,
+                    byte_size INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL
+                );
                 ",
             )
             .map_err(|error| format!("Failed to initialize library database: {error}"))?;
@@ -202,7 +244,12 @@ impl Library {
         ensure_track_column(&connection, "acoustid_fingerprint", "TEXT")?;
         ensure_track_column(&connection, "musicbrainz_recording_id", "TEXT")?;
         ensure_track_column(&connection, "is_saf_uri", "INTEGER NOT NULL DEFAULT 0")?;
+        ensure_track_column(&connection, "album_art_id", "TEXT")?;
         ensure_playlist_column(&connection, "sync_folder", "TEXT")?;
+
+        if let Err(error) = ensure_tracks_fts(&connection) {
+            tracing::warn!("Failed to initialize FTS search index: {error}");
+        }
 
         // Seed the default profile and playlist. We do this once at startup.
         let profile_id = ensure_profile_with_connection(&connection, "default", "Default")?;
@@ -230,6 +277,11 @@ impl Library {
             tracing::warn!("Failed to deduplicate tracks on startup: {error}");
         }
 
+        drop(connection);
+        if let Err(error) = self.migrate_cover_art_blobs() {
+            tracing::warn!("Cover art migration: {error}");
+        }
+
         Ok(())
     }
 
@@ -244,6 +296,135 @@ impl Library {
             ensure_playlist_with_connection(&connection, &profile_id, LIBRARY_PLAYLIST_NAME)?;
         let _ = self.default_playlist_id_cache.set(playlist_id.clone());
         Ok(playlist_id)
+    }
+
+    /// Migrate legacy per-track `cover_art_data_url` blobs into shared `album_art` thumbs.
+    fn migrate_cover_art_blobs(&self) -> Result<(), String> {
+        let connection = self.write_connection();
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM tracks
+                 WHERE cover_art_data_url IS NOT NULL
+                   AND length(cover_art_data_url) > 0
+                   AND album_art_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if count == 0 {
+            // Still share album_art_id among siblings that already migrated.
+            drop(connection);
+            self.share_album_art_among_siblings()?;
+            return Ok(());
+        }
+
+        tracing::info!("Migrating {count} track cover blobs to shared album art thumbs");
+        let rows: Vec<(String, String, Option<String>)> = {
+            let mut stmt = connection
+                .prepare(
+                    "SELECT id, cover_art_data_url, cover_art_mime FROM tracks
+                     WHERE cover_art_data_url IS NOT NULL
+                       AND length(cover_art_data_url) > 0
+                       AND album_art_id IS NULL",
+                )
+                .map_err(|e| format!("Failed to prepare cover migration: {e}"))?;
+            let mapped = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })
+                .map_err(|e| format!("Failed to query cover migration: {e}"))?;
+            mapped
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("Failed to read cover migration rows: {e}"))?
+        };
+
+        let now = now_timestamp();
+        for (track_id, data_url, mime) in rows {
+            let saved = match crate::cover_art::migrate_data_url_to_thumb(&self.cover_root, &data_url)
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::debug!("Skip cover migrate for {track_id}: {e}");
+                    let _ = connection.execute(
+                        "UPDATE tracks SET cover_art_data_url = NULL WHERE id = ?1",
+                        params![track_id],
+                    );
+                    continue;
+                }
+            };
+            let mime = mime.unwrap_or_else(|| saved.mime.clone());
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO album_art (id, thumb_path, mime, byte_size, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        saved.id,
+                        saved.relative_path,
+                        mime,
+                        saved.byte_size,
+                        now
+                    ],
+                )
+                .map_err(|e| format!("Failed to insert album_art: {e}"))?;
+            connection
+                .execute(
+                    "UPDATE tracks SET album_art_id = ?1, cover_art_mime = ?2,
+                            cover_art_data_url = NULL WHERE id = ?3",
+                    params![saved.id, mime, track_id],
+                )
+                .map_err(|e| format!("Failed to link album_art: {e}"))?;
+        }
+
+        drop(connection);
+        self.share_album_art_among_siblings()?;
+
+        // Best-effort VACUUM to reclaim blob space.
+        {
+            let connection = self.write_connection();
+            if let Err(e) = connection.execute_batch("VACUUM;") {
+                tracing::warn!("VACUUM after cover migration skipped: {e}");
+            }
+        }
+
+        if let Some(app) = &self.app_handle {
+            crate::cover_art::cleanup_legacy_track_covers(app);
+        }
+        Ok(())
+    }
+
+    /// Copy album_art_id to sibling tracks that share (album_artist, album).
+    fn share_album_art_among_siblings(&self) -> Result<(), String> {
+        let connection = self.write_connection();
+        connection
+            .execute_batch(
+                "
+                UPDATE tracks
+                SET album_art_id = (
+                    SELECT t2.album_art_id FROM tracks t2
+                    WHERE t2.album_art_id IS NOT NULL
+                      AND t2.album = tracks.album
+                      AND COALESCE(NULLIF(t2.album_artist, ''), t2.artist)
+                          = COALESCE(NULLIF(tracks.album_artist, ''), tracks.artist)
+                    LIMIT 1
+                )
+                WHERE album_art_id IS NULL
+                  AND album IS NOT NULL
+                  AND length(album) > 0
+                  AND EXISTS (
+                    SELECT 1 FROM tracks t2
+                    WHERE t2.album_art_id IS NOT NULL
+                      AND t2.album = tracks.album
+                      AND COALESCE(NULLIF(t2.album_artist, ''), t2.artist)
+                          = COALESCE(NULLIF(tracks.album_artist, ''), tracks.artist)
+                  );
+                ",
+            )
+            .map_err(|e| format!("Failed to share album art among siblings: {e}"))?;
+        Ok(())
     }
 
     /// Returns the cached favorites playlist id, seeding if necessary.
@@ -276,11 +457,11 @@ impl Library {
                 .query_row(
                     &format!(
                         "SELECT {TRACK_SELECT_COLUMNS}
-                         FROM tracks t
+                         FROM {TRACK_FROM}
                          WHERE t.path = ?1"
                     ),
                     params![path],
-                    row_to_track,
+                    |row| row_to_track(row, &self.cover_root),
                 )
                 .optional()
                 .map_err(|error| format!("Failed to look up track: {error}"))?
@@ -415,6 +596,11 @@ impl Library {
         )
         .map_err(|e| format!("Failed to remove from playlist_tracks: {e}"))?;
 
+        let _ = tx.execute(
+            "DELETE FROM tracks_fts WHERE track_id = ?1",
+            params![track_id],
+        );
+
         tx.execute("DELETE FROM tracks WHERE id = ?1", params![track_id])
             .map_err(|e| format!("Failed to remove track: {e}"))?;
         Ok(())
@@ -434,14 +620,14 @@ impl Library {
                 .prepare(
                     &format!(
                         "SELECT {TRACK_SELECT_COLUMNS}
-                     FROM tracks t
+                     FROM {TRACK_FROM}
                      ORDER BY t.name"
                     ),
                 )
                 .map_err(|error| format!("Failed to prepare all-local-files query: {error}"))?;
 
             let tracks = statement
-                .query_map([], row_to_track)
+                .query_map([], |row| row_to_track(row, &self.cover_root))
                 .map_err(|error| format!("Failed to query all-local-files: {error}"))?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| format!("Failed to read all-local-files track: {error}"))?;
@@ -454,6 +640,7 @@ impl Library {
                     "SELECT {TRACK_SELECT_COLUMNS}
                  FROM playlist_tracks pt
                  JOIN tracks t ON t.id = pt.track_id
+                 LEFT JOIN album_art aa ON aa.id = t.album_art_id
                  WHERE pt.playlist_id = ?1
                  ORDER BY pt.position"
                 ),
@@ -461,7 +648,7 @@ impl Library {
             .map_err(|error| format!("Failed to prepare playlist query: {error}"))?;
 
         let tracks = statement
-            .query_map(params![playlist_id], row_to_track)
+            .query_map(params![playlist_id], |row| row_to_track(row, &self.cover_root))
             .map_err(|error| format!("Failed to query playlist: {error}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("Failed to read playlist track: {error}"))?;
@@ -931,6 +1118,7 @@ impl Library {
         if is_default {
             tx.execute("DELETE FROM playlist_tracks", [])
                 .map_err(|e| format!("Failed to clear playlist_tracks: {e}"))?;
+            let _ = tx.execute("DELETE FROM tracks_fts", []);
             tx.execute("DELETE FROM tracks", [])
                 .map_err(|e| format!("Failed to clear tracks: {e}"))?;
         } else {
@@ -973,6 +1161,7 @@ impl Library {
 
         tx.execute("DELETE FROM playlist_tracks", [])
             .map_err(|e| format!("Failed to clear playlist membership: {e}"))?;
+        let _ = tx.execute("DELETE FROM tracks_fts", []);
         tx.execute("DELETE FROM tracks", [])
             .map_err(|e| format!("Failed to clear tracks: {e}"))?;
         tx.execute(
@@ -1276,7 +1465,7 @@ impl Library {
         }
 
         let mut connection = self.lock_connection()?;
-        let tracks = Self::get_tracks_by_column(&connection, "album", album)?;
+        let tracks = Self::get_tracks_by_column(&connection, &self.cover_root, "album", album)?;
         if tracks.is_empty() {
             return Err(format!("No tracks found for album \"{album}\""));
         }
@@ -1337,7 +1526,7 @@ impl Library {
         }
 
         let mut connection = self.lock_connection()?;
-        let tracks = Self::get_tracks_by_column(&connection, "artist", artist)?;
+        let tracks = Self::get_tracks_by_column(&connection, &self.cover_root, "artist", artist)?;
         if tracks.is_empty() {
             return Err(format!("No tracks found for artist \"{artist}\""));
         }
@@ -1386,12 +1575,13 @@ impl Library {
     /// album → disc_number → track_number for sensible ordering.
     fn get_tracks_by_column(
         connection: &Connection,
+        cover_root: &Path,
         column: &str,
         value: &str,
     ) -> Result<Vec<Track>, String> {
         let sql = format!(
             "SELECT {TRACK_SELECT_COLUMNS}
-             FROM tracks t
+             FROM {TRACK_FROM}
              WHERE t.{column} = ?1
              ORDER BY t.album, COALESCE(t.disc_number, 1), COALESCE(t.track_number, 0)"
         );
@@ -1399,7 +1589,7 @@ impl Library {
             .prepare(&sql)
             .map_err(|error| format!("Failed to prepare query by {column}: {error}"))?;
         let tracks = statement
-            .query_map(params![value], row_to_track)
+            .query_map(params![value], |row| row_to_track(row, cover_root))
             .map_err(|error| format!("Failed to query by {column}: {error}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("Failed to read tracks by {column}: {error}"))?;
@@ -1413,24 +1603,27 @@ impl Library {
     /// album name. Each entry carries aggregate info (track count, year,
     /// representative cover art) suitable for a browse grid.
     pub fn list_albums(&self) -> Result<Vec<AlbumSummaryDto>, String> {
-        let connection = self.lock_connection()?;
+        let connection = self.read_connection();
         let mut statement = connection
             .prepare(
-                "SELECT
+                &format!(
+                    "SELECT
                     t.album,
                     COALESCE(NULLIF(t.album_artist, ''), t.artist) AS album_artist,
                     MIN(t.artist) AS artist,
                     COUNT(*) AS track_count,
                     MIN(t.year) AS year,
-                    MIN(t.cover_art_data_url) AS cover_art_data_url,
-                    MIN(t.cover_art_mime) AS cover_art_mime
-                 FROM tracks t
+                    MIN(aa.thumb_path) AS cover_art_data_url,
+                    MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
+                    MIN(t.path) AS cover_track_path
+                 FROM {TRACK_FROM}
                  GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
-                 ORDER BY album_artist, t.album",
+                 ORDER BY album_artist, t.album"
+                ),
             )
             .map_err(|error| format!("Failed to prepare albums query: {error}"))?;
         let albums = statement
-            .query_map([], row_to_album_summary)
+            .query_map([], |row| row_to_album_summary(row, &self.cover_root))
             .map_err(|error| format!("Failed to query albums: {error}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("Failed to read albums: {error}"))?;
@@ -1440,7 +1633,7 @@ impl Library {
     /// List every distinct artist in the library (by the track `artist` tag),
     /// with aggregate track and album counts, ordered by artist name.
     pub fn list_artists(&self) -> Result<Vec<ArtistSummaryDto>, String> {
-        let connection = self.lock_connection()?;
+        let connection = self.read_connection();
         let mut statement = connection
             .prepare(
                 "SELECT
@@ -1487,7 +1680,7 @@ impl Library {
         let sql = if album_artist.is_some() {
             format!(
                 "SELECT {TRACK_SELECT_COLUMNS}
-                 FROM tracks t
+                 FROM {TRACK_FROM}
                  WHERE t.album = ?1
                    AND COALESCE(NULLIF(t.album_artist, ''), t.artist) = ?2
                  ORDER BY COALESCE(t.disc_number, 1), COALESCE(t.track_number, 0)"
@@ -1495,7 +1688,7 @@ impl Library {
         } else {
             format!(
                 "SELECT {TRACK_SELECT_COLUMNS}
-                 FROM tracks t
+                 FROM {TRACK_FROM}
                  WHERE t.album = ?1
                  ORDER BY COALESCE(t.disc_number, 1), COALESCE(t.track_number, 0)"
             )
@@ -1505,17 +1698,23 @@ impl Library {
             .prepare(&sql)
             .map_err(|error| format!("Failed to prepare album tracks query: {error}"))?;
 
-        let rows = match album_artist {
-            Some(album_artist) => statement
-                .query_map(params![album, album_artist], row_to_track)
-                .map_err(|error| format!("Failed to query album tracks: {error}"))?,
-            None => statement
-                .query_map(params![album], row_to_track)
-                .map_err(|error| format!("Failed to query album tracks: {error}"))?,
+        let rows = if let Some(album_artist) = album_artist {
+            statement
+                .query_map(params![album, album_artist], |row| {
+                    row_to_track(row, &self.cover_root)
+                })
+                .map_err(|error| format!("Failed to query album tracks: {error}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("Failed to read album tracks: {error}"))?
+        } else {
+            statement
+                .query_map(params![album], |row| row_to_track(row, &self.cover_root))
+                .map_err(|error| format!("Failed to query album tracks: {error}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("Failed to read album tracks: {error}"))?
         };
 
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("Failed to read album tracks: {error}"))
+        Ok(rows)
     }
 
     /// Return every track by an artist (a discography), ordered by album then
@@ -1526,7 +1725,7 @@ impl Library {
             return Err("Artist name cannot be empty".to_string());
         }
         let connection = self.lock_connection()?;
-        Self::get_tracks_by_column(&connection, "artist", artist)
+        Self::get_tracks_by_column(&connection, &self.cover_root, "artist", artist)
     }
 
     /// Return distinct albums by an artist, with aggregate info suitable for
@@ -1536,25 +1735,28 @@ impl Library {
         if artist.is_empty() {
             return Err("Artist name cannot be empty".to_string());
         }
-        let connection = self.lock_connection()?;
+        let connection = self.read_connection();
         let mut statement = connection
             .prepare(
-                "SELECT
+                &format!(
+                    "SELECT
                     t.album,
                     COALESCE(NULLIF(t.album_artist, ''), t.artist) AS album_artist,
                     MIN(t.artist) AS artist,
                     COUNT(*) AS track_count,
                     MIN(t.year) AS year,
-                    MIN(t.cover_art_data_url) AS cover_art_data_url,
-                    MIN(t.cover_art_mime) AS cover_art_mime
-                 FROM tracks t
+                    MIN(aa.thumb_path) AS cover_art_data_url,
+                    MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
+                    MIN(t.path) AS cover_track_path
+                 FROM {TRACK_FROM}
                  WHERE t.artist = ?1
                  GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
-                 ORDER BY MIN(COALESCE(t.year, 9999)), t.album",
+                 ORDER BY MIN(COALESCE(t.year, 9999)), t.album"
+                ),
             )
             .map_err(|error| format!("Failed to prepare artist albums query: {error}"))?;
         let albums = statement
-            .query_map(params![artist], row_to_album_summary)
+            .query_map(params![artist], |row| row_to_album_summary(row, &self.cover_root))
             .map_err(|error| format!("Failed to query artist albums: {error}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("Failed to read artist albums: {error}"))?;
@@ -1594,9 +1796,9 @@ impl Library {
         let connection = self.lock_connection()?;
         connection
             .query_row(
-                &format!("SELECT {TRACK_SELECT_COLUMNS} FROM tracks t WHERE t.id = ?1"),
+                &format!("SELECT {TRACK_SELECT_COLUMNS} FROM {TRACK_FROM} WHERE t.id = ?1"),
                 params![track_id],
-                row_to_track,
+                |row| row_to_track(row, &self.cover_root),
             )
             .optional()
             .map_err(|e| format!("Failed to query track by id: {e}"))
@@ -1613,32 +1815,32 @@ impl Library {
         query: &str,
         limit: Option<u32>,
     ) -> Result<Vec<Track>, String> {
-        let pattern = format!("%{}%", query.trim());
-        let connection = self.lock_connection()?;
-        let sql = if let Some(limit) = limit {
-            format!(
-                "SELECT {TRACK_SELECT_COLUMNS} FROM tracks t
-                 WHERE t.title LIKE ?1 OR t.artist LIKE ?1 OR t.album LIKE ?1
-                    OR t.name LIKE ?1
-                 ORDER BY t.artist, t.album, t.track_number
-                 LIMIT {limit}"
-            )
-        } else {
-            format!(
-                "SELECT {TRACK_SELECT_COLUMNS} FROM tracks t
-                 WHERE t.title LIKE ?1 OR t.artist LIKE ?1 OR t.album LIKE ?1
-                    OR t.name LIKE ?1
-                 ORDER BY t.artist, t.album, t.track_number"
-            )
-        };
-        let mut stmt = connection
-            .prepare(&sql)
-            .map_err(|e| format!("Failed to prepare search query: {e}"))?;
-        let rows = stmt
-            .query_map(params![pattern], row_to_track)
-            .map_err(|e| format!("Failed to execute search query: {e}"))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to read search results: {e}"))
+        Ok(self
+            .search_tracks_rich(query, limit)?
+            .into_iter()
+            .map(|hit| hit.track)
+            .collect())
+    }
+
+    /// Fast realtime search across title, artist, album, filename, and lyrics.
+    /// Uses FTS5 when available, with a LIKE fallback.
+    pub fn search_tracks_rich(
+        &self,
+        query: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<SearchHitDto>, String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.unwrap_or(80).min(200) as i64;
+        let connection = self.read_connection();
+
+        let fts_hits = search_tracks_fts(&connection, &self.cover_root, query, limit);
+        match fts_hits {
+            Ok(hits) if !hits.is_empty() || fts_table_ready(&connection) => Ok(hits),
+            Ok(_) | Err(_) => search_tracks_like(&connection, &self.cover_root, query, limit),
+        }
     }
 
     /// Search playlists by name.
@@ -1662,28 +1864,94 @@ impl Library {
             .map_err(|e| format!("Failed to read search results: {e}"))
     }
 
-    /// Update a track's cover art from raw image bytes.
+    /// Update a track's cover art from raw image bytes (stored as shared thumb).
     pub fn set_track_cover(
         &self,
         track_id: &str,
         image_data: &[u8],
         mime_type: &str,
     ) -> Result<(), String> {
-        use base64::Engine;
-        let data_url = format!(
-            "data:{};base64,{}",
-            mime_type,
-            base64::engine::general_purpose::STANDARD.encode(image_data)
-        );
-        let connection = self.lock_connection()?;
+        let Some(app) = &self.app_handle else {
+            return Err("Cover update requires app handle".into());
+        };
+        let saved = crate::cover_art::save_album_art_thumb(
+            app,
+            crate::cover_art::ExtractedCoverArt {
+                data: image_data.to_vec(),
+                mime: mime_type.to_string(),
+            },
+        )?;
+        let connection = self.write_connection();
+        let now = now_timestamp();
         connection
             .execute(
-                "UPDATE tracks SET cover_art_data_url = ?1, cover_art_mime = ?2, cover_art_source = 'user'
+                "INSERT OR IGNORE INTO album_art (id, thumb_path, mime, byte_size, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    saved.id,
+                    saved.relative_path,
+                    saved.mime,
+                    saved.byte_size,
+                    now
+                ],
+            )
+            .map_err(|e| format!("Failed to upsert album_art: {e}"))?;
+        connection
+            .execute(
+                "UPDATE tracks SET album_art_id = ?1, cover_art_mime = ?2,
+                        cover_art_source = 'user', cover_art_data_url = NULL
                  WHERE id = ?3",
-                params![data_url, mime_type, track_id],
+                params![saved.id, saved.mime, track_id],
             )
             .map_err(|e| format!("Failed to update track cover: {e}"))?;
         Ok(())
+    }
+
+    /// Persist album_art_id / mime after deferred online enrich (no full re-upsert).
+    pub fn apply_track_art_update(&self, track: &Track) -> Result<(), String> {
+        let Some(ref art_id) = track.album_art_id else {
+            return Ok(());
+        };
+        let connection = self.write_connection();
+        let rel = format!("thumbs/{art_id}.jpg");
+        let mime = track
+            .cover_art_mime
+            .clone()
+            .unwrap_or_else(|| "image/jpeg".into());
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO album_art (id, thumb_path, mime, byte_size, created_at)
+                 VALUES (?1, ?2, ?3, 0, ?4)",
+                params![art_id, rel, mime, now_timestamp()],
+            )
+            .map_err(|e| format!("Failed to insert album_art: {e}"))?;
+        connection
+            .execute(
+                "UPDATE tracks SET album_art_id = ?1, cover_art_mime = ?2,
+                        cover_art_source = COALESCE(?3, cover_art_source),
+                        cover_art_data_url = NULL
+                 WHERE path = ?4",
+                params![art_id, mime, track.cover_art_source, track.path],
+            )
+            .map_err(|e| format!("Failed to update track art: {e}"))?;
+        Ok(())
+    }
+
+    /// Full track detail including lyrics (for lyrics panel).
+    pub fn get_track_details(&self, path: &str) -> Result<Option<Track>, String> {
+        let connection = self.read_connection();
+        connection
+            .query_row(
+                &format!(
+                    "SELECT {TRACK_DETAIL_COLUMNS}
+                     FROM {TRACK_FROM}
+                     WHERE t.path = ?1"
+                ),
+                params![path],
+                |row| row_to_track(row, &self.cover_root),
+            )
+            .optional()
+            .map_err(|error| format!("Failed to query track details: {error}"))
     }
 
     pub fn set_track_lyrics(
@@ -1692,13 +1960,21 @@ impl Library {
         lyrics: &str,
         source: &str,
     ) -> Result<(), String> {
-        let connection = self.lock_connection()?;
+        let connection = self.write_connection();
         connection
             .execute(
                 "UPDATE tracks SET lyrics = ?1, lyrics_source = ?2 WHERE id = ?3",
                 params![lyrics, source, track_id],
             )
             .map_err(|e| format!("Failed to update track lyrics: {e}"))?;
+        // Refresh FTS row for lyrics search.
+        if let Ok(Some(track)) = connection.query_row(
+            &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM} WHERE t.id = ?1"),
+            params![track_id],
+            |row| row_to_track(row, &self.cover_root),
+        ).optional() {
+            let _ = sync_track_fts(&connection, &track);
+        }
         Ok(())
     }
 
@@ -1713,11 +1989,11 @@ impl Library {
                 .query_row(
                     &format!(
                         "SELECT {TRACK_SELECT_COLUMNS}
-                         FROM tracks t
+                         FROM {TRACK_FROM}
                          WHERE t.path = ?1"
                     ),
                     params![path],
-                    row_to_track,
+                    |row| row_to_track(row, &self.cover_root),
                 )
                 .optional()
                 .map_err(|error| format!("Failed to query track by path: {error}"))?;
@@ -1858,7 +2134,13 @@ impl Library {
     }
 }
 
-pub(crate) fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
+pub(crate) fn row_to_track(
+    row: &rusqlite::Row<'_>,
+    cover_root: &Path,
+) -> rusqlite::Result<Track> {
+    let thumb_rel: Option<String> = row.get(18)?;
+    let album_art_id: Option<String> = row.get(28)?;
+    let cover_art_data_url = resolve_cover_display_path(cover_root, thumb_rel.as_deref(), album_art_id.as_deref());
     Ok(Track {
         id: row.get(0)?,
         path: row.get(1)?,
@@ -1878,7 +2160,7 @@ pub(crate) fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
         bit_depth: row.get(15)?,
         lyrics: row.get(16)?,
         lyrics_source: row.get(17)?,
-        cover_art_data_url: row.get(18)?,
+        cover_art_data_url,
         cover_art_mime: row.get(19)?,
         cover_art_source: row.get(20)?,
         fingerprint_sha256: row.get(21)?,
@@ -1888,7 +2170,32 @@ pub(crate) fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
         modified_at: row.get(25)?,
         indexed_at: row.get(26)?,
         is_saf_uri: row.get(27)?,
+        album_art_id,
     })
+}
+
+fn resolve_cover_display_path(
+    cover_root: &Path,
+    thumb_rel: Option<&str>,
+    album_art_id: Option<&str>,
+) -> Option<String> {
+    if let Some(rel) = thumb_rel.filter(|s| !s.is_empty()) {
+        let abs = if Path::new(rel).is_absolute() {
+            PathBuf::from(rel)
+        } else {
+            cover_root.join(rel)
+        };
+        if abs.is_file() {
+            return Some(abs.to_string_lossy().into_owned());
+        }
+    }
+    if let Some(id) = album_art_id.filter(|s| !s.is_empty()) {
+        let abs = cover_root.join("thumbs").join(format!("{id}.jpg"));
+        if abs.is_file() {
+            return Some(abs.to_string_lossy().into_owned());
+        }
+    }
+    None
 }
 
 fn row_to_playlist(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlaylistInfo> {
@@ -1903,15 +2210,20 @@ fn row_to_playlist(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlaylistInfo> {
     })
 }
 
-fn row_to_album_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<AlbumSummaryDto> {
+fn row_to_album_summary(
+    row: &rusqlite::Row<'_>,
+    cover_root: &Path,
+) -> rusqlite::Result<AlbumSummaryDto> {
+    let thumb_rel: Option<String> = row.get(5)?;
     Ok(AlbumSummaryDto {
         name: row.get(0)?,
         album_artist: row.get(1)?,
         artist: row.get(2)?,
         track_count: row.get(3)?,
         year: row.get(4)?,
-        cover_art_data_url: row.get(5)?,
+        cover_art_data_url: resolve_cover_display_path(cover_root, thumb_rel.as_deref(), None),
         cover_art_mime: row.get(6)?,
+        cover_track_path: row.get(7)?,
     })
 }
 
@@ -1978,7 +2290,28 @@ impl Queryable for Transaction<'_> {
     }
 }
 
-impl Queryable for std::sync::MutexGuard<'_, Connection> {
+impl Queryable for RwLockWriteGuard<'_, Connection> {
+    fn exec<P: rusqlite::Params>(&self, sql: &str, params: P) -> rusqlite::Result<usize> {
+        self.execute(sql, params)
+    }
+    fn query_opt<T, P, F>(&self, sql: &str, params: P, f: F) -> rusqlite::Result<Option<T>>
+    where
+        P: rusqlite::Params,
+        F: FnOnce(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    {
+        self.query_row(sql, params, f).optional()
+    }
+    fn query_vec<T, F>(&self, sql: &str, f: F) -> rusqlite::Result<Vec<T>>
+    where
+        F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    {
+        let mut statement = self.prepare(sql)?;
+        let rows = statement.query_map([], f)?;
+        rows.collect()
+    }
+}
+
+impl Queryable for RwLockReadGuard<'_, Connection> {
     fn exec<P: rusqlite::Params>(&self, sql: &str, params: P) -> rusqlite::Result<usize> {
         self.execute(sql, params)
     }
@@ -2178,8 +2511,11 @@ fn upsert_track_deduped(conn: &impl Queryable, track: &Track) -> Result<String, 
                         file_size = ?17,
                         modified_at = ?18,
                         indexed_at = ?19,
-                        is_saf_uri = ?20
-                     WHERE id = ?21",
+                        is_saf_uri = ?20,
+                        album_art_id = COALESCE(?21, album_art_id),
+                        cover_art_mime = COALESCE(?22, cover_art_mime),
+                        cover_art_source = COALESCE(?23, cover_art_source)
+                     WHERE id = ?24",
                     params![
                         track.path,
                         track.name,
@@ -2201,6 +2537,9 @@ fn upsert_track_deduped(conn: &impl Queryable, track: &Track) -> Result<String, 
                         track.modified_at,
                         track.indexed_at,
                         track.is_saf_uri as i32,
+                        track.album_art_id,
+                        track.cover_art_mime,
+                        track.cover_art_source,
                         existing_id,
                     ],
                 )
@@ -2208,6 +2547,8 @@ fn upsert_track_deduped(conn: &impl Queryable, track: &Track) -> Result<String, 
                 existing_id
             }
         };
+        track.id = id.clone();
+        let _ = sync_track_fts(conn, &track);
         return Ok(id);
     }
 
@@ -2215,17 +2556,30 @@ fn upsert_track_deduped(conn: &impl Queryable, track: &Track) -> Result<String, 
 }
 
 fn upsert_track(conn: &impl Queryable, track: &Track) -> Result<String, String> {
+    if let Some(ref art_id) = track.album_art_id {
+        let rel = format!("thumbs/{art_id}.jpg");
+        let mime = track
+            .cover_art_mime
+            .clone()
+            .unwrap_or_else(|| "image/jpeg".into());
+        let _ = conn.exec(
+            "INSERT OR IGNORE INTO album_art (id, thumb_path, mime, byte_size, created_at)
+             VALUES (?1, ?2, ?3, 0, ?4)",
+            params![art_id, rel, mime, now_timestamp()],
+        );
+    }
+
     conn.exec(
         "INSERT INTO tracks (
             id, path, name, title, artist, album, album_artist, genre, year, track_number,
             disc_number, format, duration_seconds, sample_rate, channels, bit_depth,
             lyrics, lyrics_source, cover_art_data_url, cover_art_mime, cover_art_source,
             fingerprint_sha256, acoustid_fingerprint, musicbrainz_recording_id, file_size,
-            modified_at, indexed_at, is_saf_uri
+            modified_at, indexed_at, is_saf_uri, album_art_id
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-            ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
+            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, NULL, ?19,
+            ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
         )
         ON CONFLICT(path) DO UPDATE SET
             name = excluded.name,
@@ -2244,16 +2598,17 @@ fn upsert_track(conn: &impl Queryable, track: &Track) -> Result<String, String> 
             bit_depth = excluded.bit_depth,
             lyrics = excluded.lyrics,
             lyrics_source = excluded.lyrics_source,
-            cover_art_data_url = excluded.cover_art_data_url,
-            cover_art_mime = excluded.cover_art_mime,
-            cover_art_source = excluded.cover_art_source,
+            cover_art_data_url = NULL,
+            cover_art_mime = COALESCE(excluded.cover_art_mime, tracks.cover_art_mime),
+            cover_art_source = COALESCE(excluded.cover_art_source, tracks.cover_art_source),
             fingerprint_sha256 = excluded.fingerprint_sha256,
             acoustid_fingerprint = excluded.acoustid_fingerprint,
             musicbrainz_recording_id = excluded.musicbrainz_recording_id,
             file_size = excluded.file_size,
             modified_at = excluded.modified_at,
             indexed_at = excluded.indexed_at,
-            is_saf_uri = excluded.is_saf_uri",
+            is_saf_uri = excluded.is_saf_uri,
+            album_art_id = COALESCE(excluded.album_art_id, tracks.album_art_id)",
         params![
             track.id,
             track.path,
@@ -2273,7 +2628,6 @@ fn upsert_track(conn: &impl Queryable, track: &Track) -> Result<String, String> 
             track.bit_depth,
             track.lyrics,
             track.lyrics_source,
-            track.cover_art_data_url,
             track.cover_art_mime,
             track.cover_art_source,
             track.fingerprint_sha256,
@@ -2282,11 +2636,16 @@ fn upsert_track(conn: &impl Queryable, track: &Track) -> Result<String, String> 
             track.file_size,
             track.modified_at,
             track.indexed_at,
-            track.is_saf_uri as i32
+            track.is_saf_uri as i32,
+            track.album_art_id,
         ],
     )
     .map_err(|error| format!("Failed to upsert track: {error}"))?;
-    lookup_track_id(conn, &track.path)
+    let id = lookup_track_id(conn, &track.path)?;
+    let mut synced = track.clone();
+    synced.id = id.clone();
+    let _ = sync_track_fts(conn, &synced);
+    Ok(id)
 }
 
 fn ensure_track_column(
@@ -2432,6 +2791,12 @@ fn deduplicate_tracks(connection: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("Failed to remove duplicate tracks: {e}"))?;
 
+    let _ = tx.execute(
+        "DELETE FROM tracks_fts
+         WHERE track_id NOT IN (SELECT id FROM _dedup_keep)",
+        [],
+    );
+
     tx.execute("DROP TABLE IF EXISTS _dedup_keep", [])
         .map_err(|e| format!("Failed to drop dedup temp table: {e}"))?;
 
@@ -2505,17 +2870,342 @@ fn now_timestamp() -> i64 {
         .unwrap_or_default()
 }
 
+fn ensure_tracks_fts(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
+                title,
+                artist,
+                album,
+                name,
+                lyrics,
+                track_id UNINDEXED,
+                tokenize = 'unicode61 remove_diacritics 2'
+            );",
+        )
+        .map_err(|e| format!("Failed to create tracks_fts: {e}"))?;
+
+    let fts_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM tracks_fts", [], |row| row.get(0))
+        .unwrap_or(0);
+    let track_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    if fts_count != track_count {
+        rebuild_tracks_fts(connection)?;
+    }
+    Ok(())
+}
+
+fn rebuild_tracks_fts(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM tracks_fts", [])
+        .map_err(|e| format!("Failed to clear tracks_fts: {e}"))?;
+    connection
+        .execute(
+            "INSERT INTO tracks_fts(title, artist, album, name, lyrics, track_id)
+             SELECT title, artist, album, name, COALESCE(lyrics, ''), id FROM tracks",
+            [],
+        )
+        .map_err(|e| format!("Failed to rebuild tracks_fts: {e}"))?;
+    Ok(())
+}
+
+fn fts_table_ready(connection: &Connection) -> bool {
+    connection
+        .prepare("SELECT 1 FROM tracks_fts LIMIT 1")
+        .is_ok()
+}
+
+fn sync_track_fts(conn: &impl Queryable, track: &Track) -> Result<(), String> {
+    let _ = conn.exec(
+        "DELETE FROM tracks_fts WHERE track_id = ?1",
+        params![track.id],
+    );
+    conn.exec(
+        "INSERT INTO tracks_fts(title, artist, album, name, lyrics, track_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            track.title,
+            track.artist,
+            track.album,
+            track.name,
+            track.lyrics.clone().unwrap_or_default(),
+            track.id,
+        ],
+    )
+    .map_err(|e| format!("Failed to sync tracks_fts: {e}"))?;
+    Ok(())
+}
+
+/// Build an FTS5 MATCH query: each token becomes a prefix term (`foo*`).
+fn build_fts_match_query(raw: &str) -> Option<String> {
+    let tokens: Vec<String> = raw
+        .split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '-')
+        .filter(|t| !t.is_empty())
+        .map(|t| {
+            let escaped = t.replace('"', "\"\"");
+            format!("\"{escaped}\"*")
+        })
+        .collect();
+    if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens.join(" "))
+    }
+}
+
+fn field_contains(haystack: &str, needle: &str) -> bool {
+    haystack.to_lowercase().contains(&needle.to_lowercase())
+}
+
+fn matched_fields_for(track: &Track, query: &str) -> Vec<String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Vec::new();
+    }
+    let tokens: Vec<&str> = q
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        .collect();
+    let check = |value: &str| {
+        if tokens.is_empty() {
+            field_contains(value, q)
+        } else {
+            tokens.iter().any(|t| field_contains(value, t))
+        }
+    };
+
+    let mut fields = Vec::new();
+    if check(&track.title) {
+        fields.push("title".into());
+    }
+    if check(&track.artist) {
+        fields.push("artist".into());
+    }
+    if check(&track.album) {
+        fields.push("album".into());
+    }
+    if check(&track.name) && !fields.iter().any(|f| f == "title") {
+        fields.push("name".into());
+    }
+    if track
+        .lyrics
+        .as_deref()
+        .is_some_and(|lyrics| check(lyrics))
+    {
+        fields.push("lyrics".into());
+    }
+    if fields.is_empty() {
+        // FTS may stem/match differently — still mark title as a soft hit.
+        fields.push("title".into());
+    }
+    fields
+}
+
+/// Lower is better: title/name → artist → album → lyrics.
+fn match_field_priority(fields: &[String]) -> u8 {
+    if fields.iter().any(|f| f == "title" || f == "name") {
+        0
+    } else if fields.iter().any(|f| f == "artist") {
+        1
+    } else if fields.iter().any(|f| f == "album") {
+        2
+    } else if fields.iter().any(|f| f == "lyrics") {
+        3
+    } else {
+        4
+    }
+}
+
+fn sort_search_hits(hits: &mut [SearchHitDto]) {
+    hits.sort_by(|a, b| {
+        match_field_priority(&a.matched_fields)
+            .cmp(&match_field_priority(&b.matched_fields))
+            .then_with(|| {
+                a.track
+                    .artist
+                    .to_lowercase()
+                    .cmp(&b.track.artist.to_lowercase())
+            })
+            .then_with(|| {
+                a.track
+                    .album
+                    .to_lowercase()
+                    .cmp(&b.track.album.to_lowercase())
+            })
+            .then_with(|| {
+                a.track
+                    .title
+                    .to_lowercase()
+                    .cmp(&b.track.title.to_lowercase())
+            })
+    });
+}
+
+fn lyrics_snippet(lyrics: &str, query: &str) -> Option<String> {
+    let lower = lyrics.to_lowercase();
+    let needle = query
+        .split_whitespace()
+        .find(|t| !t.is_empty())
+        .unwrap_or(query)
+        .to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    let idx = lower.find(&needle)?;
+    let start = lyrics[..idx]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or_else(|| idx.saturating_sub(40));
+    let end = lyrics[idx..]
+        .find('\n')
+        .map(|i| idx + i)
+        .unwrap_or_else(|| (idx + needle.len() + 60).min(lyrics.len()));
+    let mut snip = lyrics[start..end].trim().to_string();
+    if start > 0 {
+        snip = format!("…{snip}");
+    }
+    if end < lyrics.len() {
+        snip.push('…');
+    }
+    Some(snip)
+}
+
+fn search_tracks_fts(
+    connection: &Connection,
+    cover_root: &Path,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<SearchHitDto>, String> {
+    let match_query = build_fts_match_query(query)
+        .ok_or_else(|| "Empty search query".to_string())?;
+
+    // Over-fetch then re-rank so title hits aren't truncated by bm25 alone.
+    let fetch_limit = limit.saturating_mul(3).min(600);
+    let mut stmt = connection
+        .prepare(
+            // Column weights: title, artist, album, name, lyrics (higher = more important).
+            "SELECT f.track_id,
+                    snippet(tracks_fts, 4, '', '', '…', 10) AS lyrics_snip
+             FROM tracks_fts f
+             WHERE tracks_fts MATCH ?1
+             ORDER BY bm25(tracks_fts, 12.0, 6.0, 3.0, 10.0, 0.4)
+             LIMIT ?2",
+        )
+        .map_err(|e| format!("Failed to prepare FTS search: {e}"))?;
+
+    let rows = stmt
+        .query_map(params![match_query, fetch_limit], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })
+        .map_err(|e| format!("Failed to execute FTS search: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to read FTS hits: {e}"))?;
+
+    let mut hits = Vec::with_capacity(rows.len());
+    for (track_id, fts_snip) in rows {
+        let track = connection
+            .query_row(
+                &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM} WHERE t.id = ?1"),
+                params![track_id],
+                |row| row_to_track(row, cover_root),
+            )
+            .map_err(|e| format!("Failed to load FTS hit track: {e}"))?;
+        let matched_fields = matched_fields_for(&track, query);
+        let lyrics_snippet = if matched_fields.iter().any(|f| f == "lyrics") {
+            track
+                .lyrics
+                .as_deref()
+                .and_then(|l| lyrics_snippet(l, query))
+                .or(fts_snip.filter(|s| !s.trim().is_empty()))
+        } else {
+            None
+        };
+        hits.push(SearchHitDto {
+            track,
+            matched_fields,
+            lyrics_snippet,
+        });
+    }
+    sort_search_hits(&mut hits);
+    hits.truncate(limit as usize);
+    Ok(hits)
+}
+
+fn search_tracks_like(
+    connection: &Connection,
+    cover_root: &Path,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<SearchHitDto>, String> {
+    let pattern = format!("%{}%", query.trim());
+    let mut stmt = connection
+        .prepare(&format!(
+            "SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM}
+             WHERE t.title LIKE ?1 COLLATE NOCASE
+                OR t.artist LIKE ?1 COLLATE NOCASE
+                OR t.album LIKE ?1 COLLATE NOCASE
+                OR t.name LIKE ?1 COLLATE NOCASE
+                OR IFNULL(t.lyrics, '') LIKE ?1 COLLATE NOCASE
+             ORDER BY
+                CASE
+                  WHEN t.title LIKE ?1 COLLATE NOCASE
+                    OR t.name LIKE ?1 COLLATE NOCASE THEN 0
+                  WHEN t.artist LIKE ?1 COLLATE NOCASE THEN 1
+                  WHEN t.album LIKE ?1 COLLATE NOCASE THEN 2
+                  ELSE 3
+                END,
+                t.artist, t.album, t.track_number
+             LIMIT ?2"
+        ))
+        .map_err(|e| format!("Failed to prepare LIKE search: {e}"))?;
+    let tracks = stmt
+        .query_map(params![pattern, limit], |row| row_to_track(row, cover_root))
+        .map_err(|e| format!("Failed to execute LIKE search: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to read LIKE search results: {e}"))?;
+
+    let mut hits: Vec<SearchHitDto> = tracks
+        .into_iter()
+        .map(|track| {
+            let matched_fields = matched_fields_for(&track, query);
+            let lyrics_snippet = if matched_fields.iter().any(|f| f == "lyrics") {
+                track
+                    .lyrics
+                    .as_deref()
+                    .and_then(|l| lyrics_snippet(l, query))
+            } else {
+                None
+            };
+            SearchHitDto {
+                track,
+                matched_fields,
+                lyrics_snippet,
+            }
+        })
+        .collect();
+    sort_search_hits(&mut hits);
+    Ok(hits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
     fn open_test_library() -> Result<Library, String> {
         let connection = Connection::open_in_memory()
             .map_err(|error| format!("Failed to open in-memory database: {error}"))?;
+        let cover_root = std::env::temp_dir().join(format!("wave-test-covers-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(cover_root.join("thumbs"))
+            .map_err(|e| format!("Failed to create test cover dir: {e}"))?;
         let library = Library {
             db_path: PathBuf::from(":memory:"),
-            connection: Mutex::new(connection),
+            connection: RwLock::new(connection),
+            cover_root,
             default_playlist_id_cache: OnceLock::new(),
             favorites_playlist_id_cache: OnceLock::new(),
             app_handle: None,
@@ -2547,6 +3237,7 @@ mod tests {
             cover_art_data_url: None,
             cover_art_mime: None,
             cover_art_source: None,
+            album_art_id: None,
             fingerprint_sha256: None,
             acoustid_fingerprint: None,
             musicbrainz_recording_id: None,
@@ -2715,7 +3406,7 @@ mod tests {
         track_number: Option<i32>,
         disc_number: Option<i32>,
         year: Option<i32>,
-        cover: Option<&str>,
+        cover_art_id: Option<&str>,
     ) -> Track {
         let mut t = sample_track(id, path);
         t.artist = artist.to_string();
@@ -2724,31 +3415,40 @@ mod tests {
         t.track_number = track_number;
         t.disc_number = disc_number;
         t.year = year;
-        t.cover_art_data_url = cover.map(String::from);
-        t.cover_art_mime = cover.map(|_| "image/jpeg".to_string());
+        if let Some(art_id) = cover_art_id {
+            t.album_art_id = Some(art_id.to_string());
+            t.cover_art_mime = Some("image/jpeg".to_string());
+            t.cover_art_source = Some("test".to_string());
+        }
         t
     }
 
-    fn upsert_many(connection: &Connection, tracks: &[Track]) {
+    fn upsert_many(library: &Library, tracks: &[Track]) {
+        let connection = library.lock_connection().expect("connection");
         for track in tracks {
-            upsert_track(connection, track).expect("upsert");
+            if let Some(ref art_id) = track.album_art_id {
+                let thumb = library.cover_root.join("thumbs").join(format!("{art_id}.jpg"));
+                if !thumb.exists() {
+                    std::fs::write(&thumb, b"fake").expect("thumb");
+                }
+            }
+            upsert_track(&*connection, track).expect("upsert");
         }
     }
 
     fn seed_library_for_browse_tests(library: &Library) {
-        let connection = library.lock_connection().expect("connection");
         upsert_many(
-            &connection,
+            library,
             &[
                 // "Abbey Road" by The Beatles (album_artist set, 3 tracks).
-                track_with("b1", "/m/abbey-1.flac", "The Beatles", "Abbey Road", Some("The Beatles"), Some(1), Some(1), Some(1969), Some("data:abbey")),
-                track_with("b2", "/m/abbey-2.flac", "The Beatles", "Abbey Road", Some("The Beatles"), Some(2), Some(1), Some(1969), Some("data:abbey")),
-                track_with("b3", "/m/abbey-3.flac", "The Beatles", "Abbey Road", Some("The Beatles"), Some(3), Some(1), Some(1969), Some("data:abbey")),
+                track_with("b1", "/m/abbey-1.flac", "The Beatles", "Abbey Road", Some("The Beatles"), Some(1), Some(1), Some(1969), Some("art_abbey")),
+                track_with("b2", "/m/abbey-2.flac", "The Beatles", "Abbey Road", Some("The Beatles"), Some(2), Some(1), Some(1969), Some("art_abbey")),
+                track_with("b3", "/m/abbey-3.flac", "The Beatles", "Abbey Road", Some("The Beatles"), Some(3), Some(1), Some(1969), Some("art_abbey")),
                 // A second Beatles album so album_count > 1.
-                track_with("b4", "/m/letitbe-1.flac", "The Beatles", "Let It Be", Some("The Beatles"), Some(1), Some(1), Some(1970), Some("data:letitbe")),
+                track_with("b4", "/m/letitbe-1.flac", "The Beatles", "Let It Be", Some("The Beatles"), Some(1), Some(1), Some(1970), Some("art_letitbe")),
                 // "Greatest Hits" collision: Queen (2 tracks) vs ABBA (1 track, no cover).
-                track_with("q1", "/m/queen-1.flac", "Queen", "Greatest Hits", Some("Queen"), Some(1), Some(1), Some(1981), Some("data:queen")),
-                track_with("q2", "/m/queen-2.flac", "Queen", "Greatest Hits", Some("Queen"), Some(2), Some(1), Some(1981), Some("data:queen")),
+                track_with("q1", "/m/queen-1.flac", "Queen", "Greatest Hits", Some("Queen"), Some(1), Some(1), Some(1981), Some("art_queen")),
+                track_with("q2", "/m/queen-2.flac", "Queen", "Greatest Hits", Some("Queen"), Some(2), Some(1), Some(1981), Some("art_queen")),
                 track_with("a1", "/m/abba-1.flac", "ABBA", "Greatest Hits", Some("ABBA"), Some(1), Some(1), Some(1975), None),
                 // Album with no album_artist tag → resolved album_artist falls back to artist.
                 track_with("s1", "/m/solo-1.flac", "Solo", "No Album Artist", None, Some(1), Some(1), Some(2020), None),
@@ -2786,7 +3486,7 @@ mod tests {
         let abbey = albums.iter().find(|a| a.name == "Abbey Road").unwrap();
         assert_eq!(abbey.artist, "The Beatles");
         assert_eq!(abbey.year, Some(1969));
-        assert_eq!(abbey.cover_art_data_url.as_deref(), Some("data:abbey"));
+        assert!(abbey.cover_art_data_url.as_ref().is_some_and(|p| p.ends_with("art_abbey.jpg")));
         assert_eq!(abbey.cover_art_mime.as_deref(), Some("image/jpeg"));
 
         let abba = albums.iter().find(|a| a.name == "Greatest Hits" && a.album_artist.as_deref() == Some("ABBA")).unwrap();
@@ -2864,17 +3564,14 @@ mod tests {
     #[test]
     fn get_tracks_by_album_orders_by_disc_then_track() {
         let library = open_test_library().expect("library");
-        {
-            let connection = library.lock_connection().expect("connection");
-            upsert_many(
-                &connection,
-                &[
-                    track_with("d1", "/m/d1.flac", "X", "Double", Some("X"), Some(1), Some(2), None, None),
-                    track_with("d2", "/m/d2.flac", "X", "Double", Some("X"), Some(2), Some(1), None, None),
-                    track_with("d3", "/m/d3.flac", "X", "Double", Some("X"), Some(1), Some(1), None, None),
-                ],
-            );
-        }
+        upsert_many(
+            &library,
+            &[
+                track_with("d1", "/m/d1.flac", "X", "Double", Some("X"), Some(1), Some(2), None, None),
+                track_with("d2", "/m/d2.flac", "X", "Double", Some("X"), Some(2), Some(1), None, None),
+                track_with("d3", "/m/d3.flac", "X", "Double", Some("X"), Some(1), Some(1), None, None),
+            ],
+        );
 
         let tracks = library
             .get_tracks_by_album("Double", Some("X"))
@@ -3355,5 +4052,95 @@ mod tests {
                 .expect("sync")
         };
         assert!(sync.is_none());
+    }
+
+    #[test]
+    fn search_tracks_rich_matches_title_artist_album_and_lyrics() {
+        let library = open_test_library().expect("library");
+        {
+            let connection = library.lock_connection().expect("connection");
+            let mut rainy = sample_track("s1", "/m/rainy.flac");
+            rainy.title = "Rainy Day".into();
+            rainy.artist = "Storm Band".into();
+            rainy.album = "Cloud Nine".into();
+            rainy.lyrics = Some("walking through the thunder and rain tonight".into());
+            upsert_track(&*connection, &rainy).expect("upsert rainy");
+
+            let mut sunny = sample_track("s2", "/m/sunny.flac");
+            sunny.title = "Sunny Side".into();
+            sunny.artist = "Blue Sky".into();
+            sunny.album = "Clear Skies".into();
+            sunny.lyrics = Some("nothing but sunshine".into());
+            upsert_track(&*connection, &sunny).expect("upsert sunny");
+        }
+
+        let by_title = library.search_tracks_rich("Rainy", Some(20)).expect("title");
+        assert_eq!(by_title.len(), 1);
+        assert_eq!(by_title[0].track.title, "Rainy Day");
+        assert!(by_title[0].matched_fields.iter().any(|f| f == "title"));
+
+        let by_artist = library.search_tracks_rich("Storm", Some(20)).expect("artist");
+        assert_eq!(by_artist.len(), 1);
+        assert!(by_artist[0].matched_fields.iter().any(|f| f == "artist"));
+
+        let by_album = library.search_tracks_rich("Cloud", Some(20)).expect("album");
+        assert!(by_album.iter().any(|h| h.track.album == "Cloud Nine"));
+
+        let by_lyrics = library
+            .search_tracks_rich("thunder", Some(20))
+            .expect("lyrics");
+        assert_eq!(by_lyrics.len(), 1);
+        assert!(by_lyrics[0].matched_fields.iter().any(|f| f == "lyrics"));
+        assert!(by_lyrics[0]
+            .lyrics_snippet
+            .as_deref()
+            .is_some_and(|s| s.to_lowercase().contains("thunder")));
+    }
+
+    #[test]
+    fn search_tracks_orders_by_title_artist_album_lyrics() {
+        let library = open_test_library().expect("library");
+        {
+            let connection = library.lock_connection().expect("connection");
+
+            let mut lyrics_hit = sample_track("o1", "/m/lyrics.flac");
+            lyrics_hit.title = "Something Else".into();
+            lyrics_hit.artist = "Zulu".into();
+            lyrics_hit.album = "Zed".into();
+            lyrics_hit.lyrics = Some("echo echo echo in the night".into());
+            upsert_track(&*connection, &lyrics_hit).expect("lyrics");
+
+            let mut album_hit = sample_track("o2", "/m/album.flac");
+            album_hit.title = "Other Song".into();
+            album_hit.artist = "Yankee".into();
+            album_hit.album = "Echo Chamber".into();
+            album_hit.lyrics = None;
+            upsert_track(&*connection, &album_hit).expect("album");
+
+            let mut artist_hit = sample_track("o3", "/m/artist.flac");
+            artist_hit.title = "Different".into();
+            artist_hit.artist = "Echo Park".into();
+            artist_hit.album = "West".into();
+            artist_hit.lyrics = None;
+            upsert_track(&*connection, &artist_hit).expect("artist");
+
+            let mut title_hit = sample_track("o4", "/m/title.flac");
+            title_hit.title = "Echo".into();
+            title_hit.artist = "Alpha".into();
+            title_hit.album = "Beta".into();
+            title_hit.lyrics = None;
+            upsert_track(&*connection, &title_hit).expect("title");
+        }
+
+        let hits = library.search_tracks_rich("echo", Some(20)).expect("search");
+        assert!(hits.len() >= 4, "expected all four field matches, got {hits:?}");
+        assert_eq!(hits[0].track.title, "Echo");
+        assert!(hits[0].matched_fields.iter().any(|f| f == "title"));
+        assert_eq!(hits[1].track.artist, "Echo Park");
+        assert!(hits[1].matched_fields.iter().any(|f| f == "artist"));
+        assert_eq!(hits[2].track.album, "Echo Chamber");
+        assert!(hits[2].matched_fields.iter().any(|f| f == "album"));
+        assert!(hits[3].matched_fields.iter().any(|f| f == "lyrics"));
+        assert_eq!(hits[3].track.title, "Something Else");
     }
 }

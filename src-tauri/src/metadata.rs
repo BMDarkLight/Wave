@@ -52,9 +52,13 @@ pub struct Track {
     pub bit_depth: Option<i32>,
     pub lyrics: Option<String>,
     pub lyrics_source: Option<String>,
+    /// Absolute thumb path (or legacy data URL). Never a full-size image in list payloads.
     pub cover_art_data_url: Option<String>,
     pub cover_art_mime: Option<String>,
     pub cover_art_source: Option<String>,
+    /// Shared album-art row id (content hash of the thumb JPEG).
+    #[serde(default)]
+    pub album_art_id: Option<String>,
     pub fingerprint_sha256: Option<String>,
     pub acoustid_fingerprint: Option<String>,
     pub musicbrainz_recording_id: Option<String>,
@@ -109,9 +113,20 @@ pub fn is_supported_audio_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Extract tags + embedded cover thumb. Online Cover Art Archive lookup is
+/// skipped here so sync stays fast — call [`enrich_cover_art_online`] later.
 pub fn extract_track(app: Option<&tauri::AppHandle>, path: &str) -> Result<Track, String> {
+    extract_track_with_options(app, path, false)
+}
+
+/// Like [`extract_track`], optionally running online cover enrichment inline.
+pub fn extract_track_with_options(
+    app: Option<&tauri::AppHandle>,
+    path: &str,
+    online_cover: bool,
+) -> Result<Track, String> {
     if path.starts_with("content://") {
-        return extract_track_content_uri(app, path);
+        return extract_track_content_uri(app, path, online_cover);
     }
 
     let path_buf = PathBuf::from(path);
@@ -221,6 +236,7 @@ pub fn extract_track(app: Option<&tauri::AppHandle>, path: &str) -> Result<Track
         cover_art_data_url: None,
         cover_art_mime: None,
         cover_art_source: None,
+        album_art_id: None,
         fingerprint_sha256,
         acoustid_fingerprint: tags.acoustid_fingerprint,
         musicbrainz_recording_id: tags.musicbrainz_recording_id,
@@ -231,31 +247,10 @@ pub fn extract_track(app: Option<&tauri::AppHandle>, path: &str) -> Result<Track
     };
 
     if let Some(art) = cover_art {
-        let mime = art.mime.clone();
-        let source = art.source.clone();
-        let saved = if let Some(app_handle) = app {
-            crate::cover_art::save_cover_art(
-                app_handle,
-                &track_id,
-                crate::cover_art::ExtractedCoverArt {
-                    data: art.data,
-                    mime: mime.clone(),
-                },
-            )
-        } else {
-            crate::cover_art::encode_cover_data_url(art.data, &mime)
-        };
-        match saved {
-            Ok(data_url) => {
-                track.cover_art_data_url = Some(data_url);
-                track.cover_art_mime = Some(mime);
-                track.cover_art_source = Some(source);
-            }
-            Err(e) => tracing::warn!("Cover art save skipped: {e}"),
-        }
+        apply_extracted_cover(app, &mut track, art.data, &art.mime, &art.source);
     }
 
-    if track.cover_art_data_url.is_none() {
+    if online_cover && track.album_art_id.is_none() && track.cover_art_data_url.is_none() {
         if let Some(app_handle) = app {
             enrich_cover_art_online(app_handle, &mut track);
         }
@@ -263,7 +258,11 @@ pub fn extract_track(app: Option<&tauri::AppHandle>, path: &str) -> Result<Track
     Ok(track)
 }
 
-fn extract_track_content_uri(app: Option<&tauri::AppHandle>, path: &str) -> Result<Track, String> {
+fn extract_track_content_uri(
+    app: Option<&tauri::AppHandle>,
+    path: &str,
+    online_cover: bool,
+) -> Result<Track, String> {
     let Some(app_handle) = app else {
         return Err("content:// metadata requires an app handle".into());
     };
@@ -322,6 +321,7 @@ fn extract_track_content_uri(app: Option<&tauri::AppHandle>, path: &str) -> Resu
         cover_art_data_url: None,
         cover_art_mime: None,
         cover_art_source: None,
+        album_art_id: None,
         fingerprint_sha256: None,
         acoustid_fingerprint: None,
         musicbrainz_recording_id: None,
@@ -332,28 +332,56 @@ fn extract_track_content_uri(app: Option<&tauri::AppHandle>, path: &str) -> Resu
     };
 
     if let Some(cover_bytes) = probed.cover_jpeg {
-        match crate::cover_art::save_cover_art(
-            app_handle,
-            &track_id,
-            crate::cover_art::ExtractedCoverArt {
-                data: cover_bytes,
-                mime: "image/jpeg".to_string(),
-            },
-        ) {
-            Ok(data_url) => {
-                track.cover_art_data_url = Some(data_url);
-                track.cover_art_mime = Some("image/jpeg".to_string());
-                track.cover_art_source = Some("embedded".to_string());
-            }
-            Err(e) => tracing::warn!("Cover art save skipped (URI): {e}"),
-        }
+        apply_extracted_cover(
+            Some(app_handle),
+            &mut track,
+            cover_bytes,
+            "image/jpeg",
+            "embedded",
+        );
     }
 
-    if track.cover_art_data_url.is_none() {
+    if online_cover && track.album_art_id.is_none() && track.cover_art_data_url.is_none() {
         enrich_cover_art_online(app_handle, &mut track);
     }
 
     Ok(track)
+}
+
+fn apply_extracted_cover(
+    app: Option<&tauri::AppHandle>,
+    track: &mut Track,
+    data: Vec<u8>,
+    mime: &str,
+    source: &str,
+) {
+    if let Some(app_handle) = app {
+        match crate::cover_art::save_album_art_thumb(
+            app_handle,
+            crate::cover_art::ExtractedCoverArt {
+                data,
+                mime: mime.to_string(),
+            },
+        ) {
+            Ok(saved) => {
+                track.album_art_id = Some(saved.id);
+                track.cover_art_data_url =
+                    Some(saved.thumb_abs_path.to_string_lossy().into_owned());
+                track.cover_art_mime = Some(saved.mime);
+                track.cover_art_source = Some(source.to_string());
+            }
+            Err(e) => tracing::warn!("Cover art thumb save skipped: {e}"),
+        }
+    } else {
+        match crate::cover_art::encode_cover_data_url(data, mime) {
+            Ok(data_url) => {
+                track.cover_art_data_url = Some(data_url);
+                track.cover_art_mime = Some("image/jpeg".into());
+                track.cover_art_source = Some(source.to_string());
+            }
+            Err(e) => tracing::warn!("Cover art encode skipped: {e}"),
+        }
+    }
 }
 
 fn merge_tags(target: &mut Tags, tags: &[Tag]) {
@@ -404,7 +432,7 @@ fn extract_cover_art(visuals: &[Visual]) -> Option<CoverArt> {
     if visual.data.is_empty() {
         return None;
     }
-    // Cap absurdly large APIC/frames; normal album art is resized in cover_art::save_cover_art.
+    // Cap absurdly large APIC/frames; normal album art is resized in cover_art::save_album_art_thumb.
     if visual.data.len() > MAX_EMBEDDED_ART_BYTES {
         tracing::warn!(
             "Skipping embedded cover art ({} bytes > {} limit)",
@@ -425,6 +453,54 @@ fn extract_cover_art(visuals: &[Visual]) -> Option<CoverArt> {
         mime,
         source: "embedded".to_string(),
     })
+}
+
+/// Extract full embedded cover as a one-shot data URL (not persisted).
+pub fn extract_full_cover_data_url(app: Option<&tauri::AppHandle>, path: &str) -> Result<Option<String>, String> {
+    if path.starts_with("content://") {
+        let Some(app_handle) = app else {
+            return Err("content:// cover requires an app handle".into());
+        };
+        let probed = crate::android::metadata::probe_content_uri(app_handle, path)?;
+        return Ok(probed.cover_jpeg.map(|bytes| {
+            crate::cover_art::full_cover_data_url(bytes, "image/jpeg")
+        }));
+    }
+
+    let path_buf = PathBuf::from(path);
+    if !path_buf.is_file() {
+        return Err("Audio file does not exist".to_string());
+    }
+
+    let file = File::open(&path_buf).map_err(|error| format!("Failed to open audio file: {error}"))?;
+    let source = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
+    let mut hint = Hint::new();
+    if let Some(extension) = path_buf.extension().and_then(|extension| extension.to_str()) {
+        hint.with_extension(extension);
+    }
+
+    let mut probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            source,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|error| format!("Failed to inspect audio file: {error}"))?;
+
+    let mut cover_art = None;
+    if let Some(metadata) = probed.metadata.get() {
+        if let Some(revision) = metadata.current() {
+            cover_art = extract_cover_art(revision.visuals());
+        }
+    }
+    if cover_art.is_none() {
+        if let Some(revision) = probed.format.metadata().current() {
+            cover_art = extract_cover_art(revision.visuals());
+        }
+    }
+
+    Ok(cover_art.map(|art| crate::cover_art::full_cover_data_url(art.data, &art.mime)))
 }
 
 fn read_sidecar_lyrics(path: &Path) -> Option<String> {
@@ -465,7 +541,7 @@ fn hash_file_sha256(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn enrich_cover_art_online(app: &tauri::AppHandle, track: &mut Track) {
+pub fn enrich_cover_art_online(app: &tauri::AppHandle, track: &mut Track) {
     let Some(release_id) = find_musicbrainz_release_id(track) else {
         return;
     };
@@ -483,21 +559,13 @@ fn enrich_cover_art_online(app: &tauri::AppHandle, track: &mut Track) {
         Err(_) => return,
     };
 
-    let data_url = match crate::cover_art::save_cover_art(
-        app,
-        &track.id,
-        crate::cover_art::ExtractedCoverArt {
-            data: bytes,
-            mime: "image/jpeg".to_string(),
-        },
-    ) {
-        Ok(url) => url,
-        Err(_) => return,
-    };
-
-    track.cover_art_data_url = Some(data_url);
-    track.cover_art_mime = Some("image/jpeg".to_string());
-    track.cover_art_source = Some("cover-art-archive".to_string());
+    apply_extracted_cover(
+        Some(app),
+        track,
+        bytes,
+        "image/jpeg",
+        "cover-art-archive",
+    );
 }
 
 pub fn enrich_lyrics_online(track: &mut Track) {

@@ -76,9 +76,11 @@ export interface Track {
   bit_depth: number | null;
   lyrics: string | null;
   lyrics_source: string | null;
+  /** Absolute thumb path, data URL, or https URL. */
   cover_art_data_url: string | null;
   cover_art_mime: string | null;
   cover_art_source: string | null;
+  album_art_id?: string | null;
   fingerprint_sha256: string | null;
   acoustid_fingerprint: string | null;
   musicbrainz_recording_id: string | null;
@@ -129,8 +131,10 @@ export interface AlbumSummary {
   artist: string;              // representative track artist
   track_count: number;
   year: number | null;
-  cover_art_data_url: string | null; // representative cover (data: or https URL)
+  cover_art_data_url: string | null; // thumb path for list/grid fallback
   cover_art_mime: string | null;
+  /** Track path used to extract a full-resolution embedded cover. */
+  cover_track_path: string | null;
 }
 
 /** Summary of a distinct artist in the library, with aggregate counts. */
@@ -417,6 +421,30 @@ export const searchLibraryTracks = (
   });
 };
 
+export type SearchMatchField =
+  | "title"
+  | "artist"
+  | "album"
+  | "name"
+  | "lyrics";
+
+export interface SearchHit {
+  track: Track;
+  matched_fields: SearchMatchField[];
+  lyrics_snippet: string | null;
+}
+
+/** Realtime search across title, artist, album, filename, and lyrics. */
+export const searchLibrary = (
+  query: string,
+  limit?: number,
+): Promise<SearchHit[]> => {
+  return safeInvoke<SearchHit[]>("search_library", {
+    query,
+    limit: limit ?? null,
+  });
+};
+
 export const addTrackToPlaylistById = (id: string, path: string): Promise<Track> => {
   return safeInvoke<Track>("add_track_to_playlist_by_id", { id, path });
 };
@@ -435,6 +463,51 @@ export const removeTrackFromLibrary = (path: string): Promise<void> => {
 
 export const fetchLyricsForTrack = (path: string): Promise<Track | null> => {
   return safeInvoke<Track>("fetch_lyrics_for_track", { path }).catch(() => null);
+};
+
+/** Full track row including lyrics (list queries omit lyrics). */
+export const getTrackDetails = (path: string): Promise<Track | null> => {
+  return safeInvoke<Track | null>("get_track_details", { path }).catch(() => null);
+};
+
+/** Full embedded cover as a one-shot data URL (not stored). */
+export const getTrackFullCover = (path: string): Promise<string | null> => {
+  return safeInvoke<string | null>("get_track_full_cover", { path }).catch(() => null);
+};
+
+/** Resolve cover URL for <img src>. Absolute paths go through convertFileSrc. */
+export const resolveCoverSrc = async (
+  cover: string | null | undefined,
+): Promise<string | null> => {
+  if (!cover) return null;
+  if (
+    cover.startsWith("data:") ||
+    cover.startsWith("http://") ||
+    cover.startsWith("https://") ||
+    cover.startsWith("asset:") ||
+    cover.startsWith("blob:")
+  ) {
+    return cover;
+  }
+
+  // Strip file:// so convertFileSrc gets a real filesystem path.
+  let path = cover;
+  if (path.startsWith("file://")) {
+    try {
+      path = decodeURIComponent(path.replace(/^file:\/\//, ""));
+    } catch {
+      path = path.replace(/^file:\/\//, "");
+    }
+  }
+
+  try {
+    await tauriInitialized;
+    const core = await import("@tauri-apps/api/core");
+    return core.convertFileSrc(path);
+  } catch {
+    // Never return a bare path / file:// — WebView CSP will break the <img>.
+    return null;
+  }
 };
 
 export const clearPlaylistById = (id: string): Promise<void> => {
@@ -711,6 +784,39 @@ export interface MediaControlHandlers {
   /** Android notification "repeat" button tapped. */
   onRepeat?: () => void;
 }
+
+export const listenToSyncProgress = async (
+  onProgress: (payload: {
+    playlist_id?: string;
+    phase?: string;
+    scanned?: number;
+    to_add?: number;
+    to_remove?: number;
+    processed?: number;
+    extracted?: number;
+    added?: number;
+    removed?: number;
+  }) => void,
+): Promise<() => void> => {
+  await tauriInitialized;
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await listen("sync-progress", (e) => {
+    onProgress((e.payload ?? {}) as {
+      playlist_id?: string;
+      phase?: string;
+      scanned?: number;
+      to_add?: number;
+      to_remove?: number;
+      processed?: number;
+      extracted?: number;
+      added?: number;
+      removed?: number;
+    });
+  });
+  return () => {
+    unlisten();
+  };
+};
 
 export const listenToMediaControls = async (
   handlers: MediaControlHandlers

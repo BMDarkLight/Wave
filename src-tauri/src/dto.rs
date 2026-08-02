@@ -70,6 +70,8 @@ pub struct AlbumSummaryDto {
     /// Representative cover art for the album (may be a `data:` URL or HTTPS URL).
     pub cover_art_data_url: Option<String>,
     pub cover_art_mime: Option<String>,
+    /// Path of a track that carries this album's cover (for full-res extraction).
+    pub cover_track_path: Option<String>,
 }
 
 /// Summary of a distinct artist in the library, used for browse/discography views.
@@ -78,6 +80,15 @@ pub struct ArtistSummaryDto {
     pub name: String,
     pub track_count: i64,
     pub album_count: i64,
+}
+
+/// One realtime search hit with which fields matched and an optional lyrics snippet.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchHitDto {
+    pub track: Track,
+    /// Fields that matched: `title`, `artist`, `album`, `name`, `lyrics`.
+    pub matched_fields: Vec<String>,
+    pub lyrics_snippet: Option<String>,
 }
 
 /// Equalizer settings returned by `get_eq_settings`.

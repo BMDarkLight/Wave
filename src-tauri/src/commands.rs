@@ -6,13 +6,13 @@ use crate::app_settings::{AppSettings, AppSettingsState};
 use crate::audio::player::AudioPlayer;
 use crate::dto::{
     AlbumSummaryDto, ArtistSummaryDto, CloseAction, EqSettingsDto, ImportResultDto,
-    PlaybackModeDto, PlaybackStateDto, QueueDto, QueueStateDto,
+    PlaybackModeDto, PlaybackStateDto, QueueDto, QueueStateDto, SearchHitDto,
 };
 use crate::library::{Library, PlaylistInfo};
 use crate::media_controls::TrackMetadata;
 use crate::metadata::{enrich_lyrics_online, is_supported_audio_file, supported_audio_extensions, Track};
 use crate::path_validation::{validate_audio_path, validate_safe_output_path};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
 
 /// Lazily-initialized audio engine. Creation is deferred until first use so
@@ -194,6 +194,7 @@ fn placeholder_track(path: &str) -> Track {
         cover_art_data_url: None,
         cover_art_mime: None,
         cover_art_source: None,
+        album_art_id: None,
         fingerprint_sha256: None,
         acoustid_fingerprint: None,
         musicbrainz_recording_id: None,
@@ -361,6 +362,9 @@ pub(crate) fn handle_native_media_action(app: &tauri::AppHandle, action: &str) -
 
     match action {
         "play" => {
+            // Optimistic MediaSession update so the notification doesn't lag ExoPlayer.
+            let position = with_app_player(app, |player| Ok(player.position_seconds())).unwrap_or(0.0);
+            app.state::<MediaBridgeState>().0.set_playing(position);
             let position = with_app_player(app, |player| {
                 if player.get_current_path().is_none() {
                     return Ok(None);
@@ -376,6 +380,8 @@ pub(crate) fn handle_native_media_action(app: &tauri::AppHandle, action: &str) -
             Ok(())
         }
         "pause" => {
+            let position = with_app_player(app, |player| Ok(player.position_seconds())).unwrap_or(0.0);
+            app.state::<MediaBridgeState>().0.set_paused(position);
             let position = with_app_player(app, |player| {
                 let position = player.position_seconds();
                 player.pause().map_err(|e| e.to_string())?;
@@ -1279,6 +1285,17 @@ pub async fn search_library_tracks(
     lock_library(&library)?.search_tracks_limited(&query, Some(capped))
 }
 
+/// Realtime library search with matched-field metadata and lyrics snippets.
+#[tauri::command]
+pub async fn search_library(
+    query: String,
+    limit: Option<u32>,
+    library: tauri::State<'_, LibraryState>,
+) -> Result<Vec<SearchHitDto>, String> {
+    let capped = limit.unwrap_or(80).min(200);
+    lock_library(&library)?.search_tracks_rich(&query, Some(capped))
+}
+
 #[tauri::command]
 pub async fn add_track_to_playlist_by_id(
     id: String,
@@ -1399,6 +1416,30 @@ pub async fn get_artist_albums(
 }
 
 #[tauri::command]
+pub async fn get_track_details(
+    path: String,
+    library: tauri::State<'_, LibraryState>,
+) -> Result<Option<Track>, String> {
+    validate_audio_path(&path)?;
+    lock_library(&library)?.get_track_details(&path)
+}
+
+/// Extract full embedded cover art as a one-shot data URL (not persisted).
+/// Used when the lyrics sidebar needs a large album image.
+#[tauri::command]
+pub async fn get_track_full_cover(
+    path: String,
+    app: tauri::AppHandle,
+) -> Result<Option<String>, String> {
+    validate_audio_path(&path)?;
+    let app_clone = app.clone();
+    blocking(move || {
+        crate::metadata::extract_full_cover_data_url(Some(&app_clone), &path)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn fetch_lyrics_for_track(
     path: String,
     app: tauri::AppHandle,
@@ -1412,6 +1453,9 @@ pub async fn fetch_lyrics_for_track(
     let mut track = blocking(move || {
         let library = app_clone.state::<LibraryState>();
         let lib = library.0.lock().map_err(|e| e.to_string())?;
+        if let Ok(Some(detailed)) = lib.get_track_details(&p) {
+            return Ok(detailed);
+        }
         Ok(resolve_track(&lib, &p))
     })
     .await?;
@@ -2067,6 +2111,17 @@ pub async fn sync_playlist_folder(
             lib.diff_playlist_paths(&playlist_id_clone, &desired)?
         };
 
+        let _ = app_clone.emit(
+            "sync-progress",
+            serde_json::json!({
+                "playlist_id": playlist_id_clone,
+                "phase": "diff",
+                "scanned": desired.len(),
+                "to_add": to_add.len(),
+                "to_remove": to_remove.len(),
+            }),
+        );
+
         if to_remove.is_empty() && to_add.is_empty() {
             return Ok(SyncPlaylistResult {
                 added: 0,
@@ -2081,8 +2136,10 @@ pub async fn sync_playlist_folder(
         };
 
         // Heavy work with the library unlocked so playlist browsing stays live.
+        // Online cover enrich is deferred so files appear in the library quickly.
         let mut extracted = Vec::new();
         let mut link_ids = Vec::new();
+        let mut processed = 0usize;
         for chunk in to_add.chunks(BATCH_SIZE) {
             for path in chunk {
                 let key = normalize_import_path(path);
@@ -2097,13 +2154,59 @@ pub async fn sync_playlist_folder(
                         errors.push(format!("{path}: {e}"));
                     }
                 }
+                processed += 1;
             }
+            let _ = app_clone.emit(
+                "sync-progress",
+                serde_json::json!({
+                    "playlist_id": playlist_id_clone,
+                    "phase": "extract",
+                    "processed": processed,
+                    "to_add": to_add.len(),
+                    "extracted": extracted.len(),
+                }),
+            );
         }
+
+        let need_online_art: Vec<Track> = extracted
+            .iter()
+            .filter(|t| t.album_art_id.is_none())
+            .cloned()
+            .collect();
 
         let (added, removed) = {
             let lib = library.0.lock().map_err(|e| e.to_string())?;
             lib.apply_playlist_sync(&playlist_id_clone, &to_remove, &extracted, &link_ids)?
         };
+
+        let _ = app_clone.emit(
+            "sync-progress",
+            serde_json::json!({
+                "playlist_id": playlist_id_clone,
+                "phase": "done",
+                "added": added,
+                "removed": removed,
+            }),
+        );
+
+        if !need_online_art.is_empty() {
+            let enrich_app = app_clone.clone();
+            std::thread::spawn(move || {
+                for mut track in need_online_art {
+                    crate::metadata::enrich_cover_art_online(&enrich_app, &mut track);
+                    if track.album_art_id.is_none() {
+                        continue;
+                    }
+                    if let Ok(lib) = enrich_app.state::<LibraryState>().0.lock() {
+                        let _ = lib.apply_track_art_update(&track);
+                    }
+                }
+                let _ = enrich_app.emit(
+                    "sync-progress",
+                    serde_json::json!({ "phase": "art_done" }),
+                );
+            });
+        }
 
         Ok(SyncPlaylistResult {
             added,

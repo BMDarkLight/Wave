@@ -139,8 +139,12 @@ pub fn run() {
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(400));
+                    // Media actions are handled by the dedicated worker; tick
+                    // only retries JNI install and auto-advances the queue.
                     #[cfg(target_os = "android")]
-                    android::media_bridge::drain_actions(&tick_app);
+                    {
+                        android::media_bridge::drain_actions(&tick_app);
+                    }
                     commands::tick_auto_advance(&tick_app);
                 }
             });
@@ -225,6 +229,7 @@ pub fn run() {
             commands::rename_playlist,
             commands::get_playlist_tracks_by_id,
             commands::search_library_tracks,
+            commands::search_library,
             commands::add_track_to_playlist_by_id,
             commands::remove_track_from_playlist_by_id,
             commands::remove_track_from_library,
@@ -238,6 +243,8 @@ pub fn run() {
             commands::get_album_tracks,
             commands::get_artist_tracks,
             commands::get_artist_albums,
+            commands::get_track_details,
+            commands::get_track_full_cover,
             commands::add_to_queue,
             commands::queue_insert_next,
             commands::remove_from_queue,

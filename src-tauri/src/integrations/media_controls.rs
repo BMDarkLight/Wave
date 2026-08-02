@@ -30,6 +30,16 @@ mod cover_art {
 
         pub fn resolve_path(&mut self, cover_url: Option<&str>) -> Option<PathBuf> {
             let url = cover_url?;
+            // Prefer shared album thumb file paths — no temp rewrite.
+            if let Some(path) = url.strip_prefix("file://") {
+                let p = PathBuf::from(path);
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+            if std::path::Path::new(url).is_file() {
+                return Some(PathBuf::from(url));
+            }
             if url.starts_with("data:") {
                 let (header, data) = url.split_once(',')?;
                 let mime = header.strip_prefix("data:")?.split(';').next()?;
@@ -42,16 +52,20 @@ mod cover_art {
                     _ => return None,
                 };
                 let bytes = STANDARD.decode(data).ok()?;
-                let path = std::env::temp_dir().join(format!("wave-cover.{ext}"));
+                let path = std::env::temp_dir().join(format!(
+                    "wave-cover-{}-{}.{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0),
+                    ext
+                ));
                 std::fs::write(&path, bytes).ok()?;
-                self.path = Some(path.clone());
+                if let Some(old) = self.path.replace(path.clone()) {
+                    let _ = std::fs::remove_file(old);
+                }
                 return Some(path);
-            }
-            if let Some(path) = url.strip_prefix("file://") {
-                return Some(PathBuf::from(path));
-            }
-            if std::path::Path::new(url).exists() {
-                return Some(PathBuf::from(url));
             }
             None
         }
@@ -72,27 +86,56 @@ mod cover_art {
         /// HTTP restrictions, which can block loopback artwork servers.
         #[cfg(target_os = "android")]
         pub fn resolve_artwork_url(&mut self, cover_url: Option<&str>) -> Option<String> {
-            let url = cover_url?;
-
-            if url.starts_with("http://")
-                || url.starts_with("https://")
-                || url.starts_with("data:")
-                || url.starts_with("file://")
-            {
-                return Some(url.to_string());
-            }
-
-            std::path::Path::new(url)
-                .exists()
-                .then(|| format!("file://{url}"))
+            normalize_cover_url(cover_url)
         }
 
+        /// Souvlaki (macOS/Linux) needs a real URL with a scheme. Bare
+        /// absolute thumb paths from the library crash NSURL / MPRIS.
         #[cfg(not(target_os = "android"))]
         pub fn resolve_url(&mut self, cover_url: Option<&str>) -> Option<String> {
-            cover_url.map(str::to_string)
+            normalize_cover_url(cover_url)
         }
     }
 
+    fn normalize_cover_url(cover_url: Option<&str>) -> Option<String> {
+        let url = cover_url?.trim();
+        if url.is_empty() {
+            return None;
+        }
+
+        if url.starts_with("http://")
+            || url.starts_with("https://")
+            || url.starts_with("data:")
+            || url.starts_with("file://")
+        {
+            return Some(url.to_string());
+        }
+
+        let path = std::path::Path::new(url);
+        if !path.is_absolute() {
+            return None;
+        }
+        // Prefer canonicalize so spaces / symlinks become a real file URL.
+        let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if !abs.is_file() {
+            return None;
+        }
+        url::Url::from_file_path(&abs)
+            .ok()
+            .map(|u| u.to_string())
+            .or_else(|| {
+                // Fallback for exotic paths Url rejects.
+                let s = abs.to_string_lossy();
+                #[cfg(windows)]
+                {
+                    Some(format!("file:///{}", s.replace('\\', "/")))
+                }
+                #[cfg(not(windows))]
+                {
+                    Some(format!("file://{s}"))
+                }
+            })
+    }
 }
 
 #[cfg(target_os = "windows")]

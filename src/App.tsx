@@ -1,6 +1,6 @@
 // The Code for Frontend of Wave is currently completely AI Generated and may contain bugs or rough edges. Please report any issues you encounter at
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import trayTemplate from "../assets/tray-template.svg";
 import {
@@ -36,6 +36,7 @@ import {
   BiMinus,
   BiImage,
   BiAlignLeft,
+  BiSearch,
 } from "react-icons/bi";
 import {
   addTrackToPlaylistById,
@@ -47,6 +48,9 @@ import {
   deletePlaylist,
   exportPlaylist,
   fetchLyricsForTrack,
+  getTrackDetails,
+  getTrackFullCover,
+  resolveCoverSrc,
   getFileName,
   getFavorites,
   getPlaybackMode,
@@ -74,6 +78,7 @@ import {
   resumeTrack,
   savePlaylistDialog,
   searchLibraryTracks,
+  searchLibrary,
   seekTrack,
   selectAudioFile,
   selectAudioFolder,
@@ -103,11 +108,13 @@ import {
   syncPlaylistFolder,
   isFolderSetupDismissed,
   dismissFolderSetup,
+  listenToSyncProgress,
   type EqSettings,
   type PlaybackMode,
   type PlaybackState,
   type PlaylistInfo,
   type QueueTrackState,
+  type SearchHit,
   type Track,
 } from "./utils/player";
 import { isAndroid } from "./utils/platform";
@@ -201,16 +208,32 @@ const Artwork = ({
   track,
   fallback,
   className,
+  overrideSrc,
 }: {
   track?: Track | null;
   fallback: string;
   className: string;
+  /** Optional full-resolution cover (lyrics panel). */
+  overrideSrc?: string | null;
 }) => {
-  if (track?.cover_art_data_url) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const raw = overrideSrc || track?.cover_art_data_url || null;
+    void resolveCoverSrc(raw).then((resolved) => {
+      if (!cancelled) setSrc(resolved);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [track?.cover_art_data_url, overrideSrc]);
+
+  if (src) {
     return (
       <img
         className={className}
-        src={track.cover_art_data_url}
+        src={src}
         alt={`${getTrackTitle(track)} cover`}
         draggable={false}
       />
@@ -219,6 +242,62 @@ const Artwork = ({
 
   return <div className={className}>{fallback}</div>;
 };
+
+const MATCH_FIELD_LABEL: Record<string, string> = {
+  title: "Title",
+  artist: "Artist",
+  album: "Album",
+  name: "File",
+  lyrics: "Lyrics",
+};
+
+function highlightMatch(text: string, query: string): ReactNode {
+  const q = query.trim();
+  if (!q || !text) return text;
+  const tokens = q
+    .split(/\s+/)
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  if (!tokens.length) return text;
+
+  const lower = text.toLowerCase();
+  const ranges: Array<[number, number]> = [];
+  for (const token of tokens) {
+    const needle = token.toLowerCase();
+    let from = 0;
+    while (from < lower.length) {
+      const idx = lower.indexOf(needle, from);
+      if (idx < 0) break;
+      ranges.push([idx, idx + needle.length]);
+      from = idx + needle.length;
+    }
+  }
+  if (!ranges.length) return text;
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const range of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && range[0] <= last[1]) {
+      last[1] = Math.max(last[1], range[1]);
+    } else {
+      merged.push([...range] as [number, number]);
+    }
+  }
+
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  merged.forEach(([start, end], i) => {
+    if (cursor < start) parts.push(text.slice(cursor, start));
+    parts.push(
+      <mark key={`${start}-${i}`} className="search-hit-mark">
+        {text.slice(start, end)}
+      </mark>,
+    );
+    cursor = end;
+  });
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
+}
 
 function App() {
   const [playbackState, setPlaybackState] =
@@ -246,12 +325,32 @@ function App() {
     null,
   );
 
-  // Album / artist page navigation
-  const [viewingAlbum, setViewingAlbum] = useState<{
-    name: string;
-    albumArtist: string | null;
-  } | null>(null);
-  const [viewingArtist, setViewingArtist] = useState<string | null>(null);
+  // Album / artist browse stack (artist → album nests correctly for back)
+  type BrowsePage =
+    | { kind: "artist"; name: string }
+    | { kind: "album"; name: string; albumArtist: string | null };
+  const [browseStack, setBrowseStack] = useState<BrowsePage[]>([]);
+  const browseTop = browseStack[browseStack.length - 1] ?? null;
+  const viewingAlbum =
+    browseTop?.kind === "album"
+      ? { name: browseTop.name, albumArtist: browseTop.albumArtist }
+      : null;
+  const viewingArtist =
+    browseTop?.kind === "artist" ? browseTop.name : null;
+
+  const openArtistPage = (name: string) => {
+    setBrowseStack([{ kind: "artist", name }]);
+  };
+  const openAlbumPage = (name: string, albumArtist: string | null) => {
+    setBrowseStack([{ kind: "album", name, albumArtist }]);
+  };
+  const pushAlbumPage = (name: string, albumArtist: string | null) => {
+    setBrowseStack((stack) => [...stack, { kind: "album", name, albumArtist }]);
+  };
+  const browseBack = () => {
+    setBrowseStack((stack) => stack.slice(0, -1));
+  };
+  const clearBrowse = () => setBrowseStack([]);
 
   // Favorited track paths (for heart toggle state in the track list)
   const [favoritePaths, setFavoritePaths] = useState<Set<string>>(new Set());
@@ -269,6 +368,49 @@ function App() {
   const [librarySearchLoading, setLibrarySearchLoading] = useState(false);
   const [librarySearchAdding, setLibrarySearchAdding] = useState(false);
   const librarySearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Main library realtime search (title / artist / album / lyrics)
+  const [mainSearchQuery, setMainSearchQuery] = useState("");
+  const [mainSearchHits, setMainSearchHits] = useState<SearchHit[]>([]);
+  const [mainSearchLoading, setMainSearchLoading] = useState(false);
+  const [mainSearchOpen, setMainSearchOpen] = useState(false);
+  const mainSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mainSearchReqId = useRef(0);
+  const mainSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
+
+  const focusMainSearchInput = () => {
+    const mobile =
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 900px)").matches;
+    const input = mobile
+      ? mobileSearchInputRef.current
+      : mainSearchInputRef.current;
+    input?.focus();
+    input?.select();
+  };
+
+  const openMainSearch = () => {
+    clearBrowse();
+    setMainSearchOpen(true);
+  };
+  const closeMainSearch = () => {
+    setMainSearchOpen(false);
+    setMainSearchQuery("");
+    setMainSearchHits([]);
+  };
+  const toggleMainSearch = () => {
+    if (mainSearchOpen) closeMainSearch();
+    else openMainSearch();
+  };
+
+  // Leaving the playlist list for artist/album dismisses search.
+  useEffect(() => {
+    if (browseStack.length === 0) return;
+    setMainSearchOpen(false);
+    setMainSearchQuery("");
+    setMainSearchHits([]);
+  }, [browseStack]);
 
   // Delete-playlist confirmation modal
   const [deletePlaylistConfirm, setDeletePlaylistConfirm] = useState<{
@@ -292,6 +434,7 @@ function App() {
 
   // Lyrics panel
   const [lyricsPanelTrack, setLyricsPanelTrack] = useState<Track | null>(null);
+  const [lyricsFullCover, setLyricsFullCover] = useState<string | null>(null);
   const activeLyricLineRef = useRef<HTMLButtonElement>(null);
 
   // Audio output device selection
@@ -359,6 +502,18 @@ function App() {
   const [showFolderSetup, setShowFolderSetup] = useState(false);
   const [isScanningFolder, setIsScanningFolder] = useState(false);
   const [folderScanIsSync, setFolderScanIsSync] = useState(false);
+
+  // Opening search dismisses drawers/panels that would cover it.
+  useEffect(() => {
+    if (!mainSearchOpen) return;
+    setMobileNavOpen(false);
+    setShowQueue(false);
+    setShowDeviceList(false);
+    setLyricsPanelTrack(null);
+    // Wait a beat so the mobile topbar expansion has started before focusing.
+    const id = window.setTimeout(() => focusMainSearchInput(), 180);
+    return () => window.clearTimeout(id);
+  }, [mainSearchOpen]);
 
   const clampRightPanelWidth = (width: number, sidebar = sidebarWidth) => {
     const reserved = sidebar + 8 + 340; // handles + minimum main column
@@ -447,6 +602,7 @@ function App() {
   // Panel toggles (only one open at a time)
   const handleToggleQueue = () => {
     setMobileNavOpen(false);
+    closeMainSearch();
     setRightPanelWidth((width) => clampRightPanelWidth(width));
     if (showQueue) {
       closeRightPanelDelayed();
@@ -461,6 +617,7 @@ function App() {
 
   const handleToggleLyrics = () => {
     setMobileNavOpen(false);
+    closeMainSearch();
     setRightPanelWidth((width) => clampRightPanelWidth(width));
     if (lyricsPanelTrack) {
       closeRightPanelDelayed();
@@ -475,12 +632,46 @@ function App() {
   const handleOpenLyrics = () => {
     if (!currentTrack) return;
     setMobileNavOpen(false);
+    closeMainSearch();
     setRightPanelWidth((width) => clampRightPanelWidth(width));
     cancelCloseRightPanel();
     setShowQueue(false);
     setShowDeviceList(false);
     setLyricsPanelTrack(currentTrack);
   };
+
+  // Load full cover + lyrics details only while the lyrics panel is open.
+  useEffect(() => {
+    if (!lyricsPanelTrack?.path) {
+      setLyricsFullCover(null);
+      return;
+    }
+    let cancelled = false;
+    const path = lyricsPanelTrack.path;
+    void (async () => {
+      const [fullCover, details] = await Promise.all([
+        getTrackFullCover(path),
+        getTrackDetails(path),
+      ]);
+      if (cancelled) return;
+      if (fullCover) setLyricsFullCover(fullCover);
+      else setLyricsFullCover(null);
+      if (details?.lyrics) {
+        setLyricsPanelTrack((prev) =>
+          prev && prev.path === path
+            ? {
+                ...prev,
+                lyrics: details.lyrics,
+                lyrics_source: details.lyrics_source,
+              }
+            : prev,
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [lyricsPanelTrack?.path]);
 
   const handleToggleDevice = () => {
     setMobileNavOpen(false);
@@ -582,6 +773,13 @@ function App() {
 
     setIsScanningFolder(true);
     setFolderScanIsSync(true);
+    setImportedCount(0);
+    const stopProgress = await listenToSyncProgress((p) => {
+      if (typeof p.processed === "number") setImportedCount(p.processed);
+      else if (typeof p.extracted === "number") setImportedCount(p.extracted);
+      else if (typeof p.added === "number") setImportedCount(p.added);
+    }).catch(() => null);
+
     let failed = 0;
     for (const [i, pl] of synced.entries()) {
       try {
@@ -610,6 +808,7 @@ function App() {
       // Let the UI process clicks between playlists.
       await new Promise((r) => setTimeout(r, 0));
     }
+    stopProgress?.();
     setIsScanningFolder(false);
     setFolderScanIsSync(false);
     if (failed > 0) {
@@ -1143,6 +1342,55 @@ function App() {
       }
     };
   }, [showAddFromLibrary, librarySearchQuery]);
+
+  // Realtime main search — short debounce so typing stays tactile.
+  useEffect(() => {
+    const q = mainSearchQuery.trim();
+    if (!q) {
+      setMainSearchHits([]);
+      setMainSearchLoading(false);
+      return;
+    }
+    if (mainSearchTimer.current) clearTimeout(mainSearchTimer.current);
+    setMainSearchLoading(true);
+    const reqId = ++mainSearchReqId.current;
+    mainSearchTimer.current = setTimeout(() => {
+      searchLibrary(q, 100)
+        .then((hits) => {
+          if (mainSearchReqId.current !== reqId) return;
+          setMainSearchHits(hits);
+        })
+        .catch(() => {
+          if (mainSearchReqId.current !== reqId) return;
+          setMainSearchHits([]);
+        })
+        .finally(() => {
+          if (mainSearchReqId.current === reqId) setMainSearchLoading(false);
+        });
+    }, 80);
+    return () => {
+      if (mainSearchTimer.current) {
+        clearTimeout(mainSearchTimer.current);
+        mainSearchTimer.current = null;
+      }
+    };
+  }, [mainSearchQuery]);
+
+  // Cmd/Ctrl+K opens/focuses search; Escape clears or collapses it.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        openMainSearch();
+      }
+      if (event.key === "Escape" && (mainSearchQuery || mainSearchOpen)) {
+        if (mainSearchQuery) setMainSearchQuery("");
+        else closeMainSearch();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mainSearchQuery, mainSearchOpen]);
 
   const toggleLibrarySearchSelect = (path: string) => {
     setLibrarySearchSelected((prev) => {
@@ -1898,8 +2146,8 @@ function App() {
 
   const handleSelectPlaylist = (id: string) => {
     const samePlaylist = selectedPlaylistIdRef.current === id;
-    setViewingAlbum(null);
-    setViewingArtist(null);
+    clearBrowse();
+    closeMainSearch();
     setMenuTrackPath(null);
     setMobileNavOpen(false);
     setIsImporting(false);
@@ -2151,12 +2399,8 @@ function App() {
   };
 
   // ── Hardware/OS back button ─────────────────────────────────────────────
-  // Whenever a modal, popover, or the mobile sidebar/right panel is open, a
-  // browser history "sentinel" entry is pushed. Pressing back then just
-  // navigates that sentinel (dismissing the topmost overlay) instead of
-  // letting the WebView fall through to its default behaviour of exiting
-  // the app. Kept fresh on every render so the popstate handler (registered
-  // once) always sees the latest overlay state via the ref.
+  // Push one history entry per overlay layer so nested UI (queue → context
+  // menu, artist → album) each get their own back step instead of exiting.
   const overlaySnapshotRef = useRef({
     menuTrackPath,
     queueMenuIndex,
@@ -2169,8 +2413,8 @@ function App() {
     addToPlaylistTrack,
     mobileNavOpen,
     rightPanelOpen,
-    viewingAlbum,
-    viewingArtist,
+    mainSearchOpen,
+    browseDepth: browseStack.length,
   });
   overlaySnapshotRef.current = {
     menuTrackPath,
@@ -2184,32 +2428,30 @@ function App() {
     addToPlaylistTrack,
     mobileNavOpen,
     rightPanelOpen,
-    viewingAlbum,
-    viewingArtist,
+    mainSearchOpen,
+    browseDepth: browseStack.length,
   };
 
-  const isAnyOverlayOpen = () => {
+  const countOverlayDepth = () => {
     const s = overlaySnapshotRef.current;
-    return !!(
-      s.menuTrackPath ||
-      s.queueMenuIndex != null ||
-      s.showAddTrackMenu ||
-      s.showEqPanel ||
-      s.playlistDialog ||
-      s.showClearConfirm ||
-      s.showAddFromLibrary ||
-      s.deletePlaylistConfirm ||
-      s.addToPlaylistTrack ||
-      s.mobileNavOpen ||
-      s.rightPanelOpen ||
-      s.viewingAlbum ||
-      s.viewingArtist
-    );
+    let depth = 0;
+    if (s.menuTrackPath || s.queueMenuIndex != null) depth += 1;
+    if (s.showAddTrackMenu) depth += 1;
+    if (s.showEqPanel) depth += 1;
+    if (s.playlistDialog) depth += 1;
+    if (s.showClearConfirm) depth += 1;
+    if (s.showAddFromLibrary) depth += 1;
+    if (s.deletePlaylistConfirm) depth += 1;
+    if (s.addToPlaylistTrack) depth += 1;
+    if (s.rightPanelOpen) depth += 1;
+    if (s.mobileNavOpen) depth += 1;
+    if (s.mainSearchOpen) depth += 1;
+    depth += s.browseDepth;
+    return depth;
   };
 
   // Closes whichever overlay is "on top" — transient menus first, then modals,
-  // then floating panels, then nested content pages (album → artist), then the
-  // mobile nav drawer. Reports whether anything was actually closed.
+  // then floating panels, then search, then nested content pages.
   const closeTopOverlay = (): boolean => {
     const s = overlaySnapshotRef.current;
     if (s.menuTrackPath || s.queueMenuIndex != null) {
@@ -2247,7 +2489,6 @@ function App() {
       setAddToPlaylistTrack(null);
       return true;
     }
-    // Floating panels sit above content pages.
     if (s.rightPanelOpen) {
       closeRightPanelDelayed();
       return true;
@@ -2256,44 +2497,47 @@ function App() {
       setMobileNavOpen(false);
       return true;
     }
-    // Nested library navigation: album may sit on top of artist.
-    if (s.viewingAlbum) {
-      setViewingAlbum(null);
+    if (s.mainSearchOpen) {
+      closeMainSearch();
       return true;
     }
-    if (s.viewingArtist) {
-      setViewingArtist(null);
+    if (s.browseDepth > 0) {
+      browseBack();
       return true;
     }
     return false;
   };
 
-  const historyPushedRef = useRef(false);
+  const overlayHistoryDepthRef = useRef(0);
+  const ignorePopCountRef = useRef(0);
 
-  // Keep the history sentinel in sync with overlay state on every render.
-  // This naturally also handles nested overlays (e.g. a context menu on top
-  // of a modal): once the top layer closes, this re-runs and pushes a fresh
-  // sentinel for whatever is still open.
   useEffect(() => {
-    if (isAnyOverlayOpen() && !historyPushedRef.current) {
-      window.history.pushState({ waveOverlay: true }, "");
-      historyPushedRef.current = true;
-    } else if (!isAnyOverlayOpen() && historyPushedRef.current) {
-      historyPushedRef.current = false;
-      if (
-        (window.history.state as { waveOverlay?: boolean } | null)?.waveOverlay
-      ) {
-        window.history.back();
+    const desired = countOverlayDepth();
+    const current = overlayHistoryDepthRef.current;
+    if (desired > current) {
+      for (let i = current; i < desired; i++) {
+        window.history.pushState({ waveOverlay: true }, "");
       }
+      overlayHistoryDepthRef.current = desired;
+    } else if (desired < current) {
+      const toPop = current - desired;
+      ignorePopCountRef.current += toPop;
+      overlayHistoryDepthRef.current = desired;
+      window.history.go(-toPop);
     }
   });
 
   useEffect(() => {
     const onPopState = () => {
-      const closed = closeTopOverlay();
-      // The sentinel (if any) has just been consumed by this navigation.
-      historyPushedRef.current = false;
-      if (!closed) return;
+      if (ignorePopCountRef.current > 0) {
+        ignorePopCountRef.current -= 1;
+        return;
+      }
+      closeTopOverlay();
+      overlayHistoryDepthRef.current = Math.max(
+        0,
+        overlayHistoryDepthRef.current - 1,
+      );
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -2307,7 +2551,7 @@ function App() {
 
   return (
     <div
-      className={`app-container${mobileNavOpen ? " nav-open" : ""}${rightPanelOpen || rightPanelClosing ? " panel-open" : ""}${rightPanelClosing ? " panel-closing" : ""}`}
+      className={`app-container${mobileNavOpen ? " nav-open" : ""}${rightPanelOpen || rightPanelClosing ? " panel-open" : ""}${rightPanelClosing ? " panel-closing" : ""}${mainSearchOpen ? " mobile-search-open" : ""}`}
       style={
         {
           "--sidebar-width": `${sidebarWidth}px`,
@@ -2320,41 +2564,101 @@ function App() {
         } as React.CSSProperties
       }
     >
-      <header className="mobile-topbar">
-        <button
-          className="mobile-topbar-btn"
-          onClick={() => {
-            setShowQueue(false);
-            setShowDeviceList(false);
-            setLyricsPanelTrack(null);
-            setMobileNavOpen(true);
-          }}
-          type="button"
-          title="Open playlists"
-          aria-label="Open playlists"
-        >
-          <BiMenu />
-        </button>
-        <div className="mobile-topbar-title">
-          <img src={trayTemplate} alt="Wave" className="mobile-topbar-logo" />
-          {isScanningFolder ? (
-            <span
-              className="brand-sync-spinner"
-              title={folderScanIsSync ? "Syncing folders…" : "Importing…"}
-              aria-label={folderScanIsSync ? "Syncing folders" : "Importing"}
-              role="status"
-            />
-          ) : null}
+      <header
+        className={`mobile-topbar${mainSearchOpen ? " search-open" : ""}`}
+      >
+        <div className="mobile-topbar-row">
+          <button
+            className="mobile-topbar-btn"
+            onClick={() => {
+              setShowQueue(false);
+              setShowDeviceList(false);
+              setLyricsPanelTrack(null);
+              closeMainSearch();
+              setMobileNavOpen(true);
+            }}
+            type="button"
+            title="Open playlists"
+            aria-label="Open playlists"
+          >
+            <BiMenu />
+          </button>
+          <div className="mobile-topbar-title">
+            <img src={trayTemplate} alt="Wave" className="mobile-topbar-logo" />
+            {isScanningFolder ? (
+              <span
+                className="brand-sync-spinner"
+                title={folderScanIsSync ? "Syncing folders…" : "Importing…"}
+                aria-label={folderScanIsSync ? "Syncing folders" : "Importing"}
+                role="status"
+              />
+            ) : null}
+          </div>
+          <div className="mobile-topbar-actions">
+            <button
+              className={`mobile-topbar-btn ${mainSearchOpen ? "active" : ""}`}
+              onClick={toggleMainSearch}
+              type="button"
+              title="Search"
+              aria-label={mainSearchOpen ? "Close search" : "Search library"}
+              aria-expanded={mainSearchOpen}
+            >
+              <BiSearch />
+            </button>
+            <button
+              className={`mobile-topbar-btn ${showQueue ? "active" : ""}`}
+              onClick={handleToggleQueue}
+              type="button"
+              title="Queue"
+              aria-label="Toggle queue"
+            >
+              <BiListUl />
+            </button>
+          </div>
         </div>
-        <button
-          className={`mobile-topbar-btn ${showQueue ? "active" : ""}`}
-          onClick={handleToggleQueue}
-          type="button"
-          title="Queue"
-          aria-label="Toggle queue"
+        <div
+          className="mobile-topbar-search"
+          aria-hidden={!mainSearchOpen}
         >
-          <BiListUl />
-        </button>
+          <div className="mobile-topbar-search-inner">
+            <BiSearch className="library-search-icon" aria-hidden />
+            <input
+              ref={mobileSearchInputRef}
+              className="library-search-input"
+              type="search"
+              placeholder="Search songs, artists, albums, lyrics…"
+              value={mainSearchQuery}
+              onChange={(e) => setMainSearchQuery(e.target.value)}
+              aria-label="Search library"
+              autoComplete="off"
+              spellCheck={false}
+              tabIndex={mainSearchOpen ? 0 : -1}
+            />
+            {mainSearchQuery ? (
+              <button
+                className="library-search-clear"
+                type="button"
+                onClick={() => setMainSearchQuery("")}
+                title="Clear search"
+                aria-label="Clear search"
+                tabIndex={mainSearchOpen ? 0 : -1}
+              >
+                <BiX />
+              </button>
+            ) : (
+              <button
+                className="library-search-clear"
+                type="button"
+                onClick={closeMainSearch}
+                title="Close search"
+                aria-label="Close search"
+                tabIndex={mainSearchOpen ? 0 : -1}
+              >
+                <BiX />
+              </button>
+            )}
+          </div>
+        </div>
       </header>
 
       <button
@@ -2512,7 +2816,7 @@ function App() {
         <AlbumPage
           album={viewingAlbum.name}
           albumArtist={viewingAlbum.albumArtist}
-          onBack={() => setViewingAlbum(null)}
+          onBack={browseBack}
           onPlayTrack={(path, tracks) => {
             const index = Math.max(
               0,
@@ -2527,15 +2831,14 @@ function App() {
             });
           }}
           onArtistClick={(name) => {
-            setViewingAlbum(null);
-            setViewingArtist(name);
+            openArtistPage(name);
           }}
           playbackState={playbackState}
         />
       ) : viewingArtist ? (
         <ArtistPage
           artist={viewingArtist}
-          onBack={() => setViewingArtist(null)}
+          onBack={browseBack}
           onPlayTrack={(path, tracks) => {
             const index = Math.max(
               0,
@@ -2551,7 +2854,7 @@ function App() {
           }}
           onAlbumClick={(name, albumArtist) => {
             // Keep artist underneath so hardware/UI back returns to it.
-            setViewingAlbum({ name, albumArtist });
+            pushAlbumPage(name, albumArtist);
           }}
           playbackState={playbackState}
         />
@@ -2560,11 +2863,15 @@ function App() {
           <div className="hero-copy">
             <h1>{selectedPlaylist?.name ?? LIBRARY_PLAYLIST_NAME}</h1>
             <p>
-              {playlist.length
-                ? `${playlist.length} tracks in this playlist`
-                : isLoadingPlaylist
-                  ? "Loading tracks…"
-                  : "No tracks in this playlist"}
+              {mainSearchQuery.trim()
+                ? mainSearchLoading
+                  ? "Searching…"
+                  : `${mainSearchHits.length} match${mainSearchHits.length === 1 ? "" : "es"}`
+                : playlist.length
+                  ? `${playlist.length} tracks in this playlist`
+                  : isLoadingPlaylist
+                    ? "Loading tracks…"
+                    : "No tracks in this playlist"}
               {(isScanningFolder &&
                 (selectedPlaylist?.sync_folder ||
                   isLibraryPlaylistName(selectedPlaylist?.name))) ||
@@ -2641,6 +2948,57 @@ function App() {
                   </button>
                 </div>
               )}
+              <div
+                className={`hero-search-wrap${mainSearchOpen || mainSearchQuery ? " is-open" : ""}`}
+              >
+                {!(mainSearchOpen || mainSearchQuery) ? (
+                  <button
+                    className="btn-secondary hero-search-btn"
+                    type="button"
+                    onClick={openMainSearch}
+                    title="Search library"
+                    aria-label="Search library"
+                  >
+                    <BiSearch />
+                  </button>
+                ) : (
+                  <div className="library-search-bar">
+                    <BiSearch className="library-search-icon" aria-hidden />
+                    <input
+                      ref={mainSearchInputRef}
+                      className="library-search-input"
+                      type="search"
+                      placeholder="Search songs, artists, albums, lyrics…"
+                      value={mainSearchQuery}
+                      onChange={(e) => setMainSearchQuery(e.target.value)}
+                      aria-label="Search library"
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    {mainSearchQuery ? (
+                      <button
+                        className="library-search-clear"
+                        type="button"
+                        onClick={() => setMainSearchQuery("")}
+                        title="Clear search"
+                        aria-label="Clear search"
+                      >
+                        <BiX />
+                      </button>
+                    ) : (
+                      <button
+                        className="library-search-clear"
+                        type="button"
+                        onClick={closeMainSearch}
+                        title="Close search"
+                        aria-label="Close search"
+                      >
+                        <BiX />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
               {playlist.length > 0 &&
                 !isLibraryPlaylistName(selectedPlaylist?.name) &&
                 selectedPlaylist?.name !== "Favorites" &&
@@ -2657,7 +3015,109 @@ function App() {
           </div>
 
           <section className="playlist-container">
-            {playlist.length === 0 && isLoadingPlaylist ? (
+            {mainSearchQuery.trim() ? (
+              <div className="search-results">
+                {mainSearchLoading && mainSearchHits.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="empty-icon">
+                      <span className="import-spinner" />
+                    </div>
+                    <h2>Searching…</h2>
+                  </div>
+                ) : mainSearchHits.length === 0 ? (
+                  <div className="empty-state">
+                    <div className="empty-icon">
+                      <BiSearch />
+                    </div>
+                    <h2>No matches</h2>
+                    <p className="import-subtitle">
+                      Try another song, artist, album, or lyric phrase.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="search-hit-list">
+                    {mainSearchHits.map((hit) => {
+                      const track = hit.track;
+                      const fields = hit.matched_fields.filter(
+                        (f) => f in MATCH_FIELD_LABEL,
+                      );
+                      return (
+                        <button
+                          key={track.id}
+                          type="button"
+                          className={`search-hit ${isCurrentTrack(track) ? "active" : ""}`}
+                          onClick={() => {
+                            const paths = mainSearchHits.map((h) => h.track.path);
+                            const index = Math.max(
+                              0,
+                              paths.findIndex((p) => p === track.path),
+                            );
+                            void playTracks(paths, index).then(() => {
+                              updatePlaybackState();
+                              loadQueueTracks();
+                            });
+                          }}
+                          onContextMenu={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            openTrackContextMenu(track.path, {
+                              top: event.clientY,
+                              left: event.clientX,
+                            });
+                          }}
+                        >
+                          <Artwork
+                            track={track}
+                            fallback={getTrackTitle(track)
+                              .slice(0, 1)
+                              .toUpperCase()}
+                            className="track-thumb search-hit-thumb"
+                          />
+                          <div className="search-hit-body">
+                            <div className="search-hit-title">
+                              {highlightMatch(
+                                getTrackTitle(track),
+                                mainSearchQuery,
+                              )}
+                            </div>
+                            <div className="search-hit-meta">
+                              {highlightMatch(track.artist, mainSearchQuery)}
+                              {track.album ? (
+                                <>
+                                  {" · "}
+                                  {highlightMatch(track.album, mainSearchQuery)}
+                                </>
+                              ) : null}
+                            </div>
+                            {hit.lyrics_snippet ? (
+                              <div className="search-hit-lyrics">
+                                {highlightMatch(
+                                  hit.lyrics_snippet,
+                                  mainSearchQuery,
+                                )}
+                              </div>
+                            ) : null}
+                            <div className="search-hit-fields">
+                              {fields.map((field) => (
+                                <span
+                                  key={field}
+                                  className={`search-field-chip search-field-${field}`}
+                                >
+                                  {MATCH_FIELD_LABEL[field] ?? field}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="search-hit-duration">
+                            {formatTime(track.duration_seconds)}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : playlist.length === 0 && isLoadingPlaylist ? (
               <div className="empty-state">
                 <div className="empty-icon">
                   <span className="import-spinner" />
@@ -2798,8 +3258,7 @@ function App() {
                               // the title — taps here should play the row, not
                               // navigate away (pointer-events also disabled in CSS).
                               if (window.innerWidth <= 900) return;
-                              setViewingAlbum(null);
-                              setViewingArtist(track.artist);
+                              openArtistPage(track.artist);
                             }}
                             type="button"
                           >
@@ -2836,11 +3295,7 @@ function App() {
                       onClick={(e) => {
                         e.stopPropagation();
                         if (window.innerWidth <= 900) return;
-                        setViewingArtist(null);
-                        setViewingAlbum({
-                          name: track.album,
-                          albumArtist: track.album_artist || track.artist,
-                        });
+                        openAlbumPage(track.album, track.album_artist || track.artist,);
                       }}
                     >
                       {track.album}
@@ -3139,6 +3594,7 @@ function App() {
               <div className="lyrics-panel-cover">
                 <Artwork
                   track={lyricsPanelTrack}
+                  overrideSrc={lyricsFullCover}
                   fallback={getTrackTitle(lyricsPanelTrack)
                     .slice(0, 2)
                     .toUpperCase()}
@@ -3155,8 +3611,7 @@ function App() {
                     <button
                       className="lyrics-link"
                       onClick={() => {
-                        setViewingAlbum(null);
-                        setViewingArtist(lyricsPanelTrack.artist);
+                        openArtistPage(lyricsPanelTrack.artist);
                         closeRightPanelDelayed();
                       }}
                       type="button"
@@ -3171,13 +3626,11 @@ function App() {
                     <button
                       className="lyrics-link"
                       onClick={() => {
-                        setViewingArtist(null);
-                        setViewingAlbum({
-                          name: lyricsPanelTrack.album,
-                          albumArtist:
-                            lyricsPanelTrack.album_artist ||
+                        openAlbumPage(
+                          lyricsPanelTrack.album,
+                          lyricsPanelTrack.album_artist ||
                             lyricsPanelTrack.artist,
-                        });
+                        );
                         closeRightPanelDelayed();
                       }}
                       type="button"
@@ -3384,11 +3837,7 @@ function App() {
                   type="button"
                   onClick={() => {
                     closeTrackContextMenu();
-                    setViewingArtist(null);
-                    setViewingAlbum({
-                      name: menuTrack.album,
-                      albumArtist: menuTrack.album_artist || menuTrack.artist,
-                    });
+                    openAlbumPage(menuTrack.album, menuTrack.album_artist || menuTrack.artist,);
                   }}
                 >
                   <BiAlbum /> Go to Album
@@ -3399,8 +3848,7 @@ function App() {
                   type="button"
                   onClick={() => {
                     closeTrackContextMenu();
-                    setViewingAlbum(null);
-                    setViewingArtist(menuTrack.artist);
+                    openArtistPage(menuTrack.artist);
                   }}
                 >
                   <BiUser /> Go to Artist
@@ -3867,8 +4315,7 @@ function App() {
               className="now-playing-artist"
               onClick={() => {
                 if (!currentTrack?.artist) return;
-                setViewingAlbum(null);
-                setViewingArtist(currentTrack.artist);
+                openArtistPage(currentTrack.artist);
               }}
               type="button"
               disabled={!currentTrack?.artist}
@@ -3882,12 +4329,7 @@ function App() {
               className="now-playing-path"
               onClick={() => {
                 if (!currentTrack?.album) return;
-                setViewingArtist(null);
-                setViewingAlbum({
-                  name: currentTrack.album,
-                  albumArtist:
-                    currentTrack.album_artist || currentTrack.artist,
-                });
+                openAlbumPage(currentTrack.album, currentTrack.album_artist || currentTrack.artist,);
               }}
               type="button"
               disabled={!currentTrack?.album}

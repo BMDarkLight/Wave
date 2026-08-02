@@ -502,14 +502,16 @@ fn cmd_tracks_list(playlist_id: Option<String>) {
         let conn = library.lock_connection().unwrap();
         let mut stmt = conn
             .prepare(&format!(
-                "SELECT {} FROM tracks t ORDER BY t.artist, t.album, t.track_number",
-                crate::library::TRACK_SELECT_COLUMNS
+                "SELECT {} FROM {} ORDER BY t.artist, t.album, t.track_number",
+                crate::library::TRACK_SELECT_COLUMNS,
+                crate::library::TRACK_FROM
             ))
             .map_err(|e| format!("Failed to prepare query: {e}"))
             .unwrap();
+        let cover_root = library.cover_root().to_path_buf();
         let rows = stmt
             .query_map([], |row| {
-                crate::library::row_to_track(row)
+                crate::library::row_to_track(row, &cover_root)
             })
             .map_err(|e| format!("Failed to query tracks: {e}"))
             .unwrap();

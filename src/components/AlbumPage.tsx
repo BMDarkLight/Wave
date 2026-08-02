@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { BiArrowBack } from "react-icons/bi";
-import { getAlbumTracks } from "../utils/player";
+import {
+  getAlbumTracks,
+  getTrackFullCover,
+  resolveCoverSrc,
+} from "../utils/player";
 import type { Track, PlaybackState } from "../utils/player";
 
 const formatTime = (seconds?: number | null) => {
@@ -22,16 +26,46 @@ const Artwork = ({
   track,
   fallback,
   className,
+  preferFull = false,
 }: {
   track?: Track | null;
   fallback: string;
   className: string;
+  /** When true, upgrade from thumb to full embedded cover. */
+  preferFull?: boolean;
 }) => {
-  if (track?.cover_art_data_url) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSrc(null);
+
+    void (async () => {
+      const thumb = track?.cover_art_data_url ?? null;
+      if (thumb) {
+        const resolved = await resolveCoverSrc(thumb);
+        if (!cancelled && resolved) setSrc(resolved);
+      }
+
+      if (!preferFull || !track?.path) return;
+      try {
+        const full = await getTrackFullCover(track.path);
+        if (!cancelled && full) setSrc(full);
+      } catch {
+        // Keep thumb / letter fallback.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [track?.path, track?.cover_art_data_url, preferFull]);
+
+  if (src) {
     return (
       <img
         className={className}
-        src={track.cover_art_data_url}
+        src={src}
         alt={`${fallback} cover`}
         draggable={false}
       />
@@ -107,6 +141,7 @@ export default function AlbumPage({
           track={coverTrack}
           fallback={album.slice(0, 2).toUpperCase()}
           className="album-hero-cover"
+          preferFull
         />
         <div className="album-hero-info">
           <span className="album-hero-type">Album</span>
@@ -120,7 +155,9 @@ export default function AlbumPage({
               {displayArtist}
             </button>
             {year && <span>· {year}</span>}
-            <span>· {tracks.length} songs, about {totalMin} min</span>
+            <span>
+              · {tracks.length} songs, about {totalMin} min
+            </span>
           </div>
         </div>
       </div>

@@ -19,11 +19,13 @@ import androidx.media3.exoplayer.ExoPlayer;
  * Owns decode/output only. MediaSession notifications stay with
  * tauri-plugin-media-session + MediaNativeBridge.
  *
- * All public methods are safe to call from any thread; work is posted to
- * the main looper when required by ExoPlayer.
+ * Transport methods (play/pause/volume) are fire-and-forget on the main
+ * looper so JNI callers never block. Position/playing state is cached from
+ * player listeners for non-blocking queries.
  */
 public final class WaveExoPlayer {
     private static final String TAG = "WaveExoPlayer";
+    private static final long BLOCKING_TIMEOUT_MS = 500L;
 
     private static volatile WaveExoPlayer INSTANCE;
 
@@ -31,6 +33,9 @@ public final class WaveExoPlayer {
     private final Handler mainHandler;
     private ExoPlayer player;
     private volatile boolean ended;
+    private volatile boolean playingCached;
+    private volatile long positionMsCached;
+    private volatile long durationMsCached;
 
     private WaveExoPlayer(Context context) {
         this.appContext = context.getApplicationContext();
@@ -69,14 +74,32 @@ public final class WaveExoPlayer {
             @Override
             public void onPlaybackStateChanged(int playbackState) {
                 ended = playbackState == Player.STATE_ENDED;
+                refreshCacheFromPlayer();
+            }
+
+            @Override
+            public void onIsPlayingChanged(boolean isPlaying) {
+                playingCached = isPlaying;
+                refreshCacheFromPlayer();
             }
 
             @Override
             public void onPlayerError(PlaybackException error) {
                 Log.e(TAG, "Playback error: " + error.getMessage());
                 ended = true;
+                playingCached = false;
             }
         });
+    }
+
+    private void refreshCacheFromPlayer() {
+        if (player == null) {
+            return;
+        }
+        playingCached = player.isPlaying();
+        positionMsCached = player.getCurrentPosition();
+        long d = player.getDuration();
+        durationMsCached = d == C.TIME_UNSET ? 0L : d;
     }
 
     public void playUri(String uriString) {
@@ -90,48 +113,58 @@ public final class WaveExoPlayer {
             player.setMediaItem(MediaItem.fromUri(uri));
             player.prepare();
             player.play();
+            playingCached = true;
+            refreshCacheFromPlayer();
         });
     }
 
     public void play() {
-        runOnMainBlocking(() -> {
+        runOnMainAsync(() -> {
             if (player != null) {
                 ended = false;
                 player.play();
+                playingCached = true;
             }
         });
     }
 
     public void pause() {
-        runOnMainBlocking(() -> {
+        runOnMainAsync(() -> {
             if (player != null) {
+                refreshCacheFromPlayer();
                 player.pause();
+                playingCached = false;
             }
         });
     }
 
     public void stop() {
-        runOnMainBlocking(() -> {
+        runOnMainAsync(() -> {
             if (player != null) {
                 player.stop();
                 player.clearMediaItems();
                 ended = false;
+                playingCached = false;
+                positionMsCached = 0L;
+                durationMsCached = 0L;
             }
         });
     }
 
     public void seekTo(long positionMs) {
-        runOnMainBlocking(() -> {
+        runOnMainAsync(() -> {
             if (player != null) {
                 ended = false;
-                player.seekTo(Math.max(0L, positionMs));
+                long clamped = Math.max(0L, positionMs);
+                player.seekTo(clamped);
+                positionMsCached = clamped;
             }
         });
     }
 
     public void setVolume(float volume) {
         float clamped = Math.max(0f, Math.min(1f, volume));
-        runOnMainBlocking(() -> {
+        runOnMainAsync(() -> {
             if (player != null) {
                 player.setVolume(clamped);
             }
@@ -139,26 +172,29 @@ public final class WaveExoPlayer {
     }
 
     public long getCurrentPosition() {
-        return queryOnMain(() -> player != null ? player.getCurrentPosition() : 0L);
+        if (Looper.myLooper() == Looper.getMainLooper() && player != null) {
+            positionMsCached = player.getCurrentPosition();
+        }
+        return positionMsCached;
     }
 
     public long getDuration() {
-        return queryOnMain(() -> {
-            if (player == null) {
-                return 0L;
-            }
+        if (Looper.myLooper() == Looper.getMainLooper() && player != null) {
             long d = player.getDuration();
-            return d == C.TIME_UNSET ? 0L : d;
-        });
+            durationMsCached = d == C.TIME_UNSET ? 0L : d;
+        }
+        return durationMsCached;
     }
 
     public boolean isPlaying() {
-        return queryOnMain(() -> player != null && player.isPlaying());
+        if (Looper.myLooper() == Looper.getMainLooper() && player != null) {
+            playingCached = player.isPlaying();
+        }
+        return playingCached;
     }
 
     public boolean isEnded() {
-        return ended || queryOnMain(() ->
-                player != null && player.getPlaybackState() == Player.STATE_ENDED);
+        return ended;
     }
 
     private static String normalizeUri(String uriString) {
@@ -168,11 +204,18 @@ public final class WaveExoPlayer {
                 || uriString.startsWith("https://")) {
             return uriString;
         }
-        // Absolute filesystem path → file:// URI
         if (uriString.startsWith("/")) {
             return Uri.fromFile(new java.io.File(uriString)).toString();
         }
         return uriString;
+    }
+
+    private void runOnMainAsync(Runnable action) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action.run();
+            return;
+        }
+        mainHandler.post(action);
     }
 
     private void runOnMainBlocking(Runnable action) {
@@ -182,6 +225,7 @@ public final class WaveExoPlayer {
         }
         final Object lock = new Object();
         final Throwable[] error = new Throwable[1];
+        final boolean[] done = new boolean[1];
         synchronized (lock) {
             mainHandler.post(() -> {
                 try {
@@ -190,12 +234,20 @@ public final class WaveExoPlayer {
                     error[0] = t;
                 } finally {
                     synchronized (lock) {
+                        done[0] = true;
                         lock.notifyAll();
                     }
                 }
             });
             try {
-                lock.wait(15_000);
+                long deadline = System.currentTimeMillis() + BLOCKING_TIMEOUT_MS;
+                while (!done[0]) {
+                    long remaining = deadline - System.currentTimeMillis();
+                    if (remaining <= 0) {
+                        throw new RuntimeException("Timed out waiting for ExoPlayer main-thread work");
+                    }
+                    lock.wait(remaining);
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("Interrupted waiting for ExoPlayer main-thread work", e);
@@ -207,57 +259,5 @@ public final class WaveExoPlayer {
             }
             throw new RuntimeException(error[0]);
         }
-    }
-
-    private interface LongQuery {
-        long get();
-    }
-
-    private interface BoolQuery {
-        boolean get();
-    }
-
-    private long queryOnMain(LongQuery query) {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            return query.get();
-        }
-        final long[] result = new long[1];
-        final Object lock = new Object();
-        synchronized (lock) {
-            mainHandler.post(() -> {
-                result[0] = query.get();
-                synchronized (lock) {
-                    lock.notifyAll();
-                }
-            });
-            try {
-                lock.wait(5_000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-        return result[0];
-    }
-
-    private boolean queryOnMain(BoolQuery query) {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            return query.get();
-        }
-        final boolean[] result = new boolean[1];
-        final Object lock = new Object();
-        synchronized (lock) {
-            mainHandler.post(() -> {
-                result[0] = query.get();
-                synchronized (lock) {
-                    lock.notifyAll();
-                }
-            });
-            try {
-                lock.wait(5_000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-        return result[0];
     }
 }
