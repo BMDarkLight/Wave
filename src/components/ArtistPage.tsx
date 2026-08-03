@@ -11,6 +11,7 @@ import {
   resolveCoverSrc,
 } from "../utils/player";
 import type { Track, PlaybackState, AlbumSummary } from "../utils/player";
+import VirtualizedList from "./VirtualizedList";
 
 const formatTime = (seconds?: number | null) => {
   if (!seconds || !Number.isFinite(seconds)) return "0:00";
@@ -270,39 +271,48 @@ export default function ArtistPage({
                   Duration
                 </div>
               </div>
-              {tracks.map((track, i) => (
-                <div
-                  key={track.id}
-                  className={`track-item ${isCurrentTrack(track) ? "active" : ""}`}
-                  onClick={() => onPlayTrack(track.path, tracks)}
-                >
-                  <div className="track-col-index">
-                    {isCurrentTrack(track) && playbackState.is_playing ? (
-                      <span className="mini-bars">
-                        <i />
-                        <i />
-                        <i />
-                      </span>
-                    ) : (
-                      i + 1
-                    )}
-                  </div>
-                  <div className="track-title-cell">
-                    <Artwork
-                      track={track}
-                      fallback={getTrackTitle(track).slice(0, 1).toUpperCase()}
-                      className="track-thumb"
-                    />
-                    <div>
-                      <div className="track-name">{getTrackTitle(track)}</div>
-                      <div className="track-meta">{track.album}</div>
+              <VirtualizedList
+                count={tracks.length}
+                estimateSize={58}
+                className="track-list-virtual"
+              >
+                {(i) => {
+                  const track = tracks[i];
+                  if (!track) return null;
+                  return (
+                    <div
+                      className={`track-item ${isCurrentTrack(track) ? "active" : ""}`}
+                      onClick={() => onPlayTrack(track.path, tracks)}
+                    >
+                      <div className="track-col-index">
+                        {isCurrentTrack(track) && playbackState.is_playing ? (
+                          <span className="mini-bars">
+                            <i />
+                            <i />
+                            <i />
+                          </span>
+                        ) : (
+                          i + 1
+                        )}
+                      </div>
+                      <div className="track-title-cell">
+                        <Artwork
+                          track={track}
+                          fallback={getTrackTitle(track).slice(0, 1).toUpperCase()}
+                          className="track-thumb"
+                        />
+                        <div>
+                          <div className="track-name">{getTrackTitle(track)}</div>
+                          <div className="track-meta">{track.album}</div>
+                        </div>
+                      </div>
+                      <div className="track-duration">
+                        {formatTime(track.duration_seconds)}
+                      </div>
                     </div>
-                  </div>
-                  <div className="track-duration">
-                    {formatTime(track.duration_seconds)}
-                  </div>
-                </div>
-              ))}
+                  );
+                }}
+              </VirtualizedList>
             </div>
           )}
         </section>

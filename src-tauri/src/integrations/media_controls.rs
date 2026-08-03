@@ -249,9 +249,10 @@ impl MediaBridge {
     fn set_metadata(&mut self, meta: &TrackMetadata) {
         #[cfg(target_os = "windows")]
         {
+            let preferred = crate::cover_art::prefer_media_artwork_url(meta.cover_url.as_deref());
             let cover_path = self
                 .cover_art_cache
-                .resolve_path(meta.cover_url.as_deref());
+                .resolve_path(preferred.as_deref());
             let cover_ref = cover_path.as_ref().and_then(|p| p.to_str());
             self.backend.set_metadata(meta, cover_ref);
         }
@@ -283,9 +284,10 @@ impl MediaBridge {
         {
             use souvlaki::MediaMetadata;
             let duration = meta.duration_seconds.map(Duration::from_secs_f64);
-            let cover_url = self
-                .cover_art_cache
-                .resolve_url(meta.cover_url.as_deref());
+            // Prefer 512px media-session JPEG over the 96px UI list thumb.
+            let cover_url = self.cover_art_cache.resolve_url(
+                crate::cover_art::prefer_media_artwork_url(meta.cover_url.as_deref()).as_deref(),
+            );
             if let Err(error) = self.controls.set_metadata(MediaMetadata {
                 title: meta.title.as_deref(),
                 artist: meta.artist.as_deref(),

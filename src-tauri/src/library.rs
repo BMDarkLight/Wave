@@ -1164,6 +1164,8 @@ impl Library {
         let _ = tx.execute("DELETE FROM tracks_fts", []);
         tx.execute("DELETE FROM tracks", [])
             .map_err(|e| format!("Failed to clear tracks: {e}"))?;
+        // Drop cached album art rows; files on disk are cleaned by reset_app.
+        let _ = tx.execute("DELETE FROM album_art", []);
         tx.execute(
             "UPDATE playlists SET sync_folder = NULL, updated_at = ?1 WHERE id = ?2",
             params![now_timestamp(), library_id],

@@ -6,6 +6,7 @@ import {
   resolveCoverSrc,
 } from "../utils/player";
 import type { Track, PlaybackState } from "../utils/player";
+import VirtualizedList from "./VirtualizedList";
 
 const formatTime = (seconds?: number | null) => {
   if (!seconds || !Number.isFinite(seconds)) return "0:00";
@@ -169,52 +170,70 @@ export default function AlbumPage({
           </div>
         ) : (
           <div
-            className="track-list track-list-compact"
+            className="track-list track-list-compact album-track-list"
             style={
               {
-                "--track-grid": "48px minmax(80px, 1fr) 60px",
+                "--track-grid": "52px minmax(120px, 1fr) 72px",
               } as React.CSSProperties
             }
           >
             <div className="track-list-header">
-              <div className="track-col-index">#</div>
+              <div className="track-col-index" title="Track number">
+                #
+              </div>
               <div className="track-title-cell">Title</div>
               <div className="track-duration track-duration-header">
                 Duration
               </div>
             </div>
-            {tracks.map((track, i) => (
-              <div
-                key={track.id}
-                className={`track-item ${isCurrentTrack(track) ? "active" : ""}`}
-                onClick={() => onPlayTrack(track.path, tracks)}
-              >
-                <div className="track-col-index">
-                  {isCurrentTrack(track) && playbackState.is_playing ? (
-                    <span className="mini-bars">
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                  ) : (
-                    track.track_number ?? i + 1
-                  )}
-                </div>
-                <div className="track-title-cell">
-                  <Artwork
-                    track={track}
-                    fallback={getTrackTitle(track).slice(0, 1).toUpperCase()}
-                    className="track-thumb"
-                  />
-                  <div>
-                    <div className="track-name">{getTrackTitle(track)}</div>
+            <VirtualizedList
+              count={tracks.length}
+              estimateSize={58}
+              className="track-list-virtual"
+            >
+              {(i) => {
+                const track = tracks[i];
+                if (!track) return null;
+                const trackNo =
+                  track.track_number != null && track.track_number > 0
+                    ? String(track.track_number)
+                    : "—";
+                return (
+                  <div
+                    className={`track-item ${isCurrentTrack(track) ? "active" : ""}`}
+                    onClick={() => onPlayTrack(track.path, tracks)}
+                  >
+                    <div className="track-col-index track-col-number">
+                      {isCurrentTrack(track) && playbackState.is_playing ? (
+                        <span className="mini-bars">
+                          <i />
+                          <i />
+                          <i />
+                        </span>
+                      ) : (
+                        trackNo
+                      )}
+                    </div>
+                    <div className="track-title-cell">
+                      <Artwork
+                        track={track}
+                        fallback={getTrackTitle(track).slice(0, 1).toUpperCase()}
+                        className="track-thumb"
+                      />
+                      <div>
+                        <div className="track-name">{getTrackTitle(track)}</div>
+                        {track.artist && (
+                          <div className="track-meta">{track.artist}</div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="track-duration">
+                      {formatTime(track.duration_seconds)}
+                    </div>
                   </div>
-                </div>
-                <div className="track-duration">
-                  {formatTime(track.duration_seconds)}
-                </div>
-              </div>
-            ))}
+                );
+              }}
+            </VirtualizedList>
           </div>
         )}
       </section>

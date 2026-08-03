@@ -453,6 +453,16 @@ export const clearAudioImports = (): Promise<number> => {
   return safeInvoke<number>("clear_audio_imports");
 };
 
+export type ResetAppResult = {
+  tracks_removed: number;
+  playlists_deleted: number;
+};
+
+/** Wipe library DB, media folder prefs, and cover caches. Keeps empty Library + Favorites. */
+export const resetApp = (): Promise<ResetAppResult> => {
+  return safeInvoke<ResetAppResult>("reset_app");
+};
+
 export const removeTrackFromPlaylistById = (id: string, path: string): Promise<void> => {
   return safeInvoke("remove_track_from_playlist_by_id", { id, path });
 };

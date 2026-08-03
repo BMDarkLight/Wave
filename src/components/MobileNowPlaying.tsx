@@ -29,6 +29,7 @@ import {
   EQ_PRESETS,
 } from "../utils/player";
 import type { Track, PlaybackMode, EqSettings } from "../utils/player";
+import { useDragDismiss } from "../hooks/useDragDismiss";
 
 const formatTime = (seconds?: number | null) => {
   if (!seconds || !Number.isFinite(seconds)) return "0:00";
@@ -418,6 +419,32 @@ export default function MobileNowPlaying({
   const [sheetMounted, setSheetMounted] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
 
+  const closeSheet = () => onMenuOpenChange(false);
+
+  /** Step back through sheet → cover → dismiss, matching Android back. */
+  const handleHeaderBack = () => {
+    if (menuOpen) {
+      closeSheet();
+      return;
+    }
+    if (view !== "cover") {
+      onViewChange("cover");
+      return;
+    }
+    onClose();
+  };
+
+  const pageDismiss = useDragDismiss({
+    onDismiss: onClose,
+    enabled: !closing,
+  });
+
+  const sheetDismiss = useDragDismiss({
+    onDismiss: closeSheet,
+    enabled: sheetOpen && !closing,
+    threshold: 90,
+  });
+
   useEffect(() => {
     const id = requestAnimationFrame(() => {
       requestAnimationFrame(() => setEntered(true));
@@ -533,16 +560,32 @@ export default function MobileNowPlaying({
     onEqBandsChange(next);
   };
 
+  const pageDragStyle =
+    !closing && (pageDismiss.dragging || pageDismiss.offset > 0)
+      ? {
+          transform: `translateY(${pageDismiss.offset}px)`,
+          opacity: Math.max(0.4, 1 - pageDismiss.offset / 520),
+        }
+      : undefined;
+
+  const sheetDragStyle =
+    sheetOpen && (sheetDismiss.dragging || sheetDismiss.offset > 0)
+      ? { transform: `translateY(${sheetDismiss.offset}px)` }
+      : undefined;
+
   return (
     <div
-      className={`mobile-now-playing${entered && !closing ? " mnp-open" : ""}${closing ? " mnp-closing" : ""}${view !== "cover" ? " mnp-expanded" : ""}`}
+      className={`mobile-now-playing${entered && !closing ? " mnp-open" : ""}${closing ? " mnp-closing" : ""}${view !== "cover" ? " mnp-expanded" : ""}${pageDismiss.dragging ? " mnp-dragging" : ""}`}
+      style={pageDragStyle}
     >
-      <div className="mnp-header">
+      <div className="mnp-header" {...pageDismiss.bind}>
         <button
           className="mnp-icon-btn"
-          onClick={onClose}
+          onClick={handleHeaderBack}
           type="button"
-          aria-label="Minimize player"
+          aria-label={
+            menuOpen || view !== "cover" ? "Go back" : "Minimize player"
+          }
         >
           <BiChevronDown />
         </button>
@@ -560,6 +603,7 @@ export default function MobileNowPlaying({
       <div className="mnp-body">
         <div
           className={`mnp-layer mnp-cover-wrap ${view === "cover" ? "mnp-layer-active" : ""}`}
+          {...(view === "cover" && !menuOpen ? pageDismiss.bind : {})}
         >
           <Artwork
             track={track}
@@ -697,10 +741,10 @@ export default function MobileNowPlaying({
       </div>
 
       <div className="mnp-meta">
-        <div className="mnp-meta-text">
-          <div className="mnp-title" title={title}>
-            {title}
-          </div>
+        <div className="mnp-title" title={title}>
+          {title}
+        </div>
+        <div className="mnp-meta-row">
           <button
             className="mnp-artist"
             onClick={() => track.artist && onOpenArtist(track.artist)}
@@ -709,18 +753,18 @@ export default function MobileNowPlaying({
           >
             {track.artist || "Unknown artist"}
           </button>
+          {track.album && (
+            <button
+              className="mnp-album"
+              onClick={() =>
+                onOpenAlbum(track.album, track.album_artist || track.artist)
+              }
+              type="button"
+            >
+              {track.album}
+            </button>
+          )}
         </div>
-        {track.album && (
-          <button
-            className="mnp-album"
-            onClick={() =>
-              onOpenAlbum(track.album, track.album_artist || track.artist)
-            }
-            type="button"
-          >
-            {track.album}
-          </button>
-        )}
       </div>
 
       <div className="mnp-seek-row">
@@ -820,21 +864,22 @@ export default function MobileNowPlaying({
         <>
           <button
             className={`mnp-sheet-backdrop${sheetOpen ? " mnp-sheet-open" : ""}`}
-            onClick={() => onMenuOpenChange(false)}
+            onClick={closeSheet}
             type="button"
             aria-label="Close menu"
           />
           <div
-            className={`mnp-sheet${sheetOpen ? " mnp-sheet-open" : ""}`}
+            className={`mnp-sheet${sheetOpen ? " mnp-sheet-open" : ""}${sheetDismiss.dragging ? " mnp-sheet-dragging" : ""}`}
             role="dialog"
             aria-label="Volume and equalizer"
+            style={sheetDragStyle}
           >
-            <div className="mnp-sheet-handle" />
-            <div className="mnp-sheet-header">
+            <div className="mnp-sheet-handle" {...sheetDismiss.bind} />
+            <div className="mnp-sheet-header" {...sheetDismiss.bind}>
               <h3>Playback</h3>
               <button
                 className="mnp-icon-btn"
-                onClick={() => onMenuOpenChange(false)}
+                onClick={closeSheet}
                 type="button"
                 aria-label="Close"
               >

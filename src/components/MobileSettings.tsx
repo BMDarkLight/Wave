@@ -1,6 +1,12 @@
-// Mobile-only Settings page: media source folders, playlist management,
-// equalizer, crossfade, and audio output — all in one full-screen page.
-import { useEffect, useState } from "react";
+// Settings page: media source folders, playlist management, equalizer,
+// crossfade, audio output, and app reset — shared by mobile and desktop.
+import {
+  useEffect,
+  useRef,
+  useState,
+  type InputHTMLAttributes,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { BiArrowBack } from "react-icons/bi";
 import {
   BiFolderOpen,
@@ -15,6 +21,8 @@ import {
   BiTimer,
   BiSliderAlt,
   BiCheck,
+  BiErrorCircle,
+  BiReset,
 } from "react-icons/bi";
 import {
   listMediaFolders,
@@ -29,6 +37,98 @@ import type { EqSettings, PlaylistInfo } from "../utils/player";
 const LIBRARY_PLAYLIST_NAME = "Library";
 const isLibraryPlaylistName = (name?: string | null) =>
   name === LIBRARY_PLAYLIST_NAME || name === "All Local Files";
+
+/**
+ * Range input that ignores accidental drags while the settings page scrolls.
+ * Arms only after a short still press (or stays inert if the page moved).
+ */
+function ScrollSafeRange({
+  value,
+  onValueChange,
+  className,
+  ...rest
+}: Omit<InputHTMLAttributes<HTMLInputElement>, "onChange" | "type" | "value"> & {
+  value: number;
+  onValueChange: (value: number) => void;
+}) {
+  const armedRef = useRef(false);
+  const [armed, setArmed] = useState(false);
+  const startRef = useRef<{
+    x: number;
+    y: number;
+    scrollTop: number;
+  } | null>(null);
+  const armTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const clearArmTimer = () => {
+    if (armTimerRef.current != null) {
+      clearTimeout(armTimerRef.current);
+      armTimerRef.current = null;
+    }
+  };
+
+  const scrollParentOf = (el: HTMLElement | null) =>
+    el?.closest(".mset-scroll") as HTMLElement | null;
+
+  const disarm = () => {
+    clearArmTimer();
+    armedRef.current = false;
+    setArmed(false);
+    startRef.current = null;
+  };
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLInputElement>) => {
+    disarm();
+    const scroll = scrollParentOf(e.currentTarget);
+    startRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      scrollTop: scroll?.scrollTop ?? 0,
+    };
+    armTimerRef.current = setTimeout(() => {
+      const scrollNow = scrollParentOf(inputRef.current);
+      if (!startRef.current) return;
+      if (Math.abs((scrollNow?.scrollTop ?? 0) - startRef.current.scrollTop) > 2) {
+        return;
+      }
+      armedRef.current = true;
+      setArmed(true);
+    }, 140);
+  };
+
+  const onPointerMove = (e: ReactPointerEvent<HTMLInputElement>) => {
+    if (armedRef.current || !startRef.current) return;
+    const scroll = scrollParentOf(e.currentTarget);
+    if (Math.abs((scroll?.scrollTop ?? 0) - startRef.current.scrollTop) > 2) {
+      clearArmTimer();
+      return;
+    }
+    const dx = Math.abs(e.clientX - startRef.current.x);
+    const dy = Math.abs(e.clientY - startRef.current.y);
+    // Movement before arming = scroll / swipe intent, not a deliberate adjust.
+    if (dx > 8 || dy > 8) clearArmTimer();
+  };
+
+  return (
+    <input
+      {...rest}
+      ref={inputRef}
+      type="range"
+      className={className}
+      value={value}
+      data-scroll-safe={armed ? "armed" : "idle"}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={disarm}
+      onPointerCancel={disarm}
+      onChange={(e) => {
+        if (!armedRef.current) return;
+        onValueChange(Number(e.target.value));
+      }}
+    />
+  );
+}
 
 interface MobileSettingsProps {
   closing?: boolean;
@@ -51,6 +151,7 @@ interface MobileSettingsProps {
   onCrossfadeChange: (value: number) => void;
   currentOutputDevice: string;
   onSelectOutputDevice: (name: string) => Promise<void>;
+  onResetApp: () => Promise<void>;
 }
 
 export default function MobileSettings({
@@ -74,11 +175,14 @@ export default function MobileSettings({
   onCrossfadeChange,
   currentOutputDevice,
   onSelectOutputDevice,
+  onResetApp,
 }: MobileSettingsProps) {
   const [mediaFolders, setMediaFolders] = useState<string[]>([]);
   const [addingSource, setAddingSource] = useState(false);
   const [outputDevices, setOutputDevices] = useState<string[]>([]);
   const [entered, setEntered] = useState(false);
+  const [resetConfirming, setResetConfirming] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const refreshMediaFolders = () => {
     listMediaFolders().then(setMediaFolders).catch(() => {});
@@ -329,15 +433,12 @@ export default function MobileSettings({
                     {(eqSettings.bands[index] ?? 0) > 0 ? "+" : ""}
                     {(eqSettings.bands[index] ?? 0).toFixed(0)}
                   </span>
-                  <input
-                    type="range"
+                  <ScrollSafeRange
                     min={-12}
                     max={12}
                     step={0.5}
                     value={eqSettings.bands[index] ?? 0}
-                    onChange={(e) =>
-                      onEqBandChange(index, Number(e.target.value))
-                    }
+                    onValueChange={(next) => onEqBandChange(index, next)}
                     aria-label={`${label} Hz`}
                   />
                   <span className="eq-band-label">{label}</span>
@@ -356,13 +457,12 @@ export default function MobileSettings({
           </h2>
           <div className="mset-card">
             <div className="mset-crossfade-row">
-              <input
-                type="range"
+              <ScrollSafeRange
                 min={0}
                 max={8}
                 step={0.5}
                 value={crossfadeDuration}
-                onChange={(e) => onCrossfadeChange(Number(e.target.value))}
+                onValueChange={onCrossfadeChange}
                 aria-label="Crossfade duration in seconds"
               />
               <span className="mset-crossfade-value">
@@ -394,6 +494,63 @@ export default function MobileSettings({
                   {name === currentOutputDevice && <BiCheck />}
                 </button>
               ))
+            )}
+          </div>
+        </section>
+
+        <section className="mset-section mset-danger-zone">
+          <h2>
+            <BiErrorCircle /> Reset
+          </h2>
+          <div className="mset-card mset-danger-card">
+            <p className="mset-hint">
+              Clear Wave&apos;s database and cached covers. Your audio files on
+              disk stay put. Library and Favorites are kept empty; custom
+              playlists and media folder links are removed.
+            </p>
+            {!resetConfirming ? (
+              <button
+                className="btn-ghost mset-danger-btn"
+                type="button"
+                onClick={() => setResetConfirming(true)}
+              >
+                <BiReset /> Clear database…
+              </button>
+            ) : (
+              <div className="mset-danger-confirm">
+                <p className="mset-danger-warning">
+                  This cannot be undone. Continue?
+                </p>
+                <div className="mset-danger-actions">
+                  <button
+                    className="btn-ghost btn-sm"
+                    type="button"
+                    disabled={resetting}
+                    onClick={() => setResetConfirming(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="btn-primary btn-sm mset-danger-confirm-btn"
+                    type="button"
+                    disabled={resetting}
+                    onClick={() => {
+                      void (async () => {
+                        setResetting(true);
+                        try {
+                          await onResetApp();
+                          setResetConfirming(false);
+                          refreshMediaFolders();
+                        } finally {
+                          setResetting(false);
+                        }
+                      })();
+                    }}
+                  >
+                    {resetting ? "Resetting…" : "Yes, reset Wave"}
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </section>

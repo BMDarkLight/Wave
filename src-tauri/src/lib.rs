@@ -279,6 +279,7 @@ pub fn run() {
             commands::pick_media_folder,
             commands::scan_saf_folder,
             commands::clear_audio_imports,
+            commands::reset_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

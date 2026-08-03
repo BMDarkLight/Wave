@@ -38,6 +38,8 @@ import {
   BiAlignLeft,
   BiSearch,
   BiCog,
+  BiHomeAlt2,
+  BiLibrary,
 } from "react-icons/bi";
 import {
   addTrackToPlaylistById,
@@ -46,6 +48,7 @@ import {
   clearPlaylistById,
   clearQueue,
   createPlaylist,
+  resetApp,
   deletePlaylist,
   exportPlaylist,
   fetchLyricsForTrack,
@@ -121,10 +124,12 @@ import { isAndroid } from "./utils/platform";
 import AlbumPage from "./components/AlbumPage";
 import ArtistPage from "./components/ArtistPage";
 import ContextMenu from "./components/ContextMenu";
+import HomePage from "./components/HomePage";
 import MobileNowPlaying, {
   type MobileNowPlayingView,
 } from "./components/MobileNowPlaying";
 import MobileSettings from "./components/MobileSettings";
+import VirtualizedList from "./components/VirtualizedList";
 import "./App.css";
 
 function formatInvokeError(err: unknown, fallback: string): string {
@@ -313,9 +318,32 @@ function App() {
   const [lyricsFetchPath, setLyricsFetchPath] = useState<string | null>(null);
   const lyricsFetchIdRef = useRef(0);
   const [isAddingTracks, setIsAddingTracks] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
+  /** Playlist currently undergoing a first-time folder import (blocks list UI). */
+  const [importingPlaylistId, setImportingPlaylistId] = useState<string | null>(
+    null,
+  );
+  const importingPlaylistIdRef = useRef<string | null>(null);
+  const isImporting = importingPlaylistId != null;
   const [isLoadingPlaylist, setIsLoadingPlaylist] = useState(true);
   const [importedCount, setImportedCount] = useState(0);
+
+  const beginPlaylistImport = (playlistId: string) => {
+    importingPlaylistIdRef.current = playlistId;
+    setImportingPlaylistId(playlistId);
+    setImportedCount(0);
+  };
+
+  const endPlaylistImport = (playlistId?: string | null) => {
+    if (
+      playlistId != null &&
+      importingPlaylistIdRef.current != null &&
+      importingPlaylistIdRef.current !== playlistId
+    ) {
+      return;
+    }
+    importingPlaylistIdRef.current = null;
+    setImportingPlaylistId(null);
+  };
   const [showAddTrackMenu, setShowAddTrackMenu] = useState(false);
   const [addTrackMenuAnchor, setAddTrackMenuAnchor] = useState<{
     top: number;
@@ -329,6 +357,8 @@ function App() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
     null,
   );
+  /** Top-level main pane: Home suggestions vs a selected playlist. */
+  const [mainView, setMainView] = useState<"home" | "playlist">("home");
 
   // Album / artist browse stack (artist → album nests correctly for back)
   type BrowsePage =
@@ -352,10 +382,27 @@ function App() {
   const pushAlbumPage = (name: string, albumArtist: string | null) => {
     setBrowseStack((stack) => [...stack, { kind: "album", name, albumArtist }]);
   };
+  /** When true, leaving the last browse page reopens mobile Now Playing. */
+  const reopenMobilePlayerAfterBrowseRef = useRef(false);
+  const [reopenMobilePlayer, setReopenMobilePlayer] = useState(false);
   const browseBack = () => {
-    setBrowseStack((stack) => stack.slice(0, -1));
+    setBrowseStack((stack) => {
+      const next = stack.slice(0, -1);
+      if (
+        next.length === 0 &&
+        reopenMobilePlayerAfterBrowseRef.current &&
+        stack.length > 0
+      ) {
+        reopenMobilePlayerAfterBrowseRef.current = false;
+        setReopenMobilePlayer(true);
+      }
+      return next;
+    });
   };
-  const clearBrowse = () => setBrowseStack([]);
+  const clearBrowse = () => {
+    reopenMobilePlayerAfterBrowseRef.current = false;
+    setBrowseStack([]);
+  };
 
   // Favorited track paths (for heart toggle state in the track list)
   const [favoritePaths, setFavoritePaths] = useState<Set<string>>(new Set());
@@ -541,7 +588,7 @@ function App() {
   }, [mainSearchOpen]);
 
   const clampRightPanelWidth = (width: number, sidebar = sidebarWidth) => {
-    const reserved = sidebar + 8 + 340; // handles + minimum main column
+    const reserved = sidebar + 24 + 340; // resize gutters + minimum main column
     const max = Math.max(280, Math.min(400, window.innerWidth - reserved));
     return Math.max(280, Math.min(max, width));
   };
@@ -575,9 +622,10 @@ function App() {
     "asc",
   );
 
-  // Resizable title/album split (album column width in px)
+  // Resizable title/album split. Album uses minmax(0, width) so it collapses
+  // first when the main pane shrinks; title keeps a larger minimum.
   const [albumColWidth, setAlbumColWidth] = useState(200);
-  const trackGridCols = `48px minmax(80px, 1fr) ${albumColWidth}px 64px 40px`;
+  const trackGridCols = `48px minmax(200px, 1fr) minmax(0px, ${albumColWidth}px) 64px 40px`;
 
   const handleAlbumColResizeStart = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -587,7 +635,9 @@ function App() {
     const onMouseMove = (ev: MouseEvent) => {
       // Handle sits on the title/album boundary: drag right → title grows, album shrinks.
       const dx = ev.clientX - startX;
-      setAlbumColWidth(Math.max(80, Math.min(480, startWidth - dx)));
+      // Preferred album width from the drag; layout may still collapse it
+      // further via minmax(0, …) when the window is narrow.
+      setAlbumColWidth(Math.max(72, Math.min(480, startWidth - dx)));
     };
     const onMouseUp = () => {
       document.removeEventListener("mousemove", onMouseMove);
@@ -770,6 +820,8 @@ function App() {
     setShowQueue(false);
     setShowDeviceList(false);
     setLyricsPanelTrack(null);
+    reopenMobilePlayerAfterBrowseRef.current = false;
+    setReopenMobilePlayer(false);
     forceCloseMobilePlayer();
     if (mobileSettingsCloseTimer.current) {
       clearTimeout(mobileSettingsCloseTimer.current);
@@ -791,6 +843,18 @@ function App() {
       setMobileSettingsOpen(false);
       mobileSettingsCloseTimer.current = null;
     }, 320);
+  };
+
+  const handleResetApp = async () => {
+    try {
+      setError(null);
+      await resetApp();
+      // Fresh boot so every cached list / session bit is rebuilt from the empty DB.
+      window.location.reload();
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to reset Wave"));
+      throw err;
+    }
   };
 
   const handleToggleDevice = () => {
@@ -842,6 +906,14 @@ function App() {
     return fromPlaylist ?? null;
   }, [playbackState.current_path, queueData.tracks, playlist]);
 
+  // Artist/album opened from Now Playing: after browse empties, restore NP.
+  useEffect(() => {
+    if (!reopenMobilePlayer) return;
+    if (browseStack.length > 0) return;
+    setReopenMobilePlayer(false);
+    if (currentTrack) handleOpenMobilePlayer();
+  }, [reopenMobilePlayer, browseStack.length, currentTrack]);
+
   // Drag-to-resize for sidebar and right panel
   const [dragging, setDragging] = useState<"sidebar" | "right" | null>(null);
   const dragStartRef = useRef({ x: 0, width: 0 });
@@ -851,7 +923,7 @@ function App() {
     const onChange = () => {
       if (!media.matches) {
         setMobileNavOpen(false);
-        // Mobile-only pages never make sense once the layout goes wide again.
+        // Now Playing is mobile-only; Settings stays available on desktop.
         if (mobilePlayerCloseTimer.current) {
           clearTimeout(mobilePlayerCloseTimer.current);
           mobilePlayerCloseTimer.current = null;
@@ -861,13 +933,6 @@ function App() {
         setMobilePlayerOpen(false);
         setMobilePlayerView("cover");
         setMobilePlayerMenuOpen(false);
-        if (mobileSettingsCloseTimer.current) {
-          clearTimeout(mobileSettingsCloseTimer.current);
-          mobileSettingsCloseTimer.current = null;
-        }
-        mobileSettingsClosingRef.current = false;
-        setMobileSettingsClosing(false);
-        setMobileSettingsOpen(false);
       }
     };
     onChange();
@@ -921,15 +986,21 @@ function App() {
 
     let failed = 0;
     for (const [i, pl] of synced.entries()) {
+      const firstTimeFill = pl.track_count === 0;
+      if (firstTimeFill) beginPlaylistImport(pl.id);
       try {
         const folder = pl.sync_folder!;
         const paths = isAndroidDevice
           ? await scanDirectoryRecursive(folder)
           : null; // desktop: Rust walks sync_folder itself
         await syncPlaylistFolder(pl.id, paths);
-        // Soft-refresh the open playlist without clearing the list first.
+        // Soft-refresh the open playlist without clearing the list first —
+        // but not while a first-time import UI is covering that playlist.
         const viewId = selectedPlaylistIdRef.current;
-        if (viewId === pl.id || (!viewId && i === 0)) {
+        if (
+          !firstTimeFill &&
+          (viewId === pl.id || (!viewId && i === 0))
+        ) {
           const id = viewId ?? pl.id;
           getPlaylistTracksById(id)
             .then((tracks) => {
@@ -943,6 +1014,13 @@ function App() {
       } catch (err) {
         failed++;
         console.warn(`Failed to sync playlist "${pl.name}":`, err);
+      } finally {
+        if (firstTimeFill) {
+          if (selectedPlaylistIdRef.current === pl.id) {
+            await loadPlaylistTracks(pl.id).catch(() => {});
+          }
+          endPlaylistImport(pl.id);
+        }
       }
       // Let the UI process clicks between playlists.
       await new Promise((r) => setTimeout(r, 0));
@@ -1138,6 +1216,22 @@ function App() {
     });
   }, [playlists]);
 
+  const libraryPlaylist = useMemo(
+    () => playlists.find((p) => isLibraryPlaylistName(p.name)) ?? null,
+    [playlists],
+  );
+  const favoritesPlaylist = useMemo(
+    () => playlists.find((p) => p.name === "Favorites") ?? null,
+    [playlists],
+  );
+  const userPlaylists = useMemo(
+    () =>
+      sortedPlaylists.filter(
+        (p) => !isLibraryPlaylistName(p.name) && p.name !== "Favorites",
+      ),
+    [sortedPlaylists],
+  );
+
   const updatePlaybackState = async () => {
     const state = await getPlaybackState();
     setPlaybackState({ ...emptyPlaybackState, ...state });
@@ -1291,9 +1385,9 @@ function App() {
 
   // Push track metadata to OS media controls (Control Center, SMTC, MPRIS).
   // Fires on track change regardless of play state so the flyout updates immediately.
-  // Cover art is intentionally omitted here — the Rust play bridge already pushes
-  // higher-res media-session artwork, and re-sending the 96px UI thumb would
-  // overwrite it with the blurry notification art.
+  // Cover art is omitted here on purpose — the Rust command fills in the 512px
+  // media-session JPEG from the current track so we never overwrite OS art with
+  // the 96px UI list thumb.
   useEffect(() => {
     if (currentTrack && playbackState.current_path) {
       updateMediaMetadata({
@@ -1669,26 +1763,31 @@ function App() {
       await saveMediaFolder(directory).catch(() => {});
 
       // Import in batches of 10 to show progress
+      beginPlaylistImport(playlistId);
       const BATCH = 10;
       let failCount = 0;
       const sampleErrors: string[] = [];
-      for (let i = 0; i < paths.length; i += BATCH) {
-        const batch = paths.slice(i, i + BATCH);
-        try {
-          const result = await importScannedAudio(batch, playlistId);
-          failCount += result.errors.length;
-          for (const detail of result.errors) {
-            if (sampleErrors.length < 3) sampleErrors.push(detail);
+      try {
+        for (let i = 0; i < paths.length; i += BATCH) {
+          const batch = paths.slice(i, i + BATCH);
+          try {
+            const result = await importScannedAudio(batch, playlistId);
+            failCount += result.errors.length;
+            for (const detail of result.errors) {
+              if (sampleErrors.length < 3) sampleErrors.push(detail);
+            }
+          } catch (err) {
+            failCount += batch.length;
+            if (sampleErrors.length < 3) {
+              sampleErrors.push(formatInvokeError(err, "Import batch failed"));
+            }
           }
-        } catch (err) {
-          failCount += batch.length;
-          if (sampleErrors.length < 3) {
-            sampleErrors.push(formatInvokeError(err, "Import batch failed"));
-          }
+          setImportedCount(Math.min(i + batch.length, paths.length));
         }
+      } finally {
+        endPlaylistImport(playlistId);
+        setIsScanningFolder(false);
       }
-
-      setIsScanningFolder(false);
       if (failCount > 0) {
         const detail =
           sampleErrors.length > 0 ? ` — ${sampleErrors.join(" | ")}` : "";
@@ -1697,9 +1796,11 @@ function App() {
         clearAudioImports().catch(() => {});
       }
       setActivePlaylistId(playlistId);
+      setMainView("playlist");
       await loadPlaylistTracks(playlistId);
       await loadPlaylists();
     } catch (err) {
+      endPlaylistImport();
       setIsScanningFolder(false);
       setError(formatInvokeError(err, "Failed to scan folder"));
     }
@@ -1769,6 +1870,7 @@ function App() {
       const folderName = getFileName(directory);
       const info = await createPlaylist(folderName, directory);
       setActivePlaylistId(info.id);
+      setMainView("playlist");
       await loadPlaylists();
       await loadPlaylistTracks(info.id);
       const paths = await scanDirectory(directory);
@@ -1793,10 +1895,12 @@ function App() {
     // where the tapped playlist may not be the one currently open.
     const target = playlists.find((p) => p.id === playlistId);
     if (!target?.sync_folder) return;
+    const firstTimeFill = target.track_count === 0;
     try {
       setError(null);
       setIsScanningFolder(true);
       setFolderScanIsSync(true);
+      if (firstTimeFill) beginPlaylistImport(playlistId);
       const folder = target.sync_folder;
       // Android SAF folders need a JS-side recursive scan; desktop Rust walks the path.
       const paths = androidHost
@@ -1810,35 +1914,38 @@ function App() {
     } catch (err) {
       setError(formatInvokeError(err, "Failed to sync folder"));
     } finally {
+      if (firstTimeFill) endPlaylistImport(playlistId);
       setIsScanningFolder(false);
       setFolderScanIsSync(false);
     }
   };
 
   const runFolderImport = async (paths: string[], playlistId: string) => {
-    setIsImporting(true);
-    setImportedCount(0);
+    beginPlaylistImport(playlistId);
     let failCount = 0;
-    for (const [i, path] of paths.entries()) {
-      try {
-        await addTrackToPlaylistById(playlistId, path);
-        setImportedCount(i + 1);
-        if ((i + 1) % 5 === 0) {
-          loadPlaylists().catch(() => {});
+    try {
+      for (const [i, path] of paths.entries()) {
+        try {
+          await addTrackToPlaylistById(playlistId, path);
+          setImportedCount(i + 1);
+          if ((i + 1) % 5 === 0) {
+            loadPlaylists().catch(() => {});
+          }
+        } catch {
+          failCount++;
         }
-      } catch {
-        failCount++;
       }
+      if (failCount > 0) {
+        setError(`Finished importing folder with ${failCount} failure(s).`);
+      }
+      // Only refresh track list if the user is still viewing that playlist
+      if (selectedPlaylistIdRef.current === playlistId) {
+        await loadPlaylistTracks(playlistId);
+      }
+      await loadPlaylists();
+    } finally {
+      endPlaylistImport(playlistId);
     }
-    setIsImporting(false);
-    if (failCount > 0) {
-      setError(`Finished importing folder with ${failCount} failure(s).`);
-    }
-    // Only refresh track list if the user is still viewing that playlist
-    if (selectedPlaylistIdRef.current === playlistId) {
-      await loadPlaylistTracks(playlistId);
-    }
-    await loadPlaylists();
   };
 
   const handleRemoveFromLibrary = async (path: string) => {
@@ -2274,6 +2381,7 @@ function App() {
         );
         await loadPlaylists();
         setActivePlaylistId(info.id);
+        setMainView("playlist");
         await loadPlaylistTracks(info.id);
         if (playlistSyncFolder) {
           closePlaylistDialog();
@@ -2285,20 +2393,26 @@ function App() {
             return;
           }
           if (androidHost) {
+            beginPlaylistImport(info.id);
             setIsScanningFolder(true);
             setFolderScanIsSync(false);
             const BATCH = 10;
             let failCount = 0;
-            for (let i = 0; i < paths.length; i += BATCH) {
-              const batch = paths.slice(i, i + BATCH);
-              try {
-                const result = await importScannedAudio(batch, info.id);
-                failCount += result.errors.length;
-              } catch {
-                failCount += batch.length;
+            try {
+              for (let i = 0; i < paths.length; i += BATCH) {
+                const batch = paths.slice(i, i + BATCH);
+                try {
+                  const result = await importScannedAudio(batch, info.id);
+                  failCount += result.errors.length;
+                } catch {
+                  failCount += batch.length;
+                }
+                setImportedCount(Math.min(i + batch.length, paths.length));
               }
+            } finally {
+              endPlaylistImport(info.id);
+              setIsScanningFolder(false);
             }
-            setIsScanningFolder(false);
             if (failCount > 0) {
               setError(`Imported with ${failCount} error(s).`);
             }
@@ -2354,12 +2468,13 @@ function App() {
   };
 
   const handleSelectPlaylist = (id: string) => {
-    const samePlaylist = selectedPlaylistIdRef.current === id;
+    const samePlaylist =
+      selectedPlaylistIdRef.current === id && mainView === "playlist";
     clearBrowse();
     closeMainSearch();
     setMenuTrackPath(null);
     setMobileNavOpen(false);
-    setIsImporting(false);
+    setMainView("playlist");
 
     // Already showing this playlist (e.g. leaving an album view) — no refetch flash.
     if (samePlaylist) {
@@ -2373,6 +2488,11 @@ function App() {
 
     void (async () => {
       try {
+        // First-time import still running — keep the importing UI, don't flash
+        // a partial track list from what's been written so far.
+        if (importingPlaylistIdRef.current === id) {
+          return;
+        }
         await loadPlaylistTracks(id);
       } catch (err) {
         if (selectedPlaylistIdRef.current === id) {
@@ -2384,6 +2504,14 @@ function App() {
         }
       }
     })();
+  };
+
+  const goHome = () => {
+    clearBrowse();
+    closeMainSearch();
+    setMenuTrackPath(null);
+    setMobileNavOpen(false);
+    setMainView("home");
   };
 
   // ── Queue operations ───────────────────────────────────────────────────────
@@ -2601,6 +2729,7 @@ function App() {
       const result = await importPlaylist(path);
       await loadPlaylists();
       setActivePlaylistId(result.playlist_id);
+      setMainView("playlist");
       await loadPlaylistTracks(result.playlist_id);
     } catch (err) {
       setError(formatInvokeError(err, "Failed to import playlist"));
@@ -2722,12 +2851,14 @@ function App() {
       closeRightPanelDelayed();
       return true;
     }
-    if (s.mobilePlayerOpen) {
-      handleCloseMobilePlayer();
-      return true;
-    }
+    // Settings is a sibling overlay to Now Playing — close it before the player
+    // so a lone Settings page always pops first.
     if (s.mobileSettingsOpen) {
       handleCloseMobileSettings();
+      return true;
+    }
+    if (s.mobilePlayerOpen) {
+      handleCloseMobilePlayer();
       return true;
     }
     if (s.mobileNavOpen) {
@@ -2797,7 +2928,9 @@ function App() {
               ? `${rightPanelWidth}px`
               : "0px",
           "--right-handle-width":
-            rightPanelOpen || rightPanelClosing ? "4px" : "0px",
+            rightPanelOpen || rightPanelClosing
+              ? "var(--section-inset)"
+              : "0px",
         } as React.CSSProperties
       }
     >
@@ -2841,15 +2974,6 @@ function App() {
               aria-expanded={mainSearchOpen}
             >
               <BiSearch />
-            </button>
-            <button
-              className={`mobile-topbar-btn ${showQueue ? "active" : ""}`}
-              onClick={handleToggleQueue}
-              type="button"
-              title="Queue"
-              aria-label="Toggle queue"
-            >
-              <BiListUl />
             </button>
           </div>
         </div>
@@ -2920,6 +3044,51 @@ function App() {
             />
           ) : null}
         </div>
+        <div className="sidebar-pins">
+          <button
+            className={`sidebar-pin ${!viewingAlbum && !viewingArtist && mainView === "home" ? "active" : ""}`}
+            onClick={goHome}
+            type="button"
+          >
+            <span className="sidebar-pin-label">Home</span>
+            <span className="sidebar-pin-icon" aria-hidden>
+              <BiHomeAlt2 />
+            </span>
+          </button>
+          {libraryPlaylist && (
+            <button
+              className={`sidebar-pin ${!viewingAlbum && !viewingArtist && mainView === "playlist" && selectedPlaylistId === libraryPlaylist.id ? "active" : ""}`}
+              onClick={() => handleSelectPlaylist(libraryPlaylist.id)}
+              type="button"
+            >
+              <span className="sidebar-pin-label">Library</span>
+              <span className="sidebar-pin-icon" aria-hidden>
+                <BiLibrary />
+              </span>
+            </button>
+          )}
+          {favoritesPlaylist && (
+            <button
+              className={`sidebar-pin ${!viewingAlbum && !viewingArtist && mainView === "playlist" && selectedPlaylistId === favoritesPlaylist.id ? "active" : ""}`}
+              onClick={() => handleSelectPlaylist(favoritesPlaylist.id)}
+              type="button"
+            >
+              <span className="sidebar-pin-label">Favorites</span>
+              {favoritesPlaylist.track_count > 0 && (
+                <span className="sidebar-pin-count">
+                  {favoritesPlaylist.track_count}
+                </span>
+              )}
+              <span className="sidebar-pin-icon" aria-hidden>
+                {favoritesPlaylist.track_count > 0 ? (
+                  <BiSolidHeart />
+                ) : (
+                  <BiHeart />
+                )}
+              </span>
+            </button>
+          )}
+        </div>
         <div className="playlist-section">
           <div className="playlist-section-header">
             <p>Playlists</p>
@@ -2941,7 +3110,7 @@ function App() {
             </button>
           </div>
           <div className="playlist-list">
-            {playlists.length === 0 ? (
+            {userPlaylists.length === 0 ? (
               <div className="playlist-empty">
                 <p>No playlists yet</p>
                 <button
@@ -2953,17 +3122,17 @@ function App() {
                 </button>
               </div>
             ) : (
-              sortedPlaylists.map((pl) => (
+              userPlaylists.map((pl) => (
                 <div
                   key={pl.id}
-                  className={`playlist-item ${!viewingAlbum && !viewingArtist && selectedPlaylistId === pl.id ? "active" : ""}`}
+                  className={`playlist-item ${!viewingAlbum && !viewingArtist && mainView === "playlist" && selectedPlaylistId === pl.id ? "active" : ""}`}
                   onClick={() => handleSelectPlaylist(pl.id)}
                 >
                   <span className="playlist-item-name" title={pl.name}>
                     {pl.sync_folder && !(
                       isScanningFolder &&
                       folderScanIsSync &&
-                      (selectedPlaylistId === pl.id || isLibraryPlaylistName(pl.name))
+                      selectedPlaylistId === pl.id
                     ) ? (
                       <BiSync
                         className="playlist-sync-icon"
@@ -2976,8 +3145,8 @@ function App() {
                       />
                     ) : isScanningFolder &&
                       folderScanIsSync &&
-                      (pl.sync_folder || isLibraryPlaylistName(pl.name)) &&
-                      (selectedPlaylistId === pl.id || isLibraryPlaylistName(pl.name)) ? (
+                      pl.sync_folder &&
+                      selectedPlaylistId === pl.id ? (
                       <BiSync
                         className="playlist-sync-icon playlist-sync-spin"
                         title="Syncing with folder"
@@ -2992,11 +3161,7 @@ function App() {
                     ) : null}
                     {pl.name}
                   </span>
-                  {!isLibraryPlaylistName(pl.name) && (
-                    <span className="playlist-item-count">
-                      {pl.track_count}
-                    </span>
-                  )}
+                  <span className="playlist-item-count">{pl.track_count}</span>
                   <div className="playlist-item-actions">
                     <button
                       className="playlist-export-btn"
@@ -3009,33 +3174,28 @@ function App() {
                     >
                       <BiExport />
                     </button>
-                    {!isLibraryPlaylistName(pl.name) &&
-                      pl.name !== "Favorites" && (
-                        <>
-                          <button
-                            className="playlist-rename-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openRenamePlaylistDialog(pl.id, pl.name);
-                            }}
-                            title="Rename playlist"
-                            type="button"
-                          >
-                            <BiEditAlt />
-                          </button>
-                          <button
-                            className="playlist-delete-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeletePlaylist(pl.id);
-                            }}
-                            title="Delete playlist"
-                            type="button"
-                          >
-                            <BiTrash />
-                          </button>
-                        </>
-                      )}
+                    <button
+                      className="playlist-rename-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openRenamePlaylistDialog(pl.id, pl.name);
+                      }}
+                      title="Rename playlist"
+                      type="button"
+                    >
+                      <BiEditAlt />
+                    </button>
+                    <button
+                      className="playlist-delete-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeletePlaylist(pl.id);
+                      }}
+                      title="Delete playlist"
+                      type="button"
+                    >
+                      <BiTrash />
+                    </button>
                   </div>
                 </div>
               ))
@@ -3101,6 +3261,32 @@ function App() {
             pushAlbumPage(name, albumArtist);
           }}
           playbackState={playbackState}
+        />
+      ) : mainView === "home" ? (
+        <HomePage
+          libraryPlaylistId={libraryPlaylist?.id ?? null}
+          onPlayTrack={(path, tracks) => {
+            const index = Math.max(
+              0,
+              tracks.findIndex((t) => t.path === path),
+            );
+            void playTracks(
+              tracks.map((t) => t.path),
+              index,
+            ).then(() => {
+              updatePlaybackState();
+              loadQueueTracks();
+            });
+          }}
+          onOpenAlbum={(name, albumArtist) => {
+            openAlbumPage(name, albumArtist);
+          }}
+          onOpenArtist={(name) => {
+            openArtistPage(name);
+          }}
+          onOpenLibrary={() => {
+            if (libraryPlaylist) handleSelectPlaylist(libraryPlaylist.id);
+          }}
         />
       ) : (
         <main className="main-content">
@@ -3369,7 +3555,8 @@ function App() {
                 </div>
                 <h2>Loading…</h2>
               </div>
-            ) : playlist.length === 0 && isImporting ? (
+            ) : importingPlaylistId != null &&
+              selectedPlaylistId === importingPlaylistId ? (
               <div className="empty-state">
                 <div className="empty-icon">
                   <span className="import-spinner" />
@@ -3455,15 +3642,20 @@ function App() {
                     Duration
                   </div>
                 </div>
-                {sortedPlaylist.map((track) => (
+                <VirtualizedList
+                  count={sortedPlaylist.length}
+                  estimateSize={typeof window !== "undefined" && window.innerWidth <= 900 ? 58 : 64}
+                  className="track-list-virtual"
+                >
+                  {(index) => {
+                    const track = sortedPlaylist[index];
+                    if (!track) return null;
+                    return (
+
                   <div
                     key={track.id}
                     className={`track-item ${isCurrentTrack(track) ? "active" : ""}`}
-                    onClick={() =>
-                      handlePlayTrack(
-                        sortedPlaylist.findIndex((t) => t.path === track.path),
-                      )
-                    }
+                    onClick={() => handlePlayTrack(index)}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -3482,7 +3674,7 @@ function App() {
                           <i />
                         </span>
                       ) : (
-                        playlist.findIndex((t) => t.path === track.path) + 1
+                        index + 1
                       )}
                     </div>
                     <div className="track-title-cell">
@@ -3620,7 +3812,9 @@ function App() {
                       </button>
                     </div>
                   </div>
-                ))}
+                    );
+                  }}
+                </VirtualizedList>
               </div>
             )}
           </section>
@@ -4644,10 +4838,12 @@ function App() {
           closing={mobilePlayerClosing}
           onClose={handleCloseMobilePlayer}
           onOpenArtist={(name) => {
+            reopenMobilePlayerAfterBrowseRef.current = true;
             forceCloseMobilePlayer();
             openArtistPage(name);
           }}
           onOpenAlbum={(name, albumArtist) => {
+            reopenMobilePlayerAfterBrowseRef.current = true;
             forceCloseMobilePlayer();
             openAlbumPage(name, albumArtist);
           }}
@@ -4694,6 +4890,7 @@ function App() {
           onCrossfadeChange={handleCrossfadeChange}
           currentOutputDevice={playbackState.output_device_name}
           onSelectOutputDevice={handleSelectOutputDeviceSettings}
+          onResetApp={handleResetApp}
         />
       )}
 

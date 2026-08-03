@@ -253,6 +253,14 @@ fn resolve_os_cover_url(app: &tauri::AppHandle, track: &Track) -> Option<String>
                 }
             }
         }
+        // Last resort: derive media JPEG from the existing 96px thumb bytes.
+        if let Some(thumb) = crate::cover_art::thumb_path_for_id(app, id) {
+            if let Ok(bytes) = std::fs::read(&thumb) {
+                if let Some(path) = crate::cover_art::ensure_media_art(app, id, &bytes) {
+                    return Some(path.to_string_lossy().into_owned());
+                }
+            }
+        }
     }
     crate::cover_art::prefer_media_artwork_url(track.cover_art_data_url.as_deref())
 }
@@ -1860,11 +1868,38 @@ pub async fn set_output_device(
 /// Called by the frontend whenever the currently playing track changes.
 /// Pushes rich metadata (title, artist, album, duration, cover art URL) to the
 /// OS media interface so it shows up in the system media overlay / Control Center.
+///
+/// When the frontend omits `cover_url` (intentional — so the 96px list thumb
+/// never overwrites OS art), we resolve the current track's 512px media-session
+/// art here so macOS/Windows keep showing high-quality artwork.
 #[tauri::command]
 pub async fn update_media_metadata(
-    metadata: TrackMetadata,
+    app: tauri::AppHandle,
+    mut metadata: TrackMetadata,
     bridge: tauri::State<'_, MediaBridgeState>,
 ) -> Result<(), String> {
+    let needs_cover = metadata
+        .cover_url
+        .as_ref()
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true);
+    if needs_cover {
+        let path = {
+            let state = app.state::<PlayerState>();
+            let mut slot = state.0.lock().map_err(|e| e.to_string())?;
+            slot.as_mut()
+                .and_then(|player| player.get_current_path())
+                .and_then(|p| p.to_str().map(String::from))
+        };
+        if let Some(path) = path {
+            let track = {
+                let lib = app.state::<LibraryState>();
+                let lib = lib.0.lock().map_err(|e| e.to_string())?;
+                resolve_track(&lib, &path)
+            };
+            metadata.cover_url = resolve_os_cover_url(&app, &track);
+        }
+    }
     bridge.0.set_metadata(metadata);
     Ok(())
 }
@@ -2281,4 +2316,59 @@ pub fn clear_audio_imports(app: tauri::AppHandle) -> Result<u64, String> {
     }
     
     Ok(freed)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResetAppResult {
+    pub tracks_removed: u32,
+    pub playlists_deleted: u32,
+}
+
+/// Wipe library data, media folder prefs, and cached cover art / imports.
+/// Keeps empty Library + Favorites playlists. Does not delete audio files on disk.
+#[tauri::command]
+pub async fn reset_app(app: tauri::AppHandle) -> Result<ResetAppResult, String> {
+    // Stop playback first so the UI isn't left pointing at deleted tracks.
+    {
+        let state = app.state::<PlayerState>();
+        let mut slot = state.0.lock().map_err(|e| e.to_string())?;
+        if let Some(player) = slot.as_mut() {
+            let _ = player.stop();
+            player.clear_upcoming();
+            player.queue = Default::default();
+        }
+    }
+    {
+        let bridge = app.state::<MediaBridgeState>();
+        bridge.0.set_stopped();
+    }
+
+    let (tracks_removed, playlists_deleted) = {
+        let library = app.state::<LibraryState>();
+        let library = library.0.lock().map_err(|e| e.to_string())?;
+        library.reset_library()?
+    };
+
+    {
+        let settings_state = app.state::<AppSettingsState>();
+        let mut settings = lock_settings(&settings_state)?;
+        settings.media_folders.clear();
+        settings.folder_setup_dismissed = false;
+        settings.save(&app)?;
+    }
+
+    // Best-effort cleanup of on-disk caches.
+    if let Ok(app_dir) = app.path().app_data_dir() {
+        let cover_dir = app_dir.join("cover_art");
+        if cover_dir.is_dir() {
+            let _ = std::fs::remove_dir_all(&cover_dir);
+            let _ = std::fs::create_dir_all(&cover_dir);
+        }
+    }
+    let _ = clear_audio_imports(app.clone());
+
+    Ok(ResetAppResult {
+        tracks_removed,
+        playlists_deleted,
+    })
 }
