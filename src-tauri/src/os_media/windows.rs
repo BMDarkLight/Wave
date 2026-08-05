@@ -283,6 +283,18 @@ impl ThumbIcons {
     }
 }
 
+fn icon_pixel_len(size_usize: usize) -> Result<usize, String> {
+    size_usize
+        .checked_mul(size_usize)
+        .ok_or_else(|| "Icon dimensions overflow".to_string())
+}
+
+fn icon_byte_len(size_usize: usize) -> Result<usize, String> {
+    icon_pixel_len(size_usize)?
+        .checked_mul(4)
+        .ok_or_else(|| "Bitmap size overflow".to_string())
+}
+
 fn load_media_icon(glyph: u16, draw: fn(&mut [u32; 1024])) -> Result<HICON, String> {
     match unsafe { mdl2_glyph_icon(glyph) } {
         Ok(icon) => Ok(icon),
@@ -346,7 +358,8 @@ unsafe fn mdl2_glyph_icon(glyph: u16) -> Result<HICON, String> {
     }
 
     let _old_bitmap = SelectObject(hdc, bitmap);
-    std::ptr::write_bytes(bits as *mut u8, 0, size_usize * size_usize * 4);
+    let byte_len = icon_byte_len(size_usize)?;
+    std::ptr::write_bytes(bits as *mut u8, 0, byte_len);
 
     let font = CreateFontW(
         -(size * 7 / 10),
@@ -389,7 +402,8 @@ unsafe fn mdl2_glyph_icon(glyph: u16) -> Result<HICON, String> {
         DT_CENTER | DT_VCENTER | DT_SINGLELINE,
     );
 
-    let mut pixels = vec![0u32; size_usize * size_usize];
+    let pixel_len = icon_pixel_len(size_usize)?;
+    let mut pixels = vec![0u32; pixel_len];
     let src = bits as *const u8;
     for y in 0..size_usize {
         for x in 0..size_usize {
