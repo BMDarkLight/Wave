@@ -805,6 +805,106 @@ impl AudioPlayer {
         self.prefetch_next_into_sink();
     }
 
+    /// Load a track at `position_secs` without starting playback (session restore).
+    pub fn load_paused_at(&mut self, path: &str, position_secs: f64) -> Result<(), AudioError> {
+        #[cfg(target_os = "android")]
+        {
+            return self.load_paused_at_exo(path, position_secs);
+        }
+
+        #[cfg(not(target_os = "android"))]
+        {
+            return self.load_paused_at_desktop(path, position_secs);
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn load_paused_at_exo(&mut self, path: &str, position_secs: f64) -> Result<(), AudioError> {
+        self.ensure_output()?;
+        let position_ms = (position_secs.max(0.0) * 1000.0) as i64;
+        crate::android::audio::exo_prepare_uri_at(path, position_ms).map_err(AudioError::Decode)?;
+        let _ = crate::android::audio::exo_set_volume(self.volume);
+
+        let duration = crate::android::audio::exo_get_duration()
+            .ok()
+            .filter(|&ms| ms > 0)
+            .map(|ms| Duration::from_millis(ms as u64));
+
+        self.sink = None;
+        self.prefetched_next = None;
+        self.crossfade_state = None;
+        self.current_path = Some(PathBuf::from(path));
+        self.clock = PlaybackClock {
+            started_at: None,
+            elapsed_before_start: Duration::from_secs_f64(position_secs.max(0.0)),
+            duration,
+        };
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn load_paused_at_desktop(&mut self, path: &str, position_secs: f64) -> Result<(), AudioError> {
+        self.ensure_output()?;
+        let handle = &self
+            .output
+            .as_ref()
+            .expect("output ensured")
+            .handle;
+
+        if self.sink.is_some() {
+            if let Some(sink) = self.sink.take() {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    sink.stop();
+                }));
+            }
+        }
+        self.prefetched_next = None;
+        self.crossfade_state = None;
+        self.set_soft_fade_target(1.0);
+
+        let offset = Duration::from_secs_f64(position_secs.max(0.0));
+        let (source, duration, crossfade_state) = Self::build_source(
+            path,
+            self.eq_config.clone(),
+            self.eq_version.clone(),
+            0.0,
+            None,
+            self.soft_fade.clone(),
+        )?;
+
+        let sink = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Sink::try_new(handle)
+        })) {
+            Ok(Ok(sink)) => sink,
+            Ok(Err(error)) => {
+                return Err(AudioError::SinkCreation(format!(
+                    "Could not initialise audio playback: {error}"
+                )));
+            }
+            Err(_) => {
+                return Err(AudioError::SinkCreation(
+                    "Audio playback initialisation crashed.".to_string(),
+                ));
+            }
+        };
+
+        sink.set_volume(self.volume);
+        sink.append(source);
+        sink.pause();
+        sink.try_seek(offset)
+            .map_err(|error| AudioError::Decode(format!("Seek failed: {error}")))?;
+
+        self.sink = Some(sink);
+        self.current_path = Some(PathBuf::from(path));
+        self.clock = PlaybackClock {
+            started_at: None,
+            elapsed_before_start: offset,
+            duration,
+        };
+        self.crossfade_state = crossfade_state;
+        Ok(())
+    }
+
     /// True when the sink still has the prefetched follow-up buffered or playing.
     fn has_sink_prefetch(&self) -> bool {
         self.prefetched_next.is_some()

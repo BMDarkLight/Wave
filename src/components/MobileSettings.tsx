@@ -1,5 +1,5 @@
 // Settings page: media source folders, playlist management, equalizer,
-// crossfade, audio output, and app reset — shared by mobile and desktop.
+// crossfade, audio output (desktop/non-Android), and app reset.
 import {
   useEffect,
   useRef,
@@ -33,6 +33,7 @@ import {
   EQ_PRESETS,
 } from "../utils/player";
 import type { EqSettings, PlaylistInfo } from "../utils/player";
+import { isAndroid } from "../utils/platform";
 
 const LIBRARY_PLAYLIST_NAME = "Library";
 const isLibraryPlaylistName = (name?: string | null) =>
@@ -180,6 +181,7 @@ export default function MobileSettings({
   const [mediaFolders, setMediaFolders] = useState<string[]>([]);
   const [addingSource, setAddingSource] = useState(false);
   const [outputDevices, setOutputDevices] = useState<string[]>([]);
+  const [showAudioOutput, setShowAudioOutput] = useState(false);
   const [entered, setEntered] = useState(false);
   const [resetConfirming, setResetConfirming] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -190,7 +192,12 @@ export default function MobileSettings({
 
   useEffect(() => {
     refreshMediaFolders();
-    listOutputDevices().then(setOutputDevices).catch(() => {});
+    void (async () => {
+      // Android only exposes ExoPlayer (system default) — hide the section.
+      if (await isAndroid()) return;
+      setShowAudioOutput(true);
+      listOutputDevices().then(setOutputDevices).catch(() => {});
+    })();
   }, []);
 
   useEffect(() => {
@@ -475,28 +482,30 @@ export default function MobileSettings({
           </div>
         </section>
 
-        <section className="mset-section">
-          <h2>
-            <BiDevices /> Audio Output
-          </h2>
-          <div className="mset-card mset-device-list">
-            {outputDevices.length === 0 ? (
-              <p className="mset-hint">No output devices found.</p>
-            ) : (
-              outputDevices.map((name) => (
-                <button
-                  key={name}
-                  className={`mset-row mset-device-row ${name === currentOutputDevice ? "active" : ""}`}
-                  onClick={() => void onSelectOutputDevice(name)}
-                  type="button"
-                >
-                  <span className="mset-row-value">{name}</span>
-                  {name === currentOutputDevice && <BiCheck />}
-                </button>
-              ))
-            )}
-          </div>
-        </section>
+        {showAudioOutput && (
+          <section className="mset-section">
+            <h2>
+              <BiDevices /> Audio Output
+            </h2>
+            <div className="mset-card mset-device-list">
+              {outputDevices.length === 0 ? (
+                <p className="mset-hint">No output devices found.</p>
+              ) : (
+                outputDevices.map((name) => (
+                  <button
+                    key={name}
+                    className={`mset-row mset-device-row ${name === currentOutputDevice ? "active" : ""}`}
+                    onClick={() => void onSelectOutputDevice(name)}
+                    type="button"
+                  >
+                    <span className="mset-row-value">{name}</span>
+                    {name === currentOutputDevice && <BiCheck />}
+                  </button>
+                ))
+              )}
+            </div>
+          </section>
+        )}
 
         <section className="mset-section mset-danger-zone">
           <h2>

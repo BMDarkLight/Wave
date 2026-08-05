@@ -215,6 +215,27 @@ pub fn exo_play_uri(uri: &str) -> Result<(), String> {
     })
 }
 
+pub fn exo_prepare_uri_at(uri: &str, position_ms: i64) -> Result<(), String> {
+    with_player(|p| {
+        p.with_env(|env| {
+            let j_uri = env.new_string(uri).map_err(|e| format!("uri string: {e}"))?;
+            env.call_method(
+                p.instance.as_obj(),
+                "prepareUriAt",
+                "(Ljava/lang/String;J)V",
+                &[JValue::Object(&j_uri), JValue::Long(position_ms)],
+            )
+            .map_err(|e| format!("prepareUriAt: {e}"))?;
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+                return Err("prepareUriAt threw".into());
+            }
+            Ok(())
+        })
+    })
+}
+
 pub fn exo_play() -> Result<(), String> {
     with_player(|p| p.call_void("play", "()V", &[]))
 }

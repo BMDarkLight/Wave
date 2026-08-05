@@ -2,6 +2,7 @@
 // sidebar on narrow/responsive layouts: big cover art, transport controls,
 // a lyrics view toggle, and a bottom-sheet menu with the volume dial + EQ.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useLyricsAutoScroll } from "../hooks/useLyricsAutoScroll";
 import {
   BiChevronDown,
   BiHeart,
@@ -30,6 +31,7 @@ import {
 } from "../utils/player";
 import type { Track, PlaybackMode, EqSettings } from "../utils/player";
 import { useDragDismiss } from "../hooks/useDragDismiss";
+import VirtualizedList from "./VirtualizedList";
 
 const formatTime = (seconds?: number | null) => {
   if (!seconds || !Number.isFinite(seconds)) return "0:00";
@@ -125,6 +127,7 @@ function CircularDial({
   ariaValueNow,
   formatCenter,
   className = "",
+  verticalAdjust,
 }: {
   value: number;
   onChange: (value: number) => void;
@@ -135,9 +138,22 @@ function CircularDial({
   ariaValueNow: number;
   formatCenter: (value: number) => ReactNode;
   className?: string;
+  /** Optional up/down drag: step size in native units per ~10px travel. */
+  verticalAdjust?: {
+    step: number;
+    toNative: (value: number) => number;
+    fromNative: (native: number) => number;
+    clampNative: (native: number) => number;
+  };
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState(false);
+  const gestureRef = useRef<{
+    x: number;
+    y: number;
+    startValue: number;
+    mode: "undecided" | "arc" | "vertical";
+  } | null>(null);
   const r = size * 0.36;
   const stroke = Math.max(7, size * 0.078);
   const thumb = Math.max(5, size * 0.055);
@@ -169,16 +185,48 @@ function CircularDial({
 
   useEffect(() => {
     if (!dragging) return;
-    const onMove = (e: PointerEvent) => updateFromPointer(e.clientX, e.clientY);
-    const onUp = () => setDragging(false);
+    const onMove = (e: PointerEvent) => {
+      const gesture = gestureRef.current;
+      if (!gesture) return;
+      const dx = e.clientX - gesture.x;
+      const dy = gesture.y - e.clientY;
+
+      if (gesture.mode === "undecided") {
+        if (Math.hypot(dx, dy) < 8) return;
+        if (
+          verticalAdjust &&
+          Math.abs(dy) > Math.abs(dx) * 1.15 &&
+          Math.abs(dy) > 10
+        ) {
+          gesture.mode = "vertical";
+        } else {
+          gesture.mode = "arc";
+        }
+      }
+
+      if (gesture.mode === "vertical" && verticalAdjust) {
+        const steps = Math.round(dy / 10);
+        const native = verticalAdjust.toNative(gesture.startValue) + steps * verticalAdjust.step;
+        onChange(verticalAdjust.fromNative(verticalAdjust.clampNative(native)));
+        return;
+      }
+
+      updateFromPointer(e.clientX, e.clientY);
+    };
+    const onUp = () => {
+      gestureRef.current = null;
+      setDragging(false);
+    };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragging]);
+  }, [dragging, verticalAdjust]);
 
   const angleFor = (v: number) => 225 + Math.max(0, Math.min(1, v)) * 270;
   const pointFor = (angleDeg: number) => {
@@ -203,8 +251,17 @@ function CircularDial({
       aria-valuenow={ariaValueNow}
       onPointerDown={(e) => {
         e.preventDefault();
+        gestureRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          startValue: clamped,
+          mode: "undecided",
+        };
         setDragging(true);
-        updateFromPointer(e.clientX, e.clientY);
+        if (!verticalAdjust) {
+          updateFromPointer(e.clientX, e.clientY);
+        }
+        e.currentTarget.setPointerCapture(e.pointerId);
       }}
       onKeyDown={(e) => {
         if (e.key === "ArrowUp" || e.key === "ArrowRight") {
@@ -270,24 +327,47 @@ function VolumeDial({
 
 const EQ_GAIN_MIN = -12;
 const EQ_GAIN_MAX = 12;
-const BASS_BAND_INDEXES = [0, 1, 2] as const; // 31 / 62 / 125 Hz
-const TREBLE_BAND_INDEXES = [7, 8, 9] as const; // 4k / 8k / 16k Hz
+const TONE_WEIGHT_DECAY = 0.7;
+const EQ_BAND_COUNT = EQ_BAND_LABELS.length;
+
+const clampEqGain = (gain: number) =>
+  Math.round(
+    Math.max(EQ_GAIN_MIN, Math.min(EQ_GAIN_MAX, gain)) * 2,
+  ) / 2;
 
 const gainToDial = (gain: number) =>
-  (Math.max(EQ_GAIN_MIN, Math.min(EQ_GAIN_MAX, gain)) - EQ_GAIN_MIN) /
-  (EQ_GAIN_MAX - EQ_GAIN_MIN);
+  (clampEqGain(gain) - EQ_GAIN_MIN) / (EQ_GAIN_MAX - EQ_GAIN_MIN);
 
-const dialToGain = (value: number) => {
-  const raw = value * (EQ_GAIN_MAX - EQ_GAIN_MIN) + EQ_GAIN_MIN;
-  return Math.round(raw * 2) / 2;
-};
+const dialToGain = (value: number) =>
+  clampEqGain(value * (EQ_GAIN_MAX - EQ_GAIN_MIN) + EQ_GAIN_MIN);
 
 const formatGain = (gain: number) =>
   `${gain > 0 ? "+" : ""}${gain.toFixed(gain % 1 === 0 ? 0 : 1)}`;
 
-const averageBandGain = (bands: number[], indexes: readonly number[]) => {
-  if (indexes.length === 0) return 0;
-  return indexes.reduce((sum, i) => sum + (bands[i] ?? 0), 0) / indexes.length;
+const toneWeightFromLeft = (index: number) =>
+  Math.pow(TONE_WEIGHT_DECAY, index);
+
+const toneWeightFromRight = (index: number) =>
+  Math.pow(TONE_WEIGHT_DECAY, EQ_BAND_COUNT - 1 - index);
+
+const readBassGain = (bands: number[]) => clampEqGain(bands[0] ?? 0);
+
+const readTrebleGain = (bands: number[]) =>
+  clampEqGain(bands[EQ_BAND_COUNT - 1] ?? 0);
+
+const buildWeightedToneBands = (bassGain: number, trebleGain: number) =>
+  Array.from({ length: EQ_BAND_COUNT }, (_, index) =>
+    clampEqGain(
+      bassGain * toneWeightFromLeft(index) +
+        trebleGain * toneWeightFromRight(index),
+    ),
+  );
+
+const toneVerticalAdjust = {
+  step: 0.5,
+  toNative: dialToGain,
+  fromNative: gainToDial,
+  clampNative: clampEqGain,
 };
 
 function ToneDial({
@@ -311,6 +391,7 @@ function ToneDial({
       ariaValueMax={EQ_GAIN_MAX}
       ariaValueNow={Math.round(gain)}
       className="mnp-dial-tone"
+      verticalAdjust={toneVerticalAdjust}
       formatCenter={() => (
         <>
           <span className="mnp-dial-label">{label}</span>
@@ -345,6 +426,7 @@ interface MobileNowPlayingProps {
   onOpenAlbum: (album: string, albumArtist: string | null) => void;
   volumeValue: number;
   onVolumeChange: (value: number) => void;
+  hideVolume?: boolean;
   eqSettings: EqSettings;
   onEqEnabledChange: (enabled: boolean) => void;
   onEqBandChange: (index: number, gain: number) => void;
@@ -385,6 +467,7 @@ export default function MobileNowPlaying({
   onOpenAlbum,
   volumeValue,
   onVolumeChange,
+  hideVolume = false,
   eqSettings,
   onEqEnabledChange,
   onEqBandChange,
@@ -442,7 +525,8 @@ export default function MobileNowPlaying({
   const sheetDismiss = useDragDismiss({
     onDismiss: closeSheet,
     enabled: sheetOpen && !closing,
-    threshold: 90,
+    threshold: 80,
+    velocityThreshold: 0.4,
   });
 
   useEffect(() => {
@@ -487,6 +571,15 @@ export default function MobileNowPlaying({
     };
   }, [track.path]);
 
+  // When lrclib/file sync finishes in the parent, currentTrack.lyrics updates
+  // without a path change — keep the open lyrics view in sync.
+  useEffect(() => {
+    if (track.lyrics) {
+      setLyricsText(track.lyrics);
+      setLyricsSource(track.lyrics_source ?? null);
+    }
+  }, [track.lyrics, track.lyrics_source]);
+
   const timedLyrics = useMemo(() => parseTimedLyrics(lyricsText), [lyricsText]);
 
   const activeLyricIndex = useMemo(() => {
@@ -499,14 +592,11 @@ export default function MobileNowPlaying({
     return idx;
   }, [timedLyrics, displayPosition]);
 
-  useEffect(() => {
-    if (view === "lyrics" && activeLineRef.current) {
-      activeLineRef.current.scrollIntoView({
-        block: "center",
-        behavior: "smooth",
-      });
-    }
-  }, [activeLyricIndex, view]);
+  const lyricsScrollHandlers = useLyricsAutoScroll(
+    activeLyricIndex,
+    view === "lyrics",
+    activeLineRef,
+  );
 
   const title = getTrackTitle(track);
   const coverLetters = title.slice(0, 2).toUpperCase();
@@ -532,6 +622,18 @@ export default function MobileNowPlaying({
     return best;
   };
 
+  const autoScrollQueueWhileDragging = (clientY: number) => {
+    const scroll = queueListRef.current;
+    if (!scroll) return;
+    const rect = scroll.getBoundingClientRect();
+    const edge = 56;
+    if (clientY < rect.top + edge) {
+      scroll.scrollTop -= Math.max(8, (rect.top + edge - clientY) * 0.35);
+    } else if (clientY > rect.bottom - edge) {
+      scroll.scrollTop += Math.max(8, (clientY - (rect.bottom - edge)) * 0.35);
+    }
+  };
+
   const endQueueDrag = (clientY?: number) => {
     const from = dragIndexRef.current;
     if (from == null) return;
@@ -550,14 +652,15 @@ export default function MobileNowPlaying({
     }
   };
 
-  const bassGain = averageBandGain(eqSettings.bands, BASS_BAND_INDEXES);
-  const trebleGain = averageBandGain(eqSettings.bands, TREBLE_BAND_INDEXES);
+  const bassGain = readBassGain(eqSettings.bands);
+  const trebleGain = readTrebleGain(eqSettings.bands);
 
-  const applyToneGain = (indexes: readonly number[], gain: number) => {
-    const next = eqSettings.bands.map((value, index) =>
-      indexes.includes(index) ? gain : value,
-    );
-    onEqBandsChange(next);
+  const applyBassGain = (gain: number) => {
+    onEqBandsChange(buildWeightedToneBands(gain, trebleGain));
+  };
+
+  const applyTrebleGain = (gain: number) => {
+    onEqBandsChange(buildWeightedToneBands(bassGain, gain));
   };
 
   const pageDragStyle =
@@ -615,6 +718,9 @@ export default function MobileNowPlaying({
 
         <div
           className={`mnp-layer mnp-lyrics-scroll ${view === "lyrics" ? "mnp-layer-active" : ""}`}
+          onScroll={lyricsScrollHandlers.onLyricsScroll}
+          onTouchStart={lyricsScrollHandlers.onLyricsTouchStart}
+          onWheel={lyricsScrollHandlers.onLyricsWheel}
         >
           {timedLyrics ? (
             <div className="lyrics-lines">
@@ -645,7 +751,8 @@ export default function MobileNowPlaying({
         </div>
 
         <div
-          className={`mnp-layer mnp-queue-scroll ${view === "queue" ? "mnp-layer-active" : ""}`}
+          ref={queueListRef}
+          className={`mnp-layer mnp-queue-scroll ${view === "queue" ? "mnp-layer-active" : ""}${dragIndex != null ? " is-reordering" : ""}`}
         >
           <div className="mnp-queue-header">
             <span>Up Next</span>
@@ -665,77 +772,86 @@ export default function MobileNowPlaying({
               <span>Add tracks with "Play Next" or "Add to Queue"</span>
             </div>
           ) : (
-            <div
-              className={`mnp-queue-list${dragIndex != null ? " is-reordering" : ""}`}
-              ref={queueListRef}
+            <VirtualizedList
+              count={queueTracks.length}
+              estimateSize={58}
+              overscan={12}
+              scrollSelector=".mnp-queue-scroll"
+              className="mnp-queue-list"
             >
-              {queueTracks.map((qTrack, index) => (
-                <div
-                  key={`${qTrack.path}-${index}`}
-                  data-queue-index={index}
-                  className={`queue-item mnp-queue-item${queueCurrentIndex === index ? " active" : ""}${dragIndex === index ? " is-dragging" : ""}${overIndex === index && dragIndex != null && dragIndex !== index ? " drop-target" : ""}`}
-                  onClick={() => {
-                    if (dragMovedRef.current) {
-                      dragMovedRef.current = false;
-                      return;
-                    }
-                    onPlayFromQueue(index);
-                  }}
-                >
-                  <button
-                    className="mnp-queue-handle"
-                    type="button"
-                    title="Drag to reorder"
-                    aria-label="Drag to reorder"
-                    onClick={(e) => e.stopPropagation()}
-                    onPointerDown={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      dragMovedRef.current = false;
-                      dragIndexRef.current = index;
-                      setDragIndex(index);
-                      setOverIndex(index);
-                      e.currentTarget.setPointerCapture(e.pointerId);
+              {(index) => {
+                const qTrack = queueTracks[index];
+                if (!qTrack) return null;
+                return (
+                  <div
+                    data-queue-index={index}
+                    className={`queue-item mnp-queue-item${queueCurrentIndex === index ? " active" : ""}${dragIndex === index ? " is-dragging" : ""}${overIndex === index && dragIndex != null && dragIndex !== index ? " drop-target" : ""}`}
+                    onClick={() => {
+                      if (dragMovedRef.current) {
+                        dragMovedRef.current = false;
+                        return;
+                      }
+                      onPlayFromQueue(index);
                     }}
-                    onPointerMove={(e) => {
-                      if (dragIndexRef.current == null) return;
-                      dragMovedRef.current = true;
-                      const next = resolveQueueDropIndex(e.clientY);
-                      if (next != null) setOverIndex(next);
-                    }}
-                    onPointerUp={(e) => {
-                      e.stopPropagation();
-                      endQueueDrag(e.clientY);
-                    }}
-                    onPointerCancel={() => endQueueDrag()}
                   >
-                    <BiGridVertical />
-                  </button>
-                  <Artwork
-                    track={qTrack}
-                    fallback={getTrackTitle(qTrack).slice(0, 1).toUpperCase()}
-                    className="queue-thumb"
-                  />
-                  <div className="queue-item-info">
-                    <div className="queue-item-name">{getTrackTitle(qTrack)}</div>
-                    <div className="queue-item-artist">{qTrack.artist}</div>
-                  </div>
-                  <div className="queue-item-actions">
                     <button
-                      className="queue-item-remove"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onRemoveFromQueue(index);
-                      }}
-                      title="Remove from queue"
+                      className="mnp-queue-handle"
                       type="button"
+                      title="Drag to reorder"
+                      aria-label="Drag to reorder"
+                      onClick={(e) => e.stopPropagation()}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        dragMovedRef.current = false;
+                        dragIndexRef.current = index;
+                        setDragIndex(index);
+                        setOverIndex(index);
+                        e.currentTarget.setPointerCapture(e.pointerId);
+                      }}
+                      onPointerMove={(e) => {
+                        if (dragIndexRef.current == null) return;
+                        dragMovedRef.current = true;
+                        autoScrollQueueWhileDragging(e.clientY);
+                        const next = resolveQueueDropIndex(e.clientY);
+                        if (next != null) setOverIndex(next);
+                      }}
+                      onPointerUp={(e) => {
+                        e.stopPropagation();
+                        endQueueDrag(e.clientY);
+                      }}
+                      onPointerCancel={() => endQueueDrag()}
                     >
-                      <BiX />
+                      <BiGridVertical />
                     </button>
+                    <Artwork
+                      track={qTrack}
+                      fallback={getTrackTitle(qTrack).slice(0, 1).toUpperCase()}
+                      className="queue-thumb"
+                    />
+                    <div className="queue-item-info">
+                      <div className="queue-item-name">
+                        {getTrackTitle(qTrack)}
+                      </div>
+                      <div className="queue-item-artist">{qTrack.artist}</div>
+                    </div>
+                    <div className="queue-item-actions">
+                      <button
+                        className="queue-item-remove"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemoveFromQueue(index);
+                        }}
+                        title="Remove from queue"
+                        type="button"
+                      >
+                        <BiX />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                );
+              }}
+            </VirtualizedList>
           )}
         </div>
       </div>
@@ -887,17 +1003,21 @@ export default function MobileNowPlaying({
               </button>
             </div>
             <div className="mnp-sheet-scroll">
-              <div className="mnp-volume-section">
+              <div
+                className={`mnp-volume-section${hideVolume ? " mnp-volume-section--no-volume" : ""}`}
+              >
                 <ToneDial
                   label="Bass"
                   gain={bassGain}
-                  onChange={(gain) => applyToneGain(BASS_BAND_INDEXES, gain)}
+                  onChange={applyBassGain}
                 />
-                <VolumeDial value={volumeValue} onChange={onVolumeChange} />
+                {!hideVolume && (
+                  <VolumeDial value={volumeValue} onChange={onVolumeChange} />
+                )}
                 <ToneDial
                   label="Treble"
                   gain={trebleGain}
-                  onChange={(gain) => applyToneGain(TREBLE_BAND_INDEXES, gain)}
+                  onChange={applyTrebleGain}
                 />
               </div>
               <div className="mnp-eq-section">

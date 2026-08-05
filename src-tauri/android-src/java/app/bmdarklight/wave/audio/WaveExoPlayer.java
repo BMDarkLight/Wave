@@ -147,6 +147,27 @@ public final class WaveExoPlayer {
         });
     }
 
+    /** Prepare a URI and seek without starting playback (session restore). */
+    public void prepareUriAt(String uriString, long positionMs) {
+        if (uriString == null || uriString.isEmpty()) {
+            throw new IllegalArgumentException("uri is empty");
+        }
+        runOnMainBlocking(() -> {
+            initPlayer();
+            ended = false;
+            Uri uri = Uri.parse(normalizeUri(uriString));
+            player.setMediaItem(MediaItem.fromUri(uri));
+            player.prepare();
+            long clamped = Math.max(0L, positionMs);
+            player.seekTo(clamped);
+            player.pause();
+            playingCached = false;
+            positionMsCached = clamped;
+            refreshCacheFromPlayer();
+            stopPositionTicker();
+        });
+    }
+
     public void play() {
         // Blocking so resume() doesn't return before Exo has actually started
         // (async fire-and-forget raced the UI poll and looked "stuck").

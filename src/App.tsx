@@ -121,6 +121,7 @@ import {
   type Track,
 } from "./utils/player";
 import { isAndroid } from "./utils/platform";
+import { useLyricsAutoScroll } from "./hooks/useLyricsAutoScroll";
 import AlbumPage from "./components/AlbumPage";
 import ArtistPage from "./components/ArtistPage";
 import ContextMenu from "./components/ContextMenu";
@@ -131,6 +132,7 @@ import MobileNowPlaying, {
 import MobileSettings from "./components/MobileSettings";
 import VirtualizedList from "./components/VirtualizedList";
 import "./App.css";
+import "./touch-hover.css";
 
 function formatInvokeError(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message.trim()) return err.message;
@@ -260,6 +262,54 @@ const MATCH_FIELD_LABEL: Record<string, string> = {
   name: "File",
   lyrics: "Lyrics",
 };
+
+type MainSearchScope =
+  | { kind: "library" }
+  | { kind: "playlist"; label: string; paths: Set<string> }
+  | { kind: "album"; name: string; albumArtist: string | null }
+  | { kind: "artist"; name: string };
+
+function trackInAlbum(
+  track: Track,
+  album: string,
+  albumArtist: string | null,
+): boolean {
+  if (track.album !== album) return false;
+  if (!albumArtist) return true;
+  const aa = track.album_artist || track.artist;
+  return aa === albumArtist;
+}
+
+function trackByArtist(track: Track, artist: string): boolean {
+  return track.artist === artist || track.album_artist === artist;
+}
+
+function hitMatchesSearchScope(hit: SearchHit, scope: MainSearchScope): boolean {
+  const track = hit.track;
+  switch (scope.kind) {
+    case "library":
+      return true;
+    case "playlist":
+      return scope.paths.has(track.path);
+    case "album":
+      return trackInAlbum(track, scope.name, scope.albumArtist);
+    case "artist":
+      return trackByArtist(track, scope.name);
+  }
+}
+
+function mainSearchScopeLabel(scope: MainSearchScope): string {
+  switch (scope.kind) {
+    case "library":
+      return "library";
+    case "playlist":
+      return scope.label;
+    case "album":
+      return scope.name;
+    case "artist":
+      return scope.name;
+  }
+}
 
 function highlightMatch(text: string, query: string): ReactNode {
   const q = query.trim();
@@ -425,6 +475,7 @@ function App() {
   const [mainSearchQuery, setMainSearchQuery] = useState("");
   const [mainSearchHits, setMainSearchHits] = useState<SearchHit[]>([]);
   const [mainSearchLoading, setMainSearchLoading] = useState(false);
+  const [mainSearchFullLibrary, setMainSearchFullLibrary] = useState(false);
   const [mainSearchOpen, setMainSearchOpen] = useState(false);
   const mainSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mainSearchReqId = useRef(0);
@@ -443,26 +494,18 @@ function App() {
   };
 
   const openMainSearch = () => {
-    clearBrowse();
     setMainSearchOpen(true);
   };
   const closeMainSearch = () => {
     setMainSearchOpen(false);
     setMainSearchQuery("");
     setMainSearchHits([]);
+    setMainSearchFullLibrary(false);
   };
   const toggleMainSearch = () => {
     if (mainSearchOpen) closeMainSearch();
     else openMainSearch();
   };
-
-  // Leaving the playlist list for artist/album dismisses search.
-  useEffect(() => {
-    if (browseStack.length === 0) return;
-    setMainSearchOpen(false);
-    setMainSearchQuery("");
-    setMainSearchHits([]);
-  }, [browseStack]);
 
   // Delete-playlist confirmation modal
   const [deletePlaylistConfirm, setDeletePlaylistConfirm] = useState<{
@@ -551,6 +594,7 @@ function App() {
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [androidHost, setAndroidHost] = useState(false);
+  const androidHostRef = useRef(false);
   const [showFolderSetup, setShowFolderSetup] = useState(false);
 
   // Mobile-only fullscreen "Now Playing" page (replaces the desktop lyrics
@@ -708,6 +752,12 @@ function App() {
 
   const handleOpenLyrics = () => {
     if (!currentTrack) return;
+    // Second click on art/title should close the sidebar, not replace the
+    // enriched panel track with a stale playlist entry (which drops lyrics).
+    if (lyricsPanelTrack?.path === currentTrack.path) {
+      closeRightPanelDelayed();
+      return;
+    }
     setMobileNavOpen(false);
     closeMainSearch();
     setRightPanelWidth((width) => clampRightPanelWidth(width));
@@ -715,6 +765,37 @@ function App() {
     setShowQueue(false);
     setShowDeviceList(false);
     setLyricsPanelTrack(currentTrack);
+  };
+
+  const applyLyricsToTrack = (
+    path: string,
+    lyrics: string,
+    lyricsSource: string | null | undefined,
+  ) => {
+    setPlaylist((prev) =>
+      prev.map((t) =>
+        t.path === path
+          ? { ...t, lyrics, lyrics_source: lyricsSource ?? t.lyrics_source }
+          : t,
+      ),
+    );
+    setQueueData((prev) => ({
+      ...prev,
+      tracks: prev.tracks.map((t) =>
+        t.path === path
+          ? { ...t, lyrics, lyrics_source: lyricsSource ?? t.lyrics_source }
+          : t,
+      ),
+    }));
+    setLyricsPanelTrack((prev) =>
+      prev && prev.path === path
+        ? {
+            ...prev,
+            lyrics,
+            lyrics_source: lyricsSource ?? prev.lyrics_source,
+          }
+        : prev,
+    );
   };
 
   // Load full cover + lyrics details only while the lyrics panel is open.
@@ -734,15 +815,7 @@ function App() {
       if (fullCover) setLyricsFullCover(fullCover);
       else setLyricsFullCover(null);
       if (details?.lyrics) {
-        setLyricsPanelTrack((prev) =>
-          prev && prev.path === path
-            ? {
-                ...prev,
-                lyrics: details.lyrics,
-                lyrics_source: details.lyrics_source,
-              }
-            : prev,
-        );
+        applyLyricsToTrack(path, details.lyrics, details.lyrics_source);
       }
     })();
     return () => {
@@ -941,8 +1014,22 @@ function App() {
   }, []);
 
   useEffect(() => {
-    void isAndroid().then(setAndroidHost);
+    void isAndroid().then((android) => {
+      setAndroidHost(android);
+      androidHostRef.current = android;
+      if (android) {
+        setVolumeValue(1);
+        void setPlayerVolume(1);
+      }
+    });
   }, []);
+
+  // Android uses system volume — keep Wave at 100% always.
+  useEffect(() => {
+    if (!androidHost) return;
+    setVolumeValue(1);
+    void setPlayerVolume(1);
+  }, [androidHost]);
 
   // On Android, prompt for a music folder if Library isn't synced yet
   // and the user hasn't dismissed the welcome prompt.
@@ -1121,38 +1208,7 @@ function App() {
         if (cancelled || lyricsFetchIdRef.current !== fetchId) return;
         setLyricsFetchPath(null);
         if (!updated?.lyrics) return;
-        setPlaylist((prev) =>
-          prev.map((t) =>
-            t.path === path
-              ? {
-                  ...t,
-                  lyrics: updated.lyrics,
-                  lyrics_source: updated.lyrics_source,
-                }
-              : t,
-          ),
-        );
-        setQueueData((prev) => ({
-          ...prev,
-          tracks: prev.tracks.map((t) =>
-            t.path === path
-              ? {
-                  ...t,
-                  lyrics: updated.lyrics,
-                  lyrics_source: updated.lyrics_source,
-                }
-              : t,
-          ),
-        }));
-        setLyricsPanelTrack((prev) =>
-          prev && prev.path === path
-            ? {
-                ...prev,
-                lyrics: updated.lyrics,
-                lyrics_source: updated.lyrics_source,
-              }
-            : prev,
-        );
+        applyLyricsToTrack(path, updated.lyrics, updated.lyrics_source);
       })
       .catch(() => {
         if (!cancelled && lyricsFetchIdRef.current === fetchId) {
@@ -1196,13 +1252,11 @@ function App() {
     return idx;
   }, [timedLyrics, isLyricsPanelOnCurrentTrack, displayPosition]);
 
-  useEffect(() => {
-    if (activeLyricIndex < 0) return;
-    activeLyricLineRef.current?.scrollIntoView({
-      block: "center",
-      behavior: "smooth",
-    });
-  }, [activeLyricIndex]);
+  const lyricsScrollHandlers = useLyricsAutoScroll(
+    activeLyricIndex,
+    !!lyricsPanelTrack,
+    activeLyricLineRef,
+  );
 
   const selectedPlaylist =
     playlists.find((p) => p.id === selectedPlaylistId) ?? null;
@@ -1232,10 +1286,93 @@ function App() {
     [sortedPlaylists],
   );
 
+  const mainSearchScope = useMemo((): MainSearchScope => {
+    if (viewingAlbum) {
+      return {
+        kind: "album",
+        name: viewingAlbum.name,
+        albumArtist: viewingAlbum.albumArtist,
+      };
+    }
+    if (viewingArtist) {
+      return { kind: "artist", name: viewingArtist };
+    }
+    if (mainView === "home") {
+      return { kind: "library" };
+    }
+    return {
+      kind: "playlist",
+      label: selectedPlaylist?.name ?? LIBRARY_PLAYLIST_NAME,
+      paths: new Set(playlist.map((t) => t.path)),
+    };
+  }, [
+    viewingAlbum,
+    viewingArtist,
+    mainView,
+    selectedPlaylist?.name,
+    playlist,
+  ]);
+
+  const mainSearchScopeIsLibrary =
+    mainSearchScope.kind === "library" ||
+    (mainSearchScope.kind === "playlist" &&
+      isLibraryPlaylistName(mainSearchScope.label));
+
+  const displayedMainSearchHits = useMemo(() => {
+    if (mainSearchFullLibrary || mainSearchScopeIsLibrary) {
+      return mainSearchHits;
+    }
+    return mainSearchHits.filter((hit) =>
+      hitMatchesSearchScope(hit, mainSearchScope),
+    );
+  }, [
+    mainSearchHits,
+    mainSearchFullLibrary,
+    mainSearchScopeIsLibrary,
+    mainSearchScope,
+  ]);
+
+  const showSearchFullLibraryBtn =
+    !!mainSearchQuery.trim() &&
+    !mainSearchFullLibrary &&
+    mainView !== "home" &&
+    !mainSearchScopeIsLibrary;
+
+  const mainSearchResultsSubtitle = useMemo(() => {
+    if (!mainSearchQuery.trim()) return "";
+    if (mainSearchLoading && displayedMainSearchHits.length === 0) {
+      return "Searching…";
+    }
+    const count = displayedMainSearchHits.length;
+    const matchLabel = `${count} match${count === 1 ? "" : "es"}`;
+    if (mainSearchFullLibrary || mainSearchScopeIsLibrary) {
+      return matchLabel;
+    }
+    return `${matchLabel} in ${mainSearchScopeLabel(mainSearchScope)}`;
+  }, [
+    mainSearchQuery,
+    mainSearchLoading,
+    displayedMainSearchHits.length,
+    mainSearchFullLibrary,
+    mainSearchScopeIsLibrary,
+    mainSearchScope,
+  ]);
+
+  useEffect(() => {
+    setMainSearchFullLibrary(false);
+  }, [mainSearchQuery, mainSearchScope]);
+
   const updatePlaybackState = async () => {
     const state = await getPlaybackState();
     setPlaybackState({ ...emptyPlaybackState, ...state });
-    setVolumeValue(state.volume ?? 0.8);
+    if (androidHostRef.current) {
+      if ((state.volume ?? 1) !== 1) {
+        void setPlayerVolume(1);
+      }
+      setVolumeValue(1);
+    } else {
+      setVolumeValue(state.volume ?? 0.8);
+    }
     if (!document.body.classList.contains("is-seeking")) {
       setSeekValue(state.position_seconds ?? 0);
     }
@@ -2178,6 +2315,9 @@ function App() {
   }, []);
 
   const handleVolume = async (value: number) => {
+    if (androidHostRef.current) {
+      value = 1;
+    }
     try {
       setVolumeValue(value);
       await setPlayerVolume(value);
@@ -2737,8 +2877,11 @@ function App() {
   };
 
   // ── Hardware/OS back button ─────────────────────────────────────────────
-  // Push one history entry per overlay layer so nested UI (queue → context
-  // menu, artist → album) each get their own back step instead of exiting.
+  // Android WebView's history.go(-n) often fires fewer popstate events than
+  // requested, which desyncs a multi-entry stack and "eats" real back presses
+  // (nothing → nothing → exit). Use a single history trap instead: while any
+  // overlay is open we keep exactly one synthetic entry; each user back closes
+  // the top overlay and we re-trap if anything remains.
   const overlaySnapshotRef = useRef({
     menuTrackPath,
     queueMenuIndex,
@@ -2750,7 +2893,7 @@ function App() {
     showAddFromLibrary,
     deletePlaylistConfirm,
     addToPlaylistTrack,
-    mobilePlayerLyrics: mobilePlayerView !== "cover",
+    mobilePlayerSubView: mobilePlayerView !== "cover",
     rightPanelOpen,
     mobilePlayerOpen,
     mobileSettingsOpen,
@@ -2769,7 +2912,7 @@ function App() {
     showAddFromLibrary,
     deletePlaylistConfirm,
     addToPlaylistTrack,
-    mobilePlayerLyrics: mobilePlayerView !== "cover",
+    mobilePlayerSubView: mobilePlayerView !== "cover",
     rightPanelOpen,
     mobilePlayerOpen,
     mobileSettingsOpen,
@@ -2778,134 +2921,183 @@ function App() {
     browseDepth: browseStack.length,
   };
 
-  const countOverlayDepth = () => {
+  const hasOverlayOpen = () => {
     const s = overlaySnapshotRef.current;
-    let depth = 0;
-    if (s.menuTrackPath || s.queueMenuIndex != null) depth += 1;
-    if (s.showAddTrackMenu) depth += 1;
-    if (s.showEqPanel) depth += 1;
-    if (s.mobilePlayerMenuOpen) depth += 1;
-    if (s.playlistDialog) depth += 1;
-    if (s.showClearConfirm) depth += 1;
-    if (s.showAddFromLibrary) depth += 1;
-    if (s.deletePlaylistConfirm) depth += 1;
-    if (s.addToPlaylistTrack) depth += 1;
-    if (s.mobilePlayerLyrics) depth += 1;
-    if (s.rightPanelOpen) depth += 1;
-    if (s.mobilePlayerOpen) depth += 1;
-    if (s.mobileSettingsOpen) depth += 1;
-    if (s.mobileNavOpen) depth += 1;
-    if (s.mainSearchOpen) depth += 1;
-    depth += s.browseDepth;
-    return depth;
+    return !!(
+      s.menuTrackPath ||
+      s.queueMenuIndex != null ||
+      s.showAddTrackMenu ||
+      s.showEqPanel ||
+      s.mobilePlayerMenuOpen ||
+      s.playlistDialog ||
+      s.showClearConfirm ||
+      s.showAddFromLibrary ||
+      s.deletePlaylistConfirm ||
+      s.addToPlaylistTrack ||
+      s.mobilePlayerSubView ||
+      s.rightPanelOpen ||
+      s.mobilePlayerOpen ||
+      s.mobileSettingsOpen ||
+      s.mobileNavOpen ||
+      s.mainSearchOpen ||
+      s.browseDepth > 0
+    );
   };
 
-  // Closes whichever overlay is "on top" — transient menus first, then modals,
-  // then floating panels, then search, then nested content pages.
+  // Closes whichever overlay is "on top" — context menus first, then sheets /
+  // dialogs, then NP subviews, then panels, then nav/search/browse.
+  // Also clears the matching snapshot field immediately so a rapid second back
+  // (before React re-renders) still sees the updated stack.
   const closeTopOverlay = (): boolean => {
     const s = overlaySnapshotRef.current;
-    if (s.menuTrackPath || s.queueMenuIndex != null) {
+    if (s.menuTrackPath) {
+      s.menuTrackPath = null;
       closeTrackContextMenu();
+      return true;
+    }
+    if (s.queueMenuIndex != null) {
+      s.queueMenuIndex = null;
       closeQueueContextMenu();
       return true;
     }
     if (s.showAddTrackMenu) {
+      s.showAddTrackMenu = false;
       setShowAddTrackMenu(false);
       setAddTrackMenuAnchor(null);
       return true;
     }
     if (s.showEqPanel) {
+      s.showEqPanel = false;
       setShowEqPanel(false);
       setEqAnchor(null);
       return true;
     }
     if (s.mobilePlayerMenuOpen) {
+      s.mobilePlayerMenuOpen = false;
       setMobilePlayerMenuOpen(false);
       return true;
     }
     if (s.playlistDialog) {
+      s.playlistDialog = null;
       closePlaylistDialog();
       return true;
     }
     if (s.showClearConfirm) {
+      s.showClearConfirm = false;
       setShowClearConfirm(false);
       return true;
     }
     if (s.showAddFromLibrary) {
+      s.showAddFromLibrary = false;
       closeAddFromLibrary();
       return true;
     }
     if (s.deletePlaylistConfirm) {
+      s.deletePlaylistConfirm = null;
       setDeletePlaylistConfirm(null);
       return true;
     }
     if (s.addToPlaylistTrack) {
+      s.addToPlaylistTrack = null;
       setAddToPlaylistTrack(null);
       return true;
     }
-    if (s.mobilePlayerLyrics) {
+    if (s.mobilePlayerSubView) {
+      s.mobilePlayerSubView = false;
       setMobilePlayerView("cover");
       return true;
     }
     if (s.rightPanelOpen) {
+      s.rightPanelOpen = false;
       closeRightPanelDelayed();
       return true;
     }
     // Settings is a sibling overlay to Now Playing — close it before the player
     // so a lone Settings page always pops first.
     if (s.mobileSettingsOpen) {
+      s.mobileSettingsOpen = false;
       handleCloseMobileSettings();
       return true;
     }
     if (s.mobilePlayerOpen) {
+      s.mobilePlayerOpen = false;
       handleCloseMobilePlayer();
       return true;
     }
     if (s.mobileNavOpen) {
+      s.mobileNavOpen = false;
       setMobileNavOpen(false);
       return true;
     }
     if (s.mainSearchOpen) {
+      s.mainSearchOpen = false;
       closeMainSearch();
       return true;
     }
     if (s.browseDepth > 0) {
+      s.browseDepth -= 1;
       browseBack();
       return true;
     }
     return false;
   };
 
-  const overlayHistoryDepthRef = useRef(0);
-  const ignorePopCountRef = useRef(0);
+  const backTrapActiveRef = useRef(false);
+  const ignorePopRef = useRef(false);
+  const closeTopOverlayRef = useRef(closeTopOverlay);
+  closeTopOverlayRef.current = closeTopOverlay;
+  const hasOverlayOpenRef = useRef(hasOverlayOpen);
+  hasOverlayOpenRef.current = hasOverlayOpen;
 
+  // Keep a single synthetic history entry while any overlay is open.
   useEffect(() => {
-    const desired = countOverlayDepth();
-    const current = overlayHistoryDepthRef.current;
-    if (desired > current) {
-      for (let i = current; i < desired; i++) {
-        window.history.pushState({ waveOverlay: true }, "");
-      }
-      overlayHistoryDepthRef.current = desired;
-    } else if (desired < current) {
-      const toPop = current - desired;
-      ignorePopCountRef.current += toPop;
-      overlayHistoryDepthRef.current = desired;
-      window.history.go(-toPop);
+    const open = hasOverlayOpen();
+    if (open && !backTrapActiveRef.current) {
+      window.history.pushState({ waveOverlay: true }, "");
+      backTrapActiveRef.current = true;
+    } else if (!open && backTrapActiveRef.current) {
+      // Overlay(s) closed via UI — drop the trap without treating it as a
+      // user back. A single history.back() is reliable on Android WebView;
+      // multi-step history.go(-n) is not.
+      ignorePopRef.current = true;
+      backTrapActiveRef.current = false;
+      window.history.back();
     }
-  });
+  }, [
+    menuTrackPath,
+    queueMenuIndex,
+    showAddTrackMenu,
+    showEqPanel,
+    mobilePlayerMenuOpen,
+    playlistDialog,
+    showClearConfirm,
+    showAddFromLibrary,
+    deletePlaylistConfirm,
+    addToPlaylistTrack,
+    mobilePlayerView,
+    rightPanelOpen,
+    mobilePlayerOpen,
+    mobileSettingsOpen,
+    mobileNavOpen,
+    mainSearchOpen,
+    browseStack.length,
+  ]);
 
   useEffect(() => {
     const onPopState = () => {
-      if (ignorePopCountRef.current > 0) {
-        ignorePopCountRef.current -= 1;
+      if (ignorePopRef.current) {
+        ignorePopRef.current = false;
         return;
       }
-      closeTopOverlay();
-      overlayHistoryDepthRef.current = Math.max(
-        0,
-        overlayHistoryDepthRef.current - 1,
-      );
+      // User (or OS) back — consume the trap, close the top overlay, then
+      // immediately re-trap if anything remains (avoids a race where a second
+      // back exits before React re-renders).
+      backTrapActiveRef.current = false;
+      closeTopOverlayRef.current();
+      if (hasOverlayOpenRef.current()) {
+        window.history.pushState({ waveOverlay: true }, "");
+        backTrapActiveRef.current = true;
+      }
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -2913,6 +3105,131 @@ function App() {
 
   const isCurrentTrack = (track: Track) =>
     track.path === playbackState.current_path;
+
+  const mainSearchResultsPanel = (
+    <div className="search-results">
+      {mainSearchLoading && displayedMainSearchHits.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-icon">
+            <span className="import-spinner" />
+          </div>
+          <h2>Searching…</h2>
+        </div>
+      ) : displayedMainSearchHits.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-icon">
+            <BiSearch />
+          </div>
+          <h2>No matches</h2>
+          <p className="import-subtitle">
+            {showSearchFullLibraryBtn
+              ? `Nothing in ${mainSearchScopeLabel(mainSearchScope)} matched. Try searching the full library.`
+              : "Try another song, artist, album, or lyric phrase."}
+          </p>
+          {showSearchFullLibraryBtn && (
+            <button
+              className="search-full-library-btn"
+              type="button"
+              onClick={() => setMainSearchFullLibrary(true)}
+            >
+              Search full library
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          <div className="search-hit-list">
+            {displayedMainSearchHits.map((hit) => {
+              const track = hit.track;
+              const fields = hit.matched_fields.filter(
+                (f) => f in MATCH_FIELD_LABEL,
+              );
+              return (
+                <button
+                  key={track.id}
+                  type="button"
+                  className={`search-hit ${isCurrentTrack(track) ? "active" : ""}`}
+                  onClick={() => {
+                    const paths = displayedMainSearchHits.map(
+                      (h) => h.track.path,
+                    );
+                    const index = Math.max(
+                      0,
+                      paths.findIndex((p) => p === track.path),
+                    );
+                    void playTracks(paths, index).then(() => {
+                      updatePlaybackState();
+                      loadQueueTracks();
+                    });
+                  }}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openTrackContextMenu(track.path, {
+                      top: event.clientY,
+                      left: event.clientX,
+                      flipAbove: event.clientY,
+                    });
+                  }}
+                >
+                  <Artwork
+                    track={track}
+                    fallback={getTrackTitle(track).slice(0, 1).toUpperCase()}
+                    className="track-thumb search-hit-thumb"
+                  />
+                  <div className="search-hit-body">
+                    <div className="search-hit-title">
+                      {highlightMatch(
+                        getTrackTitle(track),
+                        mainSearchQuery,
+                      )}
+                    </div>
+                    <div className="search-hit-meta">
+                      {highlightMatch(track.artist, mainSearchQuery)}
+                      {track.album ? (
+                        <>
+                          {" · "}
+                          {highlightMatch(track.album, mainSearchQuery)}
+                        </>
+                      ) : null}
+                    </div>
+                    {hit.lyrics_snippet ? (
+                      <div className="search-hit-lyrics">
+                        {highlightMatch(hit.lyrics_snippet, mainSearchQuery)}
+                      </div>
+                    ) : null}
+                    <div className="search-hit-fields">
+                      {fields.map((field) => (
+                        <span
+                          key={field}
+                          className={`search-field-chip search-field-${field}`}
+                        >
+                          {MATCH_FIELD_LABEL[field] ?? field}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="search-hit-duration">
+                    {formatTime(track.duration_seconds)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {showSearchFullLibraryBtn && (
+            <button
+              className="search-full-library-btn"
+              type="button"
+              onClick={() => setMainSearchFullLibrary(true)}
+            >
+              Search full library
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+
   const coverLetters = getTrackTitle(currentTrack, playbackState.current_path)
     .slice(0, 2)
     .toUpperCase();
@@ -2955,11 +3272,23 @@ function App() {
           </button>
           <div className="mobile-topbar-title">
             <img src={trayTemplate} alt="Wave" className="mobile-topbar-logo" />
-            {isScanningFolder ? (
+            {isScanningFolder || lyricsFetchPath ? (
               <span
                 className="brand-sync-spinner"
-                title={folderScanIsSync ? "Syncing folders…" : "Importing…"}
-                aria-label={folderScanIsSync ? "Syncing folders" : "Importing"}
+                title={
+                  isScanningFolder
+                    ? folderScanIsSync
+                      ? "Syncing folders…"
+                      : "Importing…"
+                    : "Fetching lyrics…"
+                }
+                aria-label={
+                  isScanningFolder
+                    ? folderScanIsSync
+                      ? "Syncing folders"
+                      : "Importing"
+                    : "Fetching lyrics"
+                }
                 role="status"
               />
             ) : null}
@@ -3216,7 +3545,15 @@ function App() {
         onMouseDown={onDragStart("sidebar")}
       />
 
-      {viewingAlbum ? (
+      {mainSearchQuery.trim() && (viewingAlbum || viewingArtist) ? (
+        <main className="main-content">
+          <div className="hero-copy">
+            <h1>Search</h1>
+            <p>{mainSearchResultsSubtitle}</p>
+          </div>
+          <section className="playlist-container">{mainSearchResultsPanel}</section>
+        </main>
+      ) : viewingAlbum ? (
         <AlbumPage
           album={viewingAlbum.name}
           albumArtist={viewingAlbum.albumArtist}
@@ -3262,7 +3599,7 @@ function App() {
           }}
           playbackState={playbackState}
         />
-      ) : mainView === "home" ? (
+      ) : mainView === "home" && !mainSearchQuery.trim() ? (
         <HomePage
           libraryPlaylistId={libraryPlaylist?.id ?? null}
           onPlayTrack={(path, tracks) => {
@@ -3291,92 +3628,67 @@ function App() {
       ) : (
         <main className="main-content">
           <div className="hero-copy">
-            <h1>{selectedPlaylist?.name ?? LIBRARY_PLAYLIST_NAME}</h1>
-            <p>
-              {mainSearchQuery.trim()
-                ? mainSearchLoading
-                  ? "Searching…"
-                  : `${mainSearchHits.length} match${mainSearchHits.length === 1 ? "" : "es"}`
-                : playlist.length
-                  ? `${playlist.length} tracks in this playlist`
-                  : isLoadingPlaylist
-                    ? "Loading tracks…"
-                    : "No tracks in this playlist"}
-              {(isScanningFolder &&
-                (selectedPlaylist?.sync_folder ||
-                  isLibraryPlaylistName(selectedPlaylist?.name))) ||
-              (isImporting && selectedPlaylist?.sync_folder) ? (
+            <div className="hero-top">
+              <h1>
+                {mainSearchQuery.trim()
+                  ? "Search"
+                  : (selectedPlaylist?.name ?? LIBRARY_PLAYLIST_NAME)}
+              </h1>
+              <div className="hero-actions">
+              {!mainSearchQuery.trim() && (
                 <>
-                  {" · "}
-                  <span className="playlist-sync-badge playlist-sync-badge-active">
-                    <BiSync className="playlist-sync-spin" /> Syncing…
-                  </span>
-                </>
-              ) : selectedPlaylist?.sync_folder ? (
-                <>
-                  {" · "}
-                  <span
-                    className="playlist-sync-badge"
-                    title={selectedPlaylist.sync_folder}
-                    onClick={() => handleSyncPlaylistFolder(selectedPlaylist!.id)}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <BiSync /> Synced folder
-                  </span>
-                </>
-              ) : null}
-            </p>
-            <div className="hero-actions">
-              <button
-                className="big-play"
-                onClick={handlePlayPause}
-                type="button"
-                title="Play or pause"
-              >
-                {playbackState.is_playing ? <BiPause /> : <BiPlay />}
-              </button>
-              {selectedPlaylist?.name !== "Favorites" && (
-                <div className="add-track-wrap">
                   <button
-                    ref={addTrackBtnRef}
-                    className="btn-secondary"
-                    onClick={async () => {
-                      if (androidHost) {
-                        // Library playlist: scan media folders.
-                        // Custom playlists: searchable library picker.
-                        const isLibrary = isLibraryPlaylistName(
-                          selectedPlaylist?.name,
-                        );
-                        if (isLibrary) {
-                          void handleAddFolderAndroid();
-                        } else {
-                          openAddFromLibrary();
-                        }
-                        return;
-                      }
-                      if (addTrackBtnRef.current) {
-                        const rect =
-                          addTrackBtnRef.current.getBoundingClientRect();
-                        setAddTrackMenuAnchor({
-                          top: rect.bottom + 6,
-                          left: rect.left,
-                        });
-                      }
-                      setShowAddTrackMenu((v) => !v);
-                    }}
-                    disabled={isAddingTracks}
+                    className="big-play"
+                    onClick={handlePlayPause}
                     type="button"
-                    title={
-                      androidHost
-                        ? isLibraryPlaylistName(selectedPlaylist?.name)
-                          ? "Scan media folder"
-                          : "Add from library"
-                        : "Add tracks"
-                    }
+                    title="Play or pause"
                   >
-                    <BiPlus />
+                    {playbackState.is_playing ? <BiPause /> : <BiPlay />}
                   </button>
-                </div>
+                  {selectedPlaylist?.name !== "Favorites" && (
+                    <div className="add-track-wrap">
+                      <button
+                        ref={addTrackBtnRef}
+                        className="btn-secondary"
+                        onClick={async () => {
+                          if (androidHost) {
+                            // Library playlist: scan media folders.
+                            // Custom playlists: searchable library picker.
+                            const isLibrary = isLibraryPlaylistName(
+                              selectedPlaylist?.name,
+                            );
+                            if (isLibrary) {
+                              void handleAddFolderAndroid();
+                            } else {
+                              openAddFromLibrary();
+                            }
+                            return;
+                          }
+                          if (addTrackBtnRef.current) {
+                            const rect =
+                              addTrackBtnRef.current.getBoundingClientRect();
+                            setAddTrackMenuAnchor({
+                              top: rect.bottom + 6,
+                              left: rect.left,
+                            });
+                          }
+                          setShowAddTrackMenu((v) => !v);
+                        }}
+                        disabled={isAddingTracks}
+                        type="button"
+                        title={
+                          androidHost
+                            ? isLibraryPlaylistName(selectedPlaylist?.name)
+                              ? "Scan media folder"
+                              : "Add from library"
+                            : "Add tracks"
+                        }
+                      >
+                        <BiPlus />
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
               <div
                 className={`hero-search-wrap${mainSearchOpen || mainSearchQuery ? " is-open" : ""}`}
@@ -3429,7 +3741,8 @@ function App() {
                   </div>
                 )}
               </div>
-              {playlist.length > 0 &&
+              {!mainSearchQuery.trim() &&
+                playlist.length > 0 &&
                 !isLibraryPlaylistName(selectedPlaylist?.name) &&
                 selectedPlaylist?.name !== "Favorites" &&
                 !selectedPlaylist?.sync_folder && (
@@ -3442,112 +3755,45 @@ function App() {
                   </button>
                 )}
             </div>
+            </div>
+            <p>
+              {mainSearchQuery.trim()
+                ? mainSearchResultsSubtitle
+                : playlist.length
+                  ? `${playlist.length} tracks in this playlist`
+                  : isLoadingPlaylist
+                    ? "Loading tracks…"
+                    : "No tracks in this playlist"}
+              {!mainSearchQuery.trim() &&
+              ((isScanningFolder &&
+                (selectedPlaylist?.sync_folder ||
+                  isLibraryPlaylistName(selectedPlaylist?.name))) ||
+                (isImporting && selectedPlaylist?.sync_folder)) ? (
+                <>
+                  {" · "}
+                  <span className="playlist-sync-badge playlist-sync-badge-active">
+                    <BiSync className="playlist-sync-spin" /> Syncing…
+                  </span>
+                </>
+              ) : !mainSearchQuery.trim() && selectedPlaylist?.sync_folder ? (
+                <>
+                  {" · "}
+                  <span
+                    className="playlist-sync-badge"
+                    title={selectedPlaylist.sync_folder}
+                    onClick={() => handleSyncPlaylistFolder(selectedPlaylist!.id)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <BiSync /> Synced folder
+                  </span>
+                </>
+              ) : null}
+            </p>
           </div>
 
           <section className="playlist-container">
             {mainSearchQuery.trim() ? (
-              <div className="search-results">
-                {mainSearchLoading && mainSearchHits.length === 0 ? (
-                  <div className="empty-state">
-                    <div className="empty-icon">
-                      <span className="import-spinner" />
-                    </div>
-                    <h2>Searching…</h2>
-                  </div>
-                ) : mainSearchHits.length === 0 ? (
-                  <div className="empty-state">
-                    <div className="empty-icon">
-                      <BiSearch />
-                    </div>
-                    <h2>No matches</h2>
-                    <p className="import-subtitle">
-                      Try another song, artist, album, or lyric phrase.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="search-hit-list">
-                    {mainSearchHits.map((hit) => {
-                      const track = hit.track;
-                      const fields = hit.matched_fields.filter(
-                        (f) => f in MATCH_FIELD_LABEL,
-                      );
-                      return (
-                        <button
-                          key={track.id}
-                          type="button"
-                          className={`search-hit ${isCurrentTrack(track) ? "active" : ""}`}
-                          onClick={() => {
-                            const paths = mainSearchHits.map((h) => h.track.path);
-                            const index = Math.max(
-                              0,
-                              paths.findIndex((p) => p === track.path),
-                            );
-                            void playTracks(paths, index).then(() => {
-                              updatePlaybackState();
-                              loadQueueTracks();
-                            });
-                          }}
-                          onContextMenu={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            openTrackContextMenu(track.path, {
-                              top: event.clientY,
-                              left: event.clientX,
-                              flipAbove: event.clientY,
-                            });
-                          }}
-                        >
-                          <Artwork
-                            track={track}
-                            fallback={getTrackTitle(track)
-                              .slice(0, 1)
-                              .toUpperCase()}
-                            className="track-thumb search-hit-thumb"
-                          />
-                          <div className="search-hit-body">
-                            <div className="search-hit-title">
-                              {highlightMatch(
-                                getTrackTitle(track),
-                                mainSearchQuery,
-                              )}
-                            </div>
-                            <div className="search-hit-meta">
-                              {highlightMatch(track.artist, mainSearchQuery)}
-                              {track.album ? (
-                                <>
-                                  {" · "}
-                                  {highlightMatch(track.album, mainSearchQuery)}
-                                </>
-                              ) : null}
-                            </div>
-                            {hit.lyrics_snippet ? (
-                              <div className="search-hit-lyrics">
-                                {highlightMatch(
-                                  hit.lyrics_snippet,
-                                  mainSearchQuery,
-                                )}
-                              </div>
-                            ) : null}
-                            <div className="search-hit-fields">
-                              {fields.map((field) => (
-                                <span
-                                  key={field}
-                                  className={`search-field-chip search-field-${field}`}
-                                >
-                                  {MATCH_FIELD_LABEL[field] ?? field}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="search-hit-duration">
-                            {formatTime(track.duration_seconds)}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              mainSearchResultsPanel
             ) : playlist.length === 0 && isLoadingPlaylist ? (
               <div className="empty-state">
                 <div className="empty-icon">
@@ -3860,72 +4106,85 @@ function App() {
                   <span>Add tracks with "Play Next" or "Add to Queue"</span>
                 </div>
               ) : (
-                queueData.tracks.map((track, index) => (
-                  <div
-                    key={`${track.path}-${index}`}
-                    className={`queue-item ${queueData.current_index === index ? "active" : ""} ${queueMenuIndex === index ? "menu-open" : ""}`}
-                    onClick={() => handlePlayFromQueue(index)}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      openQueueContextMenu(index, {
-                        top: event.clientY,
-                        left: event.clientX,
-                        flipAbove: event.clientY,
-                      });
-                    }}
-                  >
-                    <Artwork
-                      track={track}
-                      fallback={getTrackTitle(track).slice(0, 1).toUpperCase()}
-                      className="queue-thumb"
-                    />
-                    <div className="queue-item-info">
-                      <div className="queue-item-name">
-                        {getTrackTitle(track)}
-                      </div>
-                      <div className="queue-item-artist">{track.artist}</div>
-                    </div>
-                    <div className="queue-item-duration">
-                      {formatTime(track.duration_seconds)}
-                    </div>
-                    <div className="queue-item-actions">
-                      <button
-                        className="queue-item-menu"
-                        onClick={(event) => {
+                <VirtualizedList
+                  count={queueData.tracks.length}
+                  estimateSize={58}
+                  overscan={12}
+                  scrollSelector=".right-panel-list"
+                  className="queue-list-virtual"
+                >
+                  {(index) => {
+                    const track = queueData.tracks[index];
+                    if (!track) return null;
+                    return (
+                      <div
+                        className={`queue-item ${queueData.current_index === index ? "active" : ""} ${queueMenuIndex === index ? "menu-open" : ""}`}
+                        onClick={() => handlePlayFromQueue(index)}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
                           event.stopPropagation();
-                          if (queueMenuIndex === index) {
-                            setQueueMenuIndex(null);
-                            setQueueMenuAnchor(null);
-                          } else {
-                            const rect =
-                              event.currentTarget.getBoundingClientRect();
-                            openQueueContextMenu(index, {
-                              top: rect.bottom + 4,
-                              flipAbove: rect.top - 4,
-                              right: window.innerWidth - rect.right,
-                            });
-                          }
+                          openQueueContextMenu(index, {
+                            top: event.clientY,
+                            left: event.clientX,
+                            flipAbove: event.clientY,
+                          });
                         }}
-                        title="More"
-                        type="button"
                       >
-                        <BiDotsHorizontalRounded />
-                      </button>
-                      <button
-                        className="queue-item-remove"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemoveFromQueue(index);
-                        }}
-                        title="Remove from queue"
-                        type="button"
-                      >
-                        <BiX />
-                      </button>
-                    </div>
-                  </div>
-                ))
+                        <Artwork
+                          track={track}
+                          fallback={getTrackTitle(track)
+                            .slice(0, 1)
+                            .toUpperCase()}
+                          className="queue-thumb"
+                        />
+                        <div className="queue-item-info">
+                          <div className="queue-item-name">
+                            {getTrackTitle(track)}
+                          </div>
+                          <div className="queue-item-artist">{track.artist}</div>
+                        </div>
+                        <div className="queue-item-duration">
+                          {formatTime(track.duration_seconds)}
+                        </div>
+                        <div className="queue-item-actions">
+                          <button
+                            className="queue-item-menu"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (queueMenuIndex === index) {
+                                setQueueMenuIndex(null);
+                                setQueueMenuAnchor(null);
+                              } else {
+                                const rect =
+                                  event.currentTarget.getBoundingClientRect();
+                                openQueueContextMenu(index, {
+                                  top: rect.bottom + 4,
+                                  flipAbove: rect.top - 4,
+                                  right: window.innerWidth - rect.right,
+                                });
+                              }
+                            }}
+                            title="More"
+                            type="button"
+                          >
+                            <BiDotsHorizontalRounded />
+                          </button>
+                          <button
+                            className="queue-item-remove"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRemoveFromQueue(index);
+                            }}
+                            title="Remove from queue"
+                            type="button"
+                          >
+                            <BiX />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }}
+                </VirtualizedList>
               )}
             </div>
           </div>
@@ -3940,7 +4199,12 @@ function App() {
             >
               <BiX />
             </button>
-            <div className="lyrics-panel-scroll">
+            <div
+              className="lyrics-panel-scroll"
+              onScroll={lyricsScrollHandlers.onLyricsScroll}
+              onTouchStart={lyricsScrollHandlers.onLyricsTouchStart}
+              onWheel={lyricsScrollHandlers.onLyricsWheel}
+            >
               <div className="lyrics-panel-cover">
                 <Artwork
                   track={lyricsPanelTrack}
@@ -4608,12 +4872,19 @@ function App() {
         className={`player-bar${currentTrack && !mobilePlayerOpen ? " player-bar-tappable" : ""}`}
         onClick={(event) => {
           // Tapping empty space in the mini player (mobile only) opens the
-          // fullscreen Now Playing page. Clicks on any actual control
-          // (buttons, the seek slider, etc.) are left alone.
+          // fullscreen Now Playing page. Clicks on transport/seek controls
+          // are left alone; the title/art block opens NP on its own.
           if (!isMobileLayout()) return;
           if (mobilePlayerOpen) return;
           const target = event.target as HTMLElement;
-          if (target.closest("button, input, a, select")) return;
+          if (
+            target.closest(
+              ".player-controls, .seek-row, .player-right, input, select, a",
+            )
+          ) {
+            return;
+          }
+          if (!currentTrack) return;
           handleOpenMobilePlayer();
         }}
       >
@@ -4631,7 +4902,15 @@ function App() {
               className="album-art"
             />
           </button>
-          <div className="now-playing-info">
+          <div
+            className="now-playing-info"
+            onClick={() => {
+              // Mobile: the whole info block opens Now Playing (large hit
+              // target). Desktop keeps per-field buttons below.
+              if (!isMobileLayout() || !currentTrack || mobilePlayerOpen) return;
+              handleOpenMobilePlayer();
+            }}
+          >
             <button
               type="button"
               className="now-playing-name"
@@ -4645,6 +4924,12 @@ function App() {
               className="now-playing-artist"
               onClick={() => {
                 if (!currentTrack?.artist) return;
+                // Artist page is reached from Now Playing on mobile — tapping
+                // the bar artist should open NP, not navigate away.
+                if (isMobileLayout()) {
+                  handleOpenMobilePlayer();
+                  return;
+                }
                 openArtistPage(currentTrack.artist);
               }}
               type="button"
@@ -4849,6 +5134,7 @@ function App() {
           }}
           volumeValue={volumeValue}
           onVolumeChange={handleVolume}
+          hideVolume={androidHost}
           eqSettings={eqSettings}
           onEqEnabledChange={handleEqEnabled}
           onEqBandChange={handleEqBandChange}

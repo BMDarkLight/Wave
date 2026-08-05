@@ -165,6 +165,35 @@ const TrackCover = ({
   return <div className={className}>{fallback}</div>;
 };
 
+type HomeCache = {
+  libraryPlaylistId: string | null;
+  tracks: Track[];
+  albums: AlbumSummary[];
+  seed: number;
+};
+
+/** Session cache — survives Home unmount/remount until app reload. */
+let homeSessionCache: HomeCache | null = null;
+
+const readHomeCache = (libraryPlaylistId: string | null) =>
+  homeSessionCache?.libraryPlaylistId === libraryPlaylistId
+    ? homeSessionCache
+    : null;
+
+const writeHomeCache = (cache: HomeCache) => {
+  homeSessionCache = cache;
+};
+
+async function loadHomeLibrary(libraryPlaylistId: string | null) {
+  const [albumList, libraryTracks] = await Promise.all([
+    listAlbums().catch(() => [] as AlbumSummary[]),
+    libraryPlaylistId
+      ? getPlaylistTracksById(libraryPlaylistId).catch(() => [] as Track[])
+      : Promise.resolve([] as Track[]),
+  ]);
+  return { albums: albumList, tracks: libraryTracks };
+}
+
 type HomePageProps = {
   libraryPlaylistId: string | null;
   onPlayTrack: (path: string, queue: Track[]) => void;
@@ -180,25 +209,31 @@ export default function HomePage({
   onOpenArtist,
   onOpenLibrary,
 }: HomePageProps) {
-  const [tracks, setTracks] = useState<Track[]>([]);
-  const [albums, setAlbums] = useState<AlbumSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [seed, setSeed] = useState(0);
+  const initialCache = readHomeCache(libraryPlaylistId);
+  const [tracks, setTracks] = useState<Track[]>(initialCache?.tracks ?? []);
+  const [albums, setAlbums] = useState<AlbumSummary[]>(initialCache?.albums ?? []);
+  const [loading, setLoading] = useState(!initialCache);
+  const [refreshing, setRefreshing] = useState(false);
+  const [seed, setSeed] = useState(initialCache?.seed ?? 0);
 
   useEffect(() => {
+    if (readHomeCache(libraryPlaylistId)) return;
+
     let cancelled = false;
     setLoading(true);
     void (async () => {
       try {
-        const [albumList, libraryTracks] = await Promise.all([
-          listAlbums().catch(() => [] as AlbumSummary[]),
-          libraryPlaylistId
-            ? getPlaylistTracksById(libraryPlaylistId).catch(() => [] as Track[])
-            : Promise.resolve([] as Track[]),
-        ]);
+        const { albums: albumList, tracks: libraryTracks } =
+          await loadHomeLibrary(libraryPlaylistId);
         if (cancelled) return;
         setAlbums(albumList);
         setTracks(libraryTracks);
+        writeHomeCache({
+          libraryPlaylistId,
+          tracks: libraryTracks,
+          albums: albumList,
+          seed: 0,
+        });
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -207,6 +242,33 @@ export default function HomePage({
       cancelled = true;
     };
   }, [libraryPlaylistId]);
+
+  useEffect(() => {
+    if (loading) return;
+    writeHomeCache({ libraryPlaylistId, tracks, albums, seed });
+  }, [libraryPlaylistId, tracks, albums, seed, loading]);
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    void (async () => {
+      try {
+        const { albums: albumList, tracks: libraryTracks } =
+          await loadHomeLibrary(libraryPlaylistId);
+        const nextSeed = seed + 1;
+        setAlbums(albumList);
+        setTracks(libraryTracks);
+        setSeed(nextSeed);
+        writeHomeCache({
+          libraryPlaylistId,
+          tracks: libraryTracks,
+          albums: albumList,
+          seed: nextSeed,
+        });
+      } finally {
+        setRefreshing(false);
+      }
+    })();
+  };
 
   const suggestions = useMemo(() => {
     void seed;
@@ -268,21 +330,23 @@ export default function HomePage({
       <header className="home-header">
         <div>
           <p className="home-eyebrow">Wave</p>
-          <h1>{greeting}</h1>
+          <h1>
+            <button
+              className={`home-refresh-btn${refreshing ? " home-refresh-btn--spin" : ""}`}
+              type="button"
+              onClick={handleRefresh}
+              disabled={refreshing}
+              title="Refresh suggestions"
+              aria-label="Refresh suggestions"
+            >
+              <BiRefresh />
+            </button>
+            {greeting}
+          </h1>
           <p className="home-sub">
             Picked from {tracks.length.toLocaleString()} tracks in your library
           </p>
         </div>
-        <button
-          className="home-refresh-btn"
-          type="button"
-          onClick={() => setSeed((n) => n + 1)}
-          title="Shuffle suggestions"
-          aria-label="Shuffle suggestions"
-        >
-          <BiRefresh />
-          Refresh
-        </button>
       </header>
 
       {featured && (

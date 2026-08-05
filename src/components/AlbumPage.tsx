@@ -173,7 +173,7 @@ export default function AlbumPage({
             className="track-list track-list-compact album-track-list"
             style={
               {
-                "--track-grid": "52px minmax(120px, 1fr) 72px",
+                "--track-grid": "36px minmax(0, 1fr) 78px",
               } as React.CSSProperties
             }
           >
@@ -197,7 +197,7 @@ export default function AlbumPage({
                 const trackNo =
                   track.track_number != null && track.track_number > 0
                     ? String(track.track_number)
-                    : "—";
+                    : String(i + 1);
                 return (
                   <div
                     className={`track-item ${isCurrentTrack(track) ? "active" : ""}`}

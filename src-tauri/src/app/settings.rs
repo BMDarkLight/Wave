@@ -19,6 +19,7 @@ pub struct AppSettings {
     pub equalizer: EqConfig,
     // Playback state — saved on close, restored on launch.
     pub last_track_path: Option<String>,
+    pub last_position_seconds: f64,
     pub last_queue: Vec<String>,
     pub last_queue_index: Option<usize>,
     pub shuffle: bool,
@@ -36,6 +37,7 @@ impl Default for AppSettings {
             volume: 0.8,
             equalizer: EqConfig::default(),
             last_track_path: None,
+            last_position_seconds: 0.0,
             last_queue: Vec::new(),
             last_queue_index: None,
             shuffle: false,
@@ -95,6 +97,10 @@ impl AppSettings {
             self.equalizer.crossfade_duration = 0.0;
         }
         self.equalizer.crossfade_duration = self.equalizer.crossfade_duration.clamp(0.0, 8.0);
+        if !self.last_position_seconds.is_finite() {
+            self.last_position_seconds = 0.0;
+        }
+        self.last_position_seconds = self.last_position_seconds.max(0.0);
     }
 }
 

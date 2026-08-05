@@ -131,8 +131,13 @@ pub fn run() {
                     if let Err(e) = crate::android::audio::ensure_initialized() {
                         tracing::warn!("ExoPlayer init deferred: {e}");
                     }
-                    let _ = exo_app;
+                    commands::restore_saved_playback(&exo_app);
                 });
+            }
+
+            #[cfg(not(target_os = "android"))]
+            {
+                commands::restore_saved_playback(app.handle());
             }
 
             let tick_app = app_handle.clone();
@@ -146,6 +151,7 @@ pub fn run() {
                         android::media_bridge::drain_actions(&tick_app);
                     }
                     commands::tick_auto_advance(&tick_app);
+                    commands::persist_playback_state_throttled(&tick_app);
                 }
             });
 
@@ -156,26 +162,7 @@ pub fn run() {
                 let app = window.app_handle();
 
                 // Persist playback state before closing.
-                if let Some(player_state) = app.try_state::<commands::PlayerState>() {
-                    if let Ok(player_guard) = player_state.0.lock() {
-                        if let Some(player) = player_guard.as_ref() {
-                            if let Some(settings_state) = app.try_state::<AppSettingsState>() {
-                                if let Ok(mut settings) = settings_state.0.lock() {
-                                    settings.last_track_path = player
-                                        .get_current_path()
-                                        .map(|p| p.to_string_lossy().into_owned());
-                                    settings.last_queue =
-                                        player.queue.tracks().to_vec();
-                                    settings.last_queue_index =
-                                        player.queue.current_index();
-                                    settings.shuffle = player.queue.is_shuffled();
-                                    settings.repeat = player.repeat.clone();
-                                    let _ = settings.save(app);
-                                }
-                            }
-                        }
-                    }
-                }
+                commands::persist_playback_state(app);
 
                 let action = app
                     .try_state::<AppSettingsState>()

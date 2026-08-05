@@ -1,6 +1,8 @@
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, MutexGuard};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::app_settings::{AppSettings, AppSettingsState};
 use crate::audio::player::AudioPlayer;
@@ -116,6 +118,106 @@ fn with_app_player<R>(
     };
     let player = ensure_player(&mut slot)?;
     f(player)
+}
+
+const PLAYBACK_PERSIST_INTERVAL_MS: i64 = 3000;
+static LAST_PLAYBACK_PERSIST_MS: AtomicI64 = AtomicI64::new(0);
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn path_is_restorable(path: &str) -> bool {
+    if path.starts_with("content://") {
+        return true;
+    }
+    Path::new(path).exists()
+}
+
+/// Write the current queue, track, and scrubber position to disk.
+pub(crate) fn persist_playback_state(app: &tauri::AppHandle) {
+    let player_state = match app.try_state::<PlayerState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let settings_state = match app.try_state::<AppSettingsState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let player = match player_state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let Some(player) = player.as_ref() else {
+        return;
+    };
+    let mut settings = match settings_state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    settings.last_track_path = player
+        .get_current_path()
+        .map(|p| p.to_string_lossy().into_owned());
+    settings.last_position_seconds = player.position_seconds();
+    settings.last_queue = player.queue.tracks().to_vec();
+    settings.last_queue_index = player.queue.current_index();
+    settings.shuffle = player.queue.is_shuffled();
+    settings.repeat = player.repeat.clone();
+    let _ = settings.save(app);
+}
+
+pub(crate) fn persist_playback_state_throttled(app: &tauri::AppHandle) {
+    let now = now_ms();
+    let last = LAST_PLAYBACK_PERSIST_MS.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < PLAYBACK_PERSIST_INTERVAL_MS {
+        return;
+    }
+    LAST_PLAYBACK_PERSIST_MS.store(now, Ordering::Relaxed);
+    persist_playback_state(app);
+}
+
+/// Load the last session's track paused at the saved scrubber position.
+pub(crate) fn restore_saved_playback(app: &tauri::AppHandle) {
+    let (path, position) = {
+        let settings_state = match app.try_state::<AppSettingsState>() {
+            Some(s) => s,
+            None => return,
+        };
+        let settings = match settings_state.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let path = match settings.last_track_path.clone() {
+            Some(p) if path_is_restorable(&p) => p,
+            _ => return,
+        };
+        (path, settings.last_position_seconds)
+    };
+
+    if let Err(e) = with_app_player(app, |player| {
+        if player.get_current_path().is_some() {
+            return Ok(());
+        }
+        player
+            .load_paused_at(&path, position)
+            .map_err(|e| format!("Restore playback: {e}"))
+    }) {
+        tracing::warn!("{e}");
+        return;
+    }
+
+    let track = match app.state::<LibraryState>().0.lock() {
+        Ok(lib) => Some(resolve_track(&lib, &path)),
+        Err(_) => None,
+    };
+    if let Some(track) = track {
+        let bridge = app.state::<MediaBridgeState>();
+        sync_bridge_now_playing_at(app, &track, position);
+        bridge.0.set_paused(position);
+    }
 }
 
 fn lock_library<'a>(
@@ -609,6 +711,7 @@ pub async fn play_track(
     })
     .await?;
     sync_bridge_now_playing(&app, &track);
+    persist_playback_state(&app);
 
     Ok(())
 }
@@ -678,6 +781,7 @@ pub async fn play_tracks(
     })
     .await?;
     sync_bridge_now_playing(&app, &track);
+    persist_playback_state(&app);
     Ok(())
 }
 
@@ -685,6 +789,7 @@ pub async fn play_tracks(
 pub async fn pause_track(
     state: tauri::State<'_, PlayerState>,
     bridge: tauri::State<'_, MediaBridgeState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
     let position = {
         let mut player = lock_player(&state)?;
@@ -693,6 +798,7 @@ pub async fn pause_track(
         position
     };
     bridge.0.set_paused(position);
+    persist_playback_state(&app);
     Ok(())
 }
 
@@ -714,9 +820,11 @@ pub async fn resume_track(
 pub async fn stop_track(
     state: tauri::State<'_, PlayerState>,
     bridge: tauri::State<'_, MediaBridgeState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
     lock_player(&state)?.stop()?;
     bridge.0.set_stopped();
+    persist_playback_state(&app);
     Ok(())
 }
 
@@ -755,6 +863,7 @@ pub async fn seek_track(
     seconds: f64,
     state: tauri::State<'_, PlayerState>,
     bridge: tauri::State<'_, MediaBridgeState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
     let playing = {
         let mut player = lock_player(&state)?;
@@ -762,6 +871,7 @@ pub async fn seek_track(
         player.is_playing()
     };
     bridge.0.update_position(seconds, playing);
+    persist_playback_state(&app);
     Ok(())
 }
 
