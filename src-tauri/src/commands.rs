@@ -1016,6 +1016,33 @@ pub async fn set_crossfade_duration(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_gapless_enabled(
+    state: tauri::State<'_, PlayerState>,
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<bool, String> {
+    let guard = lock_player_state(&state);
+    if let Some(player) = guard.as_ref() {
+        return Ok(player.gapless_enabled());
+    }
+    let settings = lock_settings(&settings_state)?;
+    Ok(settings.gapless_enabled)
+}
+
+#[tauri::command]
+pub async fn set_gapless_enabled(
+    enabled: bool,
+    state: tauri::State<'_, PlayerState>,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    lock_player(&state)?.set_gapless_enabled(enabled);
+    let mut settings = lock_settings(&settings_state)?;
+    settings.gapless_enabled = enabled;
+    settings.save(&app)?;
+    Ok(())
+}
+
 // ── Library / playlist commands ───────────────────────────────────────────────
 
 #[tauri::command]

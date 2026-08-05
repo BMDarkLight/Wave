@@ -60,6 +60,7 @@ pub fn run() {
             player.set_eq_bands(settings.equalizer.bands);
             player.set_eq_enabled(settings.equalizer.enabled);
             player.set_crossfade_duration(settings.equalizer.crossfade_duration);
+            player.set_gapless_enabled(settings.gapless_enabled);
 
             // Restore playback state from last session.
             if !settings.last_queue.is_empty() {
@@ -250,6 +251,8 @@ pub fn run() {
             commands::import_eq_settings,
             commands::get_crossfade_duration,
             commands::set_crossfade_duration,
+            commands::get_gapless_enabled,
+            commands::set_gapless_enabled,
             commands::get_close_action,
             commands::set_close_action,
             commands::toggle_close_action,

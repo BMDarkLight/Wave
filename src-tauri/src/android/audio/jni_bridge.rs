@@ -2,7 +2,7 @@
 
 #![cfg(target_os = "android")]
 
-use jni::objects::{GlobalRef, JObject, JValue};
+use jni::objects::{GlobalRef, JObject, JString, JValue};
 use jni::{JNIEnv, JavaVM};
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -61,6 +61,20 @@ impl ExoHandle {
                 return Err(format!("{method} threw"));
             }
             result.j().map_err(|e| format!("{method} result: {e}"))
+        })
+    }
+
+    fn call_int(&self, method: &str, sig: &str, args: &[JValue]) -> Result<i32, String> {
+        self.with_env(|env| {
+            let result = env
+                .call_method(self.instance.as_obj(), method, sig, args)
+                .map_err(|e| format!("{method}: {e}"))?;
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+                return Err(format!("{method} threw"));
+            }
+            result.i().map_err(|e| format!("{method} result: {e}"))
         })
     }
 
@@ -254,6 +268,132 @@ pub fn exo_seek(position_ms: i64) -> Result<(), String> {
 
 pub fn exo_set_volume(volume: f32) -> Result<(), String> {
     with_player(|p| p.call_void("setVolume", "(F)V", &[JValue::Float(volume)]))
+}
+
+pub fn exo_set_crossfade_duration(seconds: f32) -> Result<(), String> {
+    with_player(|p| p.call_void("setCrossfadeDuration", "(F)V", &[JValue::Float(seconds)]))
+}
+
+pub fn exo_set_gapless_enabled(enabled: bool) -> Result<(), String> {
+    with_player(|p| p.call_void("setGaplessEnabled", "(Z)V", &[JValue::Bool(enabled as u8)]))
+}
+
+pub fn exo_play_media_items(uris: &[String], start_index: usize) -> Result<(), String> {
+    with_player(|p| {
+        p.with_env(|env| {
+            let string_class = env
+                .find_class("java/lang/String")
+                .map_err(|e| format!("String class: {e}"))?;
+            let array = env
+                .new_object_array(uris.len() as i32, string_class, JObject::null())
+                .map_err(|e| format!("new_object_array: {e}"))?;
+            for (i, uri) in uris.iter().enumerate() {
+                let j_uri = env.new_string(uri).map_err(|e| format!("uri string: {e}"))?;
+                env.set_object_array_element(&array, i as i32, j_uri)
+                    .map_err(|e| format!("set_object_array_element: {e}"))?;
+            }
+            env.call_method(
+                p.instance.as_obj(),
+                "playMediaItems",
+                "([Ljava/lang/String;I)V",
+                &[JValue::Object(&array), JValue::Int(start_index as i32)],
+            )
+            .map_err(|e| format!("playMediaItems: {e}"))?;
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+                return Err("playMediaItems threw".into());
+            }
+            Ok(())
+        })
+    })
+}
+
+pub fn exo_set_upcoming_uri(uri: Option<&str>) -> Result<(), String> {
+    with_player(|p| {
+        p.with_env(|env| {
+            match uri {
+                Some(uri) => {
+                    let j_uri = env.new_string(uri).map_err(|e| format!("uri string: {e}"))?;
+                    env.call_method(
+                        p.instance.as_obj(),
+                        "setUpcomingUri",
+                        "(Ljava/lang/String;)V",
+                        &[JValue::Object(&j_uri)],
+                    )
+                    .map_err(|e| format!("setUpcomingUri: {e}"))?;
+                }
+                None => {
+                    env.call_method(
+                        p.instance.as_obj(),
+                        "setUpcomingUri",
+                        "(Ljava/lang/String;)V",
+                        &[JValue::Object(&JObject::null())],
+                    )
+                    .map_err(|e| format!("setUpcomingUri: {e}"))?;
+                }
+            }
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+                return Err("setUpcomingUri threw".into());
+            }
+            Ok(())
+        })
+    })
+}
+
+pub fn exo_consume_media_index_change() -> Result<Option<i32>, String> {
+    with_player(|p| {
+        let index = p.call_int("consumeMediaIndexChange", "()I", &[])?;
+        if index < 0 {
+            Ok(None)
+        } else {
+            Ok(Some(index))
+        }
+    })
+}
+
+pub fn exo_has_next_media_item() -> Result<bool, String> {
+    with_player(|p| p.call_bool("hasNextMediaItem"))
+}
+
+pub fn exo_seek_to_next_media_item() -> Result<bool, String> {
+    with_player(|p| p.call_bool("seekToNextMediaItem"))
+}
+
+pub fn exo_get_current_media_index() -> Result<i32, String> {
+    with_player(|p| p.call_int("getCurrentMediaIndex", "()I", &[]))
+}
+
+pub fn exo_consume_crossfade_handoff() -> Result<Option<String>, String> {
+    with_player(|p| {
+        p.with_env(|env| {
+            let result = env
+                .call_method(
+                    p.instance.as_obj(),
+                    "consumeCrossfadeHandoff",
+                    "()Ljava/lang/String;",
+                    &[],
+                )
+                .map_err(|e| format!("consumeCrossfadeHandoff: {e}"))?;
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+                return Err("consumeCrossfadeHandoff threw".into());
+            }
+            let obj = result.l().map_err(|e| format!("consumeCrossfadeHandoff value: {e}"))?;
+            if obj.is_null() {
+                return Ok(None);
+            }
+            let jstr = JString::from(obj);
+            let uri: String = env
+                .get_string(&jstr)
+                .map_err(|e| format!("consumeCrossfadeHandoff string: {e}"))?
+                .into();
+            Ok(Some(uri))
+        })
+    })
 }
 
 pub fn exo_get_position() -> Result<i64, String> {

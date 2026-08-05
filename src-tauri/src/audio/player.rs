@@ -177,6 +177,36 @@ impl Queue {
         self.tracks.get(next_idx).map(String::as_str)
     }
 
+    /// Paths from the current queue position through the end of playback order.
+    pub fn paths_from_current_forward(&self, repeat: &RepeatMode) -> Vec<String> {
+        let mut sim = self.clone();
+        let mut paths = Vec::new();
+        let Some(start_idx) = sim.current_index else {
+            return paths;
+        };
+        paths.push(sim.tracks[start_idx].clone());
+        let extra_limit = match repeat {
+            RepeatMode::All => self.tracks.len().saturating_sub(1),
+            _ => self.tracks.len().saturating_sub(1),
+        };
+        let mut added = 0usize;
+        while added < extra_limit {
+            let Some(next) = sim.peek_next(repeat) else {
+                break;
+            };
+            paths.push(next.to_string());
+            sim.next(repeat);
+            added += 1;
+            if *repeat != RepeatMode::All && sim.peek_next(repeat).is_none() {
+                break;
+            }
+            if *repeat == RepeatMode::All && paths.len() >= self.tracks.len() {
+                break;
+            }
+        }
+        paths
+    }
+
     /// Go back to the previous track.
     pub fn previous(&mut self, repeat: &RepeatMode) -> Option<&str> {
         if self.tracks.is_empty() {
@@ -404,6 +434,11 @@ pub struct AudioPlayer {
     /// when the current source ends — critical on Android while backgrounded,
     /// where a delayed tick alone can miss the transition.
     prefetched_next: Option<(String, Option<Duration>)>,
+    /// Seamless queue transitions when crossfade is off.
+    gapless_enabled: bool,
+    /// Active ExoPlayer playlist URIs (Android gapless mode).
+    #[cfg(target_os = "android")]
+    android_gapless_playlist: Vec<String>,
 }
 
 impl AudioPlayer {
@@ -426,6 +461,9 @@ impl AudioPlayer {
             crossfade_state: None,
             soft_fade: Arc::new(Mutex::new(SoftFadeState::default())),
             prefetched_next: None,
+            gapless_enabled: true,
+            #[cfg(target_os = "android")]
+            android_gapless_playlist: Vec::new(),
         }
     }
 
@@ -539,6 +577,9 @@ impl AudioPlayer {
             crossfade_state: None,
             soft_fade: Arc::new(Mutex::new(SoftFadeState::default())),
             prefetched_next: None,
+            gapless_enabled: true,
+            #[cfg(target_os = "android")]
+            android_gapless_playlist: Vec::new(),
         })
         }
     }
@@ -740,7 +781,25 @@ impl AudioPlayer {
     #[cfg(target_os = "android")]
     fn play_via_exo(&mut self, path: &str) -> Result<(), AudioError> {
         self.ensure_output()?;
-        crate::android::audio::exo_play_uri(path).map_err(AudioError::Decode)?;
+        let use_gapless = self.gapless_enabled && self.crossfade_duration <= 0.0;
+        if use_gapless {
+            let paths = self.queue.paths_from_current_forward(&self.repeat);
+            let paths = if paths.is_empty() {
+                vec![path.to_string()]
+            } else {
+                paths
+            };
+            self.android_gapless_playlist = paths.clone();
+            if paths.len() > 1 {
+                crate::android::audio::exo_play_media_items(&paths, 0)
+                    .map_err(AudioError::Decode)?;
+            } else {
+                crate::android::audio::exo_play_uri(path).map_err(AudioError::Decode)?;
+            }
+        } else {
+            self.android_gapless_playlist.clear();
+            crate::android::audio::exo_play_uri(path).map_err(AudioError::Decode)?;
+        }
         let _ = crate::android::audio::exo_set_volume(self.volume);
 
         let duration = crate::android::audio::exo_get_duration()
@@ -757,11 +816,110 @@ impl AudioPlayer {
             elapsed_before_start: Duration::ZERO,
             duration,
         };
+        self.sync_android_playback_extras();
         Ok(())
+    }
+
+    #[cfg(target_os = "android")]
+    fn sync_android_playback_extras(&self) {
+        let _ = crate::android::audio::exo_set_crossfade_duration(self.crossfade_duration);
+        let _ = crate::android::audio::exo_set_gapless_enabled(self.gapless_enabled);
+        if self.crossfade_duration > 0.0 {
+            let next = self.queue.peek_next(&self.repeat).map(str::to_string);
+            let _ = crate::android::audio::exo_set_upcoming_uri(next.as_deref());
+            return;
+        }
+        let _ = crate::android::audio::exo_set_upcoming_uri(None);
+    }
+
+    #[cfg(target_os = "android")]
+    fn apply_android_gapless_index(&mut self, index: usize) -> bool {
+        let Some(path) = self.android_gapless_playlist.get(index).cloned() else {
+            return false;
+        };
+        let new_path_buf = PathBuf::from(&path);
+        if self.current_path.as_deref() == Some(new_path_buf.as_path()) {
+            return false;
+        }
+        if let Some(idx) = self.queue.tracks().iter().position(|p| p == &path) {
+            let _ = self.queue.jump(idx);
+        }
+        let duration = crate::android::audio::exo_get_duration()
+            .ok()
+            .filter(|&ms| ms > 0)
+            .map(|ms| Duration::from_millis(ms as u64));
+        self.current_path = Some(new_path_buf);
+        self.clock = PlaybackClock {
+            started_at: Some(Instant::now()),
+            elapsed_before_start: Duration::ZERO,
+            duration,
+        };
+        true
+    }
+
+    #[cfg(target_os = "android")]
+    fn check_android_gapless_handoff(&mut self) -> bool {
+        if !self.gapless_enabled || self.crossfade_duration > 0.0 {
+            return false;
+        }
+        let Ok(Some(index)) = crate::android::audio::exo_consume_media_index_change() else {
+            return false;
+        };
+        self.apply_android_gapless_index(index as usize)
+    }
+
+    #[cfg(target_os = "android")]
+    fn try_android_gapless_skip_forward(&mut self) -> Result<bool, AudioError> {
+        if !self.gapless_enabled || self.crossfade_duration > 0.0 {
+            return Ok(false);
+        }
+        if !crate::android::audio::exo_seek_to_next_media_item().unwrap_or(false) {
+            return Ok(false);
+        }
+        if let Ok(index) = crate::android::audio::exo_get_current_media_index() {
+            let _ = self.apply_android_gapless_index(index as usize);
+        }
+        Ok(true)
+    }
+
+    #[cfg(target_os = "android")]
+    fn check_android_crossfade_handoff(&mut self) -> bool {
+        let Ok(Some(next_path)) = crate::android::audio::exo_consume_crossfade_handoff() else {
+            return false;
+        };
+
+        let new_path_buf = PathBuf::from(&next_path);
+        if self.current_path.as_deref() == Some(new_path_buf.as_path()) {
+            return false;
+        }
+
+        let peeked = self.queue.peek_next(&self.repeat).map(str::to_string);
+        if peeked.as_deref() == Some(next_path.as_str()) {
+            let _ = self.queue.next(&self.repeat);
+        } else if let Some(idx) = self.queue.tracks().iter().position(|p| p == &next_path) {
+            let _ = self.queue.jump(idx);
+        }
+
+        let duration = crate::android::audio::exo_get_duration()
+            .ok()
+            .filter(|&ms| ms > 0)
+            .map(|ms| Duration::from_millis(ms as u64));
+
+        self.current_path = Some(new_path_buf);
+        self.clock = PlaybackClock {
+            started_at: Some(Instant::now()),
+            elapsed_before_start: Duration::ZERO,
+            duration,
+        };
+        self.sync_android_playback_extras();
+        true
     }
 
     /// Append the upcoming queue track to the active sink (best-effort).
     fn prefetch_next_into_sink(&mut self) {
+        if !self.gapless_enabled {
+            return;
+        }
         if self.repeat == RepeatMode::One {
             return;
         }
@@ -839,6 +997,7 @@ impl AudioPlayer {
             elapsed_before_start: Duration::from_secs_f64(position_secs.max(0.0)),
             duration,
         };
+        self.sync_android_playback_extras();
         Ok(())
     }
 
@@ -1145,6 +1304,12 @@ impl AudioPlayer {
             if crate::android::audio::exo_playback_ended().unwrap_or(false) {
                 return true;
             }
+            if self.gapless_enabled
+                && self.crossfade_duration <= 0.0
+                && crate::android::audio::exo_has_next_media_item().unwrap_or(false)
+            {
+                return false;
+            }
             // Fallback: wall-clock past known duration (ExoPlayer duration may
             // arrive late after prepare).
             return self.clock.duration.is_some_and(|duration| {
@@ -1245,6 +1410,16 @@ impl AudioPlayer {
     ///
     /// Returns `true` when the logical current track changed.
     pub fn check_crossfade_track_switch(&mut self) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            if self.check_android_gapless_handoff() {
+                return true;
+            }
+            return self.check_android_crossfade_handoff();
+        }
+
+        #[cfg(not(target_os = "android"))]
+        {
         let Some(state) = self.crossfade_state.clone() else {
             return false;
         };
@@ -1284,6 +1459,7 @@ impl AudioPlayer {
             duration,
         };
         true
+        }
     }
 
     /// Align `current_path` / duration with the crossfade mixer after a seek.
@@ -1364,6 +1540,18 @@ impl AudioPlayer {
         if let Ok(mut cfg) = self.eq_config.lock() {
             cfg.crossfade_duration = self.crossfade_duration;
         }
+        #[cfg(target_os = "android")]
+        self.sync_android_playback_extras();
+    }
+
+    pub fn gapless_enabled(&self) -> bool {
+        self.gapless_enabled
+    }
+
+    pub fn set_gapless_enabled(&mut self, enabled: bool) {
+        self.gapless_enabled = enabled;
+        #[cfg(target_os = "android")]
+        self.sync_android_playback_extras();
     }
 
     /// Query the current default audio output device name (live, every call).
@@ -1401,8 +1589,17 @@ impl AudioPlayer {
         // Adopting it mid-song only updates current_path (UI) while the
         // previous source keeps playing — so only adopt when that source
         // has actually finished. Manual Next must tear down and restart.
+        #[cfg(target_os = "android")]
+        if self.try_android_gapless_skip_forward()? {
+            return Ok(
+                self.current_path
+                    .as_ref()
+                    .and_then(|p| p.to_str().map(str::to_string)),
+            );
+        }
+
         if let Some((prefetched, duration)) = self.prefetched_next.take() {
-            if self.prefetched_is_now_audible() {
+            if self.gapless_enabled && self.prefetched_is_now_audible() {
                 let peeked = self.queue.peek_next(&self.repeat).map(str::to_string);
                 if peeked.as_deref() == Some(prefetched.as_str()) {
                     let _ = self.queue.next(&self.repeat);

@@ -150,6 +150,8 @@ interface MobileSettingsProps {
   onEqReset: () => void;
   crossfadeDuration: number;
   onCrossfadeChange: (value: number) => void;
+  gaplessEnabled: boolean;
+  onGaplessChange: (enabled: boolean) => void;
   currentOutputDevice: string;
   onSelectOutputDevice: (name: string) => Promise<void>;
   onResetApp: () => Promise<void>;
@@ -174,6 +176,8 @@ export default function MobileSettings({
   onEqReset,
   crossfadeDuration,
   onCrossfadeChange,
+  gaplessEnabled,
+  onGaplessChange,
   currentOutputDevice,
   onSelectOutputDevice,
   onResetApp,
@@ -462,23 +466,39 @@ export default function MobileSettings({
           <h2>
             <BiTimer /> Crossfade
           </h2>
-          <div className="mset-card">
-            <div className="mset-crossfade-row">
-              <ScrollSafeRange
-                min={0}
-                max={8}
-                step={0.5}
-                value={crossfadeDuration}
-                onValueChange={onCrossfadeChange}
-                aria-label="Crossfade duration in seconds"
-              />
-              <span className="mset-crossfade-value">
-                {crossfadeDuration === 0 ? "Off" : `${crossfadeDuration.toFixed(1)}s`}
-              </span>
+          <div className="mset-card mset-playback-card">
+            <div className="mset-crossfade-block">
+              <div className="mset-crossfade-row">
+                <ScrollSafeRange
+                  min={0}
+                  max={8}
+                  step={0.5}
+                  value={crossfadeDuration}
+                  onValueChange={onCrossfadeChange}
+                  aria-label="Crossfade duration in seconds"
+                />
+                <span className="mset-crossfade-value">
+                  {crossfadeDuration === 0 ? "Off" : `${crossfadeDuration.toFixed(1)}s`}
+                </span>
+              </div>
+              <p className="mset-hint mset-crossfade-hint">
+                Smoothly blend the end of one track into the start of the next.
+              </p>
             </div>
-            <p className="mset-hint">
-              Smoothly blend the end of one track into the start of the next.
-            </p>
+            <div className="mset-playback-divider" role="separator" />
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={gaplessEnabled}
+                onChange={(event) => onGaplessChange(event.target.checked)}
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Gapless playback</span>
+                <span className="mset-gapless-hint">
+                  Play consecutive tracks without silence between them.
+                </span>
+              </span>
+            </label>
           </div>
         </section>
 

@@ -727,6 +727,14 @@ export const setCrossfadeDuration = (duration: number): Promise<void> => {
   return safeInvoke("set_crossfade_duration", { duration });
 };
 
+export const getGaplessEnabled = (): Promise<boolean> => {
+  return safeInvoke<boolean>("get_gapless_enabled");
+};
+
+export const setGaplessEnabled = (enabled: boolean): Promise<void> => {
+  return safeInvoke("set_gapless_enabled", { enabled });
+};
+
 // ── Audio Output Devices ──────────────────────────────────────────────────────
 
 export const listOutputDevices = (): Promise<string[]> => {

@@ -101,6 +101,8 @@ import {
   setEqEnabled,
   getCrossfadeDuration,
   setCrossfadeDuration,
+  getGaplessEnabled,
+  setGaplessEnabled,
   EQ_BAND_LABELS,
   EQ_PRESETS,
   listMediaFolders,
@@ -544,6 +546,7 @@ function App() {
   });
   const [crossfadeDuration, setCrossfadeDurationState] = useState(0.0);
   const crossfadeSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [gaplessEnabled, setGaplessEnabledState] = useState(true);
   const [eqAnchor, setEqAnchor] = useState<{
     bottom: number;
     right: number;
@@ -2337,6 +2340,8 @@ function App() {
       setEqSettings({ bands, enabled: settings.enabled });
       const crossfade = await getCrossfadeDuration();
       setCrossfadeDurationState(crossfade);
+      const gapless = await getGaplessEnabled();
+      setGaplessEnabledState(gapless);
     } catch (err) {
       console.error("Failed to load EQ settings", err);
     }
@@ -2426,6 +2431,17 @@ function App() {
         await loadEqSettings();
       });
     }, 120);
+  };
+
+  const handleGaplessChange = async (enabled: boolean) => {
+    setGaplessEnabledState(enabled);
+    try {
+      await setGaplessEnabled(enabled);
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to set gapless playback"));
+      const gapless = await getGaplessEnabled();
+      setGaplessEnabledState(gapless);
+    }
   };
 
   const handleClearPlaylist = async () => {
@@ -2877,12 +2893,30 @@ function App() {
   };
 
   // ── Hardware/OS back button ─────────────────────────────────────────────
-  // Android WebView's history.go(-n) often fires fewer popstate events than
-  // requested, which desyncs a multi-entry stack and "eats" real back presses
-  // (nothing → nothing → exit). Use a single history trap instead: while any
-  // overlay is open we keep exactly one synthetic entry; each user back closes
-  // the top overlay and we re-trap if anything remains.
-  const overlaySnapshotRef = useRef({
+  // Push one history entry per navigation layer (album + now playing = two
+  // backs to reach home). Transient overlays (menus, dialogs) add layers too.
+  // On Android, keep a root guard entry for double-back-to-exit.
+  type OverlaySnapshot = {
+    menuTrackPath: string | null;
+    queueMenuIndex: number | null;
+    showAddTrackMenu: boolean;
+    showEqPanel: boolean;
+    mobilePlayerMenuOpen: boolean;
+    playlistDialog: typeof playlistDialog;
+    showClearConfirm: boolean;
+    showAddFromLibrary: boolean;
+    deletePlaylistConfirm: typeof deletePlaylistConfirm;
+    addToPlaylistTrack: typeof addToPlaylistTrack;
+    mobilePlayerSubView: boolean;
+    rightPanelOpen: boolean;
+    mobilePlayerOpen: boolean;
+    mobileSettingsOpen: boolean;
+    mobileNavOpen: boolean;
+    mainSearchOpen: boolean;
+    browseDepth: number;
+  };
+
+  const overlaySnapshotRef = useRef<OverlaySnapshot>({
     menuTrackPath,
     queueMenuIndex,
     showAddTrackMenu,
@@ -2921,27 +2955,31 @@ function App() {
     browseDepth: browseStack.length,
   };
 
-  const hasOverlayOpen = () => {
-    const s = overlaySnapshotRef.current;
-    return !!(
-      s.menuTrackPath ||
-      s.queueMenuIndex != null ||
-      s.showAddTrackMenu ||
-      s.showEqPanel ||
-      s.mobilePlayerMenuOpen ||
-      s.playlistDialog ||
-      s.showClearConfirm ||
-      s.showAddFromLibrary ||
-      s.deletePlaylistConfirm ||
-      s.addToPlaylistTrack ||
-      s.mobilePlayerSubView ||
-      s.rightPanelOpen ||
-      s.mobilePlayerOpen ||
-      s.mobileSettingsOpen ||
-      s.mobileNavOpen ||
-      s.mainSearchOpen ||
-      s.browseDepth > 0
-    );
+  const countHistoryLayers = (s: OverlaySnapshot = overlaySnapshotRef.current) => {
+    let layers = 0;
+    if (s.menuTrackPath) layers++;
+    if (s.queueMenuIndex != null) layers++;
+    if (s.showAddTrackMenu) layers++;
+    if (s.showEqPanel) layers++;
+    if (s.playlistDialog) layers++;
+    if (s.showClearConfirm) layers++;
+    if (s.showAddFromLibrary) layers++;
+    if (s.deletePlaylistConfirm) layers++;
+    if (s.addToPlaylistTrack) layers++;
+    if (s.mobilePlayerMenuOpen) layers++;
+    if (s.mobilePlayerSubView) layers++;
+    if (s.mobilePlayerOpen) layers++;
+    if (s.mobileSettingsOpen) layers++;
+    if (s.rightPanelOpen) layers++;
+    if (s.mobileNavOpen) layers++;
+    if (s.mainSearchOpen) layers++;
+    layers += s.browseDepth;
+    return layers;
+  };
+
+  const targetTrapDepth = () => {
+    const layers = countHistoryLayers();
+    return androidHostRef.current ? layers + 1 : layers;
   };
 
   // Closes whichever overlay is "on top" — context menus first, then sheets /
@@ -3009,19 +3047,22 @@ function App() {
     }
     if (s.rightPanelOpen) {
       s.rightPanelOpen = false;
-      closeRightPanelDelayed();
+      cancelCloseRightPanel();
+      setShowQueue(false);
+      setShowDeviceList(false);
+      setLyricsPanelTrack(null);
       return true;
     }
     // Settings is a sibling overlay to Now Playing — close it before the player
     // so a lone Settings page always pops first.
     if (s.mobileSettingsOpen) {
       s.mobileSettingsOpen = false;
-      handleCloseMobileSettings();
+      forceCloseMobileSettings();
       return true;
     }
     if (s.mobilePlayerOpen) {
       s.mobilePlayerOpen = false;
-      handleCloseMobilePlayer();
+      forceCloseMobilePlayer();
       return true;
     }
     if (s.mobileNavOpen) {
@@ -3042,26 +3083,53 @@ function App() {
     return false;
   };
 
-  const backTrapActiveRef = useRef(false);
+  const trapDepthRef = useRef(0);
   const ignorePopRef = useRef(false);
+  const exitPressAtRef = useRef(0);
+  const exitToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showExitToast, setShowExitToast] = useState(false);
   const closeTopOverlayRef = useRef(closeTopOverlay);
   closeTopOverlayRef.current = closeTopOverlay;
-  const hasOverlayOpenRef = useRef(hasOverlayOpen);
-  hasOverlayOpenRef.current = hasOverlayOpen;
+  const targetTrapDepthRef = useRef(targetTrapDepth);
+  targetTrapDepthRef.current = targetTrapDepth;
 
-  // Keep a single synthetic history entry while any overlay is open.
+  const clearExitPrompt = () => {
+    exitPressAtRef.current = 0;
+    setShowExitToast(false);
+    if (exitToastTimerRef.current) {
+      clearTimeout(exitToastTimerRef.current);
+      exitToastTimerRef.current = null;
+    }
+  };
+
+  const scheduleExitPromptExpiry = () => {
+    if (exitToastTimerRef.current) {
+      clearTimeout(exitToastTimerRef.current);
+    }
+    exitToastTimerRef.current = setTimeout(() => {
+      exitPressAtRef.current = 0;
+      setShowExitToast(false);
+      exitToastTimerRef.current = null;
+    }, 2100);
+  };
+
+  // Match synthetic history entries to open navigation layers (+ root guard).
   useEffect(() => {
-    const open = hasOverlayOpen();
-    if (open && !backTrapActiveRef.current) {
-      window.history.pushState({ waveOverlay: true }, "");
-      backTrapActiveRef.current = true;
-    } else if (!open && backTrapActiveRef.current) {
-      // Overlay(s) closed via UI — drop the trap without treating it as a
-      // user back. A single history.back() is reliable on Android WebView;
-      // multi-step history.go(-n) is not.
+    const target = targetTrapDepthRef.current();
+
+    while (trapDepthRef.current < target) {
+      window.history.pushState({ waveNav: true }, "");
+      trapDepthRef.current += 1;
+    }
+
+    if (trapDepthRef.current > target) {
       ignorePopRef.current = true;
-      backTrapActiveRef.current = false;
       window.history.back();
+      trapDepthRef.current -= 1;
+    }
+
+    if (countHistoryLayers() > 0) {
+      clearExitPrompt();
     }
   }, [
     menuTrackPath,
@@ -3081,6 +3149,7 @@ function App() {
     mobileNavOpen,
     mainSearchOpen,
     browseStack.length,
+    androidHost,
   ]);
 
   useEffect(() => {
@@ -3089,18 +3158,40 @@ function App() {
         ignorePopRef.current = false;
         return;
       }
-      // User (or OS) back — consume the trap, close the top overlay, then
-      // immediately re-trap if anything remains (avoids a race where a second
-      // back exits before React re-renders).
-      backTrapActiveRef.current = false;
-      closeTopOverlayRef.current();
-      if (hasOverlayOpenRef.current()) {
-        window.history.pushState({ waveOverlay: true }, "");
-        backTrapActiveRef.current = true;
+
+      trapDepthRef.current = Math.max(0, trapDepthRef.current - 1);
+
+      if (closeTopOverlayRef.current()) {
+        clearExitPrompt();
+        return;
       }
+
+      if (!androidHostRef.current) {
+        return;
+      }
+
+      const now = Date.now();
+      if (
+        exitPressAtRef.current > 0 &&
+        now - exitPressAtRef.current < 2000
+      ) {
+        clearExitPrompt();
+        return;
+      }
+
+      exitPressAtRef.current = now;
+      setShowExitToast(true);
+      scheduleExitPromptExpiry();
+      window.history.pushState({ waveExitGuard: true }, "");
+      trapDepthRef.current += 1;
     };
     window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      if (exitToastTimerRef.current) {
+        clearTimeout(exitToastTimerRef.current);
+      }
+    };
   }, []);
 
   const isCurrentTrack = (track: Track) =>
@@ -5174,6 +5265,8 @@ function App() {
           onEqReset={handleEqReset}
           crossfadeDuration={crossfadeDuration}
           onCrossfadeChange={handleCrossfadeChange}
+          gaplessEnabled={gaplessEnabled}
+          onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
           currentOutputDevice={playbackState.output_device_name}
           onSelectOutputDevice={handleSelectOutputDeviceSettings}
           onResetApp={handleResetApp}
@@ -5300,6 +5393,25 @@ function App() {
                     : `${crossfadeDuration.toFixed(1)}s`}
                 </span>
               </div>
+              <label
+                className="eq-gapless"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <input
+                  type="checkbox"
+                  checked={gaplessEnabled}
+                  onChange={(event) =>
+                    void handleGaplessChange(event.target.checked)
+                  }
+                />
+                <span className="eq-gapless-copy">
+                  <span className="eq-gapless-label">Gapless playback</span>
+                  <span className="eq-gapless-hint">
+                    Play consecutive tracks without silence between them.
+                  </span>
+                </span>
+              </label>
             </div>
           </>,
           document.body,
@@ -5330,6 +5442,12 @@ function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {showExitToast && (
+        <div className="exit-toast" role="status" aria-live="polite">
+          Press back again to close Wave
         </div>
       )}
 

@@ -28,6 +28,13 @@ pub struct AppSettings {
     pub media_folders: Vec<String>,
     /// User dismissed the Android first-run "select music folder" prompt.
     pub folder_setup_dismissed: bool,
+    /// Seamless transitions between consecutive queue tracks (no dead air).
+    #[serde(default = "default_gapless_enabled")]
+    pub gapless_enabled: bool,
+}
+
+fn default_gapless_enabled() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -44,6 +51,7 @@ impl Default for AppSettings {
             repeat: RepeatMode::Off,
             media_folders: Vec::new(),
             folder_setup_dismissed: false,
+            gapless_enabled: true,
         }
     }
 }
