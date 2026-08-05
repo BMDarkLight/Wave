@@ -1,6 +1,6 @@
 // The Code for Frontend of Wave is currently completely AI Generated and may contain bugs or rough edges. Please report any issues you encounter at
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import trayTemplate from "../assets/tray-template.svg";
 import {
@@ -3114,18 +3114,14 @@ function App() {
   };
 
   // Match synthetic history entries to open navigation layers (+ root guard).
-  useEffect(() => {
+  // Use `useLayoutEffect` so the trap is established before the user can
+  // trigger a hardware back press (Android WebView can otherwise bypass JS).
+  useLayoutEffect(() => {
     const target = targetTrapDepthRef.current();
 
     while (trapDepthRef.current < target) {
       window.history.pushState({ waveNav: true }, "");
       trapDepthRef.current += 1;
-    }
-
-    if (trapDepthRef.current > target) {
-      ignorePopRef.current = true;
-      window.history.back();
-      trapDepthRef.current -= 1;
     }
 
     if (countHistoryLayers() > 0) {

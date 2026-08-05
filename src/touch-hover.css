@@ -201,7 +201,9 @@
     background: rgba(255, 255, 255, 0.1);
   }
 
-  .lyrics-line:hover:not(:disabled) {
+  /* If :hover gets "stuck" after a tap, ensure it never overrides the
+     real active state driven by React (`.active`). */
+  .lyrics-line:hover:not(:disabled):not(.active) {
     color: inherit !important;
   }
 
@@ -235,7 +237,8 @@
     transform: none !important;
   }
 
-  .control-btn:hover:not(:disabled) {
+  /* Don't let stuck :hover suppress the real `.active` styling. */
+  .control-btn:hover:not(:disabled):not(.active) {
     color: var(--muted) !important;
   }
 
