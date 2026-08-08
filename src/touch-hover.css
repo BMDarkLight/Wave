@@ -1,271 +1,299 @@
 /* Touch / coarse-pointer: :hover sticks after tap on Android WebView until the
-   next tap elsewhere. Reset hover styles and use :active for press feedback. */
-@media (hover: none), (pointer: coarse) {
-  .btn-pill:hover,
-  .btn-primary:hover,
-  .btn-secondary:hover,
-  .btn-ghost:hover,
-  .big-play:hover,
-  .btn-danger:hover,
-  .control-btn:hover:not(:disabled),
-  .play-pause-btn:hover:not(:disabled) {
-    transform: none !important;
-  }
+   next tap elsewhere. Media queries alone are unreliable (WebView often claims
+   hover:hover), so JS adds html.wave-no-hover — see utils/touchHover.ts.
+   Reset hover styles and use :active for press feedback. */
 
-  .btn-pill:active:not(:disabled),
-  .btn-primary:active:not(:disabled),
-  .btn-secondary:active:not(:disabled),
-  .btn-ghost:active:not(:disabled),
-  .big-play:active:not(:disabled),
-  .btn-danger:active:not(:disabled),
-  .control-btn:active:not(:disabled),
-  .play-pause-btn:active:not(:disabled) {
-    transform: scale(0.96);
-  }
-
-  .play-pause-btn:hover:not(:disabled) {
-    background: #fff !important;
-    color: #000 !important;
-  }
-
-  .btn-danger:hover {
-    background: #e74c3c !important;
-  }
-
-  .nav-item:hover:not(.active) {
-    background: transparent !important;
-    color: var(--muted) !important;
-  }
-
-  .nav-item:active {
-    background: #1f1f1f !important;
-    color: var(--text) !important;
-  }
-
-  .sidebar-pin:hover:not(.active) {
-    background: transparent !important;
-  }
-
-  .sidebar-pin:active {
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  .sidebar-settings-btn:hover {
-    background: var(--panel) !important;
-  }
-
-  .sidebar-settings-btn:active {
-    background: var(--panel-raised);
-  }
-
-  .playlist-add-btn:hover,
-  .playlist-export-btn:hover,
-  .playlist-delete-btn:hover,
-  .playlist-rename-btn:hover,
-  .queue-item-remove:hover,
-  .queue-item-menu:hover,
-  .track-action-btn:hover,
-  .library-search-clear:hover,
-  .modal-close-btn:hover,
-  .right-panel-close:hover,
-  .lyrics-close-float:hover,
-  .eq-close:hover,
-  .page-back-btn:hover,
-  .mnp-icon-btn:hover {
-    background: transparent !important;
-    color: var(--muted) !important;
-  }
-
-  .mset-icon-btn:hover {
-    background: rgba(255, 255, 255, 0.06) !important;
-    color: var(--muted) !important;
-  }
-
-  .playlist-add-btn:active,
-  .playlist-export-btn:active,
-  .playlist-delete-btn:active,
-  .playlist-rename-btn:active,
-  .queue-item-remove:active,
-  .queue-item-menu:active,
-  .track-action-btn:active,
-  .library-search-clear:active,
-  .modal-close-btn:active,
-  .right-panel-close:active,
-  .lyrics-close-float:active,
-  .eq-close:active,
-  .page-back-btn:active,
-  .mnp-icon-btn:active,
-  .mset-icon-btn:active {
-    background: rgba(255, 255, 255, 0.12) !important;
-    color: var(--text) !important;
-  }
-
-  .playlist-item:hover:not(.active) {
-    background: transparent !important;
-  }
-
-  .playlist-item:active {
-    background: rgba(255, 255, 255, 0.06);
-  }
-
-  .track-item:hover:not(.active) {
-    background: transparent !important;
-  }
-
-  .track-item:active:not(.active) {
-    background: rgba(255, 255, 255, 0.09);
-  }
-
-  .queue-item:hover:not(.active) {
-    background: transparent !important;
-  }
-
-  .queue-item:active:not(.active) {
-    background: rgba(255, 255, 255, 0.08);
-  }
-
-  .search-hit:hover,
-  .home-suggest-row:hover,
-  .library-picker-row:hover,
-  .playlist-picker-item:hover,
-  .playlist-sync-pick:hover,
-  .device-panel-item:hover,
-  .artist-album-card:hover,
-  .artist-discography-item:hover,
-  .artist-collapsible-header:hover {
-    background: transparent !important;
-  }
-
-  .search-hit:active,
-  .home-suggest-row:active,
-  .library-picker-row:active,
-  .playlist-picker-item:active,
-  .playlist-sync-pick:active,
-  .device-panel-item:active,
-  .artist-album-card:active,
-  .artist-discography-item:active,
-  .artist-collapsible-header:active {
-    background: rgba(255, 255, 255, 0.09);
-  }
-
-  .home-refresh-btn:hover:not(:disabled),
-  .home-link:hover:not(:disabled),
-  .search-full-library-btn:hover,
-  .loading-cancel-btn:hover,
-  .error-toast button:hover {
-    opacity: 1 !important;
-    transform: none !important;
-  }
-
-  .home-play-btn:hover {
-    transform: none !important;
-  }
-
-  .home-play-btn:active {
-    transform: scale(0.96);
-  }
-
-  .home-suggest-row:hover .home-suggest-play,
-  .home-track-card:hover .home-card-play {
-    opacity: 0.55 !important;
-  }
-
-  .home-suggest-row:active .home-suggest-play,
-  .home-track-card:active .home-card-play {
-    opacity: 1;
-  }
-
-  .sort-header:hover {
-    color: var(--muted) !important;
-  }
-
-  .sort-header:active {
-    color: var(--text);
-  }
-
-  .favorite-btn:hover,
-  .favorite-btn.active:hover {
-    background: transparent !important;
-    color: inherit !important;
-  }
-
-  .add-track-menu button:hover,
-  .track-context-menu button:hover:not(:disabled),
-  .track-context-menu .delete-action:hover {
-    background: transparent !important;
-  }
-
-  .add-track-menu button:active,
-  .track-context-menu button:active:not(:disabled),
-  .track-context-menu .delete-action:active {
-    background: rgba(255, 255, 255, 0.1);
-  }
-
-  /* If :hover gets "stuck" after a tap, ensure it never overrides the
-     real active state driven by React (`.active`). */
-  .lyrics-line:hover:not(:disabled):not(.active) {
-    color: inherit !important;
-  }
-
-  .lyrics-line:active:not(:disabled) {
-    color: var(--text);
-  }
-
-  .lyrics-link:hover,
-  .track-meta-link:hover,
-  .now-playing-name:hover:not(:disabled),
-  .now-playing-artist:hover,
-  .now-playing-path:hover,
-  .album-hero-artist-btn:hover,
-  .output-device-name:hover {
-    color: inherit !important;
-    text-decoration: none !important;
-  }
-
-  .mnp-action-btn:hover:not(.active) {
-    color: var(--muted) !important;
-  }
-
-  .mnp-action-btn:active {
-    color: var(--text);
-  }
-
-  .mset-icon-btn-danger:hover,
-  .mset-danger-btn:hover,
-  .mset-danger-confirm-btn:hover {
-    background: inherit !important;
-    transform: none !important;
-  }
-
-  /* Don't let stuck :hover suppress the real `.active` styling. */
-  .control-btn:hover:not(:disabled):not(.active) {
-    color: var(--muted) !important;
-  }
-
-  .control-btn:active:not(:disabled) {
-    color: var(--text);
-  }
-
-  .volume-icon:hover,
-  .range-slider:hover::-webkit-slider-thumb,
-  .eq-crossfade input[type="range"]:hover::-webkit-slider-thumb,
-  .eq-band input[type="range"]:hover::-webkit-slider-thumb {
-    transform: none !important;
-  }
-
-  .drag-handle:hover,
-  .resize-handle:hover,
-  .resize-handle:active {
-    background: transparent !important;
-  }
+html.wave-no-hover .btn-pill:hover,
+html.wave-no-hover .btn-primary:hover,
+html.wave-no-hover .btn-secondary:hover,
+html.wave-no-hover .btn-ghost:hover,
+html.wave-no-hover .big-play:hover,
+html.wave-no-hover .btn-danger:hover,
+html.wave-no-hover .control-btn:hover:not(:disabled),
+html.wave-no-hover .play-pause-btn:hover:not(:disabled) {
+  transform: none !important;
 }
 
-@media (hover: none) and (max-width: 900px), (pointer: coarse) and (max-width: 900px) {
-  .sidebar-settings-btn:hover {
+html.wave-no-hover .btn-pill:active:not(:disabled),
+html.wave-no-hover .btn-primary:active:not(:disabled),
+html.wave-no-hover .btn-secondary:active:not(:disabled),
+html.wave-no-hover .btn-ghost:active:not(:disabled),
+html.wave-no-hover .big-play:active:not(:disabled),
+html.wave-no-hover .btn-danger:active:not(:disabled),
+html.wave-no-hover .control-btn:active:not(:disabled),
+html.wave-no-hover .play-pause-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+html.wave-no-hover .play-pause-btn:hover:not(:disabled) {
+  /* Default play/pause chrome is already white — keep hover from "sticking"
+     as a scale/filter change if App.css gains one later. */
+  transform: none !important;
+  filter: none !important;
+}
+
+html.wave-no-hover .btn-danger:hover {
+  background: #e74c3c !important;
+  transform: none !important;
+}
+
+html.wave-no-hover .nav-item:hover:not(.active) {
+  background: transparent !important;
+  color: var(--muted) !important;
+}
+
+html.wave-no-hover .nav-item:active {
+  background: #1f1f1f !important;
+  color: var(--text) !important;
+}
+
+html.wave-no-hover .sidebar-pin:hover:not(.active) {
+  background: transparent !important;
+}
+
+html.wave-no-hover .sidebar-pin:active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html.wave-no-hover .sidebar-settings-btn:hover {
+  background: var(--panel) !important;
+}
+
+html.wave-no-hover .sidebar-settings-btn:active {
+  background: var(--panel-raised);
+}
+
+html.wave-no-hover .playlist-add-btn:hover,
+html.wave-no-hover .playlist-export-btn:hover,
+html.wave-no-hover .playlist-delete-btn:hover,
+html.wave-no-hover .playlist-rename-btn:hover,
+html.wave-no-hover .queue-item-remove:hover,
+html.wave-no-hover .queue-item-menu:hover,
+html.wave-no-hover .track-action-btn:hover,
+html.wave-no-hover .library-search-clear:hover,
+html.wave-no-hover .modal-close-btn:hover,
+html.wave-no-hover .right-panel-close:hover,
+html.wave-no-hover .lyrics-close-float:hover,
+html.wave-no-hover .eq-close:hover,
+html.wave-no-hover .page-back-btn:hover,
+html.wave-no-hover .mnp-icon-btn:hover {
+  background: transparent !important;
+  color: var(--muted) !important;
+}
+
+html.wave-no-hover .mset-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: var(--muted) !important;
+}
+
+html.wave-no-hover .playlist-add-btn:active,
+html.wave-no-hover .playlist-export-btn:active,
+html.wave-no-hover .playlist-delete-btn:active,
+html.wave-no-hover .playlist-rename-btn:active,
+html.wave-no-hover .queue-item-remove:active,
+html.wave-no-hover .queue-item-menu:active,
+html.wave-no-hover .track-action-btn:active,
+html.wave-no-hover .library-search-clear:active,
+html.wave-no-hover .modal-close-btn:active,
+html.wave-no-hover .right-panel-close:active,
+html.wave-no-hover .lyrics-close-float:active,
+html.wave-no-hover .eq-close:active,
+html.wave-no-hover .page-back-btn:active,
+html.wave-no-hover .mnp-icon-btn:active,
+html.wave-no-hover .mset-icon-btn:active {
+  background: rgba(255, 255, 255, 0.12) !important;
+  color: var(--text) !important;
+}
+
+html.wave-no-hover .playlist-item:hover:not(.active) {
+  background: transparent !important;
+}
+
+html.wave-no-hover .playlist-item:active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html.wave-no-hover .track-item:hover:not(.active) {
+  background: transparent !important;
+}
+
+html.wave-no-hover .track-item:active:not(.active) {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+html.wave-no-hover .queue-item:hover:not(.active) {
+  background: transparent !important;
+}
+
+html.wave-no-hover .queue-item:active:not(.active) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html.wave-no-hover .search-hit:hover,
+html.wave-no-hover .home-suggest-row:hover,
+html.wave-no-hover .library-picker-row:hover,
+html.wave-no-hover .playlist-picker-item:hover,
+html.wave-no-hover .playlist-sync-pick:hover,
+html.wave-no-hover .device-panel-item:hover,
+html.wave-no-hover .artist-album-card:hover,
+html.wave-no-hover .artist-discography-item:hover,
+html.wave-no-hover .artist-collapsible-header:hover {
+  background: transparent !important;
+}
+
+html.wave-no-hover .search-hit:active,
+html.wave-no-hover .home-suggest-row:active,
+html.wave-no-hover .library-picker-row:active,
+html.wave-no-hover .playlist-picker-item:active,
+html.wave-no-hover .playlist-sync-pick:active,
+html.wave-no-hover .device-panel-item:active,
+html.wave-no-hover .artist-album-card:active,
+html.wave-no-hover .artist-discography-item:active,
+html.wave-no-hover .artist-collapsible-header:active {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+html.wave-no-hover .home-refresh-btn:hover:not(:disabled),
+html.wave-no-hover .home-link:hover:not(:disabled),
+html.wave-no-hover .search-full-library-btn:hover,
+html.wave-no-hover .loading-cancel-btn:hover,
+html.wave-no-hover .error-toast button:hover {
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+html.wave-no-hover .home-play-btn:hover {
+  transform: none !important;
+}
+
+html.wave-no-hover .home-play-btn:active {
+  transform: scale(0.96);
+}
+
+html.wave-no-hover .home-suggest-row:hover .home-suggest-play,
+html.wave-no-hover .home-track-card:hover .home-card-play {
+  opacity: 0.55 !important;
+}
+
+html.wave-no-hover .home-suggest-row:active .home-suggest-play,
+html.wave-no-hover .home-track-card:active .home-card-play {
+  opacity: 1;
+}
+
+html.wave-no-hover .sort-header:hover {
+  color: var(--muted) !important;
+}
+
+html.wave-no-hover .sort-header:active {
+  color: var(--text);
+}
+
+html.wave-no-hover .favorite-btn:hover,
+html.wave-no-hover .favorite-btn.active:hover {
+  background: transparent !important;
+  color: inherit !important;
+}
+
+html.wave-no-hover .add-track-menu button:hover,
+html.wave-no-hover .track-context-menu button:hover:not(:disabled),
+html.wave-no-hover .track-context-menu .delete-action:hover {
+  background: transparent !important;
+}
+
+html.wave-no-hover .add-track-menu button:active,
+html.wave-no-hover .track-context-menu button:active:not(:disabled),
+html.wave-no-hover .track-context-menu .delete-action:active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* If :hover gets "stuck" after a tap, ensure it never overrides the
+   real active state driven by React (`.active`). */
+html.wave-no-hover .lyrics-line:hover:not(:disabled):not(.active) {
+  color: inherit !important;
+}
+
+html.wave-no-hover .lyrics-line:active:not(:disabled) {
+  color: var(--text);
+}
+
+html.wave-no-hover .lyrics-link:hover,
+html.wave-no-hover .track-meta-link:hover,
+html.wave-no-hover .now-playing-name:hover:not(:disabled),
+html.wave-no-hover .now-playing-artist:hover,
+html.wave-no-hover .now-playing-path:hover,
+html.wave-no-hover .album-hero-artist-btn:hover,
+html.wave-no-hover .output-device-name:hover {
+  color: inherit !important;
+  text-decoration: none !important;
+}
+
+html.wave-no-hover .mnp-action-btn:hover:not(.active) {
+  color: var(--muted) !important;
+}
+
+html.wave-no-hover .mnp-action-btn:active {
+  color: var(--text);
+}
+
+html.wave-no-hover .mset-icon-btn-danger:hover,
+html.wave-no-hover .mset-danger-btn:hover,
+html.wave-no-hover .mset-danger-confirm-btn:hover {
+  background: inherit !important;
+  transform: none !important;
+}
+
+/* Don't let stuck :hover suppress the real `.active` styling. */
+html.wave-no-hover .control-btn:hover:not(:disabled):not(.active) {
+  color: var(--muted) !important;
+}
+
+html.wave-no-hover .control-btn:active:not(:disabled) {
+  color: var(--text);
+}
+
+html.wave-no-hover .volume-icon:hover,
+html.wave-no-hover .range-slider:hover::-webkit-slider-thumb,
+html.wave-no-hover .eq-crossfade input[type="range"]:hover::-webkit-slider-thumb,
+html.wave-no-hover .eq-band input[type="range"]:hover::-webkit-slider-thumb {
+  transform: none !important;
+}
+
+html.wave-no-hover .drag-handle:hover,
+html.wave-no-hover .resize-handle:hover,
+html.wave-no-hover .resize-handle:active {
+  background: transparent !important;
+}
+
+/* Sticky :hover also reveals desktop-only hover chrome — keep it collapsed. */
+html.wave-no-hover .playlist-item:hover:not(.active) .playlist-item-actions {
+  max-width: 0 !important;
+  opacity: 0 !important;
+}
+
+html.wave-no-hover .track-item:hover:not(.active) .favorite-btn {
+  opacity: inherit;
+}
+
+html.wave-no-hover .queue-item:hover:not(.active) .queue-item-duration {
+  opacity: inherit;
+}
+
+html.wave-no-hover .queue-item:hover:not(.active) .queue-item-actions {
+  opacity: inherit;
+  pointer-events: inherit;
+}
+
+html.wave-no-hover .page-with-float-back > .page-back-btn:hover {
+  background: transparent !important;
+  color: var(--muted) !important;
+}
+
+@media (max-width: 900px) {
+  html.wave-no-hover .sidebar-settings-btn:hover {
     background: rgba(18, 18, 18, 0.55) !important;
   }
 
-  .sidebar-settings-btn:active {
+  html.wave-no-hover .sidebar-settings-btn:active {
     background: rgba(28, 28, 28, 0.65);
   }
 }

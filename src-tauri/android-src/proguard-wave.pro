@@ -22,11 +22,18 @@
 -keepclassmembers class app.bmdarklight.wave.audio.WaveExoPlayer {
     public static app.bmdarklight.wave.audio.WaveExoPlayer getOrCreate(android.content.Context);
     public void playUri(java.lang.String);
+    public void playMediaItems(java.lang.String[], int);
+    public void prepareUriAt(java.lang.String, long);
     public void play();
     public void pause();
     public void stop();
     public void seekTo(long);
     public void setVolume(float);
+    public void setEqBands(float[]);
+    public void setEqEnabled(boolean);
+    public void setCrossfadeDuration(float);
+    public void setGaplessEnabled(boolean);
+    public void setUpcomingUri(java.lang.String);
     public long getCurrentPosition();
     public long getDuration();
     public boolean isPlaying();

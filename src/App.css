@@ -5003,13 +5003,19 @@ img.queue-thumb {
   font-size: 18px;
   color: var(--text);
   pointer-events: none;
+  text-align: center;
+  /* Horseshoe arc opens at the bottom — nudge copy into the visual center. */
+  transform: translateY(-6px);
 }
 
 .mnp-dial-center span {
+  display: block;
+  width: 100%;
   font-size: 12px;
   font-weight: 700;
   color: var(--muted);
   line-height: 1.1;
+  text-align: center;
 }
 
 .mnp-dial-label {
@@ -5022,6 +5028,7 @@ img.queue-thumb {
 
 .mnp-dial-tone .mnp-dial-center {
   font-size: 16px;
+  transform: translateY(-7px);
 }
 
 .mnp-eq-section {

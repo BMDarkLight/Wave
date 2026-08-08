@@ -270,6 +270,35 @@ pub fn exo_set_volume(volume: f32) -> Result<(), String> {
     with_player(|p| p.call_void("setVolume", "(F)V", &[JValue::Float(volume)]))
 }
 
+pub fn exo_set_eq_enabled(enabled: bool) -> Result<(), String> {
+    with_player(|p| p.call_void("setEqEnabled", "(Z)V", &[JValue::Bool(enabled as u8)]))
+}
+
+pub fn exo_set_eq_bands(bands: &[f32; 10]) -> Result<(), String> {
+    with_player(|p| {
+        p.with_env(|env| {
+            let array = env
+                .new_float_array(bands.len() as i32)
+                .map_err(|e| format!("new_float_array: {e}"))?;
+            env.set_float_array_region(&array, 0, bands)
+                .map_err(|e| format!("set_float_array_region: {e}"))?;
+            env.call_method(
+                p.instance.as_obj(),
+                "setEqBands",
+                "([F)V",
+                &[JValue::Object(&array)],
+            )
+            .map_err(|e| format!("setEqBands: {e}"))?;
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+                return Err("setEqBands threw".into());
+            }
+            Ok(())
+        })
+    })
+}
+
 pub fn exo_set_crossfade_duration(seconds: f32) -> Result<(), String> {
     with_player(|p| p.call_void("setCrossfadeDuration", "(F)V", &[JValue::Float(seconds)]))
 }

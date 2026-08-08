@@ -801,6 +801,7 @@ impl AudioPlayer {
             crate::android::audio::exo_play_uri(path).map_err(AudioError::Decode)?;
         }
         let _ = crate::android::audio::exo_set_volume(self.volume);
+        self.sync_android_eq();
 
         let duration = crate::android::audio::exo_get_duration()
             .ok()
@@ -982,6 +983,7 @@ impl AudioPlayer {
         let position_ms = (position_secs.max(0.0) * 1000.0) as i64;
         crate::android::audio::exo_prepare_uri_at(path, position_ms).map_err(AudioError::Decode)?;
         let _ = crate::android::audio::exo_set_volume(self.volume);
+        self.sync_android_eq();
 
         let duration = crate::android::audio::exo_get_duration()
             .ok()
@@ -1509,12 +1511,22 @@ impl AudioPlayer {
         let mut cfg = self.eq_config.lock().unwrap();
         cfg.bands = bands;
         *self.eq_version.lock().unwrap() += 1;
+        #[cfg(target_os = "android")]
+        {
+            drop(cfg);
+            self.sync_android_eq();
+        }
     }
 
     pub fn set_eq_enabled(&mut self, enabled: bool) {
         let mut cfg = self.eq_config.lock().unwrap();
         cfg.enabled = enabled;
         *self.eq_version.lock().unwrap() += 1;
+        #[cfg(target_os = "android")]
+        {
+            drop(cfg);
+            self.sync_android_eq();
+        }
     }
 
     pub fn apply_eq_preset(&mut self, name: &str) -> Result<(), String> {
@@ -1525,7 +1537,19 @@ impl AudioPlayer {
                 format!("Unknown EQ preset \"{name}\". Available: {}", names.join(", "))
             })?;
         *self.eq_version.lock().unwrap() += 1;
+        #[cfg(target_os = "android")]
+        {
+            drop(cfg);
+            self.sync_android_eq();
+        }
         Ok(())
+    }
+
+    #[cfg(target_os = "android")]
+    fn sync_android_eq(&self) {
+        let cfg = self.eq_config.lock().unwrap().clone();
+        let _ = crate::android::audio::exo_set_eq_bands(&cfg.bands);
+        let _ = crate::android::audio::exo_set_eq_enabled(cfg.enabled);
     }
 
     // ── Crossfade ───────────────────────────────────────────────────────────────

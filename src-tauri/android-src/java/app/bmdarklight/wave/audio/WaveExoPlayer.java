@@ -1,6 +1,7 @@
 package app.bmdarklight.wave.audio;
 
 import android.content.Context;
+import android.media.audiofx.Equalizer;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -25,12 +26,19 @@ import androidx.media3.exoplayer.ExoPlayer;
  *
  * Crossfade uses a second ExoPlayer instance: the incoming track starts
  * during the fade window while the outgoing track ramps down.
+ *
+ * EQ uses {@link Equalizer} attached to each player's audio session,
+ * mapping Wave's fixed 10-band gains onto the device band layout.
  */
 public final class WaveExoPlayer {
     private static final String TAG = "WaveExoPlayer";
     /** Allow slower main-thread work during library sync / WebView load. */
     private static final long BLOCKING_TIMEOUT_MS = 1500L;
     private static final long POSITION_TICK_MS = 250L;
+    /** Wave desktop EQ centre frequencies (Hz) — must match `dsp.rs`. */
+    private static final float[] WAVE_EQ_HZ = {
+            31f, 62f, 125f, 250f, 500f, 1000f, 2000f, 4000f, 8000f, 16000f
+    };
 
     private static volatile WaveExoPlayer INSTANCE;
 
@@ -38,6 +46,10 @@ public final class WaveExoPlayer {
     private final Handler mainHandler;
     private ExoPlayer player;
     private ExoPlayer crossfadePlayer;
+    private Equalizer playerEq;
+    private Equalizer crossfadeEq;
+    private int playerEqSessionId = C.AUDIO_SESSION_ID_UNSET;
+    private int crossfadeEqSessionId = C.AUDIO_SESSION_ID_UNSET;
     private volatile boolean ended;
     private volatile boolean playingCached;
     private volatile long positionMsCached;
@@ -52,6 +64,8 @@ public final class WaveExoPlayer {
     private volatile int pendingMediaIndexChange = -1;
     private volatile int lastReportedMediaIndex = -1;
     private float userVolume = 1f;
+    private volatile boolean eqEnabled = false;
+    private final float[] eqBandsDb = new float[WAVE_EQ_HZ.length];
 
     private final Runnable positionTicker = new Runnable() {
         @Override
@@ -130,6 +144,7 @@ public final class WaveExoPlayer {
 
             @Override
             public void onMediaItemTransition(MediaItem mediaItem, int reason) {
+                attachEqualizerForPlayer(player, /* crossfade= */ false);
                 if (!gaplessEnabled || crossfadeActive || player == null) {
                     return;
                 }
@@ -139,7 +154,13 @@ public final class WaveExoPlayer {
                     pendingMediaIndexChange = index;
                 }
             }
+
+            @Override
+            public void onAudioSessionIdChanged(int audioSessionId) {
+                attachEqualizerForPlayer(player, /* crossfade= */ false);
+            }
         });
+        attachEqualizerForPlayer(player, /* crossfade= */ false);
     }
 
     private ExoPlayer ensureCrossfadePlayer() {
@@ -148,8 +169,159 @@ public final class WaveExoPlayer {
                     .setAudioAttributes(buildAudioAttributes(), /* handleAudioFocus= */ false)
                     .setHandleAudioBecomingNoisy(false)
                     .build();
+            crossfadePlayer.addListener(new Player.Listener() {
+                @Override
+                public void onAudioSessionIdChanged(int audioSessionId) {
+                    attachEqualizerForPlayer(crossfadePlayer, /* crossfade= */ true);
+                }
+            });
         }
+        attachEqualizerForPlayer(crossfadePlayer, /* crossfade= */ true);
         return crossfadePlayer;
+    }
+
+    /** Apply Wave's 10-band gains (dB) to the platform equalizer. */
+    public void setEqBands(float[] bandsDb) {
+        if (bandsDb == null) {
+            return;
+        }
+        int n = Math.min(eqBandsDb.length, bandsDb.length);
+        for (int i = 0; i < n; i++) {
+            eqBandsDb[i] = clampEqGainDb(bandsDb[i]);
+        }
+        runOnMainAsync(() -> {
+            applyEqToInstance(playerEq);
+            applyEqToInstance(crossfadeEq);
+        });
+    }
+
+    public void setEqEnabled(boolean enabled) {
+        eqEnabled = enabled;
+        runOnMainAsync(() -> {
+            setEqInstanceEnabled(playerEq, enabled);
+            setEqInstanceEnabled(crossfadeEq, enabled);
+        });
+    }
+
+    private static float clampEqGainDb(float gainDb) {
+        if (gainDb > 12f) {
+            return 12f;
+        }
+        if (gainDb < -12f) {
+            return -12f;
+        }
+        return gainDb;
+    }
+
+    private void attachEqualizerForPlayer(ExoPlayer target, boolean crossfade) {
+        if (target == null) {
+            return;
+        }
+        int sessionId = target.getAudioSessionId();
+        if (sessionId == C.AUDIO_SESSION_ID_UNSET || sessionId == 0) {
+            return;
+        }
+        int boundSession = crossfade ? crossfadeEqSessionId : playerEqSessionId;
+        Equalizer existing = crossfade ? crossfadeEq : playerEq;
+        if (existing != null && boundSession == sessionId) {
+            applyEqToInstance(existing);
+            setEqInstanceEnabled(existing, eqEnabled);
+            return;
+        }
+        if (existing != null) {
+            releaseEqualizer(existing);
+            if (crossfade) {
+                crossfadeEq = null;
+                crossfadeEqSessionId = C.AUDIO_SESSION_ID_UNSET;
+            } else {
+                playerEq = null;
+                playerEqSessionId = C.AUDIO_SESSION_ID_UNSET;
+            }
+        }
+        try {
+            Equalizer eq = new Equalizer(0, sessionId);
+            applyEqToInstance(eq);
+            setEqInstanceEnabled(eq, eqEnabled);
+            if (crossfade) {
+                crossfadeEq = eq;
+                crossfadeEqSessionId = sessionId;
+            } else {
+                playerEq = eq;
+                playerEqSessionId = sessionId;
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Equalizer unavailable: " + e.getMessage());
+        }
+    }
+
+    private void applyEqToInstance(Equalizer eq) {
+        if (eq == null) {
+            return;
+        }
+        try {
+            short bands = eq.getNumberOfBands();
+            if (bands <= 0) {
+                return;
+            }
+            short[] range = eq.getBandLevelRange();
+            short minLevel = range[0];
+            short maxLevel = range[1];
+            for (short band = 0; band < bands; band++) {
+                float centerHz = eq.getCenterFreq(band) / 1000f;
+                float gainDb = interpolateWaveGainDb(centerHz);
+                short levelMb = (short) Math.round(gainDb * 100f);
+                if (levelMb < minLevel) {
+                    levelMb = minLevel;
+                } else if (levelMb > maxLevel) {
+                    levelMb = maxLevel;
+                }
+                eq.setBandLevel(band, levelMb);
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Failed to apply EQ bands: " + e.getMessage());
+        }
+    }
+
+    private float interpolateWaveGainDb(float centerHz) {
+        if (centerHz <= WAVE_EQ_HZ[0]) {
+            return eqBandsDb[0];
+        }
+        int last = WAVE_EQ_HZ.length - 1;
+        if (centerHz >= WAVE_EQ_HZ[last]) {
+            return eqBandsDb[last];
+        }
+        for (int i = 0; i < last; i++) {
+            float lo = WAVE_EQ_HZ[i];
+            float hi = WAVE_EQ_HZ[i + 1];
+            if (centerHz >= lo && centerHz <= hi) {
+                float t = (centerHz - lo) / (hi - lo);
+                return eqBandsDb[i] + (eqBandsDb[i + 1] - eqBandsDb[i]) * t;
+            }
+        }
+        return 0f;
+    }
+
+    private static void setEqInstanceEnabled(Equalizer eq, boolean enabled) {
+        if (eq == null) {
+            return;
+        }
+        try {
+            eq.setEnabled(enabled);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Failed to toggle EQ: " + e.getMessage());
+        }
+    }
+
+    private static void releaseEqualizer(Equalizer eq) {
+        if (eq == null) {
+            return;
+        }
+        try {
+            eq.setEnabled(false);
+            eq.release();
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Failed to release EQ: " + e.getMessage());
+        }
     }
 
     public void setGaplessEnabled(boolean enabled) {
@@ -231,6 +403,7 @@ public final class WaveExoPlayer {
             lastReportedMediaIndex = idx;
             pendingMediaIndexChange = -1;
             playingCached = true;
+            attachEqualizerForPlayer(player, /* crossfade= */ false);
             refreshCacheFromPlayer();
             syncPositionTicker();
         });
@@ -340,6 +513,7 @@ public final class WaveExoPlayer {
         incoming.prepare();
         incoming.setVolume(0f);
         incoming.play();
+        attachEqualizerForPlayer(incoming, /* crossfade= */ true);
         updateCrossfadeVolumes();
         ended = false;
     }
@@ -367,13 +541,23 @@ public final class WaveExoPlayer {
             return;
         }
         ExoPlayer outgoing = player;
+        Equalizer outgoingEq = playerEq;
+        int outgoingEqSession = playerEqSessionId;
         player = crossfadePlayer;
+        playerEq = crossfadeEq;
+        playerEqSessionId = crossfadeEqSessionId;
         crossfadePlayer = outgoing;
+        crossfadeEq = outgoingEq;
+        crossfadeEqSessionId = outgoingEqSession;
 
         player.setVolume(userVolume);
         crossfadePlayer.stop();
         crossfadePlayer.clearMediaItems();
         crossfadePlayer.setVolume(0f);
+        releaseEqualizer(crossfadeEq);
+        crossfadeEq = null;
+        crossfadeEqSessionId = C.AUDIO_SESSION_ID_UNSET;
+        attachEqualizerForPlayer(player, /* crossfade= */ false);
 
         crossfadeActive = false;
         crossfadeStartMs = 0L;
@@ -402,6 +586,7 @@ public final class WaveExoPlayer {
             lastReportedMediaIndex = 0;
             pendingMediaIndexChange = -1;
             playingCached = true;
+            attachEqualizerForPlayer(player, /* crossfade= */ false);
             refreshCacheFromPlayer();
             syncPositionTicker();
         });
@@ -427,6 +612,7 @@ public final class WaveExoPlayer {
             player.pause();
             playingCached = false;
             positionMsCached = clamped;
+            attachEqualizerForPlayer(player, /* crossfade= */ false);
             refreshCacheFromPlayer();
             stopPositionTicker();
         });

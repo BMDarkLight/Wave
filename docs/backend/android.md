@@ -141,7 +141,9 @@ Local `gen/android` is generated and not the source of truth for Java/Kotlin.
 
 ## What is *not* on Android ExoPlayer
 
-- Desktop-style EQ / crossfade DSP (Rodio chain) — EQ settings may still be stored, but they are not applied through ExoPlayer yet.
+- Desktop-style Rodio biquad EQ chain — Android uses the system `Equalizer`
+  AudioEffect attached to ExoPlayer's audio session instead (same 10-band UI
+  gains, mapped onto the device's native band layout).
 - ExoPlayer multi-item queue / shuffle — Rust owns that.
 - Replacing the media-session plugin with Media3 `MediaSessionService` — intentionally deferred.
 

@@ -8,6 +8,18 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Wave - Music Player</title>
+    <script>
+      // Android WebView often reports hover:hover, so sticky :hover CSS would
+      // otherwise apply. Mark early — before module JS — from UA / media.
+      (function () {
+        try {
+          var touch =
+            /Android/i.test(navigator.userAgent || "") ||
+            window.matchMedia("(hover: none), (pointer: coarse)").matches;
+          if (touch) document.documentElement.classList.add("wave-no-hover");
+        } catch (_) {}
+      })();
+    </script>
   </head>
 
   <body>

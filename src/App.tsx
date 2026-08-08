@@ -123,6 +123,7 @@ import {
   type Track,
 } from "./utils/player";
 import { isAndroid } from "./utils/platform";
+import { enableNoHoverMode } from "./utils/touchHover";
 import { useLyricsAutoScroll } from "./hooks/useLyricsAutoScroll";
 import AlbumPage from "./components/AlbumPage";
 import ArtistPage from "./components/ArtistPage";
@@ -1021,6 +1022,9 @@ function App() {
       setAndroidHost(android);
       androidHostRef.current = android;
       if (android) {
+        // WebView often reports hover:hover, so media-query hover resets never
+        // fire — force the no-hover class from the trusted host OS signal.
+        enableNoHoverMode();
         setVolumeValue(1);
         void setPlayerVolume(1);
       }
@@ -2929,8 +2933,9 @@ function App() {
     addToPlaylistTrack,
     mobilePlayerSubView: mobilePlayerView !== "cover",
     rightPanelOpen,
-    mobilePlayerOpen,
-    mobileSettingsOpen,
+    // Closing counts as dismissed so history can shrink during the exit anim.
+    mobilePlayerOpen: mobilePlayerOpen && !mobilePlayerClosing,
+    mobileSettingsOpen: mobileSettingsOpen && !mobileSettingsClosing,
     mobileNavOpen,
     mainSearchOpen,
     browseDepth: browseStack.length,
@@ -2948,8 +2953,8 @@ function App() {
     addToPlaylistTrack,
     mobilePlayerSubView: mobilePlayerView !== "cover",
     rightPanelOpen,
-    mobilePlayerOpen,
-    mobileSettingsOpen,
+    mobilePlayerOpen: mobilePlayerOpen && !mobilePlayerClosing,
+    mobileSettingsOpen: mobileSettingsOpen && !mobileSettingsClosing,
     mobileNavOpen,
     mainSearchOpen,
     browseDepth: browseStack.length,
@@ -3057,12 +3062,12 @@ function App() {
     // so a lone Settings page always pops first.
     if (s.mobileSettingsOpen) {
       s.mobileSettingsOpen = false;
-      forceCloseMobileSettings();
+      handleCloseMobileSettings();
       return true;
     }
     if (s.mobilePlayerOpen) {
       s.mobilePlayerOpen = false;
-      forceCloseMobilePlayer();
+      handleCloseMobilePlayer();
       return true;
     }
     if (s.mobileNavOpen) {
@@ -3084,7 +3089,7 @@ function App() {
   };
 
   const trapDepthRef = useRef(0);
-  const ignorePopRef = useRef(false);
+  const ignorePopCountRef = useRef(0);
   const exitPressAtRef = useRef(0);
   const exitToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showExitToast, setShowExitToast] = useState(false);
@@ -3114,14 +3119,22 @@ function App() {
   };
 
   // Match synthetic history entries to open navigation layers (+ root guard).
-  // Use `useLayoutEffect` so the trap is established before the user can
-  // trigger a hardware back press (Android WebView can otherwise bypass JS).
+  // Grow with pushState; shrink with history.go when UI dismisses overlays
+  // without a hardware back (drag/chevron), so orphan entries don't skip the
+  // double-back-to-exit toast.
   useLayoutEffect(() => {
     const target = targetTrapDepthRef.current();
 
     while (trapDepthRef.current < target) {
       window.history.pushState({ waveNav: true }, "");
       trapDepthRef.current += 1;
+    }
+
+    const excess = trapDepthRef.current - target;
+    if (excess > 0) {
+      ignorePopCountRef.current += excess;
+      trapDepthRef.current = target;
+      window.history.go(-excess);
     }
 
     if (countHistoryLayers() > 0) {
@@ -3141,7 +3154,9 @@ function App() {
     mobilePlayerView,
     rightPanelOpen,
     mobilePlayerOpen,
+    mobilePlayerClosing,
     mobileSettingsOpen,
+    mobileSettingsClosing,
     mobileNavOpen,
     mainSearchOpen,
     browseStack.length,
@@ -3150,8 +3165,8 @@ function App() {
 
   useEffect(() => {
     const onPopState = () => {
-      if (ignorePopRef.current) {
-        ignorePopRef.current = false;
+      if (ignorePopCountRef.current > 0) {
+        ignorePopCountRef.current -= 1;
         return;
       }
 
@@ -4956,13 +4971,15 @@ function App() {
       )}
 
       <footer
-        className={`player-bar${currentTrack && !mobilePlayerOpen ? " player-bar-tappable" : ""}`}
+        className={`player-bar${currentTrack && (!mobilePlayerOpen || mobilePlayerClosing) ? " player-bar-tappable" : ""}`}
         onClick={(event) => {
           // Tapping empty space in the mini player (mobile only) opens the
           // fullscreen Now Playing page. Clicks on transport/seek controls
           // are left alone; the title/art block opens NP on its own.
           if (!isMobileLayout()) return;
-          if (mobilePlayerOpen) return;
+          // During the close animation the sheet still mounts but shouldn't
+          // block reopening — treat closing as closed for bar taps.
+          if (mobilePlayerOpen && !mobilePlayerClosing) return;
           const target = event.target as HTMLElement;
           if (
             target.closest(
@@ -4994,7 +5011,13 @@ function App() {
             onClick={() => {
               // Mobile: the whole info block opens Now Playing (large hit
               // target). Desktop keeps per-field buttons below.
-              if (!isMobileLayout() || !currentTrack || mobilePlayerOpen) return;
+              if (
+                !isMobileLayout() ||
+                !currentTrack ||
+                (mobilePlayerOpen && !mobilePlayerClosing)
+              ) {
+                return;
+              }
               handleOpenMobilePlayer();
             }}
           >
