@@ -2472,8 +2472,10 @@ img.queue-thumb {
   font: 600 16px/1.5 "Avenir Next", "Helvetica Neue", sans-serif;
   text-align: left;
   cursor: pointer;
-  transition: color 0.2s ease, transform 0.2s ease;
-  transform-origin: left center;
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: break-word;
+  transition: color 0.2s ease, font-size 0.2s ease;
 }
 
 .lyrics-line:hover:not(:disabled) {
@@ -2488,7 +2490,7 @@ img.queue-thumb {
 .lyrics-line.active {
   color: #fff;
   font-weight: 800;
-  transform: scale(1.04);
+  font-size: 17px;
 }
 
 .drag-handle {
@@ -4426,29 +4428,25 @@ img.queue-thumb {
   color: var(--text);
   overflow: hidden;
   transform: translateY(100%);
-  opacity: 0;
+  opacity: 1;
   pointer-events: none;
-  transition:
-    transform 0.36s cubic-bezier(0.32, 0.72, 0, 1),
-    opacity 0.28s ease;
-  will-change: transform, opacity;
+  transition: transform 0.36s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
 }
 
 .mobile-now-playing.mnp-open {
   transform: translateY(0);
-  opacity: 1;
   pointer-events: auto;
 }
 
 .mobile-now-playing.mnp-closing {
   transform: translateY(100%);
-  opacity: 0;
   pointer-events: none;
 }
 
 .mobile-now-playing.mnp-dragging {
   transition: none !important;
-  will-change: transform, opacity;
+  will-change: transform;
 }
 
 .mnp-header {
@@ -4549,7 +4547,6 @@ img.queue-thumb {
   aspect-ratio: 1;
   border-radius: 14px;
   object-fit: cover;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
   display: grid;
   place-items: center;
   font-size: clamp(40px, 14cqi, 72px);
@@ -4609,16 +4606,23 @@ img.queue-thumb {
   font-weight: 700;
   line-height: 1.4;
   padding: 0;
+  width: 100%;
   max-width: 100%;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  transition: color 0.2s ease, transform 0.2s ease;
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: none;
+  transition: color 0.2s ease, font-size 0.2s ease;
 }
 
 .mnp-lyrics-scroll .lyrics-line.active {
   color: #fff;
-  transform: scale(1.03);
-  transform-origin: left center;
+  font-size: 22px;
+  font-weight: 800;
+  /* Avoid transform: scale() — it paints past the box and clips under
+     overflow-x: hidden instead of reflowing/wrapping the larger text. */
+  transform: none;
 }
 
 .mnp-lyrics-scroll pre {
@@ -4972,11 +4976,6 @@ img.queue-thumb {
   gap: 28px;
 }
 
-.mnp-volume-section--no-volume .mnp-dial {
-  width: 120px;
-  height: 120px;
-}
-
 .mnp-dial {
   position: relative;
   width: 104px;
@@ -4984,6 +4983,12 @@ img.queue-thumb {
   flex: 0 0 auto;
   cursor: pointer;
   touch-action: none;
+}
+
+.mnp-dial svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .mnp-dial:focus-visible {
@@ -5005,30 +5010,33 @@ img.queue-thumb {
   pointer-events: none;
   text-align: center;
   /* Horseshoe arc opens at the bottom — nudge copy into the visual center. */
-  transform: translateY(-6px);
+  transform: translateY(-4px);
 }
 
 .mnp-dial-center span {
   display: block;
-  width: 100%;
+  width: auto;
+  max-width: 100%;
   font-size: 12px;
   font-weight: 700;
   color: var(--muted);
-  line-height: 1.1;
+  line-height: 1.15;
   text-align: center;
 }
 
 .mnp-dial-label {
   font-size: 11px !important;
   font-weight: 800 !important;
+  /* Optical center: letter-spacing adds trailing space, pad the lead side. */
   letter-spacing: 0.04em;
+  padding-left: 0.04em;
   text-transform: uppercase;
   color: var(--text) !important;
 }
 
 .mnp-dial-tone .mnp-dial-center {
   font-size: 16px;
-  transform: translateY(-7px);
+  transform: translateY(-5px);
 }
 
 .mnp-eq-section {

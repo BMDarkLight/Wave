@@ -605,6 +605,8 @@ function App() {
   // sidebar on responsive/mobile layouts) and its lyrics/menu sub-views.
   const [mobilePlayerOpen, setMobilePlayerOpen] = useState(false);
   const [mobilePlayerClosing, setMobilePlayerClosing] = useState(false);
+  const [mobilePlayerKey, setMobilePlayerKey] = useState(0);
+  const mobilePlayerOpenRef = useRef(false);
   const mobilePlayerClosingRef = useRef(false);
   const mobilePlayerCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -844,6 +846,7 @@ function App() {
       mobilePlayerCloseTimer.current = null;
     }
     mobilePlayerClosingRef.current = false;
+    mobilePlayerOpenRef.current = false;
     setMobilePlayerClosing(false);
     setMobilePlayerOpen(false);
     setMobilePlayerView("cover");
@@ -858,6 +861,8 @@ function App() {
     setShowDeviceList(false);
     setLyricsPanelTrack(null);
     forceCloseMobileSettings();
+    const wasOpen = mobilePlayerOpenRef.current;
+    const wasClosing = mobilePlayerClosingRef.current;
     if (mobilePlayerCloseTimer.current) {
       clearTimeout(mobilePlayerCloseTimer.current);
       mobilePlayerCloseTimer.current = null;
@@ -866,13 +871,22 @@ function App() {
     setMobilePlayerClosing(false);
     setMobilePlayerView("cover");
     setMobilePlayerMenuOpen(false);
+    // Remount when opening from closed/closing so enter animation and
+    // pointer-events reset cleanly (avoids an invisible-but-open sheet).
+    if (!wasOpen || wasClosing) {
+      setMobilePlayerKey((key) => key + 1);
+    }
+    mobilePlayerOpenRef.current = true;
     setMobilePlayerOpen(true);
     void loadEqSettings();
   };
 
   const handleCloseMobilePlayer = () => {
-    if (!mobilePlayerOpen || mobilePlayerClosingRef.current) return;
+    if (!mobilePlayerOpenRef.current || mobilePlayerClosingRef.current) return;
     mobilePlayerClosingRef.current = true;
+    // Treat as closed for bar taps immediately so the first real tap after
+    // dismiss can reopen (don't wait for the 360ms unmount).
+    mobilePlayerOpenRef.current = false;
     setMobilePlayerMenuOpen(false);
     setMobilePlayerClosing(true);
     mobilePlayerCloseTimer.current = setTimeout(() => {
@@ -4971,15 +4985,17 @@ function App() {
       )}
 
       <footer
-        className={`player-bar${currentTrack && (!mobilePlayerOpen || mobilePlayerClosing) ? " player-bar-tappable" : ""}`}
+        className={`player-bar${currentTrack && (!mobilePlayerOpenRef.current || mobilePlayerClosing) ? " player-bar-tappable" : ""}`}
         onClick={(event) => {
           // Tapping empty space in the mini player (mobile only) opens the
           // fullscreen Now Playing page. Clicks on transport/seek controls
           // are left alone; the title/art block opens NP on its own.
           if (!isMobileLayout()) return;
-          // During the close animation the sheet still mounts but shouldn't
-          // block reopening — treat closing as closed for bar taps.
-          if (mobilePlayerOpen && !mobilePlayerClosing) return;
+          // Use refs so a drag-dismiss (which clears openRef synchronously)
+          // doesn't leave the first tap blocked on stale React state.
+          if (mobilePlayerOpenRef.current && !mobilePlayerClosingRef.current) {
+            return;
+          }
           const target = event.target as HTMLElement;
           if (
             target.closest(
@@ -5011,10 +5027,10 @@ function App() {
             onClick={() => {
               // Mobile: the whole info block opens Now Playing (large hit
               // target). Desktop keeps per-field buttons below.
+              if (!isMobileLayout() || !currentTrack) return;
               if (
-                !isMobileLayout() ||
-                !currentTrack ||
-                (mobilePlayerOpen && !mobilePlayerClosing)
+                mobilePlayerOpenRef.current &&
+                !mobilePlayerClosingRef.current
               ) {
                 return;
               }
@@ -5215,6 +5231,7 @@ function App() {
 
       {mobilePlayerOpen && currentTrack && (
         <MobileNowPlaying
+          key={mobilePlayerKey}
           track={currentTrack}
           isPlaying={playbackState.is_playing}
           isFavorite={favoritePaths.has(currentTrack.path)}

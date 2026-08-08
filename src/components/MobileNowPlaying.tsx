@@ -243,6 +243,7 @@ function CircularDial({
     <div
       ref={ref}
       className={`mnp-dial ${dragging ? "dragging" : ""} ${className}`.trim()}
+      style={{ width: size, height: size }}
       role="slider"
       tabIndex={0}
       aria-label={ariaLabel}
@@ -667,7 +668,6 @@ export default function MobileNowPlaying({
     !closing && (pageDismiss.dragging || pageDismiss.offset > 0)
       ? {
           transform: `translateY(${pageDismiss.offset}px)`,
-          opacity: Math.max(0.4, 1 - pageDismiss.offset / 520),
         }
       : undefined;
 
@@ -1010,6 +1010,7 @@ export default function MobileNowPlaying({
                   label="Bass"
                   gain={bassGain}
                   onChange={applyBassGain}
+                  size={hideVolume ? 120 : 104}
                 />
                 {!hideVolume && (
                   <VolumeDial value={volumeValue} onChange={onVolumeChange} />
@@ -1018,6 +1019,7 @@ export default function MobileNowPlaying({
                   label="Treble"
                   gain={trebleGain}
                   onChange={applyTrebleGain}
+                  size={hideVolume ? 120 : 104}
                 />
               </div>
               <div className="mnp-eq-section">

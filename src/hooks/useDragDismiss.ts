@@ -10,6 +10,29 @@ type UseDragDismissOptions = {
 };
 
 /**
+ * After a successful drag-dismiss, the browser still synthesizes a `click` on
+ * whatever is under the finger (often the mini player bar). Swallow only that
+ * immediate ghost click so it cannot reopen the sheet — keep the window short
+ * so a real follow-up tap still works.
+ */
+function suppressTrailingClick(durationMs = 80) {
+  let armed = true;
+  const suppress = (event: Event) => {
+    if (!armed) return;
+    armed = false;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    window.removeEventListener("click", suppress, true);
+  };
+  window.addEventListener("click", suppress, true);
+  window.setTimeout(() => {
+    armed = false;
+    window.removeEventListener("click", suppress, true);
+  }, durationMs);
+}
+
+/**
  * Pointer-driven downward swipe-to-dismiss for full-screen sheets / pages.
  * Bind the returned handlers to a drag surface (header, handle, cover).
  */
@@ -77,6 +100,9 @@ export function useDragDismiss({
     activeRef.current = false;
     setDragging(false);
     if (shouldDismiss) {
+      // Arm before onDismiss: dismiss sets pointer-events:none, so the
+      // trailing click would otherwise hit the player bar and reopen NP.
+      suppressTrailingClick();
       onDismissRef.current();
       // Let the close animation own transform; drop the drag offset next frame.
       requestAnimationFrame(() => {
