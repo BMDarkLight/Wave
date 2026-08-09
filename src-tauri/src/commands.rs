@@ -7,10 +7,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::app_settings::{AppSettings, AppSettingsState};
 use crate::audio::player::AudioPlayer;
 use crate::dto::{
-    AlbumSummaryDto, ArtistSummaryDto, CloseAction, EqSettingsDto, ImportResultDto,
-    PlaybackModeDto, PlaybackStateDto, QueueDto, QueueStateDto, SearchHitDto,
+    AlbumSummaryDto, ArtistSummaryDto, CloseAction, EqSettingsDto, HomeSuggestionsDto,
+    ImportResultDto, ListeningStatsDto, PlaybackModeDto, PlaybackStateDto, QueueDto,
+    QueueStateDto, SearchHitDto,
 };
 use crate::library::{Library, PlaylistInfo};
+use crate::listen::{ListenEndReason, ListenFlush, ListenTracker};
 use crate::media_controls::TrackMetadata;
 use crate::metadata::{enrich_lyrics_online, is_supported_audio_file, supported_audio_extensions, Track};
 use crate::path_validation::{validate_audio_path, validate_safe_output_path};
@@ -22,6 +24,7 @@ use walkdir::WalkDir;
 pub struct PlayerState(pub Mutex<Option<AudioPlayer>>);
 pub struct LibraryState(pub Mutex<Library>);
 pub struct MediaBridgeState(pub crate::media_controls::MediaBridgeState);
+pub struct ListenState(pub Mutex<ListenTracker>);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -167,6 +170,229 @@ pub(crate) fn persist_playback_state(app: &tauri::AppHandle) {
     settings.shuffle = player.queue.is_shuffled();
     settings.repeat = player.repeat.clone();
     let _ = settings.save(app);
+}
+
+fn apply_listen_flush(app: &tauri::AppHandle, flush: ListenFlush) {
+    let library_state = app.state::<LibraryState>();
+    let Ok(lib) = library_state.0.lock() else {
+        return;
+    };
+    if let Err(e) = lib.record_listen(
+        &flush.path,
+        flush.seconds,
+        flush.completed,
+        flush.skipped,
+        flush.from_path.as_deref(),
+    ) {
+        tracing::warn!("Failed to record listen: {e}");
+    }
+}
+
+fn touch_recently_played(app: &tauri::AppHandle, path: &str) {
+    let library_state = app.state::<LibraryState>();
+    let Ok(lib) = library_state.0.lock() else {
+        return;
+    };
+    if let Err(e) = lib.touch_last_played(path) {
+        tracing::warn!("Failed to touch last played: {e}");
+    }
+}
+
+/// Observe the active track while it plays; sync when the path changes unexpectedly.
+pub(crate) fn tick_listen_progress(app: &tauri::AppHandle) {
+    let snapshot = {
+        let state = match app.try_state::<PlayerState>() {
+            Some(s) => s,
+            None => return,
+        };
+        let guard = match state.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(player) = guard.as_ref() else {
+            return;
+        };
+        let path = player
+            .get_current_path()
+            .map(|p| p.to_string_lossy().into_owned());
+        let Some(path) = path else {
+            return;
+        };
+        let playing = player.is_playing();
+        let position = player.position_seconds();
+        let duration = player.duration_seconds();
+        (path, playing, position, duration)
+    };
+
+    let (path, playing, position, duration) = snapshot;
+    let listen_state = match app.try_state::<ListenState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let mut tracker = match listen_state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    if tracker.matches_player_path(&path) {
+        // Player may report a materialized path while we keyed on the library URI.
+        tracker.set_player_path(path);
+        tracker.set_duration(duration);
+        if playing {
+            tracker.observe_position(position);
+        }
+        return;
+    }
+
+    match tracker.current_path() {
+        None => {
+            if playing || position > 0.5 {
+                // Cold start (restore / external play) — use engine path for both.
+                tracker.start(path.clone(), path.clone(), duration, None);
+                drop(tracker);
+                touch_recently_played(app, &path);
+            }
+        }
+        Some(_) => {
+            // Right after listen_switch_track the engine may still report the
+            // previous file for a tick or two — don't treat that as a new song.
+            if tracker.peek_seconds().unwrap_or(0.0) < 1.0 {
+                return;
+            }
+            if playing {
+                let flush = tracker.switch_track(
+                    path.clone(),
+                    path.clone(),
+                    duration,
+                    ListenEndReason::Completed,
+                );
+                drop(tracker);
+                if let Some(flush) = flush {
+                    apply_listen_flush(app, flush);
+                }
+                touch_recently_played(app, &path);
+            }
+        }
+    }
+}
+
+/// End the current listen session and start one for `record_path`.
+///
+/// `record_path` must be the library identity (original path / content URI).
+/// Never seeds the new session with the previous track's scrubber position.
+pub(crate) fn listen_switch_track(
+    app: &tauri::AppHandle,
+    record_path: &str,
+    reason: ListenEndReason,
+) {
+    let (player_path, position, duration) = {
+        let state = match app.try_state::<PlayerState>() {
+            Some(s) => s,
+            None => return,
+        };
+        let guard = match state.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(player) = guard.as_ref() else {
+            return;
+        };
+        let player_path = player
+            .get_current_path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| record_path.to_string());
+        (player_path, player.position_seconds(), player.duration_seconds())
+    };
+
+    let listen_state = match app.try_state::<ListenState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let mut tracker = match listen_state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    // Only credit the outgoing track with this scrubber position when the
+    // engine is still reporting that same track. After play_next()/play(),
+    // get_current_path is usually already the *new* file at ~0s — applying
+    // that to the old session (or worse, seeding the new session with the
+    // old track's high position) mis-attributes listens.
+    let engine_still_on_outgoing = tracker.matches_player_path(&player_path)
+        && tracker.current_record_path() != Some(record_path);
+    if engine_still_on_outgoing {
+        tracker.observe_position(position);
+        tracker.set_duration(duration);
+    }
+
+    // Prefer the engine path for tick matching when it has already moved to
+    // the new file; otherwise key on the library path until the engine catches up.
+    let new_match_path = if !engine_still_on_outgoing {
+        player_path
+    } else {
+        record_path.to_string()
+    };
+
+    let flush = tracker.switch_track(
+        new_match_path,
+        record_path.to_string(),
+        if !engine_still_on_outgoing {
+            duration
+        } else {
+            None
+        },
+        reason,
+    );
+    drop(tracker);
+
+    if let Some(flush) = flush {
+        apply_listen_flush(app, flush);
+    }
+    // Mark recently played immediately so the sidebar updates without waiting
+    // for the song to end / be skipped.
+    touch_recently_played(app, record_path);
+}
+
+/// Flush the active listen session without starting a new one (stop / app exit).
+pub(crate) fn listen_flush_partial(app: &tauri::AppHandle) {
+    let (player_path, position) = {
+        let state = match app.try_state::<PlayerState>() {
+            Some(s) => s,
+            None => return,
+        };
+        let guard = match state.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(player) = guard.as_ref() else {
+            return;
+        };
+        (
+            player
+                .get_current_path()
+                .map(|p| p.to_string_lossy().into_owned()),
+            player.position_seconds(),
+        )
+    };
+
+    let listen_state = match app.try_state::<ListenState>() {
+        Some(s) => s,
+        None => return,
+    };
+    let mut tracker = match listen_state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(path) = player_path.as_deref() {
+        if tracker.matches_player_path(path) {
+            tracker.observe_position(position);
+        }
+    }
+    let flush = tracker.end(ListenEndReason::Partial);
+    drop(tracker);
+    if let Some(flush) = flush {
+        apply_listen_flush(app, flush);
+    }
 }
 
 pub(crate) fn persist_playback_state_throttled(app: &tauri::AppHandle) {
@@ -401,6 +627,7 @@ pub(crate) fn tick_auto_advance(app: &tauri::AppHandle) {
             Ok(lib) => resolve_track(&lib, &path),
             Err(_) => placeholder_track(&path),
         };
+        listen_switch_track(app, &track.path, ListenEndReason::Completed);
         sync_bridge_now_playing_at(app, &track, position);
     }
 
@@ -451,6 +678,7 @@ pub(crate) fn tick_auto_advance(app: &tauri::AppHandle) {
                 Ok(lib) => resolve_track(&lib, &path),
                 Err(_) => placeholder_track(&path),
             };
+            listen_switch_track(app, &track.path, ListenEndReason::Completed);
             sync_bridge_now_playing(app, &track);
         }
         None => {
@@ -463,6 +691,7 @@ pub(crate) fn tick_auto_advance(app: &tauri::AppHandle) {
                 .and_then(|g| g.as_ref().map(|p| p.is_playing() || p.is_paused()))
                 .unwrap_or(false);
             if !still_playing {
+                listen_flush_partial(app);
                 let bridge = app.state::<MediaBridgeState>();
                 bridge.0.set_stopped();
             }
@@ -534,6 +763,7 @@ pub(crate) fn handle_native_media_action(app: &tauri::AppHandle, action: &str) -
                     Ok(lib) => resolve_track(&lib, &path),
                     Err(_) => placeholder_track(&path),
                 };
+                listen_switch_track(app, &track.path, ListenEndReason::Skipped);
                 sync_bridge_now_playing(app, &track);
             }
             Ok(())
@@ -547,6 +777,7 @@ pub(crate) fn handle_native_media_action(app: &tauri::AppHandle, action: &str) -
                     Ok(lib) => resolve_track(&lib, &path),
                     Err(_) => placeholder_track(&path),
                 };
+                listen_switch_track(app, &track.path, ListenEndReason::Skipped);
                 sync_bridge_now_playing(app, &track);
             }
             Ok(())
@@ -717,6 +948,7 @@ pub async fn play_track(
     })
     .await?;
     sync_bridge_now_playing(&app, &track);
+    listen_switch_track(&app, &track.path, ListenEndReason::Partial);
     persist_playback_state(&app);
 
     Ok(())
@@ -788,6 +1020,7 @@ pub async fn play_tracks(
     .await?;
     sync_bridge_now_playing(&app, &track);
     persist_playback_state(&app);
+    listen_switch_track(&app, &track.path, ListenEndReason::Partial);
     Ok(())
 }
 
@@ -830,6 +1063,7 @@ pub async fn stop_track(
 ) -> Result<(), String> {
     lock_player(&state)?.stop()?;
     bridge.0.set_stopped();
+    listen_flush_partial(&app);
     persist_playback_state(&app);
     Ok(())
 }
@@ -1219,26 +1453,30 @@ pub async fn play_track_from_playlist(
     .await?;
 
     sync_bridge_now_playing(&app, &track);
+    listen_switch_track(&app, &track.path, ListenEndReason::Partial);
     Ok(())
 }
 
 #[tauri::command]
-pub fn scan_directory(directory: String) -> Result<Vec<String>, String> {
-    let dir_path = Path::new(&directory);
-    if !dir_path.is_dir() {
-        return Err("Path is not a directory".to_string());
-    }
+pub async fn scan_directory(directory: String) -> Result<Vec<String>, String> {
+    blocking(move || {
+        let dir_path = Path::new(&directory);
+        if !dir_path.is_dir() {
+            return Err("Path is not a directory".to_string());
+        }
 
-    let paths: Vec<String> = WalkDir::new(dir_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| is_supported_audio_file(e.path()))
-        .filter_map(|e| e.path().to_str().map(str::to_string))
-        .collect();
+        let paths: Vec<String> = WalkDir::new(dir_path)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .filter(|e| is_supported_audio_file(e.path()))
+            .filter_map(|e| e.path().to_str().map(str::to_string))
+            .collect();
 
-    Ok(paths)
+        Ok(paths)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1317,6 +1555,7 @@ pub async fn play_next(
             Ok::<_, String>(resolve_track(&lib, &p))
         })
         .await?;
+        listen_switch_track(&app, &track.path, ListenEndReason::Skipped);
         sync_bridge_now_playing(&app, &track);
     }
 
@@ -1344,6 +1583,7 @@ pub async fn play_previous(
             Ok::<_, String>(resolve_track(&lib, &p))
         })
         .await?;
+        listen_switch_track(&app, &track.path, ListenEndReason::Skipped);
         sync_bridge_now_playing(&app, &track);
     }
 
@@ -1476,9 +1716,33 @@ pub async fn add_track_to_playlist_by_id(
     let app = app.clone();
     blocking(move || {
         let resolved = crate::android::import::resolve_library_source(&app, &path)?;
+        let existing = {
+            let library = app.state::<LibraryState>();
+            let lib = library.0.lock().map_err(|e| e.to_string())?;
+            lib.get_tracks_by_paths(&[resolved.clone()])?
+                .into_iter()
+                .next()
+                .flatten()
+        };
+        if let Some(track) = existing {
+            let library = app.state::<LibraryState>();
+            let lib = library.0.lock().map_err(|e| e.to_string())?;
+            // Link into playlist if needed (no re-extract).
+            return lib.add_track_to_playlist(&id, track.path);
+        }
+
+        // Extract with the library unlocked so browsing stays live.
+        let track = crate::metadata::extract_track(Some(&app), &resolved)?;
         let library = app.state::<LibraryState>();
         let lib = library.0.lock().map_err(|e| e.to_string())?;
-        lib.add_track_to_playlist(&id, resolved)
+        let (_, _) = lib.apply_playlist_sync(&id, &[], &[track.clone()], &[])?;
+        // Re-read so callers get the upserted id / cover paths.
+        Ok(lib
+            .get_tracks_by_paths(&[resolved])?
+            .into_iter()
+            .next()
+            .flatten()
+            .unwrap_or(track))
     })
     .await
 }
@@ -1757,6 +2021,7 @@ pub async fn play_track_from_specific_playlist(
     let mut played_track = track;
     played_track.path = local_path;
     sync_bridge_now_playing(&app, &played_track);
+    listen_switch_track(&app, &original_path, ListenEndReason::Partial);
     Ok(())
 }
 
@@ -1869,6 +2134,7 @@ pub async fn play_track_from_queue(
         })
         .await?;
         sync_bridge_now_playing(&app, &track);
+        listen_switch_track(&app, &track.path, ListenEndReason::Partial);
     }
 
     Ok(())
@@ -2151,24 +2417,8 @@ pub fn remove_media_folder(
 /// Scan a local directory for audio files and return their paths.
 /// Works on desktop where paths are real filesystem paths.
 #[tauri::command]
-pub fn scan_media_folder(
-    folder: String,
-) -> Result<Vec<String>, String> {
-    let dir_path = Path::new(&folder);
-    if !dir_path.is_dir() {
-        return Err("Path is not a directory".to_string());
-    }
-
-    let paths: Vec<String> = WalkDir::new(dir_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| is_supported_audio_file(e.path()))
-        .filter_map(|e| e.path().to_str().map(str::to_string))
-        .collect();
-
-    Ok(paths)
+pub async fn scan_media_folder(folder: String) -> Result<Vec<String>, String> {
+    scan_directory(folder).await
 }
 
 /// Import audio files found by a scan into a playlist.
@@ -2179,8 +2429,8 @@ pub struct ScanImportResult {
     pub errors: Vec<String>,
 }
 
-// Process in batches to avoid OOM/crashes on mobile with large folders
-const IMPORT_BATCH_SIZE: usize = 20;
+/// Process large folders in chunks so metadata extract + DB writes stay bounded.
+const IMPORT_BATCH_SIZE: usize = 40;
 
 fn normalize_import_path(path: &str) -> String {
     let trimmed = path.trim();
@@ -2193,6 +2443,12 @@ fn normalize_import_path(path: &str) -> String {
         .unwrap_or_else(|_| trimmed.to_string())
 }
 
+fn push_import_error(errors: &mut Vec<String>, detail: String) {
+    if errors.len() < 40 {
+        errors.push(detail);
+    }
+}
+
 #[tauri::command]
 pub async fn import_scanned_audio(
     paths: Vec<String>,
@@ -2201,28 +2457,84 @@ pub async fn import_scanned_audio(
 ) -> Result<ScanImportResult, String> {
     let app_clone = app.clone();
     blocking(move || {
-        let mut imported = 0u32;
+        let library = app_clone.state::<LibraryState>();
         let mut errors = Vec::new();
+        let mut imported = 0u32;
+        let total = paths.len();
 
-        for chunk in paths.chunks(IMPORT_BATCH_SIZE) {
-            for path in chunk {
-                match crate::android::import::resolve_library_source(&app_clone, path) {
-                    Ok(resolved) => {
-                        let library = app_clone.state::<LibraryState>();
-                        let result = library.0.lock().map_err(|e| e.to_string()).and_then(|lib| {
-                            lib.add_track_to_playlist(&playlist_id, resolved)
-                        });
-                        match result {
-                            Ok(_) => imported += 1,
-                            Err(e) if e.contains("already in the playlist") => imported += 1,
-                            Err(e) => errors.push(format!("{path}: {e}")),
-                        }
+        // Resolve paths first (cheap), then extract outside the library lock.
+        let mut desired = Vec::with_capacity(paths.len());
+        let mut seen = std::collections::HashSet::new();
+        for path in &paths {
+            match crate::android::import::resolve_library_source(&app_clone, path) {
+                Ok(resolved) => {
+                    let key = normalize_import_path(&resolved);
+                    if seen.insert(key.clone()) {
+                        desired.push(key);
                     }
-                    Err(e) => errors.push(format!("{path}: {e}")),
                 }
+                Err(e) => push_import_error(&mut errors, format!("{path}: {e}")),
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
         }
+
+        let existing_ids = {
+            let lib = library.0.lock().map_err(|e| e.to_string())?;
+            lib.track_ids_by_paths(&desired)?
+        };
+
+        let mut processed = 0usize;
+        for chunk in desired.chunks(IMPORT_BATCH_SIZE) {
+            let mut extracted = Vec::new();
+            let mut link_ids = Vec::new();
+            for path in chunk {
+                let key = normalize_import_path(path);
+                if let Some(id) = existing_ids.get(&key).cloned() {
+                    link_ids.push(id);
+                    processed += 1;
+                    continue;
+                }
+                match crate::metadata::extract_track_for_bulk(Some(&app_clone), path) {
+                    Ok(track) => extracted.push(track),
+                    Err(e) => {
+                        tracing::warn!("Import skip (metadata): {path}: {e}");
+                        push_import_error(&mut errors, format!("{path}: {e}"));
+                    }
+                }
+                processed += 1;
+            }
+
+            let batch_added = {
+                let lib = library.0.lock().map_err(|e| e.to_string())?;
+                let (added, _) =
+                    lib.apply_playlist_sync(&playlist_id, &[], &extracted, &link_ids)?;
+                added + link_ids.len() as u32
+            };
+            imported += batch_added;
+
+            let _ = app_clone.emit(
+                "sync-progress",
+                serde_json::json!({
+                    "playlist_id": playlist_id,
+                    "phase": "extract",
+                    "processed": processed,
+                    "to_add": total,
+                    "extracted": imported,
+                }),
+            );
+
+            // Yield so UI / audio ticks stay responsive on large libraries.
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+
+        let _ = app_clone.emit(
+            "sync-progress",
+            serde_json::json!({
+                "playlist_id": playlist_id,
+                "phase": "done",
+                "added": imported,
+            }),
+        );
+
         Ok(ScanImportResult { imported, errors })
     })
     .await
@@ -2249,8 +2561,8 @@ pub async fn sync_playlist_folder(
     scanned_paths: Option<Vec<String>>,
     app: tauri::AppHandle,
 ) -> Result<SyncPlaylistResult, String> {
-    const BATCH_SIZE: usize = 50;
-    
+    const BATCH_SIZE: usize = 40;
+
     let app_clone = app.clone();
     let playlist_id_clone = playlist_id.clone();
     blocking(move || {
@@ -2299,7 +2611,7 @@ pub async fn sync_playlist_folder(
                             desired.push(key);
                         }
                     }
-                    Err(e) => errors.push(format!("{path}: {e}")),
+                    Err(e) => push_import_error(&mut errors, format!("{path}: {e}")),
                 }
             }
         }
@@ -2328,32 +2640,56 @@ pub async fn sync_playlist_folder(
             });
         }
 
+        // Removals first in one short write, then add in memory-bounded batches.
+        let mut removed = 0u32;
+        if !to_remove.is_empty() {
+            let lib = library.0.lock().map_err(|e| e.to_string())?;
+            let (_, r) = lib.apply_playlist_sync(&playlist_id_clone, &to_remove, &[], &[])?;
+            removed = r;
+        }
+
         let existing_ids = {
             let lib = library.0.lock().map_err(|e| e.to_string())?;
             lib.track_ids_by_paths(&to_add)?
         };
 
-        // Heavy work with the library unlocked so playlist browsing stays live.
-        // Online cover enrich is deferred so files appear in the library quickly.
-        let mut extracted = Vec::new();
-        let mut link_ids = Vec::new();
+        let mut added = 0u32;
         let mut processed = 0usize;
+        let mut need_online_art: Vec<Track> = Vec::new();
+
         for chunk in to_add.chunks(BATCH_SIZE) {
+            let mut extracted = Vec::new();
+            let mut link_ids = Vec::new();
             for path in chunk {
                 let key = normalize_import_path(path);
                 if let Some(id) = existing_ids.get(&key).cloned() {
                     link_ids.push(id);
+                    processed += 1;
                     continue;
                 }
-                match crate::metadata::extract_track(Some(&app_clone), path) {
-                    Ok(track) => extracted.push(track),
+                match crate::metadata::extract_track_for_bulk(Some(&app_clone), path) {
+                    Ok(track) => {
+                        if track.album_art_id.is_none() {
+                            need_online_art.push(track.clone());
+                        }
+                        extracted.push(track);
+                    }
                     Err(e) => {
                         tracing::warn!("Sync skip (metadata): {path}: {e}");
-                        errors.push(format!("{path}: {e}"));
+                        push_import_error(&mut errors, format!("{path}: {e}"));
                     }
                 }
                 processed += 1;
             }
+
+            let batch_added = {
+                let lib = library.0.lock().map_err(|e| e.to_string())?;
+                let (a, _) =
+                    lib.apply_playlist_sync(&playlist_id_clone, &[], &extracted, &link_ids)?;
+                a + link_ids.len() as u32
+            };
+            added += batch_added;
+
             let _ = app_clone.emit(
                 "sync-progress",
                 serde_json::json!({
@@ -2361,21 +2697,12 @@ pub async fn sync_playlist_folder(
                     "phase": "extract",
                     "processed": processed,
                     "to_add": to_add.len(),
-                    "extracted": extracted.len(),
+                    "extracted": added,
                 }),
             );
+
+            std::thread::sleep(std::time::Duration::from_millis(8));
         }
-
-        let need_online_art: Vec<Track> = extracted
-            .iter()
-            .filter(|t| t.album_art_id.is_none())
-            .cloned()
-            .collect();
-
-        let (added, removed) = {
-            let lib = library.0.lock().map_err(|e| e.to_string())?;
-            lib.apply_playlist_sync(&playlist_id_clone, &to_remove, &extracted, &link_ids)?
-        };
 
         let _ = app_clone.emit(
             "sync-progress",
@@ -2514,4 +2841,67 @@ pub async fn reset_app(app: tauri::AppHandle) -> Result<ResetAppResult, String> 
         tracks_removed,
         playlists_deleted,
     })
+}
+
+// ── Listen stats / recommendations ───────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_recently_played(
+    limit: Option<u32>,
+    library: tauri::State<'_, LibraryState>,
+) -> Result<Vec<Track>, String> {
+    lock_library(&library)?.get_recently_played(limit.unwrap_or(100))
+}
+
+#[tauri::command]
+pub async fn get_most_played(
+    limit: Option<u32>,
+    library: tauri::State<'_, LibraryState>,
+) -> Result<Vec<Track>, String> {
+    lock_library(&library)?.get_most_played(limit.unwrap_or(100))
+}
+
+#[tauri::command]
+pub async fn get_favorite_track(
+    library: tauri::State<'_, LibraryState>,
+) -> Result<Option<Track>, String> {
+    lock_library(&library)?.get_favorite_track()
+}
+
+#[tauri::command]
+pub async fn get_favorite_album(
+    library: tauri::State<'_, LibraryState>,
+) -> Result<Option<AlbumSummaryDto>, String> {
+    lock_library(&library)?.get_favorite_album()
+}
+
+#[tauri::command]
+pub async fn get_favorite_artist(
+    library: tauri::State<'_, LibraryState>,
+) -> Result<Option<ArtistSummaryDto>, String> {
+    lock_library(&library)?.get_favorite_artist()
+}
+
+#[tauri::command]
+pub async fn get_listening_stats(
+    limit: Option<u32>,
+    library: tauri::State<'_, LibraryState>,
+) -> Result<ListeningStatsDto, String> {
+    lock_library(&library)?.get_listening_stats(limit.unwrap_or(5))
+}
+
+#[tauri::command]
+pub async fn get_home_suggestions(
+    app: tauri::AppHandle,
+) -> Result<HomeSuggestionsDto, String> {
+    let seed = {
+        let state = app.state::<PlayerState>();
+        let guard = lock_player_state(&state);
+        guard
+            .as_ref()
+            .and_then(|p| p.get_current_path().map(|p| p.to_string_lossy().into_owned()))
+    };
+    let library = app.state::<LibraryState>();
+    let lib = library.0.lock().map_err(lock_poisoned)?;
+    lib.get_home_suggestions(seed.as_deref())
 }

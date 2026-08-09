@@ -60,11 +60,19 @@ pub struct AppSettingsState(pub Mutex<AppSettings>);
 
 impl AppSettings {
     pub fn load(app: &tauri::AppHandle) -> Self {
-        let path = settings_path(app);
+        Self::load_from_path(&settings_path(app))
+    }
+
+    /// Load settings from the default CLI/desktop data directory (no Tauri handle).
+    pub fn load_from_disk() -> Self {
+        Self::load_from_path(&crate::app_paths::data_dir().join(SETTINGS_FILE))
+    }
+
+    fn load_from_path(path: &std::path::Path) -> Self {
         if !path.exists() {
             return Self::default();
         }
-        let mut settings = match fs::read_to_string(&path) {
+        let mut settings = match fs::read_to_string(path) {
             Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
             Err(_) => Self::default(),
         };
@@ -73,14 +81,22 @@ impl AppSettings {
     }
 
     pub fn save(&self, app: &tauri::AppHandle) -> Result<(), String> {
-        let path = settings_path(app);
+        self.save_to_path(&settings_path(app))
+    }
+
+    /// Persist settings to the default CLI/desktop data directory.
+    pub fn save_to_disk(&self) -> Result<(), String> {
+        self.save_to_path(&crate::app_paths::data_dir().join(SETTINGS_FILE))
+    }
+
+    fn save_to_path(&self, path: &std::path::Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create settings directory: {e}"))?;
         }
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize settings: {e}"))?;
-        fs::write(&path, json).map_err(|e| format!("Failed to write settings: {e}"))
+        fs::write(path, json).map_err(|e| format!("Failed to write settings: {e}"))
     }
 
     pub fn toggle_close_action(&mut self) {

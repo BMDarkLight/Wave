@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { BiPlay, BiRefresh, BiMusic } from "react-icons/bi";
 import {
+  getHomeSuggestions,
   getPlaylistTracksById,
   getTrackFullCover,
   listAlbums,
   resolveCoverSrc,
 } from "../utils/player";
-import type { AlbumSummary, Track } from "../utils/player";
+import type { AlbumSummary, HomeSuggestions, Track } from "../utils/player";
 
 const getTrackTitle = (track?: Track | null) => {
   if (track?.title) return track.title;
@@ -22,7 +23,7 @@ function hasRealValue(value?: string | null): boolean {
   return !UNKNOWN_RE.test(trimmed);
 }
 
-/** Higher = richer tags / art. Used to bias Home suggestions. */
+/** Higher = richer tags / art. Used to bias Home suggestions when cold. */
 function trackMetadataScore(track: Track): number {
   let score = 0;
   const title = track.title?.trim();
@@ -52,10 +53,6 @@ function shufflePick<T>(items: T[], count: number): T[] {
   return copy.slice(0, Math.min(count, copy.length));
 }
 
-/**
- * Prefer items with richer metadata while keeping picks random within
- * quality tiers so Refresh still feels fresh.
- */
 function shufflePickPreferring<T>(
   items: T[],
   count: number,
@@ -70,7 +67,6 @@ function shufflePickPreferring<T>(
   return [...preferred, ...shufflePick(rest, count - preferred.length)];
 }
 
-/** Album card art: show thumb immediately, then upgrade to full embedded cover. */
 const AlbumCover = ({
   album,
   className,
@@ -167,12 +163,12 @@ const TrackCover = ({
 
 type HomeCache = {
   libraryPlaylistId: string | null;
-  tracks: Track[];
-  albums: AlbumSummary[];
+  suggestions: HomeSuggestions | null;
+  fallbackTracks: Track[];
+  fallbackAlbums: AlbumSummary[];
   seed: number;
 };
 
-/** Session cache — survives Home unmount/remount until app reload. */
 let homeSessionCache: HomeCache | null = null;
 
 const readHomeCache = (libraryPlaylistId: string | null) =>
@@ -184,7 +180,7 @@ const writeHomeCache = (cache: HomeCache) => {
   homeSessionCache = cache;
 };
 
-async function loadHomeLibrary(libraryPlaylistId: string | null) {
+async function loadFallbackLibrary(libraryPlaylistId: string | null) {
   const [albumList, libraryTracks] = await Promise.all([
     listAlbums().catch(() => [] as AlbumSummary[]),
     libraryPlaylistId
@@ -210,11 +206,50 @@ export default function HomePage({
   onOpenLibrary,
 }: HomePageProps) {
   const initialCache = readHomeCache(libraryPlaylistId);
-  const [tracks, setTracks] = useState<Track[]>(initialCache?.tracks ?? []);
-  const [albums, setAlbums] = useState<AlbumSummary[]>(initialCache?.albums ?? []);
+  const [suggestions, setSuggestions] = useState<HomeSuggestions | null>(
+    initialCache?.suggestions ?? null,
+  );
+  const [fallbackTracks, setFallbackTracks] = useState<Track[]>(
+    initialCache?.fallbackTracks ?? [],
+  );
+  const [fallbackAlbums, setFallbackAlbums] = useState<AlbumSummary[]>(
+    initialCache?.fallbackAlbums ?? [],
+  );
   const [loading, setLoading] = useState(!initialCache);
   const [refreshing, setRefreshing] = useState(false);
   const [seed, setSeed] = useState(initialCache?.seed ?? 0);
+
+  const loadSuggestions = async (nextSeed: number) => {
+    try {
+      const curated = await getHomeSuggestions();
+      if (curated.featured || curated.mix.length > 0 || curated.more.length > 0) {
+        setSuggestions(curated);
+        writeHomeCache({
+          libraryPlaylistId,
+          suggestions: curated,
+          fallbackTracks,
+          fallbackAlbums,
+          seed: nextSeed,
+        });
+        return;
+      }
+    } catch {
+      // Fall through to metadata shuffle.
+    }
+
+    const { albums: albumList, tracks: libraryTracks } =
+      await loadFallbackLibrary(libraryPlaylistId);
+    setSuggestions(null);
+    setFallbackAlbums(albumList);
+    setFallbackTracks(libraryTracks);
+    writeHomeCache({
+      libraryPlaylistId,
+      suggestions: null,
+      fallbackTracks: libraryTracks,
+      fallbackAlbums: albumList,
+      seed: nextSeed,
+    });
+  };
 
   useEffect(() => {
     if (readHomeCache(libraryPlaylistId)) return;
@@ -223,17 +258,7 @@ export default function HomePage({
     setLoading(true);
     void (async () => {
       try {
-        const { albums: albumList, tracks: libraryTracks } =
-          await loadHomeLibrary(libraryPlaylistId);
-        if (cancelled) return;
-        setAlbums(albumList);
-        setTracks(libraryTracks);
-        writeHomeCache({
-          libraryPlaylistId,
-          tracks: libraryTracks,
-          albums: albumList,
-          seed: 0,
-        });
+        await loadSuggestions(0);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -241,84 +266,97 @@ export default function HomePage({
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [libraryPlaylistId]);
-
-  useEffect(() => {
-    if (loading) return;
-    writeHomeCache({ libraryPlaylistId, tracks, albums, seed });
-  }, [libraryPlaylistId, tracks, albums, seed, loading]);
 
   const handleRefresh = () => {
     setRefreshing(true);
     void (async () => {
       try {
-        const { albums: albumList, tracks: libraryTracks } =
-          await loadHomeLibrary(libraryPlaylistId);
         const nextSeed = seed + 1;
-        setAlbums(albumList);
-        setTracks(libraryTracks);
         setSeed(nextSeed);
-        writeHomeCache({
-          libraryPlaylistId,
-          tracks: libraryTracks,
-          albums: albumList,
-          seed: nextSeed,
-        });
+        await loadSuggestions(nextSeed);
       } finally {
         setRefreshing(false);
       }
     })();
   };
 
-  const suggestions = useMemo(() => {
+  const coldSuggestions = useMemo(() => {
     void seed;
-    // Prefer title+artist+album+cover (score ~12); fall back only if needed.
-    return shufflePickPreferring(tracks, 18, trackMetadataScore, 10);
-  }, [tracks, seed]);
+    return shufflePickPreferring(fallbackTracks, 18, trackMetadataScore, 10);
+  }, [fallbackTracks, seed]);
 
-  const featured = suggestions[0] ?? null;
-  const mixRow = suggestions.slice(1, 7);
-  const moreRow = suggestions.slice(7, 15);
-
+  const featured = suggestions?.featured ?? coldSuggestions[0] ?? null;
+  const mixRow = suggestions?.mix?.length
+    ? suggestions.mix
+    : coldSuggestions.slice(1, 9);
+  const moreRow = suggestions?.more?.length
+    ? suggestions.more
+    : coldSuggestions.slice(9, 18);
   const albumPicks = useMemo(() => {
     void seed;
-    const candidates = albums.filter(
-      (a) => hasRealValue(a.name) && a.name !== "Unknown Album",
-    );
-    return shufflePickPreferring(candidates, 10, albumMetadataScore, 7);
-  }, [albums, seed]);
+    if (suggestions?.albums?.length) return suggestions.albums.slice(0, 8);
+    return shufflePickPreferring(fallbackAlbums, 8, albumMetadataScore, 5);
+  }, [suggestions, fallbackAlbums, seed]);
+
+  const playQueue = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Track[] = [];
+    for (const track of [featured, ...mixRow, ...moreRow]) {
+      if (!track || seen.has(track.path)) continue;
+      seen.add(track.path);
+      out.push(track);
+    }
+    return out;
+  }, [featured, mixRow, moreRow]);
+
+  const playFeatured = () => {
+    if (!featured) return;
+    onPlayTrack(featured.path, playQueue.length ? playQueue : [featured]);
+  };
 
   const greeting = useMemo(() => {
     const hour = new Date().getHours();
-    if (hour < 5) return "Up late";
     if (hour < 12) return "Good morning";
     if (hour < 18) return "Good afternoon";
     return "Good evening";
   }, []);
 
-  const playFeatured = () => {
-    if (!featured) return;
-    const rest = suggestions.filter((t) => t.path !== featured.path);
-    onPlayTrack(featured.path, [featured, ...rest]);
-  };
+  const trackCount = fallbackTracks.length || playQueue.length;
+  const curated = Boolean(suggestions?.curated);
 
   if (loading) {
     return (
       <main className="main-content home-page">
-        <div className="home-loading">Finding something to play…</div>
+        <div className="empty-state">
+          <div className="empty-icon">
+            <span className="import-spinner" />
+          </div>
+          <h2>Finding music for you…</h2>
+        </div>
       </main>
     );
   }
 
-  if (tracks.length === 0) {
+  if (!featured && mixRow.length === 0 && albumPicks.length === 0) {
     return (
       <main className="main-content home-page">
-        <div className="home-empty">
-          <BiMusic />
-          <h1>Your home is empty</h1>
-          <p>Scan a music folder into Library to unlock suggestions and covers.</p>
+        <header className="home-header">
+          <div>
+            <p className="home-eyebrow">Wave</p>
+            <h1>{greeting}</h1>
+            <p className="home-sub">Your library is empty</p>
+          </div>
+        </header>
+        <div className="empty-state">
+          <div className="empty-icon">
+            <BiMusic />
+          </div>
+          <h2>Nothing to suggest yet</h2>
+          <p>Add music to your library to get personalized picks.</p>
           <button className="btn-primary" type="button" onClick={onOpenLibrary}>
-            Go to Library
+            Open Library
           </button>
         </div>
       </main>
@@ -344,7 +382,9 @@ export default function HomePage({
             {greeting}
           </h1>
           <p className="home-sub">
-            Picked from {tracks.length.toLocaleString()} tracks in your library
+            {curated
+              ? "Curated from your listening history"
+              : `Picked from ${trackCount.toLocaleString()} tracks in your library`}
           </p>
         </div>
       </header>
@@ -356,7 +396,9 @@ export default function HomePage({
             <div className="home-featured-glow" aria-hidden />
           </div>
           <div className="home-featured-copy">
-            <p className="home-eyebrow">Suggested for you</p>
+            <p className="home-eyebrow">
+              {curated ? "Because you listened" : "Suggested for you"}
+            </p>
             <h2 title={getTrackTitle(featured)}>{getTrackTitle(featured)}</h2>
             <button
               className="home-link"
@@ -395,7 +437,11 @@ export default function HomePage({
         <section className="home-section">
           <div className="home-section-head">
             <h3>Mix for you</h3>
-            <p>Random cuts from your collection</p>
+            <p>
+              {curated
+                ? "Neighbors from songs you finish — plus recent favorites"
+                : "Random cuts from your collection"}
+            </p>
           </div>
           <div className="home-card-row">
             {mixRow.map((track) => (
@@ -406,7 +452,7 @@ export default function HomePage({
                 onClick={() =>
                   onPlayTrack(
                     track.path,
-                    [track, ...suggestions.filter((t) => t.path !== track.path)],
+                    [track, ...playQueue.filter((t) => t.path !== track.path)],
                   )
                 }
               >
@@ -428,7 +474,11 @@ export default function HomePage({
         <section className="home-section">
           <div className="home-section-head">
             <h3>Albums to explore</h3>
-            <p>Jump into a random record</p>
+            <p>
+              {curated
+                ? "Records you’ve spent the most time with"
+                : "Jump into a random record"}
+            </p>
           </div>
           <div className="home-card-row">
             {albumPicks.map((album) => (
@@ -457,7 +507,11 @@ export default function HomePage({
         <section className="home-section home-section-grid">
           <div className="home-section-head">
             <h3>More to dig into</h3>
-            <p>Another handful of random tracks</p>
+            <p>
+              {curated
+                ? "More from your listen graph"
+                : "Another handful of random tracks"}
+            </p>
           </div>
           <div className="home-suggest-grid">
             {moreRow.map((track) => (
@@ -468,7 +522,7 @@ export default function HomePage({
                 onClick={() =>
                   onPlayTrack(
                     track.path,
-                    [track, ...suggestions.filter((t) => t.path !== track.path)],
+                    [track, ...playQueue.filter((t) => t.path !== track.path)],
                   )
                 }
               >

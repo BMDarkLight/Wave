@@ -585,6 +585,74 @@ export const getArtistAlbums = (artist: string): Promise<AlbumSummary[]> => {
   return safeInvoke<AlbumSummary[]>("get_artist_albums", { artist });
 };
 
+// ── Listen stats / recommendations ───────────────────────────────────────────
+
+export interface HomeSuggestions {
+  featured: Track | null;
+  mix: Track[];
+  more: Track[];
+  albums: AlbumSummary[];
+  favorite_track: Track | null;
+  favorite_album: AlbumSummary | null;
+  favorite_artist: ArtistSummary | null;
+  curated: boolean;
+}
+
+export const getRecentlyPlayed = (limit = 100): Promise<Track[]> => {
+  return safeInvoke<Track[]>("get_recently_played", { limit });
+};
+
+export const getMostPlayed = (limit = 100): Promise<Track[]> => {
+  return safeInvoke<Track[]>("get_most_played", { limit });
+};
+
+export const getFavoriteTrack = (): Promise<Track | null> => {
+  return safeInvoke<Track | null>("get_favorite_track");
+};
+
+export const getFavoriteAlbum = (): Promise<AlbumSummary | null> => {
+  return safeInvoke<AlbumSummary | null>("get_favorite_album");
+};
+
+export const getFavoriteArtist = (): Promise<ArtistSummary | null> => {
+  return safeInvoke<ArtistSummary | null>("get_favorite_artist");
+};
+
+export const getHomeSuggestions = (): Promise<HomeSuggestions> => {
+  return safeInvoke<HomeSuggestions>("get_home_suggestions");
+};
+
+export interface ListenRank {
+  name: string;
+  listen_seconds: number;
+  play_count: number;
+}
+
+export interface ListeningStats {
+  total_listen_seconds: number;
+  total_plays: number;
+  tracks_played: number;
+  top_tracks: Track[];
+  top_artists: ListenRank[];
+  top_albums: ListenRank[];
+  top_genres: ListenRank[];
+}
+
+export const getListeningStats = (limit = 5): Promise<ListeningStats> => {
+  return safeInvoke<ListeningStats>("get_listening_stats", { limit });
+};
+
+/** Format listen seconds as a short human string (e.g. `2h 14m`). */
+export const formatListenDuration = (seconds: number): string => {
+  const total = Math.max(0, Math.floor(seconds));
+  if (total < 60) return `${total}s`;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours <= 0) return `${minutes}m`;
+  if (minutes <= 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
+};
+
 // ── Queue manipulation ──────────────────────────────────────────────────────
 
 export const addToQueue = (path: string): Promise<void> => {

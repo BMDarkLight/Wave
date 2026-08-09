@@ -40,6 +40,8 @@ import {
   BiCog,
   BiHomeAlt2,
   BiLibrary,
+  BiHistory,
+  BiBarChartAlt2,
 } from "react-icons/bi";
 import {
   addTrackToPlaylistById,
@@ -131,6 +133,7 @@ import AlbumPage from "./components/AlbumPage";
 import ArtistPage from "./components/ArtistPage";
 import ContextMenu from "./components/ContextMenu";
 import HomePage from "./components/HomePage";
+import PlayedTracksPage from "./components/PlayedTracksPage";
 import MobileNowPlaying, {
   type MobileNowPlayingView,
 } from "./components/MobileNowPlaying";
@@ -412,8 +415,10 @@ function App() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
     null,
   );
-  /** Top-level main pane: Home suggestions vs a selected playlist. */
-  const [mainView, setMainView] = useState<"home" | "playlist">("home");
+  /** Top-level main pane: Home suggestions vs playlist vs listen stats pages. */
+  const [mainView, setMainView] = useState<
+    "home" | "playlist" | "recently_played" | "most_played"
+  >("home");
 
   // Album / artist browse stack (artist → album nests correctly for back)
   type BrowsePage =
@@ -1304,7 +1309,7 @@ function App() {
     if (viewingArtist) {
       return { kind: "artist", name: viewingArtist };
     }
-    if (mainView === "home") {
+    if (mainView === "home" || mainView === "recently_played" || mainView === "most_played") {
       return { kind: "library" };
     }
     return {
@@ -1343,6 +1348,8 @@ function App() {
     !!mainSearchQuery.trim() &&
     !mainSearchFullLibrary &&
     mainView !== "home" &&
+    mainView !== "recently_played" &&
+    mainView !== "most_played" &&
     !mainSearchScopeIsLibrary;
 
   const mainSearchResultsSubtitle = useMemo(() => {
@@ -1883,12 +1890,14 @@ function App() {
       const directory = result.uri;
 
       setIsScanningFolder(true);
-      setFolderScanIsSync(false);
+      setFolderScanIsSync(true);
+      setImportedCount(0);
 
       const paths = await scanDirectoryRecursive(directory);
       if (!paths.length) {
         setError("No audio files found in the selected folder.");
         setIsScanningFolder(false);
+        setFolderScanIsSync(false);
         return;
       }
 
@@ -1900,52 +1909,46 @@ function App() {
       if (!playlistId) {
         setError("No playlist selected.");
         setIsScanningFolder(false);
+        setFolderScanIsSync(false);
         return;
       }
 
       await setPlaylistSyncFolder(playlistId, directory);
       await saveMediaFolder(directory).catch(() => {});
 
-      // Import in batches of 10 to show progress
       beginPlaylistImport(playlistId);
-      const BATCH = 10;
-      let failCount = 0;
-      const sampleErrors: string[] = [];
+      const stopProgress = await listenToSyncProgress((p) => {
+        if (typeof p.processed === "number") setImportedCount(p.processed);
+        else if (typeof p.extracted === "number") setImportedCount(p.extracted);
+        else if (typeof p.added === "number") setImportedCount(p.added);
+      }).catch(() => null);
+
       try {
-        for (let i = 0; i < paths.length; i += BATCH) {
-          const batch = paths.slice(i, i + BATCH);
-          try {
-            const result = await importScannedAudio(batch, playlistId);
-            failCount += result.errors.length;
-            for (const detail of result.errors) {
-              if (sampleErrors.length < 3) sampleErrors.push(detail);
-            }
-          } catch (err) {
-            failCount += batch.length;
-            if (sampleErrors.length < 3) {
-              sampleErrors.push(formatInvokeError(err, "Import batch failed"));
-            }
-          }
-          setImportedCount(Math.min(i + batch.length, paths.length));
+        const syncResult = await syncPlaylistFolder(playlistId, paths);
+        if (syncResult.errors?.length) {
+          setError(
+            `Imported with ${syncResult.errors.length} error(s) — ${syncResult.errors.slice(0, 2).join(" | ")}`,
+          );
+        } else {
+          clearAudioImports().catch(() => {});
         }
       } finally {
+        stopProgress?.();
         endPlaylistImport(playlistId);
         setIsScanningFolder(false);
+        setFolderScanIsSync(false);
       }
-      if (failCount > 0) {
-        const detail =
-          sampleErrors.length > 0 ? ` — ${sampleErrors.join(" | ")}` : "";
-        setError(`Imported with ${failCount} error(s)${detail}`);
-      } else {
-        clearAudioImports().catch(() => {});
-      }
+
       setActivePlaylistId(playlistId);
       setMainView("playlist");
-      await loadPlaylistTracks(playlistId);
+      // Defer the full track list load so the import overlay can clear first.
       await loadPlaylists();
+      await new Promise((r) => setTimeout(r, 0));
+      await loadPlaylistTracks(playlistId);
     } catch (err) {
       endPlaylistImport();
       setIsScanningFolder(false);
+      setFolderScanIsSync(false);
       setError(formatInvokeError(err, "Failed to scan folder"));
     }
   };
@@ -1963,11 +1966,13 @@ function App() {
       const directory = await selectAudioFolder();
       if (!directory) return;
       setIsScanningFolder(true);
-      setFolderScanIsSync(false);
+      setFolderScanIsSync(true);
+      setImportedCount(0);
       const paths = await scanDirectory(directory);
       if (!paths.length) {
         setError("No audio files found in the selected folder.");
         setIsScanningFolder(false);
+        setFolderScanIsSync(false);
         return;
       }
       const list = playlists.length > 0 ? playlists : await loadPlaylists();
@@ -1976,17 +1981,34 @@ function App() {
         getDefaultPlaylistId(list);
       if (!playlistId) {
         setIsScanningFolder(false);
+        setFolderScanIsSync(false);
         return;
       }
       await setPlaylistSyncFolder(playlistId, directory);
       await saveMediaFolder(directory).catch(() => {});
-      setIsScanningFolder(false);
-      await runFolderImport(paths, playlistId);
-      setActivePlaylistId(playlistId);
-      await loadPlaylistTracks(playlistId);
-      await loadPlaylists();
+      beginPlaylistImport(playlistId);
+      const stopProgress = await listenToSyncProgress((p) => {
+        if (typeof p.processed === "number") setImportedCount(p.processed);
+        else if (typeof p.extracted === "number") setImportedCount(p.extracted);
+        else if (typeof p.added === "number") setImportedCount(p.added);
+      }).catch(() => null);
+      try {
+        await syncPlaylistFolder(playlistId, paths);
+        setActivePlaylistId(playlistId);
+        setMainView("playlist");
+        await loadPlaylists();
+        await new Promise((r) => setTimeout(r, 0));
+        await loadPlaylistTracks(playlistId);
+      } finally {
+        stopProgress?.();
+        endPlaylistImport(playlistId);
+        setIsScanningFolder(false);
+        setFolderScanIsSync(false);
+      }
     } catch (err) {
+      endPlaylistImport();
       setIsScanningFolder(false);
+      setFolderScanIsSync(false);
       setError(formatInvokeError(err, "Failed to add media folder"));
     }
   };
@@ -2018,18 +2040,39 @@ function App() {
       await loadPlaylists();
       await loadPlaylistTracks(info.id);
       const paths = await scanDirectory(directory);
+      setIsAddingTracks(false);
       if (!paths.length) {
         setError(`No audio files found in "${folderName}".`);
-        setIsAddingTracks(false);
         return;
       }
-      setIsAddingTracks(false);
-      runFolderImport(paths, info.id).catch(() => {});
+      beginPlaylistImport(info.id);
+      setIsScanningFolder(true);
+      setFolderScanIsSync(true);
+      setImportedCount(0);
+      const stopProgress = await listenToSyncProgress((p) => {
+        if (typeof p.processed === "number") setImportedCount(p.processed);
+        else if (typeof p.extracted === "number") setImportedCount(p.extracted);
+        else if (typeof p.added === "number") setImportedCount(p.added);
+      }).catch(() => null);
+      try {
+        await syncPlaylistFolder(info.id, paths);
+        await loadPlaylists();
+        await new Promise((r) => setTimeout(r, 0));
+        await loadPlaylistTracks(info.id);
+      } finally {
+        stopProgress?.();
+        endPlaylistImport(info.id);
+        setIsScanningFolder(false);
+        setFolderScanIsSync(false);
+      }
     } catch (err) {
       setShowAddTrackMenu(false);
       setAddTrackMenuAnchor(null);
       setError(formatInvokeError(err, "Failed to add folder as playlist"));
       setIsAddingTracks(false);
+      endPlaylistImport();
+      setIsScanningFolder(false);
+      setFolderScanIsSync(false);
     }
   };
 
@@ -2044,17 +2087,27 @@ function App() {
       setError(null);
       setIsScanningFolder(true);
       setFolderScanIsSync(true);
+      setImportedCount(0);
       if (firstTimeFill) beginPlaylistImport(playlistId);
+      const stopProgress = await listenToSyncProgress((p) => {
+        if (typeof p.processed === "number") setImportedCount(p.processed);
+        else if (typeof p.extracted === "number") setImportedCount(p.extracted);
+        else if (typeof p.added === "number") setImportedCount(p.added);
+      }).catch(() => null);
       const folder = target.sync_folder;
       // Android SAF folders need a JS-side recursive scan; desktop Rust walks the path.
       const paths = androidHost
         ? await scanDirectoryRecursive(folder)
         : null;
-      await syncPlaylistFolder(playlistId, paths);
-      if (selectedPlaylistIdRef.current === playlistId) {
-        await loadPlaylistTracks(playlistId);
+      try {
+        await syncPlaylistFolder(playlistId, paths);
+        if (selectedPlaylistIdRef.current === playlistId) {
+          await loadPlaylistTracks(playlistId);
+        }
+        await loadPlaylists();
+      } finally {
+        stopProgress?.();
       }
-      await loadPlaylists();
     } catch (err) {
       setError(formatInvokeError(err, "Failed to sync folder"));
     } finally {
@@ -2066,29 +2119,36 @@ function App() {
 
   const runFolderImport = async (paths: string[], playlistId: string) => {
     beginPlaylistImport(playlistId);
-    let failCount = 0;
+    setIsScanningFolder(true);
+    setFolderScanIsSync(false);
+    setImportedCount(0);
+    const stopProgress = await listenToSyncProgress((p) => {
+      if (typeof p.processed === "number") setImportedCount(p.processed);
+      else if (typeof p.extracted === "number") setImportedCount(p.extracted);
+      else if (typeof p.added === "number") setImportedCount(p.added);
+    }).catch(() => null);
+
     try {
-      for (const [i, path] of paths.entries()) {
-        try {
-          await addTrackToPlaylistById(playlistId, path);
-          setImportedCount(i + 1);
-          if ((i + 1) % 5 === 0) {
-            loadPlaylists().catch(() => {});
-          }
-        } catch {
-          failCount++;
-        }
+      // One bulk IPC: extract outside the DB lock in Rust batches.
+      const result = await importScannedAudio(paths, playlistId);
+      if (result.errors?.length) {
+        setError(
+          `Finished importing folder with ${result.errors.length} failure(s).`,
+        );
       }
-      if (failCount > 0) {
-        setError(`Finished importing folder with ${failCount} failure(s).`);
-      }
-      // Only refresh track list if the user is still viewing that playlist
       if (selectedPlaylistIdRef.current === playlistId) {
+        await loadPlaylists();
+        await new Promise((r) => setTimeout(r, 0));
         await loadPlaylistTracks(playlistId);
+      } else {
+        await loadPlaylists();
       }
-      await loadPlaylists();
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to import folder"));
     } finally {
+      stopProgress?.();
       endPlaylistImport(playlistId);
+      setIsScanningFolder(false);
     }
   };
 
@@ -2552,34 +2612,31 @@ function App() {
             setError(`No audio files found in the selected folder.`);
             return;
           }
-          if (androidHost) {
-            beginPlaylistImport(info.id);
-            setIsScanningFolder(true);
-            setFolderScanIsSync(false);
-            const BATCH = 10;
-            let failCount = 0;
-            try {
-              for (let i = 0; i < paths.length; i += BATCH) {
-                const batch = paths.slice(i, i + BATCH);
-                try {
-                  const result = await importScannedAudio(batch, info.id);
-                  failCount += result.errors.length;
-                } catch {
-                  failCount += batch.length;
-                }
-                setImportedCount(Math.min(i + batch.length, paths.length));
-              }
-            } finally {
-              endPlaylistImport(info.id);
-              setIsScanningFolder(false);
+          beginPlaylistImport(info.id);
+          setIsScanningFolder(true);
+          setFolderScanIsSync(true);
+          setImportedCount(0);
+          const stopProgress = await listenToSyncProgress((p) => {
+            if (typeof p.processed === "number") setImportedCount(p.processed);
+            else if (typeof p.extracted === "number") setImportedCount(p.extracted);
+            else if (typeof p.added === "number") setImportedCount(p.added);
+          }).catch(() => null);
+          try {
+            // Playlist was created with sync_folder — use the batched sync path.
+            const syncResult = await syncPlaylistFolder(info.id, paths);
+            if (syncResult.errors?.length) {
+              setError(
+                `Imported with ${syncResult.errors.length} error(s).`,
+              );
             }
-            if (failCount > 0) {
-              setError(`Imported with ${failCount} error(s).`);
-            }
-            await loadPlaylistTracks(info.id);
             await loadPlaylists();
-          } else {
-            runFolderImport(paths, info.id).catch(() => {});
+            await new Promise((r) => setTimeout(r, 0));
+            await loadPlaylistTracks(info.id);
+          } finally {
+            stopProgress?.();
+            endPlaylistImport(info.id);
+            setIsScanningFolder(false);
+            setFolderScanIsSync(false);
           }
           return;
         }
@@ -2672,6 +2729,22 @@ function App() {
     setMenuTrackPath(null);
     setMobileNavOpen(false);
     setMainView("home");
+  };
+
+  const goRecentlyPlayed = () => {
+    clearBrowse();
+    closeMainSearch();
+    setMenuTrackPath(null);
+    setMobileNavOpen(false);
+    setMainView("recently_played");
+  };
+
+  const goMostPlayed = () => {
+    clearBrowse();
+    closeMainSearch();
+    setMenuTrackPath(null);
+    setMobileNavOpen(false);
+    setMainView("most_played");
   };
 
   // ── Queue operations ───────────────────────────────────────────────────────
@@ -3504,7 +3577,7 @@ function App() {
           ) : null}
         </div>
         <div className="sidebar-pins">
-          <button
+            <button
             className={`sidebar-pin ${!viewingAlbum && !viewingArtist && mainView === "home" ? "active" : ""}`}
             onClick={goHome}
             type="button"
@@ -3547,6 +3620,26 @@ function App() {
               </span>
             </button>
           )}
+          <button
+            className={`sidebar-pin ${!viewingAlbum && !viewingArtist && mainView === "recently_played" ? "active" : ""}`}
+            onClick={goRecentlyPlayed}
+            type="button"
+          >
+            <span className="sidebar-pin-label">Recently Played</span>
+            <span className="sidebar-pin-icon" aria-hidden>
+              <BiHistory />
+            </span>
+          </button>
+          <button
+            className={`sidebar-pin ${!viewingAlbum && !viewingArtist && mainView === "most_played" ? "active" : ""}`}
+            onClick={goMostPlayed}
+            type="button"
+          >
+            <span className="sidebar-pin-label">Most Played</span>
+            <span className="sidebar-pin-icon" aria-hidden>
+              <BiBarChartAlt2 />
+            </span>
+          </button>
         </div>
         <div className="playlist-section">
           <div className="playlist-section-header">
@@ -3753,6 +3846,25 @@ function App() {
           }}
           onOpenLibrary={() => {
             if (libraryPlaylist) handleSelectPlaylist(libraryPlaylist.id);
+          }}
+        />
+      ) : (mainView === "recently_played" || mainView === "most_played") &&
+        !mainSearchQuery.trim() ? (
+        <PlayedTracksPage
+          mode={mainView}
+          playbackState={playbackState}
+          onPlayTrack={(path, tracks) => {
+            const index = Math.max(
+              0,
+              tracks.findIndex((t) => t.path === path),
+            );
+            void playTracks(
+              tracks.map((t) => t.path),
+              index,
+            ).then(() => {
+              updatePlaybackState();
+              loadQueueTracks();
+            });
           }}
         />
       ) : (

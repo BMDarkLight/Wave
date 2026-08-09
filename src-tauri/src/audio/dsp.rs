@@ -105,6 +105,8 @@ impl Default for EqConfig {
 }
 
 impl EqConfig {
+    const TONE_WEIGHT_DECAY: f32 = 0.7;
+
     /// Apply a named preset, returning `true` on success.
     pub fn apply_preset(&mut self, name: &str) -> Option<()> {
         let (_key, _desc, bands) = EQ_PRESETS.iter().find(|(key, _, _)| *key == name)?;
@@ -116,6 +118,28 @@ impl EqConfig {
     /// Iterate available preset names and descriptions.
     pub fn list_presets() -> impl Iterator<Item = (&'static str, &'static str)> {
         EQ_PRESETS.iter().map(|(key, desc, _)| (*key, *desc))
+    }
+
+    /// Bass dial gain (lowest band), matching the mobile tone control.
+    pub fn bass_gain(&self) -> f32 {
+        self.bands[0].clamp(-12.0, 12.0)
+    }
+
+    /// Treble dial gain (highest band), matching the mobile tone control.
+    pub fn treble_gain(&self) -> f32 {
+        self.bands[9].clamp(-12.0, 12.0)
+    }
+
+    /// Rebuild the 10-band curve from bass + treble dials (GUI tone control).
+    pub fn apply_bass_treble(&mut self, bass: f32, treble: f32) {
+        let bass = bass.clamp(-12.0, 12.0);
+        let treble = treble.clamp(-12.0, 12.0);
+        for (i, band) in self.bands.iter_mut().enumerate() {
+            let left = Self::TONE_WEIGHT_DECAY.powi(i as i32);
+            let right = Self::TONE_WEIGHT_DECAY.powi((9 - i) as i32);
+            *band = (bass * left + treble * right).clamp(-12.0, 12.0);
+        }
+        self.enabled = true;
     }
 }
 

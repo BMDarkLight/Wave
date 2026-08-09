@@ -18,7 +18,7 @@ mod inner {
     static TRAY_CLICK_GENERATION: AtomicU64 = AtomicU64::new(0);
     const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(350);
 
-    fn with_player<R>(app: &AppHandle, f: impl FnOnce(&mut AudioPlayer) -> Result<R, String>) {
+    fn with_player<R>(app: &AppHandle, f: impl FnOnce(&mut AudioPlayer) -> Result<R, String>) -> Option<R> {
         let player_state = app.state::<PlayerState>();
         let mut slot = match player_state.0.lock() {
             Ok(g) => g,
@@ -28,9 +28,9 @@ mod inner {
             }
         };
         let Ok(player) = ensure_player(&mut slot) else {
-            return;
+            return None;
         };
-        let _ = f(player);
+        f(player).ok()
     }
 
     pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -156,19 +156,36 @@ mod inner {
             return;
         }
         if id == "tray_prev" {
-            let _ = with_player(app, |p| {
-                p.play_previous().map(|_| ()).map_err(|e| e.to_string())
-            });
+            if let Some(path) = with_player(app, |p| {
+                p.play_previous().map_err(|e| e.to_string())
+            })
+            .flatten()
+            {
+                crate::commands::listen_switch_track(
+                    app,
+                    &path,
+                    crate::listen::ListenEndReason::Skipped,
+                );
+            }
             return;
         }
         if id == "tray_next" {
-            let _ = with_player(app, |p| {
-                p.play_next().map(|_| ()).map_err(|e| e.to_string())
-            });
+            if let Some(path) = with_player(app, |p| {
+                p.play_next().map_err(|e| e.to_string())
+            })
+            .flatten()
+            {
+                crate::commands::listen_switch_track(
+                    app,
+                    &path,
+                    crate::listen::ListenEndReason::Skipped,
+                );
+            }
             return;
         }
         if id == "tray_stop" {
             let _ = with_player(app, |p| p.stop().map_err(|e| e.to_string()));
+            crate::commands::listen_flush_partial(app);
             return;
         }
         if id == "tray_show" {
@@ -283,6 +300,11 @@ mod inner {
             player.queue.jump(0);
             player.play(&first_path).map_err(|e| e.to_string())
         });
+        crate::commands::listen_switch_track(
+            app,
+            &first_path,
+            crate::listen::ListenEndReason::Partial,
+        );
     }
 
     fn play_playlist(app: &AppHandle, playlist_id: &str) {
@@ -306,6 +328,11 @@ mod inner {
             player.queue.jump(0);
             player.play(&first_path).map_err(|e| e.to_string())
         });
+        crate::commands::listen_switch_track(
+            app,
+            &first_path,
+            crate::listen::ListenEndReason::Partial,
+        );
     }
 }
 

@@ -116,7 +116,13 @@ pub fn is_supported_audio_file(path: &Path) -> bool {
 /// Extract tags + embedded cover thumb. Online Cover Art Archive lookup is
 /// skipped here so sync stays fast — call [`enrich_cover_art_online`] later.
 pub fn extract_track(app: Option<&tauri::AppHandle>, path: &str) -> Result<Track, String> {
-    extract_track_with_options(app, path, false)
+    extract_track_with_options(app, path, false, true)
+}
+
+/// Bulk import variant: skips full-file SHA-256 (very expensive on large
+/// libraries) so folder indexing stays responsive. Dedup still uses path.
+pub fn extract_track_for_bulk(app: Option<&tauri::AppHandle>, path: &str) -> Result<Track, String> {
+    extract_track_with_options(app, path, false, false)
 }
 
 /// Like [`extract_track`], optionally running online cover enrichment inline.
@@ -124,6 +130,7 @@ pub fn extract_track_with_options(
     app: Option<&tauri::AppHandle>,
     path: &str,
     online_cover: bool,
+    compute_fingerprint: bool,
 ) -> Result<Track, String> {
     if path.starts_with("content://") {
         return extract_track_content_uri(app, path, online_cover);
@@ -143,7 +150,11 @@ pub fn extract_track_with_options(
     let modified_at = timestamp(metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
     let indexed_at = timestamp(SystemTime::now());
 
-    let fingerprint_sha256 = hash_file_sha256(&path_buf).ok();
+    let fingerprint_sha256 = if compute_fingerprint {
+        hash_file_sha256(&path_buf).ok()
+    } else {
+        None
+    };
 
     let file = File::open(&path_buf).map_err(|error| format!("Failed to open audio file: {error}"))?;
     let source = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());

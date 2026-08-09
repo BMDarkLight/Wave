@@ -5,7 +5,9 @@ use clap::{CommandFactory, Parser, Subcommand};
 use crate::audio::player::AudioPlayer;
 use crate::library::Library;
 use crate::metadata::{extract_track, Track};
-use crate::playback_daemon::{daemon_request, daemon_request_if_running, DaemonRequest, PlaybackStatus};
+use crate::playback_daemon::{
+    daemon_request, daemon_request_if_running, DaemonRequest, DspStatus, PlaybackStatus,
+};
 
 // ── Top-level CLI ────────────────────────────────────────────────────────────
 
@@ -47,9 +49,12 @@ pub enum Commands {
     /// Inspect and manipulate track metadata
     #[command(subcommand)]
     Metadata(MetadataCmd),
-    /// DSP / equalizer controls
+    /// DSP / equalizer, gapless, and crossfade controls
     #[command(subcommand)]
     Dsp(DspCmd),
+    /// Listening stats (play time, top tracks / artists / albums / genres)
+    #[command(subcommand, visible_alias = "listen")]
+    Stats(StatsCmd),
 }
 
 // ── Subcommand structs ───────────────────────────────────────────────────────
@@ -270,12 +275,13 @@ pub enum FavoriteCmd {
 
 #[derive(clap::Subcommand)]
 pub enum DspCmd {
-    /// Show current EQ settings (band gains and enabled state)
+    /// Show current EQ, gapless, and crossfade settings
     EqShow,
     /// Set EQ band gains (10 values in dB, one per ISO band)
     EqSet {
         /// 10 gain values in dB for bands 31, 62, 125, 250, 500,
         /// 1000, 2000, 4000, 8000, 16000 Hz
+        #[arg(allow_hyphen_values = true)]
         bands: Vec<f32>,
     },
     /// Enable the equalizer
@@ -304,6 +310,68 @@ pub enum DspCmd {
     Import {
         /// Input file path (e.g. my-eq.json)
         input: String,
+    },
+    /// Show or set gapless playback (seamless queue transitions)
+    Gapless {
+        /// `on` / `off`, or omit to show the current value
+        state: Option<String>,
+    },
+    /// Show or set crossfade duration in seconds (0 = off, max 8)
+    Crossfade {
+        /// Duration in seconds, or omit to show the current value
+        seconds: Option<f32>,
+    },
+    /// Show or set the bass dial (−12…+12 dB); rebuilds the 10-band curve
+    Bass {
+        /// Gain in dB, or omit to show the current bass dial
+        #[arg(allow_hyphen_values = true)]
+        db: Option<f32>,
+    },
+    /// Show or set the treble dial (−12…+12 dB); rebuilds the 10-band curve
+    Treble {
+        /// Gain in dB, or omit to show the current treble dial
+        #[arg(allow_hyphen_values = true)]
+        db: Option<f32>,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum StatsCmd {
+    /// Overview: totals plus top tracks, artists, albums, and genres
+    Summary {
+        /// How many entries per top list (1–20, default 5)
+        #[arg(short, long, default_value_t = 5)]
+        limit: u32,
+    },
+    /// Recently played tracks
+    Recent {
+        /// Max tracks to show (default 25)
+        #[arg(short, long, default_value_t = 25)]
+        limit: u32,
+    },
+    /// Most played tracks by listen time
+    Most {
+        /// Max tracks to show (default 25)
+        #[arg(short, long, default_value_t = 25)]
+        limit: u32,
+    },
+    /// Top artists by listen time
+    Artists {
+        /// Max artists to show (default 10)
+        #[arg(short, long, default_value_t = 10)]
+        limit: u32,
+    },
+    /// Top albums by listen time
+    Albums {
+        /// Max albums to show (default 10)
+        #[arg(short, long, default_value_t = 10)]
+        limit: u32,
+    },
+    /// Top genres by listen time
+    Genres {
+        /// Max genres to show (default 10)
+        #[arg(short, long, default_value_t = 10)]
+        limit: u32,
     },
 }
 
@@ -428,6 +496,8 @@ pub fn is_daemon_ipc_client(args: &[String]) -> bool {
         Some(Commands::Playback(_)) => true,
         Some(Commands::Queue(_)) => true,
         Some(Commands::Devices(DevicesCmd::Volume { .. } | DevicesCmd::Switch { .. })) => true,
+        // Live DSP when the CLI playback daemon owns the audio engine.
+        Some(Commands::Dsp(ref cmd)) => !matches!(cmd, DspCmd::Presets),
         _ => false,
     }
 }
@@ -467,6 +537,7 @@ pub fn run() {
         Some(Commands::Favorite(cmd)) => run_favorite(cmd),
         Some(Commands::Metadata(cmd)) => run_metadata(cmd),
         Some(Commands::Dsp(cmd)) => run_dsp(cmd),
+        Some(Commands::Stats(cmd)) => run_stats(cmd),
         None => {
             // No subcommand — shouldn't reach here since main.rs checks args > 1.
         }
@@ -1406,120 +1477,57 @@ fn run_dsp(cmd: DspCmd) {
     use crate::audio::dsp::EqConfig;
 
     match cmd {
-        DspCmd::EqShow => {
-            let player = AudioPlayer::new().unwrap_or_else(|e| {
-                eprintln!("Failed to initialize audio player: {e}");
-                std::process::exit(1);
-            });
-            let eq = player.eq_settings();
-            println!("Equalizer: {}", if eq.enabled { "ON" } else { "OFF" });
-            println!();
-            println!("  Band   Frequency      Gain (dB)");
-            println!("  ----   ---------      ---------");
-            for (i, (freq, gain)) in
-                crate::audio::dsp::EQ_BANDS_HZ.iter().zip(eq.bands.iter()).enumerate()
-            {
-                let bar = if eq.enabled {
-                    let steps = (*gain as i32).clamp(-12, 12);
-                    let ch = if steps >= 0 { '+' } else { '-' };
-                    let bar_str: String = (0..steps.unsigned_abs()).map(|_| ch).collect();
-                    format!(" {:>12}", bar_str)
-                } else {
-                    String::new()
-                };
-                println!(
-                    "  {i:>4}   {:>9} Hz    {:>+6.1} dB{}",
-                    freq, gain, bar
-                );
-            }
-            println!();
-            if eq.enabled {
-                print!("  Curve: ");
-                for gain in &eq.bands {
-                    let c = if *gain > 1.0 {
-                        '▁'
-                    } else if *gain > 0.0 {
-                        '▂'
-                    } else if *gain == 0.0 {
-                        '▄'
-                    } else if *gain > -1.0 {
-                        '▆'
-                    } else {
-                        '█'
-                    };
-                    print!("{c} ");
-                }
-                println!();
-            }
-        }
-        DspCmd::EqSet { bands } => {
-            if bands.len() != 10 {
-                eprintln!("Error: expected exactly 10 EQ band values, got {}", bands.len());
-                std::process::exit(1);
-            }
-            let mut arr = [0.0f32; 10];
-            arr.copy_from_slice(&bands);
-            let mut player = AudioPlayer::new().unwrap_or_else(|e| {
-                eprintln!("Failed to initialize audio player: {e}");
-                std::process::exit(1);
-            });
-            player.set_eq_bands(arr);
-            player.set_eq_enabled(true);
-            println!("EQ bands set and enabled.");
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-        DspCmd::EqEnable => {
-            let mut player = AudioPlayer::new().unwrap_or_else(|e| {
-                eprintln!("Failed to initialize audio player: {e}");
-                std::process::exit(1);
-            });
-            player.set_eq_enabled(true);
-            println!("Equalizer enabled.");
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-        DspCmd::EqDisable => {
-            let mut player = AudioPlayer::new().unwrap_or_else(|e| {
-                eprintln!("Failed to initialize audio player: {e}");
-                std::process::exit(1);
-            });
-            player.set_eq_enabled(false);
-            println!("Equalizer disabled.");
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-        DspCmd::EqReset => {
-            let mut player = AudioPlayer::new().unwrap_or_else(|e| {
-                eprintln!("Failed to initialize audio player: {e}");
-                std::process::exit(1);
-            });
-            player.set_eq_bands([0.0; 10]);
-            player.set_eq_enabled(true);
-            println!("Equalizer reset to flat and enabled.");
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-        DspCmd::Preset { name } => {
-            let mut player = AudioPlayer::new().unwrap_or_else(|e| {
-                eprintln!("Failed to initialize audio player: {e}");
-                std::process::exit(1);
-            });
-            player.apply_eq_preset(&name).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
-            println!("Applied EQ preset: {name}");
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
         DspCmd::Presets => {
             println!("Available EQ presets:");
             for (name, desc) in EqConfig::list_presets() {
                 println!("  {name:16}  {desc}");
             }
         }
-        DspCmd::Export { output, name } => {
-            let player = AudioPlayer::new().unwrap_or_else(|e| {
-                eprintln!("Failed to initialize audio player: {e}");
+        DspCmd::EqShow => {
+            let dsp = load_dsp_status();
+            print_dsp_status(&dsp);
+        }
+        DspCmd::EqSet { bands } => {
+            if bands.len() != 10 {
+                eprintln!(
+                    "Error: expected exactly 10 EQ band values, got {}",
+                    bands.len()
+                );
                 std::process::exit(1);
-            });
-            let eq = player.eq_settings();
+            }
+            let mut arr = [0.0f32; 10];
+            arr.copy_from_slice(&bands);
+            let dsp = apply_dsp_request(DaemonRequest::SetEqBands { bands: arr });
+            println!("{}", dsp_message_or("EQ bands set and enabled."));
+            print_dsp_status(&dsp);
+        }
+        DspCmd::EqEnable => {
+            let dsp = apply_dsp_request(DaemonRequest::SetEqEnabled { enabled: true });
+            println!("{}", dsp_message_or("Equalizer enabled."));
+            print_dsp_status(&dsp);
+        }
+        DspCmd::EqDisable => {
+            let dsp = apply_dsp_request(DaemonRequest::SetEqEnabled { enabled: false });
+            println!("{}", dsp_message_or("Equalizer disabled."));
+            print_dsp_status(&dsp);
+        }
+        DspCmd::EqReset => {
+            let dsp = apply_dsp_request(DaemonRequest::ResetEq);
+            println!("{}", dsp_message_or("Equalizer reset to flat and enabled."));
+            print_dsp_status(&dsp);
+        }
+        DspCmd::Preset { name } => {
+            let dsp = apply_dsp_request(DaemonRequest::ApplyEqPreset { name: name.clone() });
+            println!("Applied EQ preset: {name}");
+            print_dsp_status(&dsp);
+        }
+        DspCmd::Export { output, name } => {
+            let dsp = load_dsp_status();
+            let eq = EqConfig {
+                bands: dsp.bands,
+                enabled: dsp.eq_enabled,
+                crossfade_duration: dsp.crossfade_duration,
+            };
             crate::audio::dsp::EqPresetFile::save_to(&output, &eq, name).unwrap_or_else(|e| {
                 eprintln!("Failed to export EQ: {e}");
                 std::process::exit(1);
@@ -1531,16 +1539,402 @@ fn run_dsp(cmd: DspCmd) {
                 eprintln!("Failed to import EQ: {e}");
                 std::process::exit(1);
             });
-            let mut player = AudioPlayer::new().unwrap_or_else(|e| {
-                eprintln!("Failed to initialize audio player: {e}");
-                std::process::exit(1);
-            });
-            player.set_eq_bands(eq.bands);
-            player.set_eq_enabled(eq.enabled);
+            let mut dsp = apply_dsp_request(DaemonRequest::SetEqBands { bands: eq.bands });
+            if !eq.enabled {
+                dsp = apply_dsp_request(DaemonRequest::SetEqEnabled { enabled: false });
+            }
+            // Match GUI: only apply crossfade from the file when it is explicitly > 0.
+            if eq.crossfade_duration > 0.0 {
+                dsp = apply_dsp_request(DaemonRequest::SetCrossfade {
+                    seconds: eq.crossfade_duration,
+                });
+            }
             println!("EQ settings imported from {input} and applied.");
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            print_dsp_status(&dsp);
+        }
+        DspCmd::Gapless { state } => match state {
+            None => {
+                let dsp = load_dsp_status();
+                println!(
+                    "Gapless playback: {}",
+                    if dsp.gapless_enabled { "ON" } else { "OFF" }
+                );
+            }
+            Some(raw) => {
+                let enabled = parse_on_off(&raw, "gapless");
+                let dsp = apply_dsp_request(DaemonRequest::SetGapless { enabled });
+                println!(
+                    "Gapless playback: {}",
+                    if dsp.gapless_enabled { "ON" } else { "OFF" }
+                );
+            }
+        },
+        DspCmd::Crossfade { seconds } => match seconds {
+            None => {
+                let dsp = load_dsp_status();
+                if dsp.crossfade_duration <= 0.0 {
+                    println!("Crossfade: OFF");
+                } else {
+                    println!("Crossfade: {:.1}s", dsp.crossfade_duration);
+                }
+            }
+            Some(secs) => {
+                if !secs.is_finite() || !(0.0..=8.0).contains(&secs) {
+                    eprintln!("Error: crossfade must be between 0 and 8 seconds");
+                    std::process::exit(1);
+                }
+                let dsp = apply_dsp_request(DaemonRequest::SetCrossfade { seconds: secs });
+                if dsp.crossfade_duration <= 0.0 {
+                    println!("Crossfade: OFF");
+                } else {
+                    println!("Crossfade: {:.1}s", dsp.crossfade_duration);
+                }
+            }
+        },
+        DspCmd::Bass { db } => match db {
+            None => {
+                let dsp = load_dsp_status();
+                println!("Bass: {:+.1} dB", dsp.bass);
+            }
+            Some(value) => {
+                if !value.is_finite() || !(-12.0..=12.0).contains(&value) {
+                    eprintln!("Error: bass must be between -12 and +12 dB");
+                    std::process::exit(1);
+                }
+                let dsp = apply_dsp_request(DaemonRequest::SetBass { db: value });
+                println!("Bass: {:+.1} dB  (treble {:+.1} dB)", dsp.bass, dsp.treble);
+                print_eq_bands_brief(&dsp);
+            }
+        },
+        DspCmd::Treble { db } => match db {
+            None => {
+                let dsp = load_dsp_status();
+                println!("Treble: {:+.1} dB", dsp.treble);
+            }
+            Some(value) => {
+                if !value.is_finite() || !(-12.0..=12.0).contains(&value) {
+                    eprintln!("Error: treble must be between -12 and +12 dB");
+                    std::process::exit(1);
+                }
+                let dsp = apply_dsp_request(DaemonRequest::SetTreble { db: value });
+                println!("Treble: {:+.1} dB  (bass {:+.1} dB)", dsp.treble, dsp.bass);
+                print_eq_bands_brief(&dsp);
+            }
+        },
+    }
+}
+
+thread_local! {
+    static LAST_DSP_MESSAGE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+fn dsp_message_or(fallback: &str) -> String {
+    LAST_DSP_MESSAGE.with(|cell| {
+        cell.borrow_mut()
+            .take()
+            .unwrap_or_else(|| fallback.to_string())
+    })
+}
+
+fn load_dsp_status() -> DspStatus {
+    match daemon_request_if_running(DaemonRequest::DspStatus) {
+        Ok(Some(resp)) if resp.ok => {
+            if let Some(dsp) = resp.dsp {
+                return dsp;
+            }
+        }
+        Ok(Some(resp)) => {
+            if let Some(err) = resp.error {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        _ => {}
+    }
+
+    let settings = crate::app_settings::AppSettings::load_from_disk();
+    DspStatus {
+        eq_enabled: settings.equalizer.enabled,
+        bands: settings.equalizer.bands,
+        crossfade_duration: settings.equalizer.crossfade_duration,
+        gapless_enabled: settings.gapless_enabled,
+        bass: settings.equalizer.bass_gain(),
+        treble: settings.equalizer.treble_gain(),
+    }
+}
+
+fn apply_dsp_request(request: DaemonRequest) -> DspStatus {
+    match daemon_request_if_running(request.clone()) {
+        Ok(Some(resp)) => {
+            if !resp.ok {
+                eprintln!("{}", resp.error.unwrap_or_else(|| "DSP request failed".into()));
+                std::process::exit(1);
+            }
+            LAST_DSP_MESSAGE.with(|cell| {
+                *cell.borrow_mut() = resp.message.clone();
+            });
+            if let Some(dsp) = resp.dsp {
+                return dsp;
+            }
+            return load_dsp_status();
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        Ok(None) => {}
+    }
+
+    // No daemon: mutate persisted settings so the next GUI/daemon launch picks them up.
+    let mut settings = crate::app_settings::AppSettings::load_from_disk();
+    match request {
+        DaemonRequest::SetEqBands { bands } => {
+            settings.equalizer.bands = bands;
+            settings.equalizer.enabled = true;
+        }
+        DaemonRequest::SetEqEnabled { enabled } => {
+            settings.equalizer.enabled = enabled;
+        }
+        DaemonRequest::ResetEq => {
+            settings.equalizer.bands = [0.0; 10];
+            settings.equalizer.enabled = true;
+        }
+        DaemonRequest::ApplyEqPreset { name } => {
+            if settings.equalizer.apply_preset(&name).is_none() {
+                let names: Vec<&str> = crate::audio::dsp::EqConfig::list_presets()
+                    .map(|(n, _)| n)
+                    .collect();
+                eprintln!(
+                    "Unknown EQ preset \"{name}\". Available: {}",
+                    names.join(", ")
+                );
+                std::process::exit(1);
+            }
+        }
+        DaemonRequest::SetCrossfade { seconds } => {
+            settings.equalizer.crossfade_duration = seconds.clamp(0.0, 8.0);
+        }
+        DaemonRequest::SetGapless { enabled } => {
+            settings.gapless_enabled = enabled;
+        }
+        DaemonRequest::SetBass { db } => {
+            let treble = settings.equalizer.treble_gain();
+            settings.equalizer.apply_bass_treble(db, treble);
+        }
+        DaemonRequest::SetTreble { db } => {
+            let bass = settings.equalizer.bass_gain();
+            settings.equalizer.apply_bass_treble(bass, db);
+        }
+        _ => {}
+    }
+    settings.save_to_disk().unwrap_or_else(|e| {
+        eprintln!("Failed to save settings: {e}");
+        std::process::exit(1);
+    });
+
+    DspStatus {
+        eq_enabled: settings.equalizer.enabled,
+        bands: settings.equalizer.bands,
+        crossfade_duration: settings.equalizer.crossfade_duration,
+        gapless_enabled: settings.gapless_enabled,
+        bass: settings.equalizer.bass_gain(),
+        treble: settings.equalizer.treble_gain(),
+    }
+}
+
+fn parse_on_off(raw: &str, label: &str) -> bool {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "1" | "enable" | "enabled" => true,
+        "off" | "false" | "0" | "disable" | "disabled" => false,
+        _ => {
+            eprintln!("Error: {label} expects on/off, got \"{raw}\"");
+            std::process::exit(1);
         }
     }
+}
+
+fn print_dsp_status(dsp: &DspStatus) {
+    println!(
+        "Equalizer: {}",
+        if dsp.eq_enabled { "ON" } else { "OFF" }
+    );
+    println!(
+        "Gapless:   {}",
+        if dsp.gapless_enabled { "ON" } else { "OFF" }
+    );
+    if dsp.crossfade_duration <= 0.0 {
+        println!("Crossfade: OFF");
+    } else {
+        println!("Crossfade: {:.1}s", dsp.crossfade_duration);
+    }
+    println!("Bass:      {:+.1} dB", dsp.bass);
+    println!("Treble:    {:+.1} dB", dsp.treble);
+    println!();
+    println!("  Band   Frequency      Gain (dB)");
+    println!("  ----   ---------      ---------");
+    for (i, (freq, gain)) in crate::audio::dsp::EQ_BANDS_HZ
+        .iter()
+        .zip(dsp.bands.iter())
+        .enumerate()
+    {
+        let bar = if dsp.eq_enabled {
+            let steps = (*gain as i32).clamp(-12, 12);
+            let ch = if steps >= 0 { '+' } else { '-' };
+            let bar_str: String = (0..steps.unsigned_abs()).map(|_| ch).collect();
+            format!(" {:>12}", bar_str)
+        } else {
+            String::new()
+        };
+        println!("  {i:>4}   {:>9} Hz    {:>+6.1} dB{bar}", freq, gain);
+    }
+}
+
+fn print_eq_bands_brief(dsp: &DspStatus) {
+    print!("Bands: ");
+    for (i, gain) in dsp.bands.iter().enumerate() {
+        if i > 0 {
+            print!(", ");
+        }
+        print!("{gain:+.1}");
+    }
+    println!();
+}
+
+// ── Listening stats ─────────────────────────────────────────────────────────
+
+fn run_stats(cmd: StatsCmd) {
+    let library = open_library();
+    match cmd {
+        StatsCmd::Summary { limit } => {
+            let stats = library
+                .get_listening_stats(limit)
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to load listening stats: {e}");
+                    std::process::exit(1);
+                });
+            println!("Listening overview");
+            println!(
+                "  Total listen time: {}",
+                format_listen_duration(stats.total_listen_seconds)
+            );
+            println!("  Total plays:       {}", stats.total_plays);
+            println!("  Tracks played:     {}", stats.tracks_played);
+            println!();
+            print_track_rank_list("Top tracks", &stats.top_tracks);
+            print_named_rank_list("Top artists", &stats.top_artists);
+            print_named_rank_list("Top albums", &stats.top_albums);
+            print_named_rank_list("Top genres", &stats.top_genres);
+        }
+        StatsCmd::Recent { limit } => {
+            let tracks = library.get_recently_played(limit).unwrap_or_else(|e| {
+                eprintln!("Failed to load recently played: {e}");
+                std::process::exit(1);
+            });
+            if tracks.is_empty() {
+                println!("No recently played tracks yet.");
+                return;
+            }
+            print_track_rank_list("Recently played", &tracks);
+        }
+        StatsCmd::Most { limit } => {
+            let tracks = library.get_most_played(limit).unwrap_or_else(|e| {
+                eprintln!("Failed to load most played: {e}");
+                std::process::exit(1);
+            });
+            if tracks.is_empty() {
+                println!("No listen history yet.");
+                return;
+            }
+            print_track_rank_list("Most played", &tracks);
+        }
+        StatsCmd::Artists { limit } => {
+            let stats = library.get_listening_stats(limit).unwrap_or_else(|e| {
+                eprintln!("Failed to load listening stats: {e}");
+                std::process::exit(1);
+            });
+            if stats.top_artists.is_empty() {
+                println!("No artist listen history yet.");
+                return;
+            }
+            print_named_rank_list("Top artists", &stats.top_artists);
+        }
+        StatsCmd::Albums { limit } => {
+            let stats = library.get_listening_stats(limit).unwrap_or_else(|e| {
+                eprintln!("Failed to load listening stats: {e}");
+                std::process::exit(1);
+            });
+            if stats.top_albums.is_empty() {
+                println!("No album listen history yet.");
+                return;
+            }
+            print_named_rank_list("Top albums", &stats.top_albums);
+        }
+        StatsCmd::Genres { limit } => {
+            let stats = library.get_listening_stats(limit).unwrap_or_else(|e| {
+                eprintln!("Failed to load listening stats: {e}");
+                std::process::exit(1);
+            });
+            if stats.top_genres.is_empty() {
+                println!("No genre listen history yet.");
+                return;
+            }
+            print_named_rank_list("Top genres", &stats.top_genres);
+        }
+    }
+}
+
+fn format_listen_duration(secs: f64) -> String {
+    let total = secs.max(0.0).round() as u64;
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let seconds = total % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+fn print_track_rank_list(title: &str, tracks: &[Track]) {
+    println!("{title}");
+    if tracks.is_empty() {
+        println!("  (none)");
+        return;
+    }
+    for (i, track) in tracks.iter().enumerate() {
+        println!(
+            "  {:>2}. {} — {}  [{}]",
+            i + 1,
+            truncate(&track.artist, 28),
+            truncate(&track.title, 40),
+            format_duration(track.duration_seconds.unwrap_or(0.0) as u64)
+        );
+    }
+    println!();
+}
+
+fn print_named_rank_list(title: &str, rows: &[crate::dto::ListenRankDto]) {
+    println!("{title}");
+    if rows.is_empty() {
+        println!("  (none)");
+        return;
+    }
+    for (i, row) in rows.iter().enumerate() {
+        println!(
+            "  {:>2}. {:<32}  {}  ({} plays)",
+            i + 1,
+            truncate(&row.name, 32),
+            format_listen_duration(row.listen_seconds),
+            row.play_count
+        );
+    }
+    println!();
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

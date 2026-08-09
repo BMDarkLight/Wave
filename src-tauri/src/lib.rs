@@ -7,6 +7,7 @@ mod dto;
 mod error;
 mod integrations;
 mod library;
+mod listen;
 mod metadata;
 mod path_validation;
 pub mod playback_daemon;
@@ -20,8 +21,9 @@ pub use integrations::gui_tray;
 pub use integrations::media_controls;
 
 use app_settings::AppSettingsState;
-use commands::{LibraryState, MediaBridgeState, PlayerState};
+use commands::{LibraryState, ListenState, MediaBridgeState, PlayerState};
 use dto::CloseAction;
+use listen::ListenTracker;
 use tauri::{Manager, WindowEvent};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -77,6 +79,7 @@ pub fn run() {
             app.manage(PlayerState(std::sync::Mutex::new(Some(player))));
 
             app.manage(AppSettingsState(std::sync::Mutex::new(settings)));
+            app.manage(ListenState(std::sync::Mutex::new(ListenTracker::new())));
 
             let library = library::Library::new(app.handle())?;
             app.manage(LibraryState(std::sync::Mutex::new(library)));
@@ -151,6 +154,7 @@ pub fn run() {
                     {
                         android::media_bridge::drain_actions(&tick_app);
                     }
+                    commands::tick_listen_progress(&tick_app);
                     commands::tick_auto_advance(&tick_app);
                     commands::persist_playback_state_throttled(&tick_app);
                 }
@@ -163,6 +167,7 @@ pub fn run() {
                 let app = window.app_handle();
 
                 // Persist playback state before closing.
+                commands::listen_flush_partial(app);
                 commands::persist_playback_state(app);
 
                 let action = app
@@ -271,6 +276,13 @@ pub fn run() {
             commands::scan_saf_folder,
             commands::clear_audio_imports,
             commands::reset_app,
+            commands::get_recently_played,
+            commands::get_most_played,
+            commands::get_favorite_track,
+            commands::get_favorite_album,
+            commands::get_favorite_artist,
+            commands::get_listening_stats,
+            commands::get_home_suggestions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -99,3 +99,37 @@ pub struct EqSettingsDto {
     /// Whether the EQ is currently applied.
     pub enabled: bool,
 }
+
+/// Curated Home page payload built from listen stats + transitions.
+#[derive(Debug, Clone, Serialize)]
+pub struct HomeSuggestionsDto {
+    pub featured: Option<Track>,
+    pub mix: Vec<Track>,
+    pub more: Vec<Track>,
+    pub albums: Vec<AlbumSummaryDto>,
+    pub favorite_track: Option<Track>,
+    pub favorite_album: Option<AlbumSummaryDto>,
+    pub favorite_artist: Option<ArtistSummaryDto>,
+    /// True when listen history influenced the picks.
+    pub curated: bool,
+}
+
+/// One named listen rollup (artist / album / genre).
+#[derive(Debug, Clone, Serialize)]
+pub struct ListenRankDto {
+    pub name: String,
+    pub listen_seconds: f64,
+    pub play_count: i64,
+}
+
+/// Compact listening overview for Settings.
+#[derive(Debug, Clone, Serialize)]
+pub struct ListeningStatsDto {
+    pub total_listen_seconds: f64,
+    pub total_plays: i64,
+    pub tracks_played: i64,
+    pub top_tracks: Vec<Track>,
+    pub top_artists: Vec<ListenRankDto>,
+    pub top_albums: Vec<ListenRankDto>,
+    pub top_genres: Vec<ListenRankDto>,
+}

@@ -1,4 +1,7 @@
-use crate::dto::{AlbumSummaryDto, ArtistSummaryDto, SearchHitDto};
+use crate::dto::{
+    AlbumSummaryDto, ArtistSummaryDto, HomeSuggestionsDto, ListenRankDto, ListeningStatsDto,
+    SearchHitDto,
+};
 use crate::metadata::{extract_track, is_supported_audio_file, Track};
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -231,6 +234,33 @@ impl Library {
                     byte_size INTEGER NOT NULL DEFAULT 0,
                     created_at INTEGER NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS listen_stats (
+                    track_id TEXT PRIMARY KEY,
+                    play_count INTEGER NOT NULL DEFAULT 0,
+                    skip_count INTEGER NOT NULL DEFAULT 0,
+                    listen_seconds REAL NOT NULL DEFAULT 0,
+                    last_played_at INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS track_transitions (
+                    from_track_id TEXT NOT NULL,
+                    to_track_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    last_at INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(from_track_id, to_track_id, kind),
+                    FOREIGN KEY(from_track_id) REFERENCES tracks(id) ON DELETE CASCADE,
+                    FOREIGN KEY(to_track_id) REFERENCES tracks(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_listen_stats_last_played
+                    ON listen_stats(last_played_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_listen_stats_play_count
+                    ON listen_stats(play_count DESC, listen_seconds DESC);
+                CREATE INDEX IF NOT EXISTS idx_track_transitions_from
+                    ON track_transitions(from_track_id, kind, count DESC);
                 ",
             )
             .map_err(|error| format!("Failed to initialize library database: {error}"))?;
@@ -1162,6 +1192,8 @@ impl Library {
         tx.execute("DELETE FROM playlist_tracks", [])
             .map_err(|e| format!("Failed to clear playlist membership: {e}"))?;
         let _ = tx.execute("DELETE FROM tracks_fts", []);
+        let _ = tx.execute("DELETE FROM track_transitions", []);
+        let _ = tx.execute("DELETE FROM listen_stats", []);
         tx.execute("DELETE FROM tracks", [])
             .map_err(|e| format!("Failed to clear tracks: {e}"))?;
         // Drop cached album art rows; files on disk are cleaned by reset_app.
@@ -2134,6 +2166,515 @@ impl Library {
         }
         Ok((playlist_id, tracks))
     }
+
+    // ── Listen stats / recommendations ────────────────────────────────────────
+
+    /// Persist a finished listen session for a track path.
+    pub fn record_listen(
+        &self,
+        path: &str,
+        seconds: f64,
+        completed: bool,
+        skipped: bool,
+        from_path: Option<&str>,
+    ) -> Result<(), String> {
+        if seconds < 1.0 && !completed && !skipped {
+            return Ok(());
+        }
+        let connection = self.write_connection();
+        let track_id = match resolve_track_id_by_path(&connection, path)? {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        let now = now_timestamp();
+        let play_inc: i64 = if completed { 1 } else { 0 };
+        let skip_inc: i64 = if skipped { 1 } else { 0 };
+        let secs = seconds.max(0.0);
+
+        connection
+            .execute(
+                "INSERT INTO listen_stats (track_id, play_count, skip_count, listen_seconds, last_played_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(track_id) DO UPDATE SET
+                   play_count = play_count + excluded.play_count,
+                   skip_count = skip_count + excluded.skip_count,
+                   listen_seconds = listen_seconds + excluded.listen_seconds,
+                   last_played_at = excluded.last_played_at",
+                params![track_id, play_inc, skip_inc, secs, now],
+            )
+            .map_err(|e| format!("Failed to update listen stats: {e}"))?;
+
+        // Transitions are recorded when the *next* track starts (see touch), or
+        // here when closing a session that knows its predecessor.
+        if let Some(from) = from_path.filter(|p| !p.is_empty() && *p != path) {
+            if let Some(from_id) = resolve_track_id_by_path(&connection, from)? {
+                if from_id != track_id {
+                    let kind = if skipped { "skip" } else { "complete" };
+                    connection
+                        .execute(
+                            "INSERT INTO track_transitions (from_track_id, to_track_id, kind, count, last_at)
+                             VALUES (?1, ?2, ?3, 1, ?4)
+                             ON CONFLICT(from_track_id, to_track_id, kind) DO UPDATE SET
+                               count = count + 1,
+                               last_at = excluded.last_at",
+                            params![from_id, track_id, kind, now],
+                        )
+                        .map_err(|e| format!("Failed to update track transition: {e}"))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Mark a track as recently played immediately when playback starts.
+    /// Does not bump play_count / listen_seconds.
+    pub fn touch_last_played(&self, path: &str) -> Result<(), String> {
+        let connection = self.write_connection();
+        let track_id = match resolve_track_id_by_path(&connection, path)? {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+        let now = now_timestamp();
+        connection
+            .execute(
+                "INSERT INTO listen_stats (track_id, play_count, skip_count, listen_seconds, last_played_at)
+                 VALUES (?1, 0, 0, 0, ?2)
+                 ON CONFLICT(track_id) DO UPDATE SET
+                   last_played_at = excluded.last_played_at",
+                params![track_id, now],
+            )
+            .map_err(|e| format!("Failed to touch last played: {e}"))?;
+        Ok(())
+    }
+
+    /// Top recently played tracks (by `last_played_at`).
+    pub fn get_recently_played(&self, limit: u32) -> Result<Vec<Track>, String> {
+        let limit = limit.clamp(1, 200) as i64;
+        let connection = self.read_connection();
+        let mut stmt = connection
+            .prepare(&format!(
+                "SELECT {TRACK_SELECT_COLUMNS}
+                 FROM {TRACK_FROM}
+                 INNER JOIN listen_stats ls ON ls.track_id = t.id
+                 WHERE ls.last_played_at > 0
+                 ORDER BY ls.last_played_at DESC
+                 LIMIT ?1"
+            ))
+            .map_err(|e| format!("Failed to prepare recently played query: {e}"))?;
+        let tracks = stmt
+            .query_map(params![limit], |row| row_to_track(row, &self.cover_root))
+            .map_err(|e| format!("Failed to query recently played: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read recently played: {e}"))?;
+        Ok(tracks)
+    }
+
+    /// Top most-played tracks (by play_count, then listen_seconds).
+    pub fn get_most_played(&self, limit: u32) -> Result<Vec<Track>, String> {
+        let limit = limit.clamp(1, 200) as i64;
+        let connection = self.read_connection();
+        let mut stmt = connection
+            .prepare(&format!(
+                "SELECT {TRACK_SELECT_COLUMNS}
+                 FROM {TRACK_FROM}
+                 INNER JOIN listen_stats ls ON ls.track_id = t.id
+                 WHERE ls.play_count > 0 OR ls.listen_seconds >= 30
+                 ORDER BY ls.play_count DESC, ls.listen_seconds DESC, ls.last_played_at DESC
+                 LIMIT ?1"
+            ))
+            .map_err(|e| format!("Failed to prepare most played query: {e}"))?;
+        let tracks = stmt
+            .query_map(params![limit], |row| row_to_track(row, &self.cover_root))
+            .map_err(|e| format!("Failed to query most played: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read most played: {e}"))?;
+        Ok(tracks)
+    }
+
+    /// Favorite song: highest play_count, then listen time.
+    pub fn get_favorite_track(&self) -> Result<Option<Track>, String> {
+        Ok(self.get_most_played(1)?.into_iter().next())
+    }
+
+    /// Favorite album by aggregated listen seconds across its tracks.
+    pub fn get_favorite_album(&self) -> Result<Option<AlbumSummaryDto>, String> {
+        let connection = self.read_connection();
+        connection
+            .query_row(
+                &format!(
+                    "SELECT
+                        t.album,
+                        COALESCE(NULLIF(t.album_artist, ''), t.artist) AS album_artist,
+                        MIN(t.artist) AS artist,
+                        COUNT(*) AS track_count,
+                        MIN(t.year) AS year,
+                        MIN(aa.thumb_path) AS cover_art_data_url,
+                        MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
+                        MIN(t.path) AS cover_track_path
+                     FROM {TRACK_FROM}
+                     INNER JOIN listen_stats ls ON ls.track_id = t.id
+                     WHERE t.album IS NOT NULL AND TRIM(t.album) != ''
+                       AND LOWER(TRIM(t.album)) NOT IN ('unknown album', 'unknown', 'untitled')
+                     GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
+                     ORDER BY SUM(ls.listen_seconds) DESC, SUM(ls.play_count) DESC
+                     LIMIT 1"
+                ),
+                [],
+                |row| row_to_album_summary(row, &self.cover_root),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query favorite album: {e}"))
+    }
+
+    /// Favorite artist by aggregated listen seconds.
+    pub fn get_favorite_artist(&self) -> Result<Option<ArtistSummaryDto>, String> {
+        let connection = self.read_connection();
+        connection
+            .query_row(
+                "SELECT
+                    t.artist,
+                    COUNT(*) AS track_count,
+                    COUNT(DISTINCT t.album) AS album_count
+                 FROM tracks t
+                 INNER JOIN listen_stats ls ON ls.track_id = t.id
+                 WHERE t.artist IS NOT NULL AND TRIM(t.artist) != ''
+                   AND LOWER(TRIM(t.artist)) NOT IN ('unknown artist', 'unknown', 'various', 'various artists')
+                 GROUP BY t.artist
+                 ORDER BY SUM(ls.listen_seconds) DESC, SUM(ls.play_count) DESC
+                 LIMIT 1",
+                [],
+                row_to_artist_summary,
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query favorite artist: {e}"))
+    }
+
+    /// Compact listening overview for Settings.
+    pub fn get_listening_stats(&self, limit: u32) -> Result<ListeningStatsDto, String> {
+        let limit = limit.clamp(1, 20) as i64;
+        let top_tracks = self.get_most_played(limit as u32)?;
+        let connection = self.read_connection();
+
+        let (total_listen_seconds, total_plays, tracks_played): (f64, i64, i64) = connection
+            .query_row(
+                "SELECT
+                    COALESCE(SUM(listen_seconds), 0),
+                    COALESCE(SUM(play_count), 0),
+                    COUNT(*)
+                 FROM listen_stats
+                 WHERE last_played_at > 0 OR listen_seconds > 0 OR play_count > 0",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|e| format!("Failed to query listen totals: {e}"))?;
+
+        let mut artist_stmt = connection
+            .prepare(
+                "SELECT
+                    t.artist AS name,
+                    COALESCE(SUM(ls.listen_seconds), 0) AS listen_seconds,
+                    COALESCE(SUM(ls.play_count), 0) AS play_count
+                 FROM tracks t
+                 INNER JOIN listen_stats ls ON ls.track_id = t.id
+                 WHERE t.artist IS NOT NULL AND TRIM(t.artist) != ''
+                   AND LOWER(TRIM(t.artist)) NOT IN ('unknown artist', 'unknown', 'various', 'various artists')
+                 GROUP BY t.artist
+                 ORDER BY listen_seconds DESC, play_count DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| format!("Failed to prepare top artists: {e}"))?;
+        let top_artists = artist_stmt
+            .query_map(params![limit], row_to_listen_rank)
+            .map_err(|e| format!("Failed to query top artists: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read top artists: {e}"))?;
+
+        let mut album_stmt = connection
+            .prepare(
+                "SELECT
+                    t.album AS name,
+                    COALESCE(SUM(ls.listen_seconds), 0) AS listen_seconds,
+                    COALESCE(SUM(ls.play_count), 0) AS play_count
+                 FROM tracks t
+                 INNER JOIN listen_stats ls ON ls.track_id = t.id
+                 WHERE t.album IS NOT NULL AND TRIM(t.album) != ''
+                   AND LOWER(TRIM(t.album)) NOT IN ('unknown album', 'unknown', 'untitled')
+                 GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
+                 ORDER BY listen_seconds DESC, play_count DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| format!("Failed to prepare top albums: {e}"))?;
+        let top_albums = album_stmt
+            .query_map(params![limit], row_to_listen_rank)
+            .map_err(|e| format!("Failed to query top albums: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read top albums: {e}"))?;
+
+        let mut genre_stmt = connection
+            .prepare(
+                "SELECT
+                    TRIM(t.genre) AS name,
+                    COALESCE(SUM(ls.listen_seconds), 0) AS listen_seconds,
+                    COALESCE(SUM(ls.play_count), 0) AS play_count
+                 FROM tracks t
+                 INNER JOIN listen_stats ls ON ls.track_id = t.id
+                 WHERE t.genre IS NOT NULL AND TRIM(t.genre) != ''
+                   AND LOWER(TRIM(t.genre)) NOT IN ('unknown', 'unknown genre')
+                 GROUP BY LOWER(TRIM(t.genre))
+                 ORDER BY listen_seconds DESC, play_count DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| format!("Failed to prepare top genres: {e}"))?;
+        let top_genres = genre_stmt
+            .query_map(params![limit], row_to_listen_rank)
+            .map_err(|e| format!("Failed to query top genres: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read top genres: {e}"))?;
+
+        Ok(ListeningStatsDto {
+            total_listen_seconds,
+            total_plays,
+            tracks_played,
+            top_tracks,
+            top_artists,
+            top_albums,
+            top_genres,
+        })
+    }
+
+    /// Build Home suggestions using listen history and track-to-track edges.
+    pub fn get_home_suggestions(
+        &self,
+        seed_path: Option<&str>,
+    ) -> Result<HomeSuggestionsDto, String> {
+        let favorite_track = self.get_favorite_track()?;
+        let favorite_album = self.get_favorite_album()?;
+        let favorite_artist = self.get_favorite_artist()?;
+        let recent = self.get_recently_played(40)?;
+        let most = self.get_most_played(40)?;
+        let curated = !recent.is_empty() || !most.is_empty();
+
+        let connection = self.read_connection();
+        let mut candidates: Vec<Track> = Vec::new();
+        let mut seen = std::collections::HashSet::<String>::new();
+
+        let push_track = |track: Track, candidates: &mut Vec<Track>, seen: &mut std::collections::HashSet<String>| {
+            if seen.insert(track.path.clone()) {
+                candidates.push(track);
+            }
+        };
+
+        // Transition neighbors from seed / current / favorite.
+        let seed_ids: Vec<String> = {
+            let mut ids = Vec::new();
+            for path in seed_path
+                .into_iter()
+                .chain(favorite_track.as_ref().map(|t| t.path.as_str()))
+                .chain(recent.first().map(|t| t.path.as_str()))
+            {
+                if let Ok(Some(id)) = resolve_track_id_by_path(&connection, path) {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+            ids
+        };
+
+        for seed_id in &seed_ids {
+            let mut stmt = connection
+                .prepare(&format!(
+                    "SELECT {TRACK_SELECT_COLUMNS}
+                     FROM {TRACK_FROM}
+                     INNER JOIN track_transitions tr ON tr.to_track_id = t.id
+                     WHERE tr.from_track_id = ?1 AND tr.kind = 'complete'
+                     ORDER BY tr.count DESC, tr.last_at DESC
+                     LIMIT 24"
+                ))
+                .map_err(|e| format!("Failed to prepare transition query: {e}"))?;
+            let rows = stmt
+                .query_map(params![seed_id], |row| row_to_track(row, &self.cover_root))
+                .map_err(|e| format!("Failed to query transitions: {e}"))?;
+            for row in rows {
+                push_track(row.map_err(|e| format!("Failed to read transition: {e}"))?, &mut candidates, &mut seen);
+            }
+        }
+        drop(connection);
+
+        for track in most.iter().chain(recent.iter()) {
+            push_track(track.clone(), &mut candidates, &mut seen);
+        }
+
+        // Same-artist / same-album enrichment from top listens.
+        if let Some(fav) = favorite_track.as_ref() {
+            if !fav.artist.trim().is_empty() {
+                for track in self.get_tracks_by_artist(&fav.artist)?.into_iter().take(20) {
+                    push_track(track, &mut candidates, &mut seen);
+                }
+            }
+            if !fav.album.trim().is_empty() {
+                let aa = fav
+                    .album_artist
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .or(Some(fav.artist.as_str()));
+                for track in self
+                    .get_tracks_by_album(&fav.album, aa)?
+                    .into_iter()
+                    .take(16)
+                {
+                    push_track(track, &mut candidates, &mut seen);
+                }
+            }
+        }
+
+        // Cold-start / fill from library.
+        if candidates.len() < 40 {
+            let connection = self.read_connection();
+            let mut stmt = connection
+                .prepare(&format!(
+                    "SELECT {TRACK_SELECT_COLUMNS}
+                     FROM {TRACK_FROM}
+                     ORDER BY t.indexed_at DESC
+                     LIMIT 200"
+                ))
+                .map_err(|e| format!("Failed to prepare library fill: {e}"))?;
+            let rows = stmt
+                .query_map([], |row| row_to_track(row, &self.cover_root))
+                .map_err(|e| format!("Failed to fill suggestions: {e}"))?;
+            for row in rows {
+                push_track(row.map_err(|e| format!("Failed to read fill track: {e}"))?, &mut candidates, &mut seen);
+                if candidates.len() >= 120 {
+                    break;
+                }
+            }
+        }
+
+        shuffle_tracks(&mut candidates);
+
+        let featured = candidates.first().cloned().or_else(|| favorite_track.clone());
+        let mix: Vec<Track> = candidates.iter().skip(1).take(8).cloned().collect();
+        let more: Vec<Track> = candidates
+            .iter()
+            .skip(1 + mix.len())
+            .take(10)
+            .cloned()
+            .collect();
+
+        let albums = self.suggest_albums(8, favorite_album.as_ref())?;
+
+        Ok(HomeSuggestionsDto {
+            featured,
+            mix,
+            more,
+            albums,
+            favorite_track,
+            favorite_album,
+            favorite_artist,
+            curated,
+        })
+    }
+
+    fn suggest_albums(
+        &self,
+        limit: usize,
+        favorite: Option<&AlbumSummaryDto>,
+    ) -> Result<Vec<AlbumSummaryDto>, String> {
+        let connection = self.read_connection();
+        let mut stmt = connection
+            .prepare(&format!(
+                "SELECT
+                    t.album,
+                    COALESCE(NULLIF(t.album_artist, ''), t.artist) AS album_artist,
+                    MIN(t.artist) AS artist,
+                    COUNT(*) AS track_count,
+                    MIN(t.year) AS year,
+                    MIN(aa.thumb_path) AS cover_art_data_url,
+                    MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
+                    MIN(t.path) AS cover_track_path,
+                    COALESCE(SUM(ls.listen_seconds), 0) AS listen_score
+                 FROM {TRACK_FROM}
+                 LEFT JOIN listen_stats ls ON ls.track_id = t.id
+                 WHERE t.album IS NOT NULL AND TRIM(t.album) != ''
+                 GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
+                 ORDER BY listen_score DESC, track_count DESC
+                 LIMIT 40"
+            ))
+            .map_err(|e| format!("Failed to prepare album suggestions: {e}"))?;
+
+        let mut albums = stmt
+            .query_map([], |row| {
+                let summary = row_to_album_summary(row, &self.cover_root)?;
+                let score: f64 = row.get(8)?;
+                Ok((summary, score))
+            })
+            .map_err(|e| format!("Failed to query album suggestions: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read album suggestions: {e}"))?;
+
+        // Light shuffle among the top tier so refresh still feels alive.
+        let top_tier: Vec<_> = albums
+            .iter()
+            .filter(|(_, score)| *score > 0.0)
+            .cloned()
+            .collect();
+        let rest: Vec<_> = albums
+            .iter()
+            .filter(|(_, score)| *score <= 0.0)
+            .cloned()
+            .collect();
+        let mut ranked = top_tier;
+        shuffle_pairs(&mut ranked);
+        let mut cold = rest;
+        shuffle_pairs(&mut cold);
+        ranked.extend(cold);
+        albums = ranked;
+
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::<String>::new();
+        if let Some(fav) = favorite {
+            let key = format!("{}::{}", fav.name, fav.album_artist.clone().unwrap_or_default());
+            seen.insert(key);
+            out.push(fav.clone());
+        }
+        for (album, _) in albums {
+            let key = format!(
+                "{}::{}",
+                album.name,
+                album.album_artist.clone().unwrap_or_default()
+            );
+            if seen.insert(key) {
+                out.push(album);
+            }
+            if out.len() >= limit {
+                break;
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn shuffle_tracks(items: &mut [Track]) {
+    let mut seed = now_timestamp() as u64
+        ^ (items.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    for i in (1..items.len()).rev() {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1);
+        let j = (seed as usize) % (i + 1);
+        items.swap(i, j);
+    }
+}
+
+fn shuffle_pairs<T: Clone>(items: &mut [(T, f64)]) {
+    let mut seed = now_timestamp() as u64 ^ (items.len() as u64);
+    for i in (1..items.len()).rev() {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1);
+        let j = (seed as usize) % (i + 1);
+        items.swap(i, j);
+    }
 }
 
 pub(crate) fn row_to_track(
@@ -2234,6 +2775,14 @@ fn row_to_artist_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtistSumm
         name: row.get(0)?,
         track_count: row.get(1)?,
         album_count: row.get(2)?,
+    })
+}
+
+fn row_to_listen_rank(row: &rusqlite::Row<'_>) -> rusqlite::Result<ListenRankDto> {
+    Ok(ListenRankDto {
+        name: row.get(0)?,
+        listen_seconds: row.get(1)?,
+        play_count: row.get(2)?,
     })
 }
 

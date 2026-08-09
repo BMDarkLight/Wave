@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use tray_icon::{TrayIconBuilder, TrayIconEvent};
 
 use crate::app_paths::{daemon_state_path, library_db_path};
+use crate::app_settings::AppSettings;
 use crate::audio::player::{AudioPlayer, RepeatMode};
 use crate::library::Library;
 use crate::media_controls::TrackMetadata;
@@ -52,6 +53,18 @@ pub enum DaemonRequest {
     QueueClear,
     Volume { level: f32 },
     SetDevice { name: String },
+    /// Return EQ / gapless / crossfade state.
+    DspStatus,
+    SetEqBands { bands: [f32; 10] },
+    SetEqEnabled { enabled: bool },
+    ResetEq,
+    ApplyEqPreset { name: String },
+    SetCrossfade { seconds: f32 },
+    SetGapless { enabled: bool },
+    /// Set bass dial in dB (−12…+12); preserves current treble.
+    SetBass { db: f32 },
+    /// Set treble dial in dB (−12…+12); preserves current bass.
+    SetTreble { db: f32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +84,16 @@ pub struct PlaybackStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DspStatus {
+    pub eq_enabled: bool,
+    pub bands: [f32; 10],
+    pub crossfade_duration: f32,
+    pub gapless_enabled: bool,
+    pub bass: f32,
+    pub treble: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonResponse {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -81,6 +104,8 @@ pub struct DaemonResponse {
     pub status: Option<PlaybackStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dsp: Option<DspStatus>,
 }
 
 impl DaemonResponse {
@@ -91,6 +116,7 @@ impl DaemonResponse {
             error: None,
             status: None,
             queue: None,
+            dsp: None,
         }
     }
 
@@ -101,6 +127,18 @@ impl DaemonResponse {
             error: Some(error.into()),
             status: None,
             queue: None,
+            dsp: None,
+        }
+    }
+
+    fn ok_dsp(message: impl Into<String>, dsp: DspStatus) -> Self {
+        Self {
+            ok: true,
+            message: Some(message.into()),
+            error: None,
+            status: None,
+            queue: None,
+            dsp: Some(dsp),
         }
     }
 }
@@ -319,10 +357,11 @@ pub fn run_daemon() {
         std::process::exit(1);
     });
 
-    let player = AudioPlayer::new().unwrap_or_else(|e| {
+    let mut player = AudioPlayer::new().unwrap_or_else(|e| {
         eprintln!("Failed to initialize audio player: {e}");
         std::process::exit(1);
     });
+    apply_settings_to_player(&mut player, &AppSettings::load_from_disk());
 
     let state = Arc::new(Mutex::new(DaemonState {
         player,
@@ -504,6 +543,7 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
             error: None,
             status: Some(build_status(&state.player, &state.library)),
             queue: None,
+            dsp: None,
         },
         DaemonRequest::Shutdown => DaemonResponse::ok_msg("Daemon shutting down."),
         DaemonRequest::QueueList => {
@@ -514,6 +554,7 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
                 error: None,
                 status: Some(build_status(&state.player, &state.library)),
                 queue: Some(tracks),
+                dsp: None,
             }
         }
         DaemonRequest::QueueAdd { track_id } => {
@@ -575,7 +616,128 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
             }
             Err(e) => DaemonResponse::err(e),
         },
+        DaemonRequest::DspStatus => {
+            DaemonResponse::ok_dsp("DSP status.", build_dsp_status(&state.player))
+        }
+        DaemonRequest::SetEqBands { bands } => {
+            state.player.set_eq_bands(bands);
+            state.player.set_eq_enabled(true);
+            persist_player_settings(&state.player);
+            DaemonResponse::ok_dsp("EQ bands set and enabled.", build_dsp_status(&state.player))
+        }
+        DaemonRequest::SetEqEnabled { enabled } => {
+            state.player.set_eq_enabled(enabled);
+            persist_player_settings(&state.player);
+            let msg = if enabled {
+                "Equalizer enabled."
+            } else {
+                "Equalizer disabled."
+            };
+            DaemonResponse::ok_dsp(msg, build_dsp_status(&state.player))
+        }
+        DaemonRequest::ResetEq => {
+            state.player.set_eq_bands([0.0; 10]);
+            state.player.set_eq_enabled(true);
+            persist_player_settings(&state.player);
+            DaemonResponse::ok_dsp(
+                "Equalizer reset to flat and enabled.",
+                build_dsp_status(&state.player),
+            )
+        }
+        DaemonRequest::ApplyEqPreset { name } => match state.player.apply_eq_preset(&name) {
+            Ok(()) => {
+                persist_player_settings(&state.player);
+                DaemonResponse::ok_dsp(
+                    format!("Applied EQ preset: {name}"),
+                    build_dsp_status(&state.player),
+                )
+            }
+            Err(e) => DaemonResponse::err(e),
+        },
+        DaemonRequest::SetCrossfade { seconds } => {
+            state.player.set_crossfade_duration(seconds);
+            persist_player_settings(&state.player);
+            let msg = if seconds <= 0.0 {
+                "Crossfade disabled.".to_string()
+            } else {
+                format!("Crossfade set to {seconds:.1}s.")
+            };
+            DaemonResponse::ok_dsp(msg, build_dsp_status(&state.player))
+        }
+        DaemonRequest::SetGapless { enabled } => {
+            state.player.set_gapless_enabled(enabled);
+            persist_player_settings(&state.player);
+            let msg = if enabled {
+                "Gapless playback enabled."
+            } else {
+                "Gapless playback disabled."
+            };
+            DaemonResponse::ok_dsp(msg, build_dsp_status(&state.player))
+        }
+        DaemonRequest::SetBass { db } => {
+            apply_bass_dial(&mut state.player, db);
+            persist_player_settings(&state.player);
+            DaemonResponse::ok_dsp(
+                format!("Bass set to {db:+.1} dB."),
+                build_dsp_status(&state.player),
+            )
+        }
+        DaemonRequest::SetTreble { db } => {
+            apply_treble_dial(&mut state.player, db);
+            persist_player_settings(&state.player);
+            DaemonResponse::ok_dsp(
+                format!("Treble set to {db:+.1} dB."),
+                build_dsp_status(&state.player),
+            )
+        }
     }
+}
+
+fn build_dsp_status(player: &AudioPlayer) -> DspStatus {
+    let eq = player.eq_settings();
+    DspStatus {
+        eq_enabled: eq.enabled,
+        bands: eq.bands,
+        crossfade_duration: player.crossfade_duration(),
+        gapless_enabled: player.gapless_enabled(),
+        bass: eq.bass_gain(),
+        treble: eq.treble_gain(),
+    }
+}
+
+fn apply_settings_to_player(player: &mut AudioPlayer, settings: &AppSettings) {
+    player.set_eq_bands(settings.equalizer.bands);
+    player.set_eq_enabled(settings.equalizer.enabled);
+    player.set_crossfade_duration(settings.equalizer.crossfade_duration);
+    player.set_gapless_enabled(settings.gapless_enabled);
+    let _ = player.set_volume(settings.volume);
+}
+
+fn persist_player_settings(player: &AudioPlayer) {
+    let mut settings = AppSettings::load_from_disk();
+    settings.equalizer = player.eq_settings();
+    settings.equalizer.crossfade_duration = player.crossfade_duration();
+    settings.gapless_enabled = player.gapless_enabled();
+    settings.volume = player.volume();
+    if let Err(e) = settings.save_to_disk() {
+        tracing::warn!("Failed to persist DSP settings: {e}");
+    }
+}
+
+fn apply_bass_dial(player: &mut AudioPlayer, bass: f32) {
+    let eq = player.eq_settings();
+    let mut next = eq.clone();
+    next.apply_bass_treble(bass, eq.treble_gain());
+    player.set_eq_bands(next.bands);
+    player.set_eq_enabled(true);
+}
+
+fn apply_treble_dial(player: &mut AudioPlayer, treble: f32) {
+    let eq = player.eq_settings();
+    let mut next = eq.clone();
+    next.apply_bass_treble(eq.bass_gain(), treble);
+    player.set_eq_bands(next.bands);
+    player.set_eq_enabled(true);
 }
 
 fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
@@ -634,6 +796,11 @@ fn rebuild_player_on_device(state: &mut DaemonState, name: &str) -> Result<(), S
     );
     state.player.queue = old.queue.clone();
     state.player.repeat = old.repeat.clone();
+    let eq = old.eq_settings();
+    state.player.set_eq_bands(eq.bands);
+    state.player.set_eq_enabled(eq.enabled);
+    state.player.set_crossfade_duration(old.crossfade_duration());
+    state.player.set_gapless_enabled(old.gapless_enabled());
     let vol = old.volume();
     state.player.set_volume(vol).map_err(|e| e.to_string())?;
     if let Some(path) = old.get_current_path() {

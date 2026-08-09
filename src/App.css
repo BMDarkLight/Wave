@@ -926,6 +926,10 @@ img.track-thumb {
   color: rgba(255, 255, 255, 0.35);
 }
 
+.home-card-cover--letter {
+  font-size: 42px;
+}
+
 .home-card-play {
   position: absolute;
   right: 10px;
@@ -5296,6 +5300,89 @@ img.queue-thumb {
   font-size: 12px;
   line-height: 1.4;
   color: var(--quiet);
+}
+
+.mset-listen-totals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px 14px 6px;
+}
+
+.mset-listen-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mset-listen-stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.mset-listen-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--quiet);
+}
+
+.mset-listen-group {
+  padding: 10px 14px 12px;
+}
+
+.mset-listen-group + .mset-listen-group {
+  border-top: 1px solid var(--line);
+}
+
+.mset-listen-group-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--quiet);
+}
+
+.mset-listen-rank {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mset-listen-rank-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.mset-listen-rank-index {
+  color: var(--quiet);
+  font-variant-numeric: tabular-nums;
+}
+
+.mset-listen-rank-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mset-listen-rank-sub {
+  color: var(--quiet);
+  font-weight: 400;
+}
+
+.mset-listen-rank-meta {
+  color: var(--quiet);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .mset-folder-row .mset-row-value {
