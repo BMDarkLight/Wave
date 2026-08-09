@@ -257,6 +257,7 @@ pub fn run() {
             commands::set_close_action,
             commands::toggle_close_action,
             commands::host_os,
+            commands::exit_app,
             commands::import_audio_sources,
             commands::list_media_folders,
             commands::save_media_folder,

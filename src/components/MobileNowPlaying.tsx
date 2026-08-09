@@ -30,7 +30,7 @@ import {
   EQ_PRESETS,
 } from "../utils/player";
 import type { Track, PlaybackMode, EqSettings } from "../utils/player";
-import { useDragDismiss } from "../hooks/useDragDismiss";
+import { useDragDismiss, DRAG_DISMISS_REOPEN_GUARD_MS } from "../hooks/useDragDismiss";
 import VirtualizedList from "./VirtualizedList";
 
 const formatTime = (seconds?: number | null) => {
@@ -423,6 +423,8 @@ interface MobileNowPlayingProps {
   onCycleRepeat: () => void;
   closing?: boolean;
   onClose: () => void;
+  /** Fired instead of onClose when the page is dismissed by drag (reopen guard). */
+  onDragClose?: () => void;
   onOpenArtist: (artist: string) => void;
   onOpenAlbum: (album: string, albumArtist: string | null) => void;
   volumeValue: number;
@@ -464,6 +466,7 @@ export default function MobileNowPlaying({
   onCycleRepeat,
   closing = false,
   onClose,
+  onDragClose,
   onOpenArtist,
   onOpenAlbum,
   volumeValue,
@@ -502,8 +505,13 @@ export default function MobileNowPlaying({
   const dragMovedRef = useRef(false);
   const [sheetMounted, setSheetMounted] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const ignoreMenuOpenUntilRef = useRef(0);
 
   const closeSheet = () => onMenuOpenChange(false);
+  const openSheet = () => {
+    if (performance.now() < ignoreMenuOpenUntilRef.current) return;
+    onMenuOpenChange(true);
+  };
 
   /** Step back through sheet → cover → dismiss, matching Android back. */
   const handleHeaderBack = () => {
@@ -519,12 +527,16 @@ export default function MobileNowPlaying({
   };
 
   const pageDismiss = useDragDismiss({
-    onDismiss: onClose,
+    onDismiss: () => (onDragClose ?? onClose)(),
     enabled: !closing,
   });
 
   const sheetDismiss = useDragDismiss({
-    onDismiss: closeSheet,
+    onDismiss: () => {
+      ignoreMenuOpenUntilRef.current =
+        performance.now() + DRAG_DISMISS_REOPEN_GUARD_MS;
+      closeSheet();
+    },
     enabled: sheetOpen && !closing,
     threshold: 80,
     velocityThreshold: 0.4,
@@ -706,7 +718,30 @@ export default function MobileNowPlaying({
       <div className="mnp-body">
         <div
           className={`mnp-layer mnp-cover-wrap ${view === "cover" ? "mnp-layer-active" : ""}`}
-          {...(view === "cover" && !menuOpen ? pageDismiss.bind : {})}
+          {...(view === "cover" && !menuOpen
+            ? {
+                ...pageDismiss.bind,
+                onClick: (event) => {
+                  pageDismiss.bind.onClick?.(event);
+                  // Ignore the click that ends a drag-dismiss gesture.
+                  if (event.defaultPrevented) return;
+                  onViewChange("lyrics");
+                },
+              }
+            : undefined)}
+          role={view === "cover" ? "button" : undefined}
+          tabIndex={view === "cover" ? 0 : undefined}
+          aria-label={view === "cover" ? "Open lyrics" : undefined}
+          onKeyDown={
+            view === "cover"
+              ? (event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onViewChange("lyrics");
+                  }
+                }
+              : undefined
+          }
         >
           <Artwork
             track={track}
@@ -967,7 +1002,7 @@ export default function MobileNowPlaying({
         </button>
         <button
           className={`mnp-action-btn ${menuOpen ? "active" : ""}`}
-          onClick={() => onMenuOpenChange(true)}
+          onClick={openSheet}
           type="button"
           title="Volume & Equalizer"
           aria-label="Open volume and equalizer"

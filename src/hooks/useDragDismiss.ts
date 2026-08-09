@@ -1,4 +1,9 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 type UseDragDismissOptions = {
   onDismiss: () => void;
@@ -10,31 +15,12 @@ type UseDragDismissOptions = {
 };
 
 /**
- * After a successful drag-dismiss, the browser still synthesizes a `click` on
- * whatever is under the finger (often the mini player bar). Swallow only that
- * immediate ghost click so it cannot reopen the sheet — keep the window short
- * so a real follow-up tap still works.
- */
-function suppressTrailingClick(durationMs = 80) {
-  let armed = true;
-  const suppress = (event: Event) => {
-    if (!armed) return;
-    armed = false;
-    event.preventDefault();
-    event.stopPropagation();
-    event.stopImmediatePropagation();
-    window.removeEventListener("click", suppress, true);
-  };
-  window.addEventListener("click", suppress, true);
-  window.setTimeout(() => {
-    armed = false;
-    window.removeEventListener("click", suppress, true);
-  }, durationMs);
-}
-
-/**
  * Pointer-driven downward swipe-to-dismiss for full-screen sheets / pages.
  * Bind the returned handlers to a drag surface (header, handle, cover).
+ *
+ * Callers should arm a short "ignore reopen" window inside `onDismiss` so the
+ * Android WebView's delayed synthetic click (often ~200–300ms later) cannot
+ * immediately reopen the surface that just closed.
  */
 export function useDragDismiss({
   onDismiss,
@@ -50,6 +36,7 @@ export function useDragDismiss({
   const lastTRef = useRef(0);
   const offsetRef = useRef(0);
   const velocityRef = useRef(0);
+  const movedRef = useRef(false);
   const onDismissRef = useRef(onDismiss);
   const enabledRef = useRef(enabled);
   onDismissRef.current = onDismiss;
@@ -59,6 +46,7 @@ export function useDragDismiss({
     activeRef.current = false;
     offsetRef.current = 0;
     velocityRef.current = 0;
+    movedRef.current = false;
     setDragging(false);
     setOffset(0);
   };
@@ -70,6 +58,7 @@ export function useDragDismiss({
     if (target?.closest("button, a, input, select, textarea, label")) return;
 
     activeRef.current = true;
+    movedRef.current = false;
     startYRef.current = e.clientY;
     lastYRef.current = e.clientY;
     lastTRef.current = performance.now();
@@ -89,34 +78,46 @@ export function useDragDismiss({
     lastYRef.current = e.clientY;
     lastTRef.current = now;
     const next = Math.max(0, e.clientY - startYRef.current);
+    if (next > 8) movedRef.current = true;
     offsetRef.current = next;
     setOffset(next);
   };
 
-  const finish = () => {
+  const finish = (event?: ReactPointerEvent<HTMLElement>) => {
     if (!activeRef.current) return;
     const shouldDismiss =
       offsetRef.current >= threshold || velocityRef.current >= velocityThreshold;
     activeRef.current = false;
     setDragging(false);
     if (shouldDismiss) {
-      // Arm before onDismiss: dismiss sets pointer-events:none, so the
-      // trailing click would otherwise hit the player bar and reopen NP.
-      suppressTrailingClick();
+      // Prevent the compatibility mouse/click synthesized from this gesture
+      // when the browser still delivers them on the same target.
+      event?.preventDefault?.();
       onDismissRef.current();
-      // Let the close animation own transform; drop the drag offset next frame.
       requestAnimationFrame(() => {
         offsetRef.current = 0;
+        movedRef.current = false;
         setOffset(0);
       });
       return;
     }
     offsetRef.current = 0;
+    movedRef.current = false;
     setOffset(0);
   };
 
-  const onPointerUp = () => finish();
+  const onPointerUp = (e: ReactPointerEvent<HTMLElement>) => finish(e);
   const onPointerCancel = () => reset();
+
+  // Swallow the ghost click that follows a drag-dismiss on the drag surface
+  // itself (sheet handle / header). Player-bar reopens are guarded separately.
+  const onClick = (e: ReactMouseEvent<HTMLElement>) => {
+    if (movedRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      movedRef.current = false;
+    }
+  };
 
   return {
     offset,
@@ -126,6 +127,10 @@ export function useDragDismiss({
       onPointerMove,
       onPointerUp,
       onPointerCancel,
+      onClick,
     },
   };
 }
+
+/** How long to ignore reopen after a drag-dismiss (Android delayed click). */
+export const DRAG_DISMISS_REOPEN_GUARD_MS = 380;

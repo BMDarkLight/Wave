@@ -2478,8 +2478,10 @@ img.queue-thumb {
   transition: color 0.2s ease, font-size 0.2s ease;
 }
 
-.lyrics-line:hover:not(:disabled) {
-  color: #d7d7d7;
+@media (hover: hover) and (pointer: fine) {
+  .lyrics-line:hover:not(:disabled) {
+    color: #d7d7d7;
+  }
 }
 
 .lyrics-line:disabled {
@@ -2670,14 +2672,16 @@ img.queue-thumb {
   cursor: pointer;
 }
 
-.now-playing-name:hover:not(:disabled) {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
 .now-playing-name:disabled {
   cursor: default;
   opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .now-playing-name:hover:not(:disabled) {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
 }
 
 .player-controls {
@@ -2714,9 +2718,11 @@ img.queue-thumb {
   font-size: 22px;
 }
 
-.play-pause-btn:hover:not(:disabled) {
-  background: var(--green-hot);
-  color: #000;
+@media (hover: hover) and (pointer: fine) {
+  .play-pause-btn:hover:not(:disabled) {
+    background: var(--green-hot);
+    color: #000;
+  }
 }
 
 .shuffle-btn.active,
@@ -3609,15 +3615,17 @@ img.queue-thumb {
   transition: text-decoration-color 0.15s;
 }
 
-.now-playing-artist:hover,
-.now-playing-path:hover {
-  text-decoration-color: currentColor;
-}
-
 .now-playing-artist:disabled,
 .now-playing-path:disabled {
   cursor: default;
   text-decoration: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .now-playing-artist:hover,
+  .now-playing-path:hover {
+    text-decoration-color: currentColor;
+  }
 }
 
 @media (max-width: 900px) {
@@ -4485,12 +4493,14 @@ img.queue-thumb {
   flex-shrink: 0;
 }
 
-.mnp-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-}
-
 .mnp-icon-btn.active {
   color: var(--green-hot);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mnp-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
 }
 
 .mnp-body {
@@ -4538,6 +4548,10 @@ img.queue-thumb {
   box-sizing: border-box;
   container-type: size;
   touch-action: none;
+}
+
+.mnp-cover-wrap.mnp-layer-active {
+  cursor: pointer;
 }
 
 .mnp-cover {
@@ -4623,6 +4637,12 @@ img.queue-thumb {
   /* Avoid transform: scale() — it paints past the box and clips under
      overflow-x: hidden instead of reflowing/wrapping the larger text. */
   transform: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mnp-lyrics-scroll .lyrics-line:hover:not(.active) {
+    color: rgba(255, 255, 255, 0.7);
+  }
 }
 
 .mnp-lyrics-scroll pre {
@@ -4864,7 +4884,13 @@ img.queue-thumb {
   font-size: 22px;
 }
 
-.mnp-action-btn:hover {
+@media (hover: hover) and (pointer: fine) {
+  .mnp-action-btn:hover {
+    color: var(--text);
+  }
+}
+
+.mnp-action-btn:active {
   color: var(--text);
 }
 
@@ -4905,10 +4931,14 @@ img.queue-thumb {
   transform: translateY(100%);
   transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
   will-change: transform;
+  /* Closed/off-screen sheets must not steal taps (Android hit-testing
+     still targets translated elements that keep pointer-events: auto). */
+  pointer-events: none;
 }
 
 .mnp-sheet.mnp-sheet-open {
   transform: translateY(0);
+  pointer-events: auto;
 }
 
 .mnp-sheet.mnp-sheet-dragging {
@@ -4985,10 +5015,17 @@ img.queue-thumb {
   touch-action: none;
 }
 
-.mnp-dial svg {
+.mnp-dial > svg {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.mnp-dial-center svg {
+  display: block;
+  width: 1.15em;
+  height: 1.15em;
+  flex-shrink: 0;
 }
 
 .mnp-dial:focus-visible {

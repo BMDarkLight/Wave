@@ -113,6 +113,7 @@ import {
   syncPlaylistFolder,
   isFolderSetupDismissed,
   dismissFolderSetup,
+  exitApp,
   listenToSyncProgress,
   type EqSettings,
   type PlaybackMode,
@@ -125,6 +126,7 @@ import {
 import { isAndroid } from "./utils/platform";
 import { enableNoHoverMode } from "./utils/touchHover";
 import { useLyricsAutoScroll } from "./hooks/useLyricsAutoScroll";
+import { DRAG_DISMISS_REOPEN_GUARD_MS } from "./hooks/useDragDismiss";
 import AlbumPage from "./components/AlbumPage";
 import ArtistPage from "./components/ArtistPage";
 import ContextMenu from "./components/ContextMenu";
@@ -435,25 +437,10 @@ function App() {
   const pushAlbumPage = (name: string, albumArtist: string | null) => {
     setBrowseStack((stack) => [...stack, { kind: "album", name, albumArtist }]);
   };
-  /** When true, leaving the last browse page reopens mobile Now Playing. */
-  const reopenMobilePlayerAfterBrowseRef = useRef(false);
-  const [reopenMobilePlayer, setReopenMobilePlayer] = useState(false);
   const browseBack = () => {
-    setBrowseStack((stack) => {
-      const next = stack.slice(0, -1);
-      if (
-        next.length === 0 &&
-        reopenMobilePlayerAfterBrowseRef.current &&
-        stack.length > 0
-      ) {
-        reopenMobilePlayerAfterBrowseRef.current = false;
-        setReopenMobilePlayer(true);
-      }
-      return next;
-    });
+    setBrowseStack((stack) => stack.slice(0, -1));
   };
   const clearBrowse = () => {
-    reopenMobilePlayerAfterBrowseRef.current = false;
     setBrowseStack([]);
   };
 
@@ -608,6 +595,7 @@ function App() {
   const [mobilePlayerKey, setMobilePlayerKey] = useState(0);
   const mobilePlayerOpenRef = useRef(false);
   const mobilePlayerClosingRef = useRef(false);
+  const ignorePlayerOpenUntilRef = useRef(0);
   const mobilePlayerCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -855,6 +843,8 @@ function App() {
 
   const handleOpenMobilePlayer = () => {
     if (!currentTrack) return;
+    // Ignore the delayed synthetic click Android fires after a drag-dismiss.
+    if (performance.now() < ignorePlayerOpenUntilRef.current) return;
     setMobileNavOpen(false);
     closeMainSearch();
     setShowQueue(false);
@@ -898,6 +888,12 @@ function App() {
     }, 360);
   };
 
+  const handleDragCloseMobilePlayer = () => {
+    ignorePlayerOpenUntilRef.current =
+      performance.now() + DRAG_DISMISS_REOPEN_GUARD_MS;
+    handleCloseMobilePlayer();
+  };
+
   /** Album art / track name tap in the mini player bar: mobile gets the
    *  fullscreen Now Playing page, desktop keeps the lyrics sidebar. */
   const handleOpenNowPlaying = () => {
@@ -911,8 +907,6 @@ function App() {
     setShowQueue(false);
     setShowDeviceList(false);
     setLyricsPanelTrack(null);
-    reopenMobilePlayerAfterBrowseRef.current = false;
-    setReopenMobilePlayer(false);
     forceCloseMobilePlayer();
     if (mobileSettingsCloseTimer.current) {
       clearTimeout(mobileSettingsCloseTimer.current);
@@ -996,14 +990,6 @@ function App() {
     );
     return fromPlaylist ?? null;
   }, [playbackState.current_path, queueData.tracks, playlist]);
-
-  // Artist/album opened from Now Playing: after browse empties, restore NP.
-  useEffect(() => {
-    if (!reopenMobilePlayer) return;
-    if (browseStack.length > 0) return;
-    setReopenMobilePlayer(false);
-    if (currentTrack) handleOpenMobilePlayer();
-  }, [reopenMobilePlayer, browseStack.length, currentTrack]);
 
   // Drag-to-resize for sidebar and right panel
   const [dragging, setDragging] = useState<"sidebar" | "right" | null>(null);
@@ -2915,6 +2901,7 @@ function App() {
   // backs to reach home). Transient overlays (menus, dialogs) add layers too.
   // On Android, keep a root guard entry for double-back-to-exit.
   type OverlaySnapshot = {
+    showFolderSetup: boolean;
     menuTrackPath: string | null;
     queueMenuIndex: number | null;
     showAddTrackMenu: boolean;
@@ -2935,6 +2922,7 @@ function App() {
   };
 
   const overlaySnapshotRef = useRef<OverlaySnapshot>({
+    showFolderSetup,
     menuTrackPath,
     queueMenuIndex,
     showAddTrackMenu,
@@ -2955,6 +2943,7 @@ function App() {
     browseDepth: browseStack.length,
   });
   overlaySnapshotRef.current = {
+    showFolderSetup,
     menuTrackPath,
     queueMenuIndex,
     showAddTrackMenu,
@@ -2976,6 +2965,7 @@ function App() {
 
   const countHistoryLayers = (s: OverlaySnapshot = overlaySnapshotRef.current) => {
     let layers = 0;
+    if (s.showFolderSetup) layers++;
     if (s.menuTrackPath) layers++;
     if (s.queueMenuIndex != null) layers++;
     if (s.showAddTrackMenu) layers++;
@@ -3007,6 +2997,11 @@ function App() {
   // (before React re-renders) still sees the updated stack.
   const closeTopOverlay = (): boolean => {
     const s = overlaySnapshotRef.current;
+    if (s.showFolderSetup) {
+      s.showFolderSetup = false;
+      void skipFolderSetup();
+      return true;
+    }
     if (s.menuTrackPath) {
       s.menuTrackPath = null;
       closeTrackContextMenu();
@@ -3074,9 +3069,21 @@ function App() {
     }
     // Settings is a sibling overlay to Now Playing — close it before the player
     // so a lone Settings page always pops first.
+    if (mobileSettingsClosingRef.current) {
+      s.mobileSettingsOpen = false;
+      forceCloseMobileSettings();
+      return true;
+    }
     if (s.mobileSettingsOpen) {
       s.mobileSettingsOpen = false;
       handleCloseMobileSettings();
+      return true;
+    }
+    // During the close animation snapshot already treats NP as gone; a second
+    // back should force-unmount instead of falling through to exit toast.
+    if (mobilePlayerClosingRef.current) {
+      s.mobilePlayerOpen = false;
+      forceCloseMobilePlayer();
       return true;
     }
     if (s.mobilePlayerOpen) {
@@ -3146,7 +3153,8 @@ function App() {
 
     const excess = trapDepthRef.current - target;
     if (excess > 0) {
-      ignorePopCountRef.current += excess;
+      // history.go(-n) emits a single popstate, not n.
+      ignorePopCountRef.current += 1;
       trapDepthRef.current = target;
       window.history.go(-excess);
     }
@@ -3155,6 +3163,7 @@ function App() {
       clearExitPrompt();
     }
   }, [
+    showFolderSetup,
     menuTrackPath,
     queueMenuIndex,
     showAddTrackMenu,
@@ -3201,6 +3210,11 @@ function App() {
         now - exitPressAtRef.current < 2000
       ) {
         clearExitPrompt();
+        // Confirm exit — the back press already consumed history; explicitly
+        // leave the process so the user is not stuck needing a third back.
+        void exitApp().catch((err) => {
+          console.error("Failed to exit Wave:", err);
+        });
         return;
       }
 
@@ -5249,13 +5263,16 @@ function App() {
           onCycleRepeat={handleCycleRepeat}
           closing={mobilePlayerClosing}
           onClose={handleCloseMobilePlayer}
+          onDragClose={handleDragCloseMobilePlayer}
           onOpenArtist={(name) => {
-            reopenMobilePlayerAfterBrowseRef.current = true;
+            ignorePlayerOpenUntilRef.current =
+              performance.now() + DRAG_DISMISS_REOPEN_GUARD_MS;
             forceCloseMobilePlayer();
             openArtistPage(name);
           }}
           onOpenAlbum={(name, albumArtist) => {
-            reopenMobilePlayerAfterBrowseRef.current = true;
+            ignorePlayerOpenUntilRef.current =
+              performance.now() + DRAG_DISMISS_REOPEN_GUARD_MS;
             forceCloseMobilePlayer();
             openAlbumPage(name, albumArtist);
           }}

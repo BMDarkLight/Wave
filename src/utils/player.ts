@@ -38,6 +38,9 @@ const safeInvoke = async <T = any>(cmd: string, args?: Record<string, unknown>):
 
 export const safeInvokeHostOs = (): Promise<string> => safeInvoke<string>("host_os");
 
+/** Exit the Wave process (used by Android double-back-to-exit). */
+export const exitApp = (): Promise<void> => safeInvoke<void>("exit_app");
+
 export interface ImportAudioResult {
   paths: string[];
   errors: string[];

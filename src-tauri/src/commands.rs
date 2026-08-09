@@ -611,6 +611,12 @@ pub fn host_os() -> String {
     std::env::consts::OS.to_string()
 }
 
+/// Exit the process (Android double-back-to-exit confirm).
+#[tauri::command]
+pub fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[derive(serde::Serialize)]
 pub struct ImportAudioResult {
     pub paths: Vec<String>,

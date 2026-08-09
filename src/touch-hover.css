@@ -26,8 +26,8 @@ html.wave-no-hover .play-pause-btn:active:not(:disabled) {
 }
 
 html.wave-no-hover .play-pause-btn:hover:not(:disabled) {
-  /* Default play/pause chrome is already white — keep hover from "sticking"
-     as a scale/filter change if App.css gains one later. */
+  background: #fff !important;
+  color: #000 !important;
   transform: none !important;
   filter: none !important;
 }
@@ -76,9 +76,14 @@ html.wave-no-hover .right-panel-close:hover,
 html.wave-no-hover .lyrics-close-float:hover,
 html.wave-no-hover .eq-close:hover,
 html.wave-no-hover .page-back-btn:hover,
-html.wave-no-hover .mnp-icon-btn:hover {
+html.wave-no-hover .mnp-icon-btn:hover:not(.active) {
   background: transparent !important;
   color: var(--muted) !important;
+}
+
+html.wave-no-hover .mnp-icon-btn.active:hover {
+  background: transparent !important;
+  color: var(--green-hot) !important;
 }
 
 html.wave-no-hover .mset-icon-btn:hover {
@@ -99,10 +104,15 @@ html.wave-no-hover .right-panel-close:active,
 html.wave-no-hover .lyrics-close-float:active,
 html.wave-no-hover .eq-close:active,
 html.wave-no-hover .page-back-btn:active,
-html.wave-no-hover .mnp-icon-btn:active,
+html.wave-no-hover .mnp-icon-btn:active:not(.active),
 html.wave-no-hover .mset-icon-btn:active {
   background: rgba(255, 255, 255, 0.12) !important;
   color: var(--text) !important;
+}
+
+html.wave-no-hover .mnp-icon-btn.active:active {
+  background: rgba(255, 255, 255, 0.12) !important;
+  color: var(--green-hot) !important;
 }
 
 html.wave-no-hover .playlist-item:hover:not(.active) {
@@ -209,11 +219,19 @@ html.wave-no-hover .track-context-menu .delete-action:active {
 /* If :hover gets "stuck" after a tap, ensure it never overrides the
    real active state driven by React (`.active`). */
 html.wave-no-hover .lyrics-line:hover:not(:disabled):not(.active) {
-  color: inherit !important;
+  color: #8a8a8a !important;
 }
 
-html.wave-no-hover .lyrics-line:active:not(:disabled) {
-  color: var(--text);
+html.wave-no-hover .mnp-lyrics-scroll .lyrics-line:hover:not(:disabled):not(.active) {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+
+html.wave-no-hover .lyrics-line:active:not(:disabled):not(.active) {
+  color: rgba(255, 255, 255, 0.85) !important;
+}
+
+html.wave-no-hover .mnp-lyrics-scroll .lyrics-line:active:not(:disabled):not(.active) {
+  color: rgba(255, 255, 255, 0.7) !important;
 }
 
 html.wave-no-hover .lyrics-link:hover,
