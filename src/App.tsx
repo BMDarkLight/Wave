@@ -53,6 +53,7 @@ import {
   resetApp,
   deletePlaylist,
   exportPlaylist,
+  exportLyrics,
   fetchLyricsForTrack,
   getTrackDetails,
   getTrackFullCover,
@@ -64,10 +65,12 @@ import {
   getPlaylistTracksById,
   getQueueTracks,
   importPlaylist,
+  importLyrics,
   scanDirectory,
   listPlaylists,
   listenToMediaControls,
   openPlaylistDialog,
+  openLyricsDialog,
   pauseTrack,
   playNext,
   playPrevious,
@@ -83,6 +86,7 @@ import {
   renamePlaylist,
   resumeTrack,
   savePlaylistDialog,
+  saveLyricsDialog,
   searchLibraryTracks,
   searchLibrary,
   seekTrack,
@@ -105,6 +109,8 @@ import {
   setCrossfadeDuration,
   getGaplessEnabled,
   setGaplessEnabled,
+  getAutoLyricsDownload,
+  setAutoLyricsDownload,
   EQ_BAND_LABELS,
   EQ_PRESETS,
   listMediaFolders,
@@ -415,9 +421,9 @@ function App() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
     null,
   );
-  /** Top-level main pane: Home suggestions vs playlist vs listen stats pages. */
+  /** Top-level main pane: Home suggestions vs playlist vs listen stats / settings. */
   const [mainView, setMainView] = useState<
-    "home" | "playlist" | "recently_played" | "most_played"
+    "home" | "playlist" | "recently_played" | "most_played" | "settings"
   >("home");
 
   // Album / artist browse stack (artist → album nests correctly for back)
@@ -540,6 +546,7 @@ function App() {
   const [crossfadeDuration, setCrossfadeDurationState] = useState(0.0);
   const crossfadeSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [gaplessEnabled, setGaplessEnabledState] = useState(true);
+  const [autoLyricsDownload, setAutoLyricsDownloadState] = useState(true);
   const [eqAnchor, setEqAnchor] = useState<{
     bottom: number;
     right: number;
@@ -608,7 +615,7 @@ function App() {
     useState<MobileNowPlayingView>("cover");
   const [mobilePlayerMenuOpen, setMobilePlayerMenuOpen] = useState(false);
 
-  // Mobile-only Settings page (media source folders, playlists, EQ, crossfade).
+  // Settings overlay on narrow layouts; desktop uses mainView === "settings".
   const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
   const [mobileSettingsClosing, setMobileSettingsClosing] = useState(false);
   const mobileSettingsClosingRef = useRef(false);
@@ -913,17 +920,28 @@ function App() {
     setShowDeviceList(false);
     setLyricsPanelTrack(null);
     forceCloseMobilePlayer();
-    if (mobileSettingsCloseTimer.current) {
-      clearTimeout(mobileSettingsCloseTimer.current);
-      mobileSettingsCloseTimer.current = null;
-    }
-    mobileSettingsClosingRef.current = false;
-    setMobileSettingsClosing(false);
-    setMobileSettingsOpen(true);
     void loadEqSettings();
+    if (isMobileLayout()) {
+      if (mobileSettingsCloseTimer.current) {
+        clearTimeout(mobileSettingsCloseTimer.current);
+        mobileSettingsCloseTimer.current = null;
+      }
+      mobileSettingsClosingRef.current = false;
+      setMobileSettingsClosing(false);
+      setMobileSettingsOpen(true);
+      return;
+    }
+    // Desktop: show Settings in the middle pane like Home / playlists.
+    forceCloseMobileSettings();
+    clearBrowse();
+    setMainView("settings");
   };
 
   const handleCloseMobileSettings = () => {
+    if (mainView === "settings" && !isMobileLayout()) {
+      setMainView("home");
+      return;
+    }
     if (!mobileSettingsOpen || mobileSettingsClosingRef.current) return;
     mobileSettingsClosingRef.current = true;
     setMobileSettingsClosing(true);
@@ -1005,7 +1023,7 @@ function App() {
     const onChange = () => {
       if (!media.matches) {
         setMobileNavOpen(false);
-        // Now Playing is mobile-only; Settings stays available on desktop.
+        // Now Playing is mobile-only; Settings moves into the middle pane on desktop.
         if (mobilePlayerCloseTimer.current) {
           clearTimeout(mobilePlayerCloseTimer.current);
           mobilePlayerCloseTimer.current = null;
@@ -1015,6 +1033,28 @@ function App() {
         setMobilePlayerOpen(false);
         setMobilePlayerView("cover");
         setMobilePlayerMenuOpen(false);
+        setMobileSettingsOpen((wasOpen) => {
+          if (wasOpen || mobileSettingsClosingRef.current) {
+            forceCloseMobileSettings();
+            clearBrowse();
+            setMainView("settings");
+          }
+          return false;
+        });
+      } else {
+        setMainView((view) => {
+          if (view === "settings") {
+            if (mobileSettingsCloseTimer.current) {
+              clearTimeout(mobileSettingsCloseTimer.current);
+              mobileSettingsCloseTimer.current = null;
+            }
+            mobileSettingsClosingRef.current = false;
+            setMobileSettingsClosing(false);
+            setMobileSettingsOpen(true);
+            return "home";
+          }
+          return view;
+        });
       }
     };
     onChange();
@@ -1209,6 +1249,10 @@ function App() {
       setLyricsFetchPath(null);
       return;
     }
+    if (!autoLyricsDownload) {
+      setLyricsFetchPath(null);
+      return;
+    }
 
     const path = currentTrack.path;
     const fetchId = ++lyricsFetchIdRef.current;
@@ -1234,7 +1278,7 @@ function App() {
         lyricsFetchIdRef.current += 1;
       }
     };
-  }, [currentTrack?.path]);
+  }, [currentTrack?.path, autoLyricsDownload]);
 
   const cancelLyricsFetch = () => {
     lyricsFetchIdRef.current += 1;
@@ -1309,7 +1353,12 @@ function App() {
     if (viewingArtist) {
       return { kind: "artist", name: viewingArtist };
     }
-    if (mainView === "home" || mainView === "recently_played" || mainView === "most_played") {
+    if (
+      mainView === "home" ||
+      mainView === "recently_played" ||
+      mainView === "most_played" ||
+      mainView === "settings"
+    ) {
       return { kind: "library" };
     }
     return {
@@ -1350,6 +1399,7 @@ function App() {
     mainView !== "home" &&
     mainView !== "recently_played" &&
     mainView !== "most_played" &&
+    mainView !== "settings" &&
     !mainSearchScopeIsLibrary;
 
   const mainSearchResultsSubtitle = useMemo(() => {
@@ -2406,6 +2456,8 @@ function App() {
       setCrossfadeDurationState(crossfade);
       const gapless = await getGaplessEnabled();
       setGaplessEnabledState(gapless);
+      const autoLyrics = await getAutoLyricsDownload();
+      setAutoLyricsDownloadState(autoLyrics);
     } catch (err) {
       console.error("Failed to load EQ settings", err);
     }
@@ -2505,6 +2557,17 @@ function App() {
       setError(formatInvokeError(err, "Failed to set gapless playback"));
       const gapless = await getGaplessEnabled();
       setGaplessEnabledState(gapless);
+    }
+  };
+
+  const handleAutoLyricsDownloadChange = async (enabled: boolean) => {
+    setAutoLyricsDownloadState(enabled);
+    try {
+      await setAutoLyricsDownload(enabled);
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to update auto lyric download"));
+      const autoLyrics = await getAutoLyricsDownload();
+      setAutoLyricsDownloadState(autoLyrics);
     }
   };
 
@@ -2966,6 +3029,49 @@ function App() {
       await loadPlaylistTracks(result.playlist_id);
     } catch (err) {
       setError(formatInvokeError(err, "Failed to import playlist"));
+    }
+  };
+
+  const handleExportLyrics = async (): Promise<string | null> => {
+    try {
+      setError(null);
+      const path = await saveLyricsDialog();
+      if (!path) return null;
+      const count = await exportLyrics(path);
+      return count === 0
+        ? "No saved lyrics to export."
+        : `Exported lyrics for ${count} track${count === 1 ? "" : "s"}.`;
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to export lyrics"));
+      return null;
+    }
+  };
+
+  const handleImportLyrics = async (): Promise<string | null> => {
+    try {
+      setError(null);
+      const path = await openLyricsDialog();
+      if (!path) return null;
+      const result = await importLyrics(path);
+      if (lyricsPanelTrack?.path) {
+        const details = await getTrackDetails(lyricsPanelTrack.path);
+        if (details?.lyrics) {
+          applyLyricsToTrack(
+            lyricsPanelTrack.path,
+            details.lyrics,
+            details.lyrics_source,
+          );
+        }
+      }
+      const parts = [
+        `Imported ${result.imported}`,
+        result.missing > 0 ? `${result.missing} not found` : null,
+        result.skipped > 0 ? `${result.skipped} skipped` : null,
+      ].filter(Boolean);
+      return `${parts.join(" · ")}.`;
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to import lyrics"));
+      return null;
     }
   };
 
@@ -3755,7 +3861,7 @@ function App() {
           </div>
         </div>
         <button
-          className="sidebar-settings-btn"
+          className={`sidebar-settings-btn${mainView === "settings" && !viewingAlbum && !viewingArtist ? " active" : ""}`}
           onClick={handleOpenMobileSettings}
           type="button"
         >
@@ -3866,6 +3972,38 @@ function App() {
               loadQueueTracks();
             });
           }}
+        />
+      ) : mainView === "settings" && !mainSearchQuery.trim() ? (
+        <MobileSettings
+          embedded
+          onClose={handleCloseMobileSettings}
+          playlists={playlists}
+          isScanningFolder={isScanningFolder}
+          onCreatePlaylist={openCreatePlaylistDialog}
+          onImportPlaylist={handleImportPlaylist}
+          onRenamePlaylist={openRenamePlaylistDialog}
+          onDeletePlaylist={handleDeletePlaylist}
+          onExportPlaylist={handleExportPlaylistById}
+          onSyncPlaylist={handleSyncPlaylistFolder}
+          onAddMediaSource={handleAddMediaSource}
+          onExportLyrics={handleExportLyrics}
+          onImportLyrics={handleImportLyrics}
+          autoLyricsDownload={autoLyricsDownload}
+          onAutoLyricsDownloadChange={(enabled) =>
+            void handleAutoLyricsDownloadChange(enabled)
+          }
+          eqSettings={eqSettings}
+          onEqEnabledChange={handleEqEnabled}
+          onEqBandChange={handleEqBandChange}
+          onEqPreset={handleEqPreset}
+          onEqReset={handleEqReset}
+          crossfadeDuration={crossfadeDuration}
+          onCrossfadeChange={handleCrossfadeChange}
+          gaplessEnabled={gaplessEnabled}
+          onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
+          currentOutputDevice={playbackState.output_device_name}
+          onSelectOutputDevice={handleSelectOutputDeviceSettings}
+          onResetApp={handleResetApp}
         />
       ) : (
         <main className="main-content">
@@ -5423,6 +5561,12 @@ function App() {
           onExportPlaylist={handleExportPlaylistById}
           onSyncPlaylist={handleSyncPlaylistFolder}
           onAddMediaSource={handleAddMediaSource}
+          onExportLyrics={handleExportLyrics}
+          onImportLyrics={handleImportLyrics}
+          autoLyricsDownload={autoLyricsDownload}
+          onAutoLyricsDownloadChange={(enabled) =>
+            void handleAutoLyricsDownloadChange(enabled)
+          }
           eqSettings={eqSettings}
           onEqEnabledChange={handleEqEnabled}
           onEqBandChange={handleEqBandChange}

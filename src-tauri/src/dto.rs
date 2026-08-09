@@ -53,6 +53,14 @@ pub struct ImportResultDto {
     pub track_count: usize,
 }
 
+/// Result of importing a Wave lyrics backup into matching library tracks.
+#[derive(Debug, Clone, Serialize)]
+pub struct LyricsImportResultDto {
+    pub imported: usize,
+    pub skipped: usize,
+    pub missing: usize,
+}
+
 /// Summary of a distinct album in the library, used for browse/grid views.
 ///
 /// Albums are grouped by `(album, album_artist)` — falling back to the track

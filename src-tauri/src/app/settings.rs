@@ -31,9 +31,16 @@ pub struct AppSettings {
     /// Seamless transitions between consecutive queue tracks (no dead air).
     #[serde(default = "default_gapless_enabled")]
     pub gapless_enabled: bool,
+    /// Automatically fetch missing lyrics from the network when a track plays.
+    #[serde(default = "default_auto_lyrics_download")]
+    pub auto_lyrics_download: bool,
 }
 
 fn default_gapless_enabled() -> bool {
+    true
+}
+
+fn default_auto_lyrics_download() -> bool {
     true
 }
 
@@ -52,6 +59,7 @@ impl Default for AppSettings {
             media_folders: Vec::new(),
             folder_setup_dismissed: false,
             gapless_enabled: true,
+            auto_lyrics_download: true,
         }
     }
 }

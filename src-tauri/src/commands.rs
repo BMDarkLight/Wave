@@ -8,8 +8,8 @@ use crate::app_settings::{AppSettings, AppSettingsState};
 use crate::audio::player::AudioPlayer;
 use crate::dto::{
     AlbumSummaryDto, ArtistSummaryDto, CloseAction, EqSettingsDto, HomeSuggestionsDto,
-    ImportResultDto, ListeningStatsDto, PlaybackModeDto, PlaybackStateDto, QueueDto,
-    QueueStateDto, SearchHitDto,
+    ImportResultDto, ListeningStatsDto, LyricsImportResultDto, PlaybackModeDto, PlaybackStateDto,
+    QueueDto, QueueStateDto, SearchHitDto,
 };
 use crate::library::{Library, PlaylistInfo};
 use crate::listen::{ListenEndReason, ListenFlush, ListenTracker};
@@ -1283,6 +1283,26 @@ pub async fn set_gapless_enabled(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_auto_lyrics_download(
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<bool, String> {
+    let settings = lock_settings(&settings_state)?;
+    Ok(settings.auto_lyrics_download)
+}
+
+#[tauri::command]
+pub async fn set_auto_lyrics_download(
+    enabled: bool,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut settings = lock_settings(&settings_state)?;
+    settings.auto_lyrics_download = enabled;
+    settings.save(&app)?;
+    Ok(())
+}
+
 // ── Library / playlist commands ───────────────────────────────────────────────
 
 #[tauri::command]
@@ -2219,6 +2239,37 @@ pub async fn import_playlist(
         playlist_name: info.name,
         track_count: tracks.len(),
     })
+}
+
+#[tauri::command]
+pub async fn export_lyrics(path: String, app: tauri::AppHandle) -> Result<usize, String> {
+    let app = app.clone();
+    blocking(move || {
+        let library = app.state::<LibraryState>();
+        let lib = library.0.lock().map_err(|e| e.to_string())?;
+        validate_safe_output_path(&path, "json")?;
+        lib.export_lyrics_json(&path)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn import_lyrics(
+    path: String,
+    app: tauri::AppHandle,
+) -> Result<LyricsImportResultDto, String> {
+    let app = app.clone();
+    blocking(move || {
+        let library = app.state::<LibraryState>();
+        let lib = library.0.lock().map_err(|e| e.to_string())?;
+        let (imported, skipped, missing) = lib.import_lyrics_json(&path)?;
+        Ok(LyricsImportResultDto {
+            imported,
+            skipped,
+            missing,
+        })
+    })
+    .await
 }
 
 // ── Audio output devices ─────────────────────────────────────────────────────

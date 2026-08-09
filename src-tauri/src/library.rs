@@ -71,6 +71,39 @@ struct TrackExportJson {
     duration_seconds: Option<f64>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct LyricsExportJson {
+    format: String,
+    version: u32,
+    exported_at: i64,
+    tracks: Vec<LyricsTrackExportJson>,
+}
+
+/// Minimal track identity for lyrics backup.
+///
+/// Matches the metadata LRCLib uses (`artist` / `title` / `album` / `duration`)
+/// plus Wave's file fingerprint for rematching after a re-import. Paths and
+/// library IDs are intentionally omitted.
+#[derive(Debug, Serialize, Deserialize)]
+struct LyricsTrackExportJson {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fingerprint_sha256: Option<String>,
+    title: String,
+    artist: String,
+    album: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    duration_seconds: Option<f64>,
+    lyrics: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lyrics_source: Option<String>,
+    /// Legacy v1 field — accepted on import only.
+    #[serde(default, skip_serializing)]
+    path: Option<String>,
+    /// Legacy v1 field — accepted on import only.
+    #[serde(default, skip_serializing)]
+    id: Option<String>,
+}
+
 /// Cached ID for the default Library playlist, so we don't need to hit the
 /// database on every single read operation.
 pub struct Library {
@@ -2165,6 +2198,195 @@ impl Library {
             }
         }
         Ok((playlist_id, tracks))
+    }
+
+    /// Export all saved track lyrics as a Wave JSON backup.
+    pub fn export_lyrics_json(&self, output_path: &str) -> Result<usize, String> {
+        let connection = self.read_connection();
+        let mut stmt = connection
+            .prepare(
+                "SELECT fingerprint_sha256, title, artist, album, duration_seconds,
+                        lyrics, lyrics_source
+                 FROM tracks
+                 WHERE lyrics IS NOT NULL AND TRIM(lyrics) != ''
+                 ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, title COLLATE NOCASE",
+            )
+            .map_err(|e| format!("Failed to prepare lyrics export: {e}"))?;
+        let tracks = stmt
+            .query_map([], |row| {
+                let fingerprint: Option<String> = row.get(0)?;
+                Ok(LyricsTrackExportJson {
+                    fingerprint_sha256: fingerprint.filter(|fp| !fp.is_empty()),
+                    title: row.get(1)?,
+                    artist: row.get(2)?,
+                    album: row.get(3)?,
+                    duration_seconds: row.get(4)?,
+                    lyrics: row.get(5)?,
+                    lyrics_source: row.get(6)?,
+                    path: None,
+                    id: None,
+                })
+            })
+            .map_err(|e| format!("Failed to query lyrics: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read lyrics rows: {e}"))?;
+
+        let count = tracks.len();
+        let export = LyricsExportJson {
+            format: "wave-lyrics".to_string(),
+            version: 2,
+            exported_at: now_timestamp(),
+            tracks,
+        };
+        let json = serde_json::to_string_pretty(&export)
+            .map_err(|e| format!("Failed to serialize lyrics JSON: {e}"))?;
+        std::fs::write(output_path, json)
+            .map_err(|e| format!("Failed to write lyrics file: {e}"))?;
+        Ok(count)
+    }
+
+    /// Import lyrics from a Wave JSON backup into matching library tracks.
+    ///
+    /// Match order: fingerprint → artist/album/title (+ duration) → legacy path/id.
+    pub fn import_lyrics_json(
+        &self,
+        json_path: &str,
+    ) -> Result<(usize, usize, usize), String> {
+        let content = std::fs::read_to_string(json_path)
+            .map_err(|e| format!("Failed to read lyrics file: {e}"))?;
+        let export: LyricsExportJson = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse lyrics JSON: {e}"))?;
+        if export.format != "wave-lyrics" {
+            return Err(format!(
+                "Unsupported lyrics format: {} (expected wave-lyrics)",
+                export.format
+            ));
+        }
+        if export.version != 1 && export.version != 2 {
+            return Err(format!(
+                "Unsupported lyrics export version: {} (expected 1 or 2)",
+                export.version
+            ));
+        }
+        if export.tracks.len() > 50_000 {
+            return Err(format!(
+                "Lyrics file has too many tracks ({}; max 50000)",
+                export.tracks.len()
+            ));
+        }
+
+        let mut imported = 0usize;
+        let mut skipped = 0usize;
+        let mut missing = 0usize;
+
+        for entry in &export.tracks {
+            let lyrics = entry.lyrics.trim();
+            if lyrics.is_empty() {
+                skipped += 1;
+                continue;
+            }
+            let Some(track_id) = self.resolve_lyrics_import_track(entry)? else {
+                missing += 1;
+                continue;
+            };
+            let source = entry
+                .lyrics_source
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("imported");
+            self.set_track_lyrics(&track_id, lyrics, source)?;
+            imported += 1;
+        }
+
+        Ok((imported, skipped, missing))
+    }
+
+    fn resolve_lyrics_import_track(
+        &self,
+        entry: &LyricsTrackExportJson,
+    ) -> Result<Option<String>, String> {
+        let connection = self.read_connection();
+
+        if let Some(ref fp) = entry.fingerprint_sha256 {
+            if !fp.is_empty() {
+                if let Some(id) = connection
+                    .query_row(
+                        "SELECT id FROM tracks WHERE fingerprint_sha256 = ?1 LIMIT 1",
+                        params![fp],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .map_err(|e| format!("Failed to look up track by fingerprint: {e}"))?
+                {
+                    return Ok(Some(id));
+                }
+            }
+        }
+
+        if !entry.title.is_empty() && entry.title != "Unknown" {
+            if let Some(duration) = entry.duration_seconds.filter(|d| d.is_finite() && *d > 0.0) {
+                // Prefer a tag match whose duration is within ~2s (same hint LRCLib uses).
+                if let Some(id) = connection
+                    .query_row(
+                        "SELECT id FROM tracks
+                         WHERE lower(artist) = lower(?1)
+                           AND lower(album) = lower(?2)
+                           AND lower(title) = lower(?3)
+                           AND duration_seconds IS NOT NULL
+                           AND ABS(duration_seconds - ?4) <= 2.0
+                         LIMIT 1",
+                        params![entry.artist, entry.album, entry.title, duration],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .map_err(|e| format!("Failed to look up track by tags+duration: {e}"))?
+                {
+                    return Ok(Some(id));
+                }
+            }
+            if let Some(id) = connection
+                .query_row(
+                    "SELECT id FROM tracks
+                     WHERE lower(artist) = lower(?1)
+                       AND lower(album) = lower(?2)
+                       AND lower(title) = lower(?3)
+                     LIMIT 1",
+                    params![entry.artist, entry.album, entry.title],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|e| format!("Failed to look up track by tags: {e}"))?
+            {
+                return Ok(Some(id));
+            }
+        }
+
+        // Legacy wave-lyrics v1 backups may still carry path / id.
+        if let Some(ref path) = entry.path {
+            if !path.is_empty() {
+                if let Some(id) = resolve_track_id_by_path(&connection, path)? {
+                    return Ok(Some(id));
+                }
+            }
+        }
+        if let Some(ref id) = entry.id {
+            if !id.is_empty() {
+                let exists: Option<String> = connection
+                    .query_row(
+                        "SELECT id FROM tracks WHERE id = ?1",
+                        params![id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| format!("Failed to look up track by id: {e}"))?;
+                if exists.is_some() {
+                    return Ok(Some(id.clone()));
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     // ── Listen stats / recommendations ────────────────────────────────────────

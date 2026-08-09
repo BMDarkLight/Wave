@@ -127,6 +127,12 @@ export interface ImportResult {
   track_count: number;
 }
 
+export interface LyricsImportResult {
+  imported: number;
+  skipped: number;
+  missing: number;
+}
+
 /** Summary of a distinct album in the library (grouped by album + album artist). */
 export interface AlbumSummary {
   name: string;
@@ -697,6 +703,14 @@ export const importPlaylist = (path: string, name?: string): Promise<ImportResul
   return safeInvoke<ImportResult>("import_playlist", { path, name });
 };
 
+export const exportLyrics = (path: string): Promise<number> => {
+  return safeInvoke<number>("export_lyrics", { path });
+};
+
+export const importLyrics = (path: string): Promise<LyricsImportResult> => {
+  return safeInvoke<LyricsImportResult>("import_lyrics", { path });
+};
+
 // ── Dialog helpers for export / import ───────────────────────────────────────
 
 export const savePlaylistDialog = async (defaultName?: string): Promise<string | null> => {
@@ -727,7 +741,35 @@ export const openPlaylistDialog = async (): Promise<string | null> => {
   });
   if (selected === null) return null;
   if (typeof selected === "string") return selected;
-  return null;
+  return Array.isArray(selected) ? selected[0] ?? null : null;
+};
+
+export const saveLyricsDialog = async (): Promise<string | null> => {
+  await tauriInitialized;
+  if (!openFn) {
+    throw new Error(TAURI_UNAVAILABLE);
+  }
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  return save({
+    title: "Export Lyrics",
+    defaultPath: "wave-lyrics.json",
+    filters: [{ name: "Wave Lyrics (JSON)", extensions: ["json"] }],
+  });
+};
+
+export const openLyricsDialog = async (): Promise<string | null> => {
+  await tauriInitialized;
+  if (!openFn) {
+    throw new Error(TAURI_UNAVAILABLE);
+  }
+  const selected = await openFn({
+    multiple: false,
+    filters: [{ name: "Wave Lyrics (JSON)", extensions: ["json"] }],
+    title: "Import Lyrics",
+  });
+  if (selected === null) return null;
+  if (typeof selected === "string") return selected;
+  return Array.isArray(selected) ? selected[0] ?? null : null;
 };
 
 // ── Queue / Playback Mode commands ────────────────────────────────────────────
@@ -804,6 +846,14 @@ export const getGaplessEnabled = (): Promise<boolean> => {
 
 export const setGaplessEnabled = (enabled: boolean): Promise<void> => {
   return safeInvoke("set_gapless_enabled", { enabled });
+};
+
+export const getAutoLyricsDownload = (): Promise<boolean> => {
+  return safeInvoke<boolean>("get_auto_lyrics_download");
+};
+
+export const setAutoLyricsDownload = (enabled: boolean): Promise<void> => {
+  return safeInvoke("set_auto_lyrics_download", { enabled });
 };
 
 // ── Audio Output Devices ──────────────────────────────────────────────────────

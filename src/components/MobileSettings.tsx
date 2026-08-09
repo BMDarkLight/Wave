@@ -165,6 +165,8 @@ function ScrollSafeRange({
 }
 
 interface MobileSettingsProps {
+  /** Render in the desktop middle pane instead of a slide-over sheet. */
+  embedded?: boolean;
   closing?: boolean;
   onClose: () => void;
   playlists: PlaylistInfo[];
@@ -176,6 +178,10 @@ interface MobileSettingsProps {
   onExportPlaylist: (id: string, name: string) => void;
   onSyncPlaylist: (id: string) => void;
   onAddMediaSource: () => Promise<void>;
+  onExportLyrics: () => Promise<string | null>;
+  onImportLyrics: () => Promise<string | null>;
+  autoLyricsDownload: boolean;
+  onAutoLyricsDownloadChange: (enabled: boolean) => void;
   eqSettings: EqSettings;
   onEqEnabledChange: (enabled: boolean) => void;
   onEqBandChange: (index: number, gain: number) => void;
@@ -191,6 +197,7 @@ interface MobileSettingsProps {
 }
 
 export default function MobileSettings({
+  embedded = false,
   closing = false,
   onClose,
   playlists,
@@ -202,6 +209,10 @@ export default function MobileSettings({
   onExportPlaylist,
   onSyncPlaylist,
   onAddMediaSource,
+  onExportLyrics,
+  onImportLyrics,
+  autoLyricsDownload,
+  onAutoLyricsDownloadChange,
   eqSettings,
   onEqEnabledChange,
   onEqBandChange,
@@ -223,6 +234,8 @@ export default function MobileSettings({
   const [resetConfirming, setResetConfirming] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [listenStats, setListenStats] = useState<ListeningStats | null>(null);
+  const [lyricsBusy, setLyricsBusy] = useState(false);
+  const [lyricsStatus, setLyricsStatus] = useState<string | null>(null);
 
   const refreshMediaFolders = () => {
     listMediaFolders().then(setMediaFolders).catch(() => {});
@@ -251,11 +264,15 @@ export default function MobileSettings({
   }, []);
 
   useEffect(() => {
+    if (embedded) {
+      setEntered(true);
+      return;
+    }
     const id = requestAnimationFrame(() => {
       requestAnimationFrame(() => setEntered(true));
     });
     return () => cancelAnimationFrame(id);
-  }, []);
+  }, [embedded]);
 
   const libraryPlaylist = playlists.find((p) => isLibraryPlaylistName(p.name));
 
@@ -277,6 +294,28 @@ export default function MobileSettings({
     }
   };
 
+  const handleExportLyricsClick = async () => {
+    setLyricsBusy(true);
+    setLyricsStatus(null);
+    try {
+      const message = await onExportLyrics();
+      if (message) setLyricsStatus(message);
+    } finally {
+      setLyricsBusy(false);
+    }
+  };
+
+  const handleImportLyricsClick = async () => {
+    setLyricsBusy(true);
+    setLyricsStatus(null);
+    try {
+      const message = await onImportLyrics();
+      if (message) setLyricsStatus(message);
+    } finally {
+      setLyricsBusy(false);
+    }
+  };
+
   const orderedPlaylists = [...playlists].sort((a, b) => {
     const priority = [LIBRARY_PLAYLIST_NAME, "Favorites"];
     const ai = priority.indexOf(a.name);
@@ -285,10 +324,20 @@ export default function MobileSettings({
     return a.name.localeCompare(b.name);
   });
 
+  const rootClass = [
+    embedded ? "main-content" : "",
+    "mobile-settings-page",
+    embedded ? "mset-embedded" : "",
+    embedded || (entered && !closing) ? "mset-open" : "",
+    !embedded && closing ? "mset-closing" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const Root = embedded ? "main" : "div";
+
   return (
-    <div
-      className={`mobile-settings-page${entered && !closing ? " mset-open" : ""}${closing ? " mset-closing" : ""}`}
-    >
+    <Root className={rootClass}>
       <div className="mset-header">
         <button
           className="page-back-btn mset-back-btn"
@@ -302,6 +351,7 @@ export default function MobileSettings({
       </div>
 
       <div className="mset-scroll">
+        {!embedded && (
         <section className="mset-section">
           <h2>Media Source Folders</h2>
           <div className="mset-card">
@@ -365,6 +415,7 @@ export default function MobileSettings({
             </div>
           )}
         </section>
+        )}
 
         <section className="mset-section">
           <div className="mset-section-header">
@@ -446,6 +497,58 @@ export default function MobileSettings({
                 </div>
               );
             })}
+          </div>
+        </section>
+
+        <section className="mset-section">
+          <h2>Lyrics</h2>
+          <div className="mset-card">
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={autoLyricsDownload}
+                onChange={(event) =>
+                  onAutoLyricsDownloadChange(event.target.checked)
+                }
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Auto lyric download</span>
+                <span className="mset-gapless-hint">
+                  Fetch missing lyrics online when a song starts playing.
+                </span>
+              </span>
+            </label>
+            <div className="mset-playback-divider" role="separator" />
+            <div className="mset-row">
+              <div className="mset-row-text">
+                <span className="mset-row-label">Saved lyrics</span>
+                <span className="mset-row-value">
+                  Back up downloaded lyrics, or restore them into matching
+                  library tracks.
+                </span>
+              </div>
+              <div className="mset-row-actions">
+                <button
+                  className="mset-icon-btn"
+                  onClick={() => void handleImportLyricsClick()}
+                  disabled={lyricsBusy}
+                  type="button"
+                  title="Import lyrics"
+                >
+                  <BiImport />
+                </button>
+                <button
+                  className="mset-icon-btn"
+                  onClick={() => void handleExportLyricsClick()}
+                  disabled={lyricsBusy}
+                  type="button"
+                  title="Export lyrics"
+                >
+                  <BiExport />
+                </button>
+              </div>
+            </div>
+            {lyricsStatus && <p className="mset-hint mset-lyrics-status">{lyricsStatus}</p>}
           </div>
         </section>
 
@@ -709,6 +812,6 @@ export default function MobileSettings({
           </div>
         </section>
       </div>
-    </div>
+    </Root>
   );
 }
