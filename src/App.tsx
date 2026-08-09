@@ -115,6 +115,7 @@ import {
   EQ_PRESETS,
   listMediaFolders,
   saveMediaFolder,
+  removeMediaFolder,
   scanDirectoryRecursive,
   importScannedAudio,
   setPlaylistSyncFolder,
@@ -2063,6 +2064,77 @@ function App() {
     }
   };
 
+  /** Add another media folder into Library without replacing the Library sync folder. */
+  const handleAddExtraMediaSource = async () => {
+    try {
+      setError(null);
+      let directory: string | null = null;
+      if (androidHost) {
+        let result;
+        try {
+          result = await selectMediaFolder();
+        } catch (err) {
+          setError(formatInvokeError(err, "Failed to open folder picker"));
+          return;
+        }
+        if (!result?.uri) return;
+        directory = result.uri;
+      } else {
+        directory = await selectAudioFolder();
+        if (!directory) return;
+      }
+
+      setIsScanningFolder(true);
+      setFolderScanIsSync(false);
+      setImportedCount(0);
+
+      const paths = androidHost
+        ? await scanDirectoryRecursive(directory)
+        : await scanDirectory(directory);
+      if (!paths.length) {
+        setError("No audio files found in the selected folder.");
+        setIsScanningFolder(false);
+        return;
+      }
+
+      await saveMediaFolder(directory).catch(() => {});
+
+      const list = playlists.length > 0 ? playlists : await loadPlaylists();
+      const playlistId =
+        list.find((p) => isLibraryPlaylistName(p.name))?.id ??
+        getDefaultPlaylistId(list);
+      if (!playlistId) {
+        setError("No playlist selected.");
+        setIsScanningFolder(false);
+        return;
+      }
+
+      await runFolderImport(paths, playlistId);
+    } catch (err) {
+      setIsScanningFolder(false);
+      setFolderScanIsSync(false);
+      setError(formatInvokeError(err, "Failed to add media source"));
+    }
+  };
+
+  /** Forget a media source folder; also unbind Library (or any playlist) synced to it. */
+  const handleRemoveMediaSource = async (path: string) => {
+    try {
+      setError(null);
+      await removeMediaFolder(path);
+      const list = playlists.length > 0 ? playlists : await loadPlaylists();
+      const bound = list.filter((p) => p.sync_folder === path);
+      for (const pl of bound) {
+        await setPlaylistSyncFolder(pl.id, null);
+      }
+      if (bound.length > 0) {
+        await loadPlaylists();
+      }
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to remove media source"));
+    }
+  };
+
   const handleSelectOutputDeviceSettings = async (name: string) => {
     try {
       await setOutputDevice(name);
@@ -3986,6 +4058,8 @@ function App() {
           onExportPlaylist={handleExportPlaylistById}
           onSyncPlaylist={handleSyncPlaylistFolder}
           onAddMediaSource={handleAddMediaSource}
+          onAddExtraMediaSource={handleAddExtraMediaSource}
+          onRemoveMediaSource={handleRemoveMediaSource}
           onExportLyrics={handleExportLyrics}
           onImportLyrics={handleImportLyrics}
           autoLyricsDownload={autoLyricsDownload}
@@ -5561,6 +5635,8 @@ function App() {
           onExportPlaylist={handleExportPlaylistById}
           onSyncPlaylist={handleSyncPlaylistFolder}
           onAddMediaSource={handleAddMediaSource}
+          onAddExtraMediaSource={handleAddExtraMediaSource}
+          onRemoveMediaSource={handleRemoveMediaSource}
           onExportLyrics={handleExportLyrics}
           onImportLyrics={handleImportLyrics}
           autoLyricsDownload={autoLyricsDownload}

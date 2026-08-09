@@ -11,6 +11,7 @@ import { BiArrowBack } from "react-icons/bi";
 import {
   BiFolderOpen,
   BiFolderMinus,
+  BiFolderPlus,
   BiImport,
   BiPlus,
   BiEditAlt,
@@ -26,7 +27,6 @@ import {
 } from "react-icons/bi";
 import {
   listMediaFolders,
-  removeMediaFolder,
   listOutputDevices,
   getFileName,
   getListeningStats,
@@ -178,6 +178,10 @@ interface MobileSettingsProps {
   onExportPlaylist: (id: string, name: string) => void;
   onSyncPlaylist: (id: string) => void;
   onAddMediaSource: () => Promise<void>;
+  /** Add another scanned folder without changing the Library sync folder. */
+  onAddExtraMediaSource: () => Promise<void>;
+  /** Forget a saved media source; clears Library sync if it was that folder. */
+  onRemoveMediaSource: (path: string) => Promise<void>;
   onExportLyrics: () => Promise<string | null>;
   onImportLyrics: () => Promise<string | null>;
   autoLyricsDownload: boolean;
@@ -209,6 +213,8 @@ export default function MobileSettings({
   onExportPlaylist,
   onSyncPlaylist,
   onAddMediaSource,
+  onAddExtraMediaSource,
+  onRemoveMediaSource,
   onExportLyrics,
   onImportLyrics,
   autoLyricsDownload,
@@ -286,9 +292,19 @@ export default function MobileSettings({
     }
   };
 
+  const handleAddExtraSource = async () => {
+    setAddingSource(true);
+    try {
+      await onAddExtraMediaSource();
+    } finally {
+      setAddingSource(false);
+      refreshMediaFolders();
+    }
+  };
+
   const handleRemoveFolder = async (path: string) => {
     try {
-      await removeMediaFolder(path);
+      await onRemoveMediaSource(path);
     } finally {
       refreshMediaFolders();
     }
@@ -353,7 +369,20 @@ export default function MobileSettings({
       <div className="mset-scroll">
         {!embedded && (
         <section className="mset-section">
-          <h2>Media Source Folders</h2>
+          <div className="mset-section-header">
+            <h2>Media Source Folders</h2>
+            <div className="mset-section-header-actions">
+              <button
+                className="mset-icon-btn"
+                onClick={() => void handleAddExtraSource()}
+                disabled={addingSource || isScanningFolder}
+                type="button"
+                title="Add media source"
+              >
+                <BiFolderPlus />
+              </button>
+            </div>
+          </div>
           <div className="mset-card">
             <div className="mset-row">
               <div className="mset-row-text">
