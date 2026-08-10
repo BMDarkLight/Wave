@@ -135,7 +135,7 @@ import {
 import { isAndroid } from "./utils/platform";
 import { enableNoHoverMode } from "./utils/touchHover";
 import { useLyricsAutoScroll } from "./hooks/useLyricsAutoScroll";
-import { DRAG_DISMISS_REOPEN_GUARD_MS } from "./hooks/useDragDismiss";
+import { armDragDismissGhostClickGuard } from "./hooks/useDragDismiss";
 import AlbumPage from "./components/AlbumPage";
 import ArtistPage from "./components/ArtistPage";
 import ContextMenu from "./components/ContextMenu";
@@ -608,7 +608,6 @@ function App() {
   const [mobilePlayerKey, setMobilePlayerKey] = useState(0);
   const mobilePlayerOpenRef = useRef(false);
   const mobilePlayerClosingRef = useRef(false);
-  const ignorePlayerOpenUntilRef = useRef(0);
   const mobilePlayerCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -856,8 +855,6 @@ function App() {
 
   const handleOpenMobilePlayer = () => {
     if (!currentTrack) return;
-    // Ignore the delayed synthetic click Android fires after a drag-dismiss.
-    if (performance.now() < ignorePlayerOpenUntilRef.current) return;
     setMobileNavOpen(false);
     closeMainSearch();
     setShowQueue(false);
@@ -902,8 +899,7 @@ function App() {
   };
 
   const handleDragCloseMobilePlayer = () => {
-    ignorePlayerOpenUntilRef.current =
-      performance.now() + DRAG_DISMISS_REOPEN_GUARD_MS;
+    // Ghost-click guard is armed inside useDragDismiss on dismiss.
     handleCloseMobilePlayer();
   };
 
@@ -5589,14 +5585,12 @@ function App() {
           onClose={handleCloseMobilePlayer}
           onDragClose={handleDragCloseMobilePlayer}
           onOpenArtist={(name) => {
-            ignorePlayerOpenUntilRef.current =
-              performance.now() + DRAG_DISMISS_REOPEN_GUARD_MS;
+            armDragDismissGhostClickGuard();
             forceCloseMobilePlayer();
             openArtistPage(name);
           }}
           onOpenAlbum={(name, albumArtist) => {
-            ignorePlayerOpenUntilRef.current =
-              performance.now() + DRAG_DISMISS_REOPEN_GUARD_MS;
+            armDragDismissGhostClickGuard();
             forceCloseMobilePlayer();
             openAlbumPage(name, albumArtist);
           }}

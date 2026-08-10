@@ -15,12 +15,46 @@ type UseDragDismissOptions = {
 };
 
 /**
+ * After a drag-dismiss removes/disables an overlay, Android WebView often
+ * synthesizes a click at the release point without a new pointerdown. Swallow
+ * that single capture-phase click. A real tap always starts with pointerdown
+ * after this is armed, so intentional reopens are never blocked.
+ */
+export function armDragDismissGhostClickGuard(timeoutMs = 320): void {
+  let seenPointerDown = false;
+
+  const cleanup = () => {
+    document.removeEventListener("pointerdown", onPointerDown, true);
+    document.removeEventListener("click", onClick, true);
+    window.clearTimeout(timer);
+  };
+
+  const onPointerDown = () => {
+    seenPointerDown = true;
+  };
+
+  const onClick = (event: Event) => {
+    if (seenPointerDown) {
+      cleanup();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    cleanup();
+  };
+
+  const timer = window.setTimeout(cleanup, timeoutMs);
+  document.addEventListener("pointerdown", onPointerDown, true);
+  document.addEventListener("click", onClick, true);
+}
+
+/**
  * Pointer-driven downward swipe-to-dismiss for full-screen sheets / pages.
  * Bind the returned handlers to a drag surface (header, handle, cover).
  *
- * Callers should arm a short "ignore reopen" window inside `onDismiss` so the
- * Android WebView's delayed synthetic click (often ~200–300ms later) cannot
- * immediately reopen the surface that just closed.
+ * On dismiss, arms {@link armDragDismissGhostClickGuard} so the Android
+ * WebView's delayed synthetic click cannot reopen the surface or steal the
+ * first intentional tap.
  */
 export function useDragDismiss({
   onDismiss,
@@ -93,6 +127,18 @@ export function useDragDismiss({
       // Prevent the compatibility mouse/click synthesized from this gesture
       // when the browser still delivers them on the same target.
       event?.preventDefault?.();
+      if (
+        event?.currentTarget &&
+        event.pointerId != null &&
+        event.currentTarget.hasPointerCapture?.(event.pointerId)
+      ) {
+        try {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        } catch {
+          /* already released */
+        }
+      }
+      armDragDismissGhostClickGuard();
       onDismissRef.current();
       requestAnimationFrame(() => {
         offsetRef.current = 0;
@@ -110,7 +156,8 @@ export function useDragDismiss({
   const onPointerCancel = () => reset();
 
   // Swallow the ghost click that follows a drag-dismiss on the drag surface
-  // itself (sheet handle / header). Player-bar reopens are guarded separately.
+  // itself (sheet handle / header). Player-bar reopens are guarded separately
+  // via armDragDismissGhostClickGuard.
   const onClick = (e: ReactMouseEvent<HTMLElement>) => {
     if (movedRef.current) {
       e.preventDefault();
@@ -131,6 +178,3 @@ export function useDragDismiss({
     },
   };
 }
-
-/** How long to ignore reopen after a drag-dismiss (Android delayed click). */
-export const DRAG_DISMISS_REOPEN_GUARD_MS = 380;

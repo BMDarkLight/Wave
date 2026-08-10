@@ -30,7 +30,7 @@ import {
   EQ_PRESETS,
 } from "../utils/player";
 import type { Track, PlaybackMode, EqSettings } from "../utils/player";
-import { useDragDismiss, DRAG_DISMISS_REOPEN_GUARD_MS } from "../hooks/useDragDismiss";
+import { useDragDismiss } from "../hooks/useDragDismiss";
 import VirtualizedList from "./VirtualizedList";
 
 const formatTime = (seconds?: number | null) => {
@@ -505,13 +505,13 @@ export default function MobileNowPlaying({
   const dragMovedRef = useRef(false);
   const [sheetMounted, setSheetMounted] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
-  const ignoreMenuOpenUntilRef = useRef(0);
+  // Local flag so drag-dismiss drops pointer-events in the same frame as the
+  // gesture (parent `closing` arrives one render later via React state).
+  const [pageDismissing, setPageDismissing] = useState(false);
+  const isPageClosing = closing || pageDismissing;
 
   const closeSheet = () => onMenuOpenChange(false);
-  const openSheet = () => {
-    if (performance.now() < ignoreMenuOpenUntilRef.current) return;
-    onMenuOpenChange(true);
-  };
+  const openSheet = () => onMenuOpenChange(true);
 
   /** Step back through sheet → cover → dismiss, matching Android back. */
   const handleHeaderBack = () => {
@@ -527,17 +527,20 @@ export default function MobileNowPlaying({
   };
 
   const pageDismiss = useDragDismiss({
-    onDismiss: () => (onDragClose ?? onClose)(),
-    enabled: !closing,
+    onDismiss: () => {
+      setPageDismissing(true);
+      (onDragClose ?? onClose)();
+    },
+    enabled: !isPageClosing,
   });
 
   const sheetDismiss = useDragDismiss({
     onDismiss: () => {
-      ignoreMenuOpenUntilRef.current =
-        performance.now() + DRAG_DISMISS_REOPEN_GUARD_MS;
+      // Drop pointer-events immediately (don't wait for menuOpen → effect).
+      setSheetOpen(false);
       closeSheet();
     },
-    enabled: sheetOpen && !closing,
+    enabled: sheetOpen && !isPageClosing,
     threshold: 80,
     velocityThreshold: 0.4,
   });
@@ -677,7 +680,7 @@ export default function MobileNowPlaying({
   };
 
   const pageDragStyle =
-    !closing && (pageDismiss.dragging || pageDismiss.offset > 0)
+    !isPageClosing && (pageDismiss.dragging || pageDismiss.offset > 0)
       ? {
           transform: `translateY(${pageDismiss.offset}px)`,
         }
@@ -690,7 +693,7 @@ export default function MobileNowPlaying({
 
   return (
     <div
-      className={`mobile-now-playing${entered && !closing ? " mnp-open" : ""}${closing ? " mnp-closing" : ""}${view !== "cover" ? " mnp-expanded" : ""}${pageDismiss.dragging ? " mnp-dragging" : ""}`}
+      className={`mobile-now-playing${entered && !isPageClosing ? " mnp-open" : ""}${isPageClosing ? " mnp-closing" : ""}${view !== "cover" ? " mnp-expanded" : ""}${pageDismiss.dragging ? " mnp-dragging" : ""}`}
       style={pageDragStyle}
     >
       <div className="mnp-header" {...pageDismiss.bind}>
