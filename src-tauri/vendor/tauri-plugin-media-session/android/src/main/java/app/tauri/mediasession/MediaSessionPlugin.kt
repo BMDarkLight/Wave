@@ -862,6 +862,12 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
             }
         }
 
+        /** Called from Rust/JNI while the WebView may be frozen or Activity gone. */
+        @JvmStatic
+        fun syncSessionFromBackground(positionSec: Double, playing: Boolean) {
+            MediaSessionState.refreshFromBackground(positionSec, playing)
+        }
+
         internal fun forceCleanup(context: Context) {
             MediaSessionCleanupService.instance?.cancelKeepalive()
             MediaSessionCleanupService.pendingNotification = null

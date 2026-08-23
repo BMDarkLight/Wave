@@ -29,5 +29,14 @@ public final class MediaNativeBridge {
         }
     }
 
+    /** Called from Rust while the WebView is frozen in the background. */
+    public static void syncSession(double positionSec, boolean playing) {
+        try {
+            MediaSessionPlugin.syncSessionFromBackground(positionSec, playing);
+        } catch (Throwable t) {
+            Log.w(TAG, "syncSession failed: " + t.getMessage());
+        }
+    }
+
     private static native void nativeOnMediaAction(String action);
 }
