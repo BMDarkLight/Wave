@@ -1163,13 +1163,10 @@ impl AudioPlayer {
                 return Err(AudioError::NoTrackLoaded);
             }
             let position_ms = (seconds.max(0.0) * 1000.0) as i64;
+            let was_playing = self.clock.started_at.is_some();
             crate::android::audio::exo_seek(position_ms).map_err(AudioError::Decode)?;
             self.clock.elapsed_before_start = Duration::from_millis(position_ms as u64);
-            if self.is_playing() {
-                self.clock.started_at = Some(Instant::now());
-            } else {
-                self.clock.started_at = None;
-            }
+            self.clock.started_at = was_playing.then(Instant::now);
             return Ok(());
         }
 
@@ -1250,10 +1247,9 @@ impl AudioPlayer {
     pub fn is_playing(&self) -> bool {
         #[cfg(target_os = "android")]
         {
-            if self.current_path.is_some() {
-                return crate::android::audio::exo_is_playing().unwrap_or(false);
-            }
-            return false;
+            // Rust transport clock is authoritative — Exo JNI cache is only
+            // refreshed on the main looper, so worker-thread polls lie.
+            return self.current_path.is_some() && self.clock.started_at.is_some();
         }
         #[cfg(not(target_os = "android"))]
         match &self.sink {
@@ -1380,17 +1376,12 @@ impl AudioPlayer {
     pub fn position_seconds(&self) -> f64 {
         #[cfg(target_os = "android")]
         {
-            // Prefer the wall clock while playing. Exo's JNI position is only
-            // refreshed on the main looper; polls from Rust worker threads used
-            // to return a frozen cache so the in-app seek bar stuck while the
-            // MediaSession notification (which extrapolates) kept advancing.
-            if self.clock.started_at.is_some() {
-                return self.clock.position().as_secs_f64();
-            }
             if self.current_path.is_some() {
-                if let Ok(ms) = crate::android::audio::exo_get_position() {
-                    return ms as f64 / 1000.0;
-                }
+                // Always prefer the Rust clock for loaded tracks. Exo position
+                // JNI reads a cache that is only refreshed on the main looper,
+                // so polls from Rust worker / Tauri command threads freeze after
+                // seek while the MediaSession notification keeps extrapolating.
+                return self.clock.position().as_secs_f64();
             }
         }
         self.clock.position().as_secs_f64()

@@ -669,13 +669,14 @@ public final class WaveExoPlayer {
     }
 
     public void seekTo(long positionMs) {
-        runOnMainAsync(() -> {
+        runOnMainBlocking(() -> {
             cancelCrossfadeInternal();
             if (player != null) {
                 ended = false;
                 long clamped = Math.max(0L, positionMs);
                 player.seekTo(clamped);
-                positionMsCached = clamped;
+                refreshCacheFromPlayer();
+                positionMsCached = player.getCurrentPosition();
             }
         });
     }

@@ -930,6 +930,7 @@ export default function MobileNowPlaying({
           step="1"
           value={displayPosition}
           onPointerDown={() => document.body.classList.add("is-seeking")}
+          onPointerCancel={() => document.body.classList.remove("is-seeking")}
           onChange={(e) => onSeekChange(Number(e.target.value))}
           onPointerUp={(e) => onSeekCommit(Number(e.currentTarget.value))}
         />

@@ -5487,6 +5487,7 @@ function App() {
             value={displayPosition}
             disabled={!playbackState.current_path}
             onPointerDown={() => document.body.classList.add("is-seeking")}
+            onPointerCancel={() => document.body.classList.remove("is-seeking")}
             onChange={(event) => setSeekValue(Number(event.target.value))}
             onPointerUp={(event) =>
               handleSeek(Number(event.currentTarget.value))
