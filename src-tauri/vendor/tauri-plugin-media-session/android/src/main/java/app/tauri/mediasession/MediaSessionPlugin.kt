@@ -594,8 +594,14 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
     private fun refreshTransportNotification(metadata: MediaMetadataCompat? = null) {
         if (!hasActiveMedia()) return
         val meta = metadata ?: buildMetadata()
-        val notification = updateNotification(meta)
-        if (notification != null) MediaSessionCleanupService.start(activity, notification)
+        val notification = updateNotification(meta) ?: return
+        if (currentIsPlaying) {
+            MediaSessionCleanupService.start(activity, notification)
+        } else {
+            // Paused: keep MediaSession state but do not cold-start FGS.
+            MediaSessionCleanupService.stop()
+            notificationManager?.notify(MediaSessionCleanupService.NOTIFICATION_ID, notification)
+        }
     }
 
     private fun dismissTransportNotification() {

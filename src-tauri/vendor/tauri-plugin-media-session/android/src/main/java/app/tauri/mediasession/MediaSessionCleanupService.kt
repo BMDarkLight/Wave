@@ -43,13 +43,11 @@ class MediaSessionCleanupService : Service() {
 
         @Volatile internal var instance: MediaSessionCleanupService? = null
         @Volatile internal var pendingNotification: Notification? = null
-        @Volatile private var safeModeLogged = false
 
         /**
          * Start (or update) the foreground service with the given notification.
-         * Cold-start is disabled in safe mode — it was crashing cold launch on
-         * Android 14+ after the post-v0.3.0 media-session changes. Existing
-         * service instances can still update their notification.
+         * Cold-start only while playback is active — starting mediaPlayback FGS
+         * for a paused/restored track on launch was crashing the process.
          */
         fun start(context: Context, notification: Notification) {
             if (!MediaSessionState.sessionActive) {
@@ -67,18 +65,19 @@ class MediaSessionCleanupService : Service() {
                 }
                 return
             }
-            // SAFE MODE: do not call startForegroundService. A failed / late
-            // startForeground kills the entire process; CrashReporter keeps a
-            // note so the next successful UI launch can show what happened.
-            Log.w(TAG, "start: safe-mode skip cold-start FGS")
-            if (!safeModeLogged) {
-                safeModeLogged = true
-                recordHostMessage(
-                    context,
-                    "MediaSessionCleanupService.start",
-                    "Skipped media foreground service cold-start (safe mode). "
-                        + "App should stay open; lock-screen / shade controls may be missing until re-enabled."
+            if (!MediaSessionState.isPlaying && !MediaSessionPlugin.isPlaybackActive()) {
+                Log.d(TAG, "start: deferred until playback is active")
+                return
+            }
+            try {
+                val appCtx = context.applicationContext
+                appCtx.startForegroundService(
+                    Intent(appCtx, MediaSessionCleanupService::class.java)
+                        .setAction(ACTION_INIT)
                 )
+            } catch (t: Throwable) {
+                Log.e(TAG, "startForegroundService failed: ${t.message}")
+                recordHostError(context, "MediaSessionCleanupService.startForegroundService", t)
             }
         }
 
@@ -92,20 +91,6 @@ class MediaSessionCleanupService : Service() {
                         Throwable::class.java
                     )
                     .invoke(null, context, where, error)
-            } catch (_: Throwable) {
-            }
-        }
-
-        private fun recordHostMessage(context: Context, where: String, message: String) {
-            try {
-                Class.forName("app.bmdarklight.wave.CrashReporter")
-                    .getMethod(
-                        "recordMessage",
-                        Context::class.java,
-                        String::class.java,
-                        String::class.java
-                    )
-                    .invoke(null, context, where, message)
             } catch (_: Throwable) {
             }
         }

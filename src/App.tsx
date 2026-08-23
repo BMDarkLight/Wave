@@ -1513,7 +1513,13 @@ function App() {
           try {
             const report = await takeAndroidCrashReport();
             if (report && report.trim()) {
-              setCrashReport(report.trim());
+              const trimmed = report.trim();
+              // Safe-mode deferrals are not crashes — clear them silently.
+              if (trimmed.startsWith("Wave soft failure")) {
+                void clearAndroidCrashReport().catch(() => {});
+              } else {
+                setCrashReport(trimmed);
+              }
             }
           } catch (crashErr) {
             console.warn("Crash report unavailable:", crashErr);
@@ -5855,7 +5861,7 @@ function App() {
             <h2 id="crash-report-title">Wave recovered from a crash</h2>
             <p>
               A previous launch failed. Copy this report when filing a bug — no
-              adb needed.
+              adb needed. Dismiss once you have copied it.
             </p>
             <pre className="crash-report-body">{crashReport}</pre>
             <div className="crash-report-actions">
