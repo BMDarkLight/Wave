@@ -10,6 +10,7 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.Process
 import android.util.Log
 
 /**
@@ -108,15 +109,14 @@ class MediaSessionCleanupService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (MediaSessionPlugin.isPlaybackActive()) {
-            // User swiped the task away while audio is playing — keep the FGS
-            // alive so playback can continue without glitches.
-            Log.d(TAG, "onTaskRemoved — keeping foreground playback alive")
-            pendingNotification?.let { postNotification(it) }
-            return
-        }
-        Log.d(TAG, "onTaskRemoved — not playing, cleaning up")
+        // User removed Wave from recents — treat as a full exit: stop playback,
+        // drop the notification, and end the process. Pressing Home (without
+        // swiping away) does not call this, so background playback still works.
+        Log.d(TAG, "onTaskRemoved — stopping playback and exiting")
+        pendingNotification = null
         MediaSessionPlugin.forceCleanup(applicationContext)
+        stopSelf()
+        Process.killProcess(Process.myPid())
     }
 
     override fun onDestroy() {

@@ -208,8 +208,8 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
                 else -> PlaybackStateCompat.REPEAT_MODE_NONE
             }
         )
-        session.isActive = currentIsPlaying
-        if (currentIsPlaying) {
+        session.isActive = hasActiveMedia()
+        if (hasActiveMedia()) {
             refreshTransportNotification(metadata)
         } else {
             dismissTransportNotification()
@@ -252,17 +252,12 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
     // ── Lifecycle ───────────────────────────────────────────────────────
 
     override fun onDestroy() {
+        // Detach from the Activity without tearing down the FGS — the user may
+        // have only sent the app to the background (Home). Swiping the task
+        // away is handled in MediaSessionCleanupService.onTaskRemoved.
         Log.d(TAG, "onDestroy: detaching plugin")
         if (activeInstance === this) {
             activeInstance = null
-        }
-        // Keep the FGS only while audio is actively playing; otherwise the app
-        // lingers in "background activity" with a stale transport notification.
-        if (isPlaybackActive()) {
-            Log.d(TAG, "onDestroy: playback active — keeping FGS alive")
-        } else {
-            Log.d(TAG, "onDestroy: not playing — releasing session")
-            releaseSession()
         }
         super.onDestroy()
     }
@@ -357,11 +352,16 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
 
     // ── Internal helpers ────────────────────────────────────────────────
 
-    private fun releaseSession() {
-        try {
-            // Native pause so audio stops even if JS is unreachable.
-            handleMediaAction("pause")
-        } catch (_: Throwable) {
+    private fun hasActiveMedia(): Boolean {
+        return currentTitle.isNotBlank() || currentArtist.isNotBlank()
+    }
+
+    private fun releaseSession(nativeAction: String? = "pause") {
+        if (nativeAction != null) {
+            try {
+                handleMediaAction(nativeAction)
+            } catch (_: Throwable) {
+            }
         }
         mediaSession?.let { session ->
             try {
@@ -524,7 +524,7 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     private fun refreshTransportNotification(metadata: MediaMetadataCompat? = null) {
-        if (!currentIsPlaying) return
+        if (!hasActiveMedia()) return
         val meta = metadata ?: buildMetadata()
         val notification = updateNotification(meta)
         if (notification != null) MediaSessionCleanupService.start(activity, notification)
@@ -838,11 +838,11 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
         }
 
         internal fun forceCleanup(context: Context) {
-            // Prefer native pause so audio stops even if the WebView is gone.
-            handleMediaAction("pause")
+            MediaSessionCleanupService.pendingNotification = null
+            handleMediaAction("stop")
             val plugin = activeInstance
             if (plugin != null) {
-                plugin.releaseSession()
+                plugin.releaseSession(nativeAction = null)
             } else {
                 MediaSessionCleanupService.stop()
                 cancelNotificationArtifacts(context, hard = true)
