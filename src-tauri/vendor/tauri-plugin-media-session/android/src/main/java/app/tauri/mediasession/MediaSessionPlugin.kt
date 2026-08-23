@@ -277,8 +277,9 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
         if (args.duration != null) session.setMetadata(buildMetadata())
 
         syncSharedState()
-        // Only refresh the FGS while playing (or if it is already running).
-        if (MediaSessionState.sessionActive && hasActiveMedia() && currentIsPlaying) {
+        // Refresh FGS notification whenever a session is active (playing or
+        // paused). start() only cold-starts while playing.
+        if (MediaSessionState.sessionActive && hasActiveMedia()) {
             MediaSessionState.refreshForeground(activity.applicationContext, advancePosition = false)
         }
 
@@ -595,13 +596,11 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
         if (!hasActiveMedia()) return
         val meta = metadata ?: buildMetadata()
         val notification = updateNotification(meta) ?: return
-        if (currentIsPlaying) {
-            MediaSessionCleanupService.start(activity, notification)
-        } else {
-            // Paused: keep MediaSession state but do not cold-start FGS.
-            MediaSessionCleanupService.stop()
-            notificationManager?.notify(MediaSessionCleanupService.NOTIFICATION_ID, notification)
-        }
+        // Always update through start(): if the FGS is already running (paused or
+        // playing) it refreshes the notification in place. Cold-start is only
+        // allowed while playing — never tear down the FGS on pause (that removed
+        // the shade notification and caused flicker / missing reappear).
+        MediaSessionCleanupService.start(activity, notification)
     }
 
     private fun dismissTransportNotification() {

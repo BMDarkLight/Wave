@@ -46,8 +46,11 @@ class MediaSessionCleanupService : Service() {
 
         /**
          * Start (or update) the foreground service with the given notification.
-         * Cold-start only while playback is active — starting mediaPlayback FGS
-         * for a paused/restored track on launch was crashing the process.
+         *
+         * - If the FGS is already running: always update the notification (play
+         *   or pause) so pause does not tear down the shade card.
+         * - Cold-start only while playback is active — starting mediaPlayback FGS
+         *   for a paused/restored track on launch was crashing the process.
          */
         fun start(context: Context, notification: Notification) {
             if (!MediaSessionState.sessionActive) {
@@ -188,7 +191,9 @@ class MediaSessionCleanupService : Service() {
         keepaliveHandler.removeCallbacks(keepaliveRunnable)
         instance = null
         releaseResources()
-        if (!MediaSessionState.sessionActive || !MediaSessionPlugin.isPlaybackActive()) {
+        // Keep the transport notification while a session still has media —
+        // pause must not wipe the shade card when the service is torn down.
+        if (!MediaSessionState.sessionActive || !MediaSessionState.hasActiveMedia()) {
             try {
                 MediaSessionPlugin.cancelNotificationArtifactsOnly(applicationContext)
             } catch (_: Throwable) {
