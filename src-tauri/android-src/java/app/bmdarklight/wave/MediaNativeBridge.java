@@ -4,7 +4,7 @@ import android.util.Log;
 
 import androidx.annotation.Keep;
 
-import app.tauri.mediasession.MediaSessionState;
+import app.tauri.mediasession.MediaSessionPlugin;
 
 /**
  * JNI bridge so media notification / audio-focus / headset events can control
@@ -34,7 +34,7 @@ public final class MediaNativeBridge {
     /** Called from Rust while the WebView is frozen in the background. */
     public static void syncSession(double positionSec, boolean playing) {
         try {
-            MediaSessionState.refreshFromBackground(positionSec, playing);
+            MediaSessionPlugin.syncSessionFromBackground(positionSec, playing);
         } catch (Throwable t) {
             Log.w(TAG, "syncSession failed: " + t.getMessage());
         }

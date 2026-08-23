@@ -1,6 +1,8 @@
 package app.tauri.mediasession
 
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -12,8 +14,8 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
-import android.os.Process
 import android.util.Log
+import androidx.core.app.NotificationCompat
 
 /**
  * Foreground service that keeps the process alive for the entire duration of a media session.
@@ -53,7 +55,7 @@ class MediaSessionCleanupService : Service() {
             pendingNotification = notification
             val svc = instance
             if (svc != null) {
-                svc.postNotification(notification)
+                svc.ensureForeground(notification)
             } else {
                 try {
                     // Application context survives Activity recreation.
@@ -79,6 +81,7 @@ class MediaSessionCleanupService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var noisyReceiver: BroadcastReceiver? = null
+    private var foregroundStarted = false
     private val keepaliveHandler = Handler(Looper.getMainLooper())
     private val keepaliveIntervalMs = 15_000L
     private val keepaliveRunnable = object : Runnable {
@@ -111,21 +114,20 @@ class MediaSessionCleanupService : Service() {
             ) {
                 Log.w(TAG, "onStartCommand: rebuilding notification for active playback")
                 MediaSessionState.refreshForeground(applicationContext, advancePosition = true)
-                return START_STICKY
+                // refreshForeground → start() → ensureForeground / pendingNotification.
+                if (pendingNotification != null) {
+                    return START_STICKY
+                }
             }
-            Log.w(TAG, "onStartCommand: no notification yet, staying alive")
-            stopSelf()
+            // Sticky restart after process death, or startForegroundService race:
+            // Android requires startForeground() before we can stop, otherwise the
+            // whole app is killed with ForegroundServiceDidNotStartInTimeException.
+            Log.w(TAG, "onStartCommand: no media to keep alive — shutting down safely")
+            shutDownGracefully()
             return START_NOT_STICKY
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID, notification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        ensureForeground(notification)
         acquireWakeLock()
         registerNoisyReceiver()
         keepaliveHandler.removeCallbacks(keepaliveRunnable)
@@ -139,15 +141,18 @@ class MediaSessionCleanupService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // User removed Wave from recents — treat as a full exit: stop playback,
-        // drop the notification, and end the process. Pressing Home (without
-        // swiping away) does not call this, so background playback still works.
+        // User removed Wave from recents — treat as a full exit: stop playback
+        // and drop the notification. Pressing Home (without swiping away) does
+        // not call this, so background playback still works.
+        //
+        // Do NOT Process.killProcess() here: it races with stopSelf() and leaves
+        // a START_STICKY restart that opens, fails startForeground, and crashes
+        // the next cold start.
         Log.d(TAG, "onTaskRemoved — stopping playback and exiting")
         keepaliveHandler.removeCallbacks(keepaliveRunnable)
         pendingNotification = null
         MediaSessionPlugin.forceCleanup(applicationContext)
-        stopSelf()
-        Process.killProcess(Process.myPid())
+        shutDownGracefully()
     }
 
     override fun onDestroy() {
@@ -166,24 +171,84 @@ class MediaSessionCleanupService : Service() {
     // ── Internal ─────────────────────────────────────────────────────────────
 
     internal fun postNotification(notification: Notification) {
-        val nm = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
-        nm.notify(NOTIFICATION_ID, notification)
+        ensureForeground(notification)
     }
 
     internal fun cancelKeepalive() {
         keepaliveHandler.removeCallbacks(keepaliveRunnable)
     }
 
+    private fun ensureForeground(notification: Notification) {
+        pendingNotification = notification
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID, notification,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        foregroundStarted = true
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * Always satisfy the FGS contract before stopping. Calling stopSelf() (or
+     * being sticky-restarted) without startForeground() crashes the process.
+     */
+    private fun shutDownGracefully() {
+        try {
+            if (!foregroundStarted) {
+                ensureForeground(buildPlaceholderNotification())
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "placeholder startForeground failed: ${e.message}")
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        } catch (_: Exception) {
+        }
+        foregroundStarted = false
+        releaseResources()
+        stopSelf()
+    }
+
+    private fun buildPlaceholderNotification(): Notification {
+        val channelId = "${packageName}.media"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            if (manager?.getNotificationChannel(channelId) == null) {
+                manager?.createNotificationChannel(
+                    NotificationChannel(
+                        channelId,
+                        "Media playback",
+                        NotificationManager.IMPORTANCE_LOW
+                    ).apply { description = "Media playback controls" }
+                )
+            }
+        }
+        return NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle("Wave")
+            .setContentText("Stopping…")
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
     private fun handleStop() {
         keepaliveHandler.removeCallbacks(keepaliveRunnable)
-        releaseResources()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
-        stopSelf()
+        pendingNotification = null
+        shutDownGracefully()
     }
 
     private fun releaseResources() {

@@ -211,17 +211,17 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
                 else -> PlaybackStateCompat.REPEAT_MODE_NONE
             }
         )
+        // Publish shared state before touching the FGS — start() ignores
+        // calls while MediaSessionState.sessionActive is still false.
+        syncSharedState()
         session.isActive = hasActiveMedia()
         if (hasActiveMedia()) {
             refreshTransportNotification(metadata)
+            MediaSessionState.refreshForeground(activity.applicationContext, advancePosition = false)
         } else {
             dismissTransportNotification()
             MediaSessionCleanupService.stop()
             MediaSessionState.clear(activity.applicationContext)
-        }
-        syncSharedState()
-        if (MediaSessionState.sessionActive) {
-            MediaSessionState.refreshForeground(activity.applicationContext, advancePosition = false)
         }
 
         Log.d(TAG, "updateState: applied -> \"$currentTitle\" by $currentArtist, " +
@@ -860,6 +860,12 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
             } catch (_: Throwable) {
                 false
             }
+        }
+
+        /** Called from Rust/JNI while the WebView may be frozen or Activity gone. */
+        @JvmStatic
+        fun syncSessionFromBackground(positionSec: Double, playing: Boolean) {
+            MediaSessionState.refreshFromBackground(positionSec, playing)
         }
 
         internal fun forceCleanup(context: Context) {
