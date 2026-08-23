@@ -11,3 +11,6 @@ pub mod audio;
 
 #[cfg(target_os = "android")]
 pub mod media_bridge;
+
+#[cfg(target_os = "android")]
+pub mod crash_report;

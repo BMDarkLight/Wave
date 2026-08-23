@@ -67,6 +67,12 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
     init {
         activeInstance = this
         Log.d(TAG, "init")
+        try {
+            Class.forName("app.bmdarklight.wave.CrashReporter")
+                .getMethod("install", Context::class.java)
+                .invoke(null, activity.applicationContext)
+        } catch (_: Throwable) {
+        }
         // Don't wipe an active media notification when the Activity/plugin
         // is recreated while background playback is still running.
         if (MediaSessionCleanupService.instance == null
@@ -126,6 +132,29 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun updateState(invoke: Invoke) {
+        try {
+            updateStateInner(invoke)
+        } catch (t: Throwable) {
+            Log.e(TAG, "updateState crashed: ${t.message}", t)
+            try {
+                Class.forName("app.bmdarklight.wave.CrashReporter")
+                    .getMethod(
+                        "recordError",
+                        Context::class.java,
+                        String::class.java,
+                        Throwable::class.java
+                    )
+                    .invoke(null, activity.applicationContext, "MediaSessionPlugin.updateState", t)
+            } catch (_: Throwable) {
+            }
+            try {
+                invoke.resolve()
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun updateStateInner(invoke: Invoke) {
         val args = invoke.parseArgs(UpdateStateArgs::class.java)
 
         // Log received fields (only the ones actually provided)

@@ -9,6 +9,15 @@
 -keepclassmembers class app.bmdarklight.wave.SafMediaScanner {
     public static java.lang.String[] listAudioFiles(android.app.Activity, java.lang.String);
 }
+-keep class app.bmdarklight.wave.CrashReporter { *; }
+-keepclassmembers class app.bmdarklight.wave.CrashReporter {
+    public static void install(android.content.Context);
+    public static void recordError(android.content.Context, java.lang.String, java.lang.Throwable);
+    public static void recordMessage(android.content.Context, java.lang.String, java.lang.String);
+    public static java.lang.String takeLast(android.content.Context);
+    public static void clearLast(android.content.Context);
+}
+-keep class app.bmdarklight.wave.CrashInitProvider { *; }
 -keep class app.bmdarklight.wave.MediaNativeBridge { *; }
 -keepclassmembers class app.bmdarklight.wave.MediaNativeBridge {
     public static void dispatch(java.lang.String);

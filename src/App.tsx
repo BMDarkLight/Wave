@@ -123,6 +123,8 @@ import {
   isFolderSetupDismissed,
   dismissFolderSetup,
   exitApp,
+  takeAndroidCrashReport,
+  clearAndroidCrashReport,
   listenToSyncProgress,
   type EqSettings,
   type PlaybackMode,
@@ -379,6 +381,7 @@ function App() {
     useState<PlaybackState>(emptyPlaybackState);
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [crashReport, setCrashReport] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [lyricsFetchPath, setLyricsFetchPath] = useState<string | null>(null);
   const lyricsFetchIdRef = useRef(0);
@@ -1505,6 +1508,17 @@ function App() {
     const initApp = async () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
       try {
+        const android = await isAndroid().catch(() => false);
+        if (android) {
+          try {
+            const report = await takeAndroidCrashReport();
+            if (report && report.trim()) {
+              setCrashReport(report.trim());
+            }
+          } catch (crashErr) {
+            console.warn("Crash report unavailable:", crashErr);
+          }
+        }
         setIsLoadingPlaylist(true);
         const list = await loadPlaylists();
         const defaultId = getDefaultPlaylistId(list);
@@ -1520,7 +1534,6 @@ function App() {
         listOutputDevices().then(setOutputDevices).catch(console.error);
 
         // Reconcile synced playlists in the background — UI stays interactive.
-        const android = await isAndroid().catch(() => false);
         void syncFolderPlaylists(list, android);
       } catch (err: any) {
         if (
@@ -5828,6 +5841,45 @@ function App() {
       {showExitToast && (
         <div className="exit-toast" role="status" aria-live="polite">
           Press back again to close Wave
+        </div>
+      )}
+
+      {crashReport && (
+        <div
+          className="crash-report-overlay"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="crash-report-title"
+        >
+          <div className="crash-report-card">
+            <h2 id="crash-report-title">Wave recovered from a crash</h2>
+            <p>
+              A previous launch failed. Copy this report when filing a bug — no
+              adb needed.
+            </p>
+            <pre className="crash-report-body">{crashReport}</pre>
+            <div className="crash-report-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard
+                    ?.writeText(crashReport)
+                    .catch(() => {});
+                }}
+              >
+                Copy
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void clearAndroidCrashReport().catch(() => {});
+                  setCrashReport(null);
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

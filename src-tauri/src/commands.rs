@@ -278,51 +278,10 @@ pub(crate) fn tick_listen_progress(app: &tauri::AppHandle) {
 
 /// Keep the Android media notification alive while backgrounded.
 ///
-/// The WebView poll stops when the app is frozen, so refresh the session from
-/// the native tick thread instead.
+/// Safe mode: the post-v0.3.0 JNI/FGS sync path crashed cold launch on device.
+/// Left as a no-op until foreground-service cold-start is re-enabled safely.
 #[cfg(target_os = "android")]
-static LAST_MEDIA_SESSION_SYNC_MS: AtomicI64 = AtomicI64::new(0);
-#[cfg(target_os = "android")]
-const MEDIA_SESSION_SYNC_INTERVAL_MS: i64 = 1_000;
-
-#[cfg(target_os = "android")]
-pub(crate) fn tick_media_session(app: &tauri::AppHandle) {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    let last = LAST_MEDIA_SESSION_SYNC_MS.load(Ordering::Relaxed);
-    if now.saturating_sub(last) < MEDIA_SESSION_SYNC_INTERVAL_MS {
-        return;
-    }
-    LAST_MEDIA_SESSION_SYNC_MS.store(now, Ordering::Relaxed);
-
-    let snapshot = {
-        let state = match app.try_state::<PlayerState>() {
-            Some(s) => s,
-            None => return,
-        };
-        let guard = match state.0.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let Some(player) = guard.as_ref() else {
-            return;
-        };
-        if player.get_current_path().is_none() {
-            return;
-        }
-        let playing = player.is_playing();
-        let paused = player.is_paused();
-        if !playing && !paused {
-            return;
-        }
-        (player.position_seconds(), playing)
-    };
-
-    let (position, playing) = snapshot;
-    crate::android::audio::sync_media_session(position, playing);
-}
+pub(crate) fn tick_media_session(_app: &tauri::AppHandle) {}
 
 /// End the current listen session and start one for `record_path`.
 ///
@@ -882,6 +841,27 @@ fn repeat_mode_str(mode: &crate::audio::player::RepeatMode) -> &'static str {
 #[tauri::command]
 pub fn host_os() -> String {
     std::env::consts::OS.to_string()
+}
+
+/// Last Android crash / soft-failure report (for devices without adb).
+#[tauri::command]
+pub fn take_android_crash_report() -> Option<String> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::android::crash_report::take_last();
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        None
+    }
+}
+
+#[tauri::command]
+pub fn clear_android_crash_report() {
+    #[cfg(target_os = "android")]
+    {
+        crate::android::crash_report::clear_last();
+    }
 }
 
 /// Exit the process (Android double-back-to-exit confirm).

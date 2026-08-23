@@ -272,6 +272,28 @@ jobs:
 
           path.write_text(patched, encoding="utf-8")
           print(f"Locked {count} activity(ies) to portrait")
+
+          # Early crash reporter ContentProvider (runs before Activity).
+          text = path.read_text(encoding="utf-8")
+          provider_name = "app.bmdarklight.wave.CrashInitProvider"
+          if provider_name not in text:
+              provider_xml = (
+                  '        <provider\n'
+                  f'            android:name="{provider_name}"\n'
+                  '            android:authorities="${applicationId}.wave-crash-init"\n'
+                  '            android:exported="false"\n'
+                  '            android:initOrder="100" />\n'
+              )
+              app_open = re.search(r"<application\b[^>]*>", text, flags=re.IGNORECASE | re.DOTALL)
+              if not app_open:
+                  print("::error::could not find <application> open tag for CrashInitProvider", file=sys.stderr)
+                  sys.exit(1)
+              insert_at = app_open.end()
+              text = text[:insert_at] + "\n" + provider_xml + text[insert_at:]
+              path.write_text(text, encoding="utf-8")
+              print("Registered CrashInitProvider in AndroidManifest.xml")
+          else:
+              print("CrashInitProvider already present in AndroidManifest.xml")
           PY
 
           # ── Media3 / ExoPlayer deps for WaveExoPlayer ────────────────────
