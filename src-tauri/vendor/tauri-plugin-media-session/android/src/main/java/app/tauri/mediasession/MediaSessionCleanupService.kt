@@ -8,7 +8,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.os.Process
 import android.util.Log
@@ -44,6 +46,10 @@ class MediaSessionCleanupService : Service() {
          * Must be called while the app is in the foreground on first call.
          */
         fun start(context: Context, notification: Notification) {
+            if (!MediaSessionState.sessionActive) {
+                Log.d(TAG, "start: session inactive, ignoring")
+                return
+            }
             pendingNotification = notification
             val svc = instance
             if (svc != null) {
@@ -73,6 +79,20 @@ class MediaSessionCleanupService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var noisyReceiver: BroadcastReceiver? = null
+    private val keepaliveHandler = Handler(Looper.getMainLooper())
+    private val keepaliveIntervalMs = 15_000L
+    private val keepaliveRunnable = object : Runnable {
+        override fun run() {
+            if (!MediaSessionState.sessionActive) return
+            if (MediaSessionPlugin.isPlaybackActive() && MediaSessionState.hasActiveMedia()) {
+                val context = applicationContext
+                MediaSessionState.refreshForeground(context, advancePosition = true)
+            }
+            if (MediaSessionState.sessionActive) {
+                keepaliveHandler.postDelayed(this, keepaliveIntervalMs)
+            }
+        }
+    }
 
     // ── Service lifecycle ────────────────────────────────────────────────────
 
@@ -85,9 +105,17 @@ class MediaSessionCleanupService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = pendingNotification
         if (notification == null) {
-            // Sticky restart without a notification — wait for the next updateState.
+            if (MediaSessionState.sessionActive
+                && MediaSessionPlugin.isPlaybackActive()
+                && MediaSessionState.hasActiveMedia()
+            ) {
+                Log.w(TAG, "onStartCommand: rebuilding notification for active playback")
+                MediaSessionState.refreshForeground(applicationContext, advancePosition = true)
+                return START_STICKY
+            }
             Log.w(TAG, "onStartCommand: no notification yet, staying alive")
-            return START_STICKY
+            stopSelf()
+            return START_NOT_STICKY
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -100,6 +128,8 @@ class MediaSessionCleanupService : Service() {
         }
         acquireWakeLock()
         registerNoisyReceiver()
+        keepaliveHandler.removeCallbacks(keepaliveRunnable)
+        keepaliveHandler.postDelayed(keepaliveRunnable, keepaliveIntervalMs)
         Log.d(TAG, "Foreground started, locks acquired")
         // START_STICKY: ask the system to recreate us after low-memory kills
         // so background playback can recover with the pending notification.
@@ -113,6 +143,7 @@ class MediaSessionCleanupService : Service() {
         // drop the notification, and end the process. Pressing Home (without
         // swiping away) does not call this, so background playback still works.
         Log.d(TAG, "onTaskRemoved — stopping playback and exiting")
+        keepaliveHandler.removeCallbacks(keepaliveRunnable)
         pendingNotification = null
         MediaSessionPlugin.forceCleanup(applicationContext)
         stopSelf()
@@ -121,11 +152,14 @@ class MediaSessionCleanupService : Service() {
 
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
+        keepaliveHandler.removeCallbacks(keepaliveRunnable)
         instance = null
         releaseResources()
-        // Only clear notification artifacts — do not emit pause via forceCleanup
-        // if the service is being recreated under START_STICKY.
-        MediaSessionPlugin.cancelNotificationArtifactsOnly(applicationContext)
+        // Keep the transport notification while audio is still playing — a sticky
+        // service restart should recover via MediaSessionState, not wipe the UI.
+        if (!MediaSessionState.sessionActive || !MediaSessionPlugin.isPlaybackActive()) {
+            MediaSessionPlugin.cancelNotificationArtifactsOnly(applicationContext)
+        }
         super.onDestroy()
     }
 
@@ -136,7 +170,12 @@ class MediaSessionCleanupService : Service() {
         nm.notify(NOTIFICATION_ID, notification)
     }
 
+    internal fun cancelKeepalive() {
+        keepaliveHandler.removeCallbacks(keepaliveRunnable)
+    }
+
     private fun handleStop() {
+        keepaliveHandler.removeCallbacks(keepaliveRunnable)
         releaseResources()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)

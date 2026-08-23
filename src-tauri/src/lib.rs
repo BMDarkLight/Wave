@@ -155,6 +155,8 @@ pub fn run() {
                         android::media_bridge::drain_actions(&tick_app);
                     }
                     commands::tick_listen_progress(&tick_app);
+                    #[cfg(target_os = "android")]
+                    commands::tick_media_session(&tick_app);
                     commands::tick_auto_advance(&tick_app);
                     commands::persist_playback_state_throttled(&tick_app);
                 }

@@ -437,6 +437,37 @@ pub fn exo_is_playing() -> Result<bool, String> {
     with_player(|p| p.call_bool("isPlaying"))
 }
 
+/// Refresh the OS media notification from Rust (works when the WebView is frozen).
+pub fn sync_media_session(position_sec: f64, playing: bool) {
+    let Ok(guard) = EXO_PLAYER.lock() else {
+        return;
+    };
+    let Some(handle) = guard.as_ref() else {
+        return;
+    };
+    let _ = handle.with_env(|env| {
+        let cls = env
+            .find_class("app/bmdarklight/wave/MediaNativeBridge")
+            .map_err(|e| format!("MediaNativeBridge: {e}"))?;
+        env.call_static_method(
+            cls,
+            "syncSession",
+            "(DZ)V",
+            &[
+                JValue::Double(position_sec),
+                JValue::Bool(playing as u8),
+            ],
+        )
+        .map_err(|e| format!("syncSession: {e}"))?;
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+            return Err("syncSession threw".into());
+        }
+        Ok(())
+    });
+}
+
 /// True when ExoPlayer reached end-of-media for the current item.
 pub fn exo_playback_ended() -> Result<bool, String> {
     with_player(|p| p.call_bool("isEnded"))

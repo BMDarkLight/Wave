@@ -12,6 +12,7 @@
 -keep class app.bmdarklight.wave.MediaNativeBridge { *; }
 -keepclassmembers class app.bmdarklight.wave.MediaNativeBridge {
     public static void dispatch(java.lang.String);
+    public static void syncSession(double, boolean);
     private static native void nativeOnMediaAction(java.lang.String);
 }
 -keep class app.bmdarklight.wave.MediaMetadataProbe { *; }

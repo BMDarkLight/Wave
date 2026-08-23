@@ -69,7 +69,10 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
         Log.d(TAG, "init")
         // Don't wipe an active media notification when the Activity/plugin
         // is recreated while background playback is still running.
-        if (MediaSessionCleanupService.instance == null) {
+        if (MediaSessionCleanupService.instance == null
+            && !isPlaybackActive()
+            && !MediaSessionState.sessionActive
+        ) {
             cancelNotificationArtifacts(activity.applicationContext)
         }
     }
@@ -214,6 +217,11 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
         } else {
             dismissTransportNotification()
             MediaSessionCleanupService.stop()
+            MediaSessionState.clear(activity.applicationContext)
+        }
+        syncSharedState()
+        if (MediaSessionState.sessionActive) {
+            MediaSessionState.refreshForeground(activity.applicationContext, advancePosition = false)
         }
 
         Log.d(TAG, "updateState: applied -> \"$currentTitle\" by $currentArtist, " +
@@ -238,6 +246,11 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
 
         session.setPlaybackState(buildPlaybackState())
         if (args.duration != null) session.setMetadata(buildMetadata())
+
+        syncSharedState()
+        if (MediaSessionState.sessionActive && hasActiveMedia()) {
+            MediaSessionState.refreshForeground(activity.applicationContext, advancePosition = false)
+        }
 
         invoke.resolve()
     }
@@ -352,6 +365,25 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
 
     // ── Internal helpers ────────────────────────────────────────────────
 
+    private fun syncSharedState() {
+        MediaSessionState.title = currentTitle
+        MediaSessionState.artist = currentArtist
+        MediaSessionState.album = currentAlbum
+        MediaSessionState.duration = currentDuration
+        MediaSessionState.position = currentPosition
+        MediaSessionState.playbackSpeed = currentPlaybackSpeed
+        MediaSessionState.isPlaying = currentIsPlaying
+        MediaSessionState.canPrev = currentCanPrev
+        MediaSessionState.canNext = currentCanNext
+        MediaSessionState.canSeek = currentCanSeek
+        MediaSessionState.shuffleEnabled = currentShuffleEnabled
+        MediaSessionState.repeatMode = currentRepeatMode
+        MediaSessionState.lastStateUpdateRealtime = lastStateUpdateRealtime
+        MediaSessionState.mediaSession = mediaSession
+        MediaSessionState.cachedArtworkBitmap = cachedArtworkBitmap
+        MediaSessionState.sessionActive = currentTitle.isNotBlank() || currentArtist.isNotBlank()
+    }
+
     private fun hasActiveMedia(): Boolean {
         return currentTitle.isNotBlank() || currentArtist.isNotBlank()
     }
@@ -380,6 +412,7 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
         notificationManager?.cancel(MediaSessionCleanupService.NOTIFICATION_ID)
         cancelNotificationArtifacts(activity.applicationContext)
         MediaSessionCleanupService.stop()
+        MediaSessionState.clear(activity.applicationContext)
 
         currentTitle = ""; currentArtist = ""; currentAlbum = ""
         currentDuration = 0.0; currentPosition = 0.0; currentPlaybackSpeed = 1.0
@@ -410,13 +443,17 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Suppress("DEPRECATION")
     private fun ensureSession(): MediaSessionCompat? {
+        MediaSessionState.mediaSession?.let {
+            mediaSession = it
+            return it
+        }
         if (mediaSession != null) return mediaSession
 
         Log.d(TAG, "ensureSession: creating new session (tag=$sessionTag, channel=$channelId)")
         // Application context outlives the Activity so the session can stay
         // active while the UI is destroyed/recreated in the background.
         val session = MediaSessionCompat(activity.applicationContext, sessionTag)
-        session.setCallback(sessionCallback)
+        session.setCallback(MediaSessionState.sessionCallback())
         session.setFlags(
             MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
                 MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
@@ -431,6 +468,7 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
         }
 
         mediaSession = session
+        MediaSessionState.mediaSession = session
         notificationManager = NotificationManagerCompat.from(activity)
         createNotificationChannel()
         return mediaSession
@@ -717,6 +755,8 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
 
     // ── Events → JavaScript ─────────────────────────────────────────────
 
+    internal fun hostApplicationContext(): Context = activity.applicationContext
+
     internal fun emitAction(action: String) {
         Log.d(TAG, "emit: action=\"$action\"")
         val payload = JSObject()
@@ -736,26 +776,6 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
         } catch (t: Throwable) {
             Log.w(TAG, "emitAction failed: ${t.message}")
         }
-    }
-
-    private val sessionCallback = object : MediaSessionCompat.Callback() {
-        override fun onPlay() = MediaSessionPlugin.handleMediaAction("play")
-        override fun onPause() = MediaSessionPlugin.handleMediaAction("pause")
-        override fun onStop() = MediaSessionPlugin.handleMediaAction("stop")
-        override fun onSkipToNext() = MediaSessionPlugin.handleMediaAction("next")
-        override fun onSkipToPrevious() = MediaSessionPlugin.handleMediaAction("previous")
-        override fun onSeekTo(pos: Long) =
-            MediaSessionPlugin.handleMediaAction("seek:${pos / 1000.0}")
-        override fun onCustomAction(action: String?, extras: android.os.Bundle?) {
-            when (action) {
-                ACTION_SHUFFLE -> MediaSessionPlugin.handleMediaAction("shuffle")
-                ACTION_REPEAT -> MediaSessionPlugin.handleMediaAction("repeat")
-            }
-        }
-        override fun onSetShuffleMode(shuffleMode: Int) =
-            MediaSessionPlugin.handleMediaAction("shuffle")
-        override fun onSetRepeatMode(repeatMode: Int) =
-            MediaSessionPlugin.handleMediaAction("repeat")
     }
 
     // ── Bitmap helpers ──────────────────────────────────────────────────
@@ -790,6 +810,11 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
 
         @Volatile
         internal var activeInstance: MediaSessionPlugin? = null
+
+        internal fun hostApplicationContext(): Context? {
+            return activeInstance?.hostApplicationContext()
+                ?: MediaSessionCleanupService.instance?.applicationContext
+        }
 
         private fun cancelNotificationArtifacts(context: Context, hard: Boolean = false) {
             try {
@@ -838,7 +863,10 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
         }
 
         internal fun forceCleanup(context: Context) {
+            MediaSessionCleanupService.instance?.cancelKeepalive()
             MediaSessionCleanupService.pendingNotification = null
+            // Deactivate first so keepalive / Rust ticks cannot repost while stopping.
+            MediaSessionState.clear(context)
             handleMediaAction("stop")
             val plugin = activeInstance
             if (plugin != null) {
