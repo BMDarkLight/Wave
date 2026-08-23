@@ -212,12 +212,12 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
             }
         )
         // Publish shared state before touching the FGS — start() ignores
-        // calls while MediaSessionState.sessionActive is still false.
+        // calls while MediaSessionState.sessionActive is still false, and only
+        // cold-starts the service while playback is active.
         syncSharedState()
         session.isActive = hasActiveMedia()
         if (hasActiveMedia()) {
             refreshTransportNotification(metadata)
-            MediaSessionState.refreshForeground(activity.applicationContext, advancePosition = false)
         } else {
             dismissTransportNotification()
             MediaSessionCleanupService.stop()
@@ -248,7 +248,8 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
         if (args.duration != null) session.setMetadata(buildMetadata())
 
         syncSharedState()
-        if (MediaSessionState.sessionActive && hasActiveMedia()) {
+        // Only refresh the FGS while playing (or if it is already running).
+        if (MediaSessionState.sessionActive && hasActiveMedia() && currentIsPlaying) {
             MediaSessionState.refreshForeground(activity.applicationContext, advancePosition = false)
         }
 

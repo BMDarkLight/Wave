@@ -446,10 +446,24 @@ pub fn sync_media_session(position_sec: f64, playing: bool) {
         return;
     };
     let _ = handle.with_env(|env| {
-        let cls = env
-            .find_class("app/bmdarklight/wave/MediaNativeBridge")
-            .map_err(|e| format!("MediaNativeBridge: {e}"))?;
-        env.call_static_method(
+        // Worker threads must use the app ClassLoader — FindClass often fails
+        // and a pending exception can abort the process on the next JNI call.
+        let ctx = match std::panic::catch_unwind(ndk_context::android_context) {
+            Ok(ctx) => ctx,
+            Err(_) => return Ok(()),
+        };
+        let activity = unsafe { JObject::from_raw(ctx.context() as *mut _) };
+        if activity.is_null() {
+            return Ok(());
+        }
+        let cls = match load_class(env, &activity, "app.bmdarklight.wave.MediaNativeBridge") {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!("syncSession class load skipped: {e}");
+                return Ok(());
+            }
+        };
+        match env.call_static_method(
             cls,
             "syncSession",
             "(DZ)V",
@@ -457,12 +471,20 @@ pub fn sync_media_session(position_sec: f64, playing: bool) {
                 JValue::Double(position_sec),
                 JValue::Bool(playing as u8),
             ],
-        )
-        .map_err(|e| format!("syncSession: {e}"))?;
+        ) {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::debug!("syncSession: {e}");
+                if env.exception_check().unwrap_or(false) {
+                    let _ = env.exception_describe();
+                    let _ = env.exception_clear();
+                }
+                return Ok(());
+            }
+        }
         if env.exception_check().unwrap_or(false) {
             let _ = env.exception_describe();
             let _ = env.exception_clear();
-            return Err("syncSession threw".into());
         }
         Ok(())
     });

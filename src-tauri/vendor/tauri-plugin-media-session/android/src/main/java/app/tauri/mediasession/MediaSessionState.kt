@@ -68,7 +68,10 @@ internal object MediaSessionState {
         isPlaying = playing
         val context = appContext() ?: return
         if (!hasActiveMedia()) return
-        refreshForeground(context, advancePosition = false)
+        // Cold-start FGS only while playing — paused restore must not start it.
+        if (playing || MediaSessionCleanupService.instance != null) {
+            refreshForeground(context, advancePosition = false)
+        }
     }
 
     /** Repost the foreground notification and keep the FGS alive. */
