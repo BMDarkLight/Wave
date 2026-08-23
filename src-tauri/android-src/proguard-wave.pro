@@ -21,6 +21,7 @@
 -keep class app.bmdarklight.wave.audio.WaveExoPlayer { *; }
 -keepclassmembers class app.bmdarklight.wave.audio.WaveExoPlayer {
     public static app.bmdarklight.wave.audio.WaveExoPlayer getOrCreate(android.content.Context);
+    public static boolean isPlayingActive();
     public void playUri(java.lang.String);
     public void playMediaItems(java.lang.String[], int);
     public void prepareUriAt(java.lang.String, long);

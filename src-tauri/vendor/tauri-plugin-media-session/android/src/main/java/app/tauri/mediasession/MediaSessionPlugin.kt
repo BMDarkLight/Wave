@@ -208,10 +208,13 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
                 else -> PlaybackStateCompat.REPEAT_MODE_NONE
             }
         )
-        session.isActive = true
-        val notification = updateNotification(metadata)
-
-        if (notification != null) MediaSessionCleanupService.start(activity, notification)
+        session.isActive = currentIsPlaying
+        if (currentIsPlaying) {
+            refreshTransportNotification(metadata)
+        } else {
+            dismissTransportNotification()
+            MediaSessionCleanupService.stop()
+        }
 
         Log.d(TAG, "updateState: applied -> \"$currentTitle\" by $currentArtist, " +
             "playing=$currentIsPlaying, pos=${currentPosition}s/${currentDuration}s, " +
@@ -249,13 +252,17 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
     // ── Lifecycle ───────────────────────────────────────────────────────
 
     override fun onDestroy() {
-        // Detach from the Activity without tearing down the FGS / MediaSession
-        // keep-alive — otherwise background playback dies when the Activity is
-        // destroyed under memory pressure. Explicit clear()/forceCleanup still
-        // release resources.
-        Log.d(TAG, "onDestroy: detaching plugin (keeping FGS if active)")
+        Log.d(TAG, "onDestroy: detaching plugin")
         if (activeInstance === this) {
             activeInstance = null
+        }
+        // Keep the FGS only while audio is actively playing; otherwise the app
+        // lingers in "background activity" with a stale transport notification.
+        if (isPlaybackActive()) {
+            Log.d(TAG, "onDestroy: playback active — keeping FGS alive")
+        } else {
+            Log.d(TAG, "onDestroy: not playing — releasing session")
+            releaseSession()
         }
         super.onDestroy()
     }
@@ -449,8 +456,7 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
                             val session = mediaSession ?: return@runOnUiThread
                             val metadata = buildMetadata()
                             session.setMetadata(metadata)
-                            val newNotif = updateNotification(metadata)
-                            if (newNotif != null) MediaSessionCleanupService.pendingNotification = newNotif
+                            refreshTransportNotification(metadata)
                         } else {
                             downloadingArtworkUrl = null
                             bitmap.recycle()
@@ -513,9 +519,19 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
             val session = mediaSession ?: return@runOnUiThread
             val metadata = buildMetadata()
             session.setMetadata(metadata)
-            val newNotif = updateNotification(metadata)
-            if (newNotif != null) MediaSessionCleanupService.pendingNotification = newNotif
+            refreshTransportNotification(metadata)
         }
+    }
+
+    private fun refreshTransportNotification(metadata: MediaMetadataCompat? = null) {
+        if (!currentIsPlaying) return
+        val meta = metadata ?: buildMetadata()
+        val notification = updateNotification(meta)
+        if (notification != null) MediaSessionCleanupService.start(activity, notification)
+    }
+
+    private fun dismissTransportNotification() {
+        notificationManager?.cancel(MediaSessionCleanupService.NOTIFICATION_ID)
     }
 
     private fun recycleCachedArtworkBitmap() {
@@ -809,6 +825,15 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
                     }
                 }
             } catch (_: Throwable) {
+            }
+        }
+
+        internal fun isPlaybackActive(): Boolean {
+            return try {
+                val cls = Class.forName("app.bmdarklight.wave.audio.WaveExoPlayer")
+                cls.getMethod("isPlayingActive").invoke(null) as Boolean
+            } catch (_: Throwable) {
+                false
             }
         }
 

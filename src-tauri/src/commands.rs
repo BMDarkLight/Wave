@@ -435,15 +435,9 @@ pub(crate) fn restore_saved_playback(app: &tauri::AppHandle) {
         return;
     }
 
-    let track = match app.state::<LibraryState>().0.lock() {
-        Ok(lib) => Some(resolve_track(&lib, &path)),
-        Err(_) => None,
-    };
-    if let Some(track) = track {
-        let bridge = app.state::<MediaBridgeState>();
-        sync_bridge_now_playing_at(app, &track, position);
-        bridge.0.set_paused(position);
-    }
+    // ExoPlayer holds the paused track for instant UI resume. Do not publish
+    // to the OS media session here — that starts the foreground service and
+    // leaves a stale notification after the app is closed.
 }
 
 fn lock_library<'a>(
@@ -845,6 +839,10 @@ pub fn host_os() -> String {
 /// Exit the process (Android double-back-to-exit confirm).
 #[tauri::command]
 pub fn exit_app(app: tauri::AppHandle) {
+    #[cfg(target_os = "android")]
+    if let Some(bridge) = app.try_state::<MediaBridgeState>() {
+        bridge.0.set_stopped();
+    }
     app.exit(0);
 }
 

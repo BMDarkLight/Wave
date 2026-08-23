@@ -108,11 +108,15 @@ class MediaSessionCleanupService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // User swiped the task away — keep playing. Music apps must NOT kill
-        // the process here; that causes audio glitches and drops the FGS.
-        Log.d(TAG, "onTaskRemoved — keeping foreground playback alive")
-        pendingNotification?.let { postNotification(it) }
-        // Do not stopSelf(), forceCleanup(), or Process.killProcess().
+        if (MediaSessionPlugin.isPlaybackActive()) {
+            // User swiped the task away while audio is playing — keep the FGS
+            // alive so playback can continue without glitches.
+            Log.d(TAG, "onTaskRemoved — keeping foreground playback alive")
+            pendingNotification?.let { postNotification(it) }
+            return
+        }
+        Log.d(TAG, "onTaskRemoved — not playing, cleaning up")
+        MediaSessionPlugin.forceCleanup(applicationContext)
     }
 
     override fun onDestroy() {

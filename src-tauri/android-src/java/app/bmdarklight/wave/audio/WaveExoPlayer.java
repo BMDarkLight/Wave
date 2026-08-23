@@ -100,6 +100,12 @@ public final class WaveExoPlayer {
         }
     }
 
+    /** Used by the media-session FGS to decide whether to stay alive after close. */
+    public static boolean isPlayingActive() {
+        WaveExoPlayer inst = INSTANCE;
+        return inst != null && inst.isPlaying();
+    }
+
     private AudioAttributes buildAudioAttributes() {
         return new AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
