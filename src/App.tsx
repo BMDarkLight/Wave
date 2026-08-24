@@ -7,28 +7,21 @@ import {
   addTrackToPlaylistById,
   addToQueue,
   clearAudioImports,
-  clearPlaylistById,
   clearQueue,
   createPlaylist,
   resetApp,
-  deletePlaylist,
-  exportPlaylist,
   exportLyrics,
-  fetchLyricsForTrack,
   getTrackDetails,
-  getTrackFullCover,
   getFileName,
   getFavorites,
   getPlaybackMode,
   getPlaybackState,
   getPlaylistTracksById,
   getQueueTracks,
-  importPlaylist,
   importLyrics,
   scanDirectory,
   listPlaylists,
   listenToMediaControls,
-  openPlaylistDialog,
   openLyricsDialog,
   pauseTrack,
   playNext,
@@ -44,7 +37,6 @@ import {
   moveQueueTrack,
   renamePlaylist,
   resumeTrack,
-  savePlaylistDialog,
   saveLyricsDialog,
   searchLibraryTracks,
   seekTrack,
@@ -60,15 +52,12 @@ import {
   updateMediaPosition,
   listOutputDevices,
   setOutputDevice,
-  listMediaFolders,
   saveMediaFolder,
   removeMediaFolder,
   scanDirectoryRecursive,
   importScannedAudio,
   setPlaylistSyncFolder,
   syncPlaylistFolder,
-  isFolderSetupDismissed,
-  dismissFolderSetup,
   exitApp,
   takeAndroidCrashReport,
   clearAndroidCrashReport,
@@ -80,7 +69,6 @@ import {
   type Track,
 } from "./utils/player";
 import { isAndroid } from "./utils/platform";
-import { enableNoHoverMode } from "./utils/touchHover";
 import { formatInvokeError } from "./utils/errors";
 import { formatTime } from "./utils/format";
 import {
@@ -89,7 +77,6 @@ import {
   getTrackTitle,
   emptyPlaybackState,
 } from "./utils/track";
-import { parseTimedLyrics } from "./utils/lyrics";
 import {
   MATCH_FIELD_LABEL,
   hitMatchesSearchScope,
@@ -97,10 +84,12 @@ import {
   highlightMatch,
   type MainSearchScope,
 } from "./utils/search";
-import { useLyricsAutoScroll } from "./hooks/useLyricsAutoScroll";
 import { useEqualizerSettings } from "./hooks/useEqualizerSettings";
 import { useResizablePanels } from "./hooks/useResizablePanels";
 import { useLibrarySearch } from "./hooks/useLibrarySearch";
+import { useLyricsPanel } from "./hooks/useLyricsPanel";
+import { useMobileOverlays } from "./hooks/useMobileOverlays";
+import { usePlaylistManager } from "./hooks/usePlaylistManager";
 import { armDragDismissGhostClickGuard } from "./hooks/useDragDismiss";
 import AlbumPage from "./components/AlbumPage";
 import ArtistPage from "./components/ArtistPage";
@@ -111,9 +100,7 @@ import ClearPlaylistDialog from "./components/dialogs/ClearPlaylistDialog";
 import DeletePlaylistDialog from "./components/dialogs/DeletePlaylistDialog";
 import AddToPlaylistDialog from "./components/dialogs/AddToPlaylistDialog";
 import AddFromLibraryDialog from "./components/dialogs/AddFromLibraryDialog";
-import CreatePlaylistDialog, {
-  type PlaylistDialogState,
-} from "./components/dialogs/CreatePlaylistDialog";
+import CreatePlaylistDialog from "./components/dialogs/CreatePlaylistDialog";
 import TrackContextMenu from "./components/TrackContextMenu";
 import QueueContextMenu from "./components/QueueContextMenu";
 import AddTrackMenu from "./components/AddTrackMenu";
@@ -125,9 +112,7 @@ import DeviceListPanel from "./components/DeviceListPanel";
 import PlayerBar from "./components/PlayerBar";
 import Sidebar, { type MainView } from "./components/Sidebar";
 import LibraryTrackList from "./components/LibraryTrackList";
-import MobileNowPlaying, {
-  type MobileNowPlayingView,
-} from "./components/MobileNowPlaying";
+import MobileNowPlaying from "./components/MobileNowPlaying";
 import MobileSettings from "./components/MobileSettings";
 import "./App.css";
 import "./touch-hover.css";
@@ -139,8 +124,6 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [crashReport, setCrashReport] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [lyricsFetchPath, setLyricsFetchPath] = useState<string | null>(null);
-  const lyricsFetchIdRef = useRef(0);
   const [isAddingTracks, setIsAddingTracks] = useState(false);
   /** Playlist currently undergoing a first-time folder import (blocks list UI). */
   const [importingPlaylistId, setImportingPlaylistId] = useState<string | null>(
@@ -184,40 +167,87 @@ function App() {
   /** Top-level main pane: Home suggestions vs playlist vs listen stats / settings. */
   const [mainView, setMainView] = useState<MainView>("home");
 
-  // Album / artist browse stack (artist → album nests correctly for back)
-  type BrowsePage =
-    | { kind: "artist"; name: string }
-    | { kind: "album"; name: string; albumArtist: string | null };
-  const [browseStack, setBrowseStack] = useState<BrowsePage[]>([]);
-  const browseTop = browseStack[browseStack.length - 1] ?? null;
-  const viewingAlbum =
-    browseTop?.kind === "album"
-      ? { name: browseTop.name, albumArtist: browseTop.albumArtist }
-      : null;
-  const viewingArtist =
-    browseTop?.kind === "artist" ? browseTop.name : null;
-
-  const openArtistPage = (name: string) => {
-    setBrowseStack([{ kind: "artist", name }]);
-  };
-  const openAlbumPage = (name: string, albumArtist: string | null) => {
-    setBrowseStack([{ kind: "album", name, albumArtist }]);
-  };
-  const pushAlbumPage = (name: string, albumArtist: string | null) => {
-    setBrowseStack((stack) => [...stack, { kind: "album", name, albumArtist }]);
-  };
-  const browseBack = () => {
-    setBrowseStack((stack) => stack.slice(0, -1));
-  };
-  const clearBrowse = () => {
-    setBrowseStack([]);
-  };
 
   // Favorited track paths (for heart toggle state in the track list)
   const [favoritePaths, setFavoritePaths] = useState<Set<string>>(new Set());
 
-  // Clear-playlist confirmation modal
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  // Refresh the set of favorited track paths (drives heart toggle state).
+  const loadFavoritePaths = async () => {
+    try {
+      const favorites = await getFavorites();
+      setFavoritePaths(new Set(favorites.map((t) => t.path)));
+    } catch (err) {
+      // Loading favorites is best-effort; don't surface hard errors for the heart UI.
+      console.warn("Failed to load favorites:", err);
+    }
+  };
+
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [androidHost, setAndroidHost] = useState(false);
+  const androidHostRef = useRef(false);
+  // Create / rename playlist dialog
+  const addTrackBtnRef = useRef<HTMLButtonElement>(null);
+  const selectedPlaylistIdRef = useRef<string | null>(null);
+
+  const setActivePlaylistId = (id: string | null) => {
+    selectedPlaylistIdRef.current = id;
+    setSelectedPlaylistId(id);
+  };
+
+  const {
+    browseStack,
+    viewingAlbum,
+    viewingArtist,
+    openArtistPage,
+    openAlbumPage,
+    pushAlbumPage,
+    browseBack,
+    clearBrowse,
+    showClearConfirm,
+    setShowClearConfirm,
+    deletePlaylistConfirm,
+    setDeletePlaylistConfirm,
+    playlistDialog,
+    playlistNameInput,
+    setPlaylistNameInput,
+    playlistSyncFolder,
+    setPlaylistSyncFolderInput,
+    playlistDialogError,
+    setPlaylistDialogError,
+    playlistNameInputRef,
+    selectedPlaylist,
+    libraryPlaylist,
+    favoritesPlaylist,
+    userPlaylists,
+    loadPlaylists,
+    loadPlaylistTracks,
+    getDefaultPlaylistId,
+    handleClearPlaylist,
+    confirmClearPlaylist,
+    openCreatePlaylistDialog,
+    openRenamePlaylistDialog,
+    closePlaylistDialog,
+    pickPlaylistSyncFolder,
+    handleDeletePlaylist,
+    confirmDeletePlaylist,
+    handleExportPlaylistById,
+    handleImportPlaylist,
+  } = usePlaylistManager({
+    playlists,
+    setPlaylists,
+    selectedPlaylistId,
+    androidHost,
+    setError,
+    setPlaylist,
+    setIsLoadingPlaylist,
+    setIsLoading,
+    loadFavoritePaths,
+    setMobileNavOpen,
+    setMainView,
+    setActivePlaylistId,
+    selectedPlaylistIdRef,
+  });
+
 
   // Android custom-playlist: add from library search
   const [showAddFromLibrary, setShowAddFromLibrary] = useState(false);
@@ -246,12 +276,6 @@ function App() {
     toggleMainSearch,
   } = useLibrarySearch();
 
-  // Delete-playlist confirmation modal
-  const [deletePlaylistConfirm, setDeletePlaylistConfirm] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
-
   // Playback mode
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>({
     repeat: "off",
@@ -267,9 +291,6 @@ function App() {
   const [showQueue, setShowQueue] = useState(false);
 
   // Lyrics panel
-  const [lyricsPanelTrack, setLyricsPanelTrack] = useState<Track | null>(null);
-  const [lyricsFullCover, setLyricsFullCover] = useState<string | null>(null);
-  const activeLyricLineRef = useRef<HTMLButtonElement>(null);
 
   // Audio output device selection
   const [outputDevices, setOutputDevices] = useState<string[]>([]);
@@ -298,52 +319,57 @@ function App() {
     handleAutoLyricsDownloadChange,
   } = useEqualizerSettings(setError);
 
-  const {
-    sidebarWidth,
-    rightPanelWidth,
-    setRightPanelWidth,
-    rightPanelOpen,
-    rightPanelClosing,
-    isMobileLayout,
-    closeRightPanelDelayed,
-    cancelCloseRightPanel,
-    clampRightPanelWidth,
-    onDragStart,
-  } = useResizablePanels({
-    panelOpen: showQueue || !!lyricsPanelTrack || showDeviceList,
-    onCloseQueue: () => setShowQueue(false),
-    onCloseDeviceList: () => setShowDeviceList(false),
-    onCloseLyrics: () => setLyricsPanelTrack(null),
-  });
-
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [androidHost, setAndroidHost] = useState(false);
-  const androidHostRef = useRef(false);
-  const [showFolderSetup, setShowFolderSetup] = useState(false);
-
-  // Mobile-only fullscreen "Now Playing" page (replaces the desktop lyrics
-  // sidebar on responsive/mobile layouts) and its lyrics/menu sub-views.
-  const [mobilePlayerOpen, setMobilePlayerOpen] = useState(false);
-  const [mobilePlayerClosing, setMobilePlayerClosing] = useState(false);
-  const [mobilePlayerKey, setMobilePlayerKey] = useState(0);
-  const mobilePlayerOpenRef = useRef(false);
-  const mobilePlayerClosingRef = useRef(false);
-  const mobilePlayerCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
-  const [mobilePlayerView, setMobilePlayerView] =
-    useState<MobileNowPlayingView>("cover");
-  const [mobilePlayerMenuOpen, setMobilePlayerMenuOpen] = useState(false);
-
-  // Settings overlay on narrow layouts; desktop uses mainView === "settings".
-  const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
-  const [mobileSettingsClosing, setMobileSettingsClosing] = useState(false);
-  const mobileSettingsClosingRef = useRef(false);
-  const mobileSettingsCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
   const [isScanningFolder, setIsScanningFolder] = useState(false);
   const [folderScanIsSync, setFolderScanIsSync] = useState(false);
+
+  const {
+    showFolderSetup,
+    setShowFolderSetup,
+    skipFolderSetup,
+    mobilePlayerOpen,
+    setMobilePlayerOpen,
+    mobilePlayerClosing,
+    setMobilePlayerClosing,
+    mobilePlayerKey,
+    setMobilePlayerKey,
+    mobilePlayerOpenRef,
+    mobilePlayerClosingRef,
+    mobilePlayerCloseTimer,
+    mobilePlayerView,
+    setMobilePlayerView,
+    mobilePlayerMenuOpen,
+    setMobilePlayerMenuOpen,
+    mobileSettingsOpen,
+    setMobileSettingsOpen,
+    mobileSettingsClosing,
+    setMobileSettingsClosing,
+    mobileSettingsClosingRef,
+    mobileSettingsCloseTimer,
+    forceCloseMobileSettings,
+    forceCloseMobilePlayer,
+    handleCloseMobilePlayer,
+    handleDragCloseMobilePlayer,
+  } = useMobileOverlays({
+    mobileNavOpen,
+    setMobileNavOpen,
+    androidHost,
+    setAndroidHost,
+    androidHostRef,
+    playlists,
+    setMainView,
+    clearBrowse,
+    onAndroidDetected: () => {
+      setVolumeValue(1);
+      void setPlayerVolume(1);
+    },
+  });
+
+  // Android uses system volume — keep Wave at 100% always.
+  useEffect(() => {
+    if (!androidHost) return;
+    setVolumeValue(1);
+    void setPlayerVolume(1);
+  }, [androidHost]);
 
   // Opening search dismisses drawers/panels that would cover it.
   useEffect(() => {
@@ -487,86 +513,7 @@ function App() {
     setLyricsPanelTrack(currentTrack);
   };
 
-  const applyLyricsToTrack = (
-    path: string,
-    lyrics: string,
-    lyricsSource: string | null | undefined,
-  ) => {
-    setPlaylist((prev) =>
-      prev.map((t) =>
-        t.path === path
-          ? { ...t, lyrics, lyrics_source: lyricsSource ?? t.lyrics_source }
-          : t,
-      ),
-    );
-    setQueueData((prev) => ({
-      ...prev,
-      tracks: prev.tracks.map((t) =>
-        t.path === path
-          ? { ...t, lyrics, lyrics_source: lyricsSource ?? t.lyrics_source }
-          : t,
-      ),
-    }));
-    setLyricsPanelTrack((prev) =>
-      prev && prev.path === path
-        ? {
-            ...prev,
-            lyrics,
-            lyrics_source: lyricsSource ?? prev.lyrics_source,
-          }
-        : prev,
-    );
-  };
-
-  // Load full cover + lyrics details only while the lyrics panel is open.
-  useEffect(() => {
-    if (!lyricsPanelTrack?.path) {
-      setLyricsFullCover(null);
-      return;
-    }
-    let cancelled = false;
-    const path = lyricsPanelTrack.path;
-    void (async () => {
-      const [fullCover, details] = await Promise.all([
-        getTrackFullCover(path),
-        getTrackDetails(path),
-      ]);
-      if (cancelled) return;
-      if (fullCover) setLyricsFullCover(fullCover);
-      else setLyricsFullCover(null);
-      if (details?.lyrics) {
-        applyLyricsToTrack(path, details.lyrics, details.lyrics_source);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [lyricsPanelTrack?.path]);
-
   // ── Mobile-only Settings / Now Playing page open-close ──────────────────
-  const forceCloseMobileSettings = () => {
-    if (mobileSettingsCloseTimer.current) {
-      clearTimeout(mobileSettingsCloseTimer.current);
-      mobileSettingsCloseTimer.current = null;
-    }
-    mobileSettingsClosingRef.current = false;
-    setMobileSettingsClosing(false);
-    setMobileSettingsOpen(false);
-  };
-
-  const forceCloseMobilePlayer = () => {
-    if (mobilePlayerCloseTimer.current) {
-      clearTimeout(mobilePlayerCloseTimer.current);
-      mobilePlayerCloseTimer.current = null;
-    }
-    mobilePlayerClosingRef.current = false;
-    mobilePlayerOpenRef.current = false;
-    setMobilePlayerClosing(false);
-    setMobilePlayerOpen(false);
-    setMobilePlayerView("cover");
-    setMobilePlayerMenuOpen(false);
-  };
-
   const handleOpenMobilePlayer = () => {
     if (!currentTrack) return;
     setMobileNavOpen(false);
@@ -593,28 +540,6 @@ function App() {
     mobilePlayerOpenRef.current = true;
     setMobilePlayerOpen(true);
     void loadEqSettings();
-  };
-
-  const handleCloseMobilePlayer = () => {
-    if (!mobilePlayerOpenRef.current || mobilePlayerClosingRef.current) return;
-    mobilePlayerClosingRef.current = true;
-    // Treat as closed for bar taps immediately so the first real tap after
-    // dismiss can reopen (don't wait for the 360ms unmount).
-    mobilePlayerOpenRef.current = false;
-    setMobilePlayerMenuOpen(false);
-    setMobilePlayerClosing(true);
-    mobilePlayerCloseTimer.current = setTimeout(() => {
-      mobilePlayerClosingRef.current = false;
-      setMobilePlayerClosing(false);
-      setMobilePlayerOpen(false);
-      setMobilePlayerView("cover");
-      mobilePlayerCloseTimer.current = null;
-    }, 360);
-  };
-
-  const handleDragCloseMobilePlayer = () => {
-    // Ghost-click guard is armed inside useDragDismiss on dismiss.
-    handleCloseMobilePlayer();
   };
 
   /** Album art / track name tap in the mini player bar: mobile gets the
@@ -689,27 +614,6 @@ function App() {
     setShowDeviceList(true);
   };
 
-  // Create / rename playlist dialog
-  const [playlistDialog, setPlaylistDialog] =
-    useState<PlaylistDialogState | null>(null);
-  const [playlistNameInput, setPlaylistNameInput] = useState("");
-  const [playlistSyncFolder, setPlaylistSyncFolderInput] = useState<
-    string | null
-  >(null);
-  const [playlistDialogError, setPlaylistDialogError] = useState<string | null>(
-    null,
-  );
-  const playlistNameInputRef = useRef<HTMLInputElement>(null);
-  const addTrackBtnRef = useRef<HTMLButtonElement>(null);
-  const selectedPlaylistIdRef = useRef<string | null>(null);
-  /** Monotonic id so stale playlist fetches never overwrite a newer selection. */
-  const playlistLoadSeqRef = useRef(0);
-
-  const setActivePlaylistId = (id: string | null) => {
-    selectedPlaylistIdRef.current = id;
-    setSelectedPlaylistId(id);
-  };
-
   const currentTrack = useMemo(() => {
     if (!playbackState.current_path) return null;
     const fromQueue = queueData.tracks.find(
@@ -722,93 +626,12 @@ function App() {
     return fromPlaylist ?? null;
   }, [playbackState.current_path, queueData.tracks, playlist]);
 
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 900px)");
-    const onChange = () => {
-      if (!media.matches) {
-        setMobileNavOpen(false);
-        // Now Playing is mobile-only; Settings moves into the middle pane on desktop.
-        if (mobilePlayerCloseTimer.current) {
-          clearTimeout(mobilePlayerCloseTimer.current);
-          mobilePlayerCloseTimer.current = null;
-        }
-        mobilePlayerClosingRef.current = false;
-        setMobilePlayerClosing(false);
-        setMobilePlayerOpen(false);
-        setMobilePlayerView("cover");
-        setMobilePlayerMenuOpen(false);
-        setMobileSettingsOpen((wasOpen) => {
-          if (wasOpen || mobileSettingsClosingRef.current) {
-            forceCloseMobileSettings();
-            clearBrowse();
-            setMainView("settings");
-          }
-          return false;
-        });
-      } else {
-        setMainView((view) => {
-          if (view === "settings") {
-            if (mobileSettingsCloseTimer.current) {
-              clearTimeout(mobileSettingsCloseTimer.current);
-              mobileSettingsCloseTimer.current = null;
-            }
-            mobileSettingsClosingRef.current = false;
-            setMobileSettingsClosing(false);
-            setMobileSettingsOpen(true);
-            return "home";
-          }
-          return view;
-        });
-      }
-    };
-    onChange();
-    media.addEventListener("change", onChange);
-    return () => media.removeEventListener("change", onChange);
-  }, []);
-
-  useEffect(() => {
-    void isAndroid().then((android) => {
-      setAndroidHost(android);
-      androidHostRef.current = android;
-      if (android) {
-        // WebView often reports hover:hover, so media-query hover resets never
-        // fire — force the no-hover class from the trusted host OS signal.
-        enableNoHoverMode();
-        setVolumeValue(1);
-        void setPlayerVolume(1);
-      }
-    });
-  }, []);
-
   // Android uses system volume — keep Wave at 100% always.
   useEffect(() => {
     if (!androidHost) return;
     setVolumeValue(1);
     void setPlayerVolume(1);
   }, [androidHost]);
-
-  // On Android, prompt for a music folder if Library isn't synced yet
-  // and the user hasn't dismissed the welcome prompt.
-  useEffect(() => {
-    if (!androidHost || playlists.length === 0) return;
-    const allLocal = playlists.find((p) => isLibraryPlaylistName(p.name));
-    if (allLocal && !allLocal.sync_folder) {
-      void Promise.all([listMediaFolders(), isFolderSetupDismissed()])
-        .then(([folders, dismissed]) => {
-          if (folders.length === 0 && !dismissed) setShowFolderSetup(true);
-        })
-        .catch(() => setShowFolderSetup(true));
-    }
-  }, [androidHost, playlists]);
-
-  const skipFolderSetup = async () => {
-    setShowFolderSetup(false);
-    try {
-      await dismissFolderSetup();
-    } catch {
-      /* ignore */
-    }
-  };
 
   /** Reconcile every playlist that has a sync_folder with its folder on disk. */
   const syncFolderPlaylists = async (
@@ -879,122 +702,50 @@ function App() {
     }
   };
 
-  useEffect(() => {
-    if (!mobileNavOpen) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMobileNavOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [mobileNavOpen]);
-
-  // Close lyrics panel and auto-fetch lyrics when track changes
-  useEffect(() => {
-    if (!currentTrack) {
-      setLyricsFetchPath(null);
-      return;
-    }
-    setLyricsPanelTrack(null);
-    if (
-      currentTrack.lyrics &&
-      (parseTimedLyrics(currentTrack.lyrics) ||
-        currentTrack.lyrics_source === "lrclib")
-    ) {
-      setLyricsFetchPath(null);
-      return;
-    }
-    if (!autoLyricsDownload) {
-      setLyricsFetchPath(null);
-      return;
-    }
-
-    const path = currentTrack.path;
-    const fetchId = ++lyricsFetchIdRef.current;
-    setLyricsFetchPath(path);
-
-    let cancelled = false;
-    fetchLyricsForTrack(path)
-      .then((updated) => {
-        if (cancelled || lyricsFetchIdRef.current !== fetchId) return;
-        setLyricsFetchPath(null);
-        if (!updated?.lyrics) return;
-        applyLyricsToTrack(path, updated.lyrics, updated.lyrics_source);
-      })
-      .catch(() => {
-        if (!cancelled && lyricsFetchIdRef.current === fetchId) {
-          setLyricsFetchPath(null);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      if (lyricsFetchIdRef.current === fetchId) {
-        lyricsFetchIdRef.current += 1;
-      }
-    };
-  }, [currentTrack?.path, autoLyricsDownload]);
-
-  const cancelLyricsFetch = () => {
-    lyricsFetchIdRef.current += 1;
-    setLyricsFetchPath(null);
-  };
-
   const hasActiveQueue = queueData.tracks.length > 0;
   const canSkip = hasActiveQueue || playlist.length > 0;
   const displayDuration =
     playbackState.duration_seconds ?? currentTrack?.duration_seconds ?? 0;
   const displayPosition = Math.min(seekValue, displayDuration || seekValue);
 
-  // Live (LRC-style) timestamped lyrics for the open lyrics panel.
-  const timedLyrics = useMemo(
-    () => parseTimedLyrics(lyricsPanelTrack?.lyrics),
-    [lyricsPanelTrack?.lyrics],
-  );
-  const isLyricsPanelOnCurrentTrack =
-    !!lyricsPanelTrack && lyricsPanelTrack.path === playbackState.current_path;
-  const activeLyricIndex = useMemo(() => {
-    if (!timedLyrics || !isLyricsPanelOnCurrentTrack) return -1;
-    let idx = -1;
-    for (let i = 0; i < timedLyrics.length; i++) {
-      if (timedLyrics[i].time > displayPosition) break;
-      idx = i;
-    }
-    return idx;
-  }, [timedLyrics, isLyricsPanelOnCurrentTrack, displayPosition]);
-
-  const lyricsScrollHandlers = useLyricsAutoScroll(
-    activeLyricIndex,
-    !!lyricsPanelTrack,
+  const {
+    lyricsPanelTrack,
+    setLyricsPanelTrack,
+    lyricsFullCover,
     activeLyricLineRef,
-  );
+    lyricsFetchPath,
+    cancelLyricsFetch,
+    applyLyricsToTrack,
+    timedLyrics,
+    isLyricsPanelOnCurrentTrack,
+    activeLyricIndex,
+    lyricsScrollHandlers,
+  } = useLyricsPanel({
+    currentTrack,
+    autoLyricsDownload,
+    playbackCurrentPath: playbackState.current_path,
+    displayPosition,
+    setPlaylist,
+    setQueueData,
+  });
 
-  const selectedPlaylist =
-    playlists.find((p) => p.id === selectedPlaylistId) ?? null;
-
-  const sortedPlaylists = useMemo(() => {
-    const priority = [LIBRARY_PLAYLIST_NAME, "Favorites"];
-    return [...playlists].sort((a, b) => {
-      const ai = priority.indexOf(a.name);
-      const bi = priority.indexOf(b.name);
-      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-    });
-  }, [playlists]);
-
-  const libraryPlaylist = useMemo(
-    () => playlists.find((p) => isLibraryPlaylistName(p.name)) ?? null,
-    [playlists],
-  );
-  const favoritesPlaylist = useMemo(
-    () => playlists.find((p) => p.name === "Favorites") ?? null,
-    [playlists],
-  );
-  const userPlaylists = useMemo(
-    () =>
-      sortedPlaylists.filter(
-        (p) => !isLibraryPlaylistName(p.name) && p.name !== "Favorites",
-      ),
-    [sortedPlaylists],
-  );
+  const {
+    sidebarWidth,
+    rightPanelWidth,
+    setRightPanelWidth,
+    rightPanelOpen,
+    rightPanelClosing,
+    isMobileLayout,
+    closeRightPanelDelayed,
+    cancelCloseRightPanel,
+    clampRightPanelWidth,
+    onDragStart,
+  } = useResizablePanels({
+    panelOpen: showQueue || !!lyricsPanelTrack || showDeviceList,
+    onCloseQueue: () => setShowQueue(false),
+    onCloseDeviceList: () => setShowDeviceList(false),
+    onCloseLyrics: () => setLyricsPanelTrack(null),
+  });
 
   const mainSearchScope = useMemo((): MainSearchScope => {
     if (viewingAlbum) {
@@ -1105,27 +856,6 @@ function App() {
     }
   };
 
-  const loadPlaylists = async () => {
-    const list = await listPlaylists();
-    setPlaylists(list);
-    return list;
-  };
-
-  const loadPlaylistTracks = async (playlistId: string) => {
-    const seq = ++playlistLoadSeqRef.current;
-    const tracks = await getPlaylistTracksById(playlistId);
-    // Ignore stale responses from a prior playlist selection.
-    if (
-      seq !== playlistLoadSeqRef.current ||
-      selectedPlaylistIdRef.current !== playlistId
-    ) {
-      return false;
-    }
-    setPlaylist(tracks);
-    await loadFavoritePaths();
-    return true;
-  };
-
   const loadPlaybackMode = async () => {
     try {
       const mode = await getPlaybackMode();
@@ -1138,24 +868,6 @@ function App() {
   const loadQueueTracks = async () => {
     const data = await getQueueTracks();
     setQueueData(data);
-  };
-
-  // Refresh the set of favorited track paths (drives heart toggle state).
-  const loadFavoritePaths = async () => {
-    try {
-      const favorites = await getFavorites();
-      setFavoritePaths(new Set(favorites.map((t) => t.path)));
-    } catch (err) {
-      // Loading favorites is best-effort; don't surface hard errors for the heart UI.
-      console.warn("Failed to load favorites:", err);
-    }
-  };
-
-  // Resolve the default playlist ID from the playlists list.
-  const getDefaultPlaylistId = (list: PlaylistInfo[]): string | null => {
-    return (
-      (list.find((p) => isLibraryPlaylistName(p.name)) ?? list[0])?.id ?? null
-    );
   };
 
   useEffect(() => {
@@ -2154,78 +1866,7 @@ function App() {
     }
   };
 
-  const handleClearPlaylist = async () => {
-    if (selectedPlaylist?.sync_folder) {
-      setError("Synced playlists cannot be cleared.");
-      return;
-    }
-    setShowClearConfirm(true);
-  };
-
-  const confirmClearPlaylist = async () => {
-    try {
-      setError(null);
-      setIsLoading(true);
-      setShowClearConfirm(false);
-      if (!selectedPlaylistId) return;
-      await clearPlaylistById(selectedPlaylistId);
-      await loadPlaylistTracks(selectedPlaylistId);
-      await loadPlaylists();
-    } catch (err) {
-      setError(formatInvokeError(err, "Failed to clear playlist"));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   // ── Playlist management ────────────────────────────────────────────────────
-
-  const openCreatePlaylistDialog = () => {
-    setMobileNavOpen(false);
-    setPlaylistNameInput("");
-    setPlaylistSyncFolderInput(null);
-    setPlaylistDialogError(null);
-    setPlaylistDialog({ mode: "create" });
-  };
-
-  const openRenamePlaylistDialog = (
-    playlistId: string,
-    currentName: string,
-  ) => {
-    setMobileNavOpen(false);
-    setPlaylistNameInput(currentName);
-    setPlaylistSyncFolderInput(null);
-    setPlaylistDialogError(null);
-    setPlaylistDialog({ mode: "rename", playlistId, currentName });
-  };
-
-  const closePlaylistDialog = () => {
-    setPlaylistDialog(null);
-    setPlaylistSyncFolderInput(null);
-    setPlaylistDialogError(null);
-  };
-
-  const pickPlaylistSyncFolder = async () => {
-    try {
-      if (androidHost) {
-        const result = await selectMediaFolder();
-        if (!result) return;
-        setPlaylistSyncFolderInput(result.uri);
-        if (!playlistNameInput.trim()) {
-          setPlaylistNameInput(result.displayName || getFileName(result.uri));
-        }
-        return;
-      }
-      const directory = await selectAudioFolder();
-      if (!directory) return;
-      setPlaylistSyncFolderInput(directory);
-      if (!playlistNameInput.trim()) {
-        setPlaylistNameInput(getFileName(directory));
-      }
-    } catch (err) {
-      setPlaylistDialogError(formatInvokeError(err, "Failed to select folder"));
-    }
-  };
 
   const submitPlaylistDialog = async () => {
     if (!playlistDialog) return;
@@ -2294,39 +1935,6 @@ function App() {
       closePlaylistDialog();
     } catch (err) {
       setPlaylistDialogError(formatInvokeError(err, "Failed to save playlist"));
-    }
-  };
-
-  const handleDeletePlaylist = async (id: string) => {
-    const playlistInfo = playlists.find((p) => p.id === id);
-    setDeletePlaylistConfirm({ id, name: playlistInfo?.name ?? "Unknown" });
-  };
-
-  const confirmDeletePlaylist = async () => {
-    if (!deletePlaylistConfirm) return;
-    const { id } = deletePlaylistConfirm;
-    setDeletePlaylistConfirm(null);
-    try {
-      setError(null);
-      await deletePlaylist(id);
-      const list = await loadPlaylists();
-      if (selectedPlaylistId === id) {
-        const defaultId = getDefaultPlaylistId(list);
-        if (defaultId) {
-          setActivePlaylistId(defaultId);
-          setPlaylist([]);
-          setIsLoadingPlaylist(true);
-          try {
-            await loadPlaylistTracks(defaultId);
-          } finally {
-            if (selectedPlaylistIdRef.current === defaultId) {
-              setIsLoadingPlaylist(false);
-            }
-          }
-        }
-      }
-    } catch (err) {
-      setError(formatInvokeError(err, "Failed to delete playlist"));
     }
   };
 
@@ -2582,38 +2190,6 @@ function App() {
   };
 
   // ── Export / Import ────────────────────────────────────────────────────────
-
-  const handleExportPlaylistById = async (
-    playlistId: string,
-    playlistName: string,
-  ) => {
-    try {
-      setError(null);
-      const path = await savePlaylistDialog(playlistName);
-      if (!path) return;
-      const exportFormat = path.toLowerCase().endsWith(".json")
-        ? "json"
-        : "m3u";
-      await exportPlaylist(playlistId, path, exportFormat);
-    } catch (err) {
-      setError(formatInvokeError(err, `Failed to export "${playlistName}"`));
-    }
-  };
-
-  const handleImportPlaylist = async () => {
-    try {
-      setError(null);
-      const path = await openPlaylistDialog();
-      if (!path) return;
-      const result = await importPlaylist(path);
-      await loadPlaylists();
-      setActivePlaylistId(result.playlist_id);
-      setMainView("playlist");
-      await loadPlaylistTracks(result.playlist_id);
-    } catch (err) {
-      setError(formatInvokeError(err, "Failed to import playlist"));
-    }
-  };
 
   const handleExportLyrics = async (): Promise<string | null> => {
     try {
