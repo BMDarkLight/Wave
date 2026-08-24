@@ -47,7 +47,6 @@ import {
   savePlaylistDialog,
   saveLyricsDialog,
   searchLibraryTracks,
-  searchLibrary,
   seekTrack,
   selectAudioFile,
   selectAudioFolder,
@@ -61,16 +60,6 @@ import {
   updateMediaPosition,
   listOutputDevices,
   setOutputDevice,
-  getEqSettings,
-  setEqBands,
-  setEqEnabled,
-  getCrossfadeDuration,
-  setCrossfadeDuration,
-  getGaplessEnabled,
-  setGaplessEnabled,
-  getAutoLyricsDownload,
-  setAutoLyricsDownload,
-  EQ_PRESETS,
   listMediaFolders,
   saveMediaFolder,
   removeMediaFolder,
@@ -84,12 +73,10 @@ import {
   takeAndroidCrashReport,
   clearAndroidCrashReport,
   listenToSyncProgress,
-  type EqSettings,
   type PlaybackMode,
   type PlaybackState,
   type PlaylistInfo,
   type QueueTrackState,
-  type SearchHit,
   type Track,
 } from "./utils/player";
 import { isAndroid } from "./utils/platform";
@@ -111,6 +98,9 @@ import {
   type MainSearchScope,
 } from "./utils/search";
 import { useLyricsAutoScroll } from "./hooks/useLyricsAutoScroll";
+import { useEqualizerSettings } from "./hooks/useEqualizerSettings";
+import { useResizablePanels } from "./hooks/useResizablePanels";
+import { useLibrarySearch } from "./hooks/useLibrarySearch";
 import { armDragDismissGhostClickGuard } from "./hooks/useDragDismiss";
 import AlbumPage from "./components/AlbumPage";
 import ArtistPage from "./components/ArtistPage";
@@ -240,41 +230,21 @@ function App() {
   const [librarySearchAdding, setLibrarySearchAdding] = useState(false);
   const librarySearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Main library realtime search (title / artist / album / lyrics)
-  const [mainSearchQuery, setMainSearchQuery] = useState("");
-  const [mainSearchHits, setMainSearchHits] = useState<SearchHit[]>([]);
-  const [mainSearchLoading, setMainSearchLoading] = useState(false);
-  const [mainSearchFullLibrary, setMainSearchFullLibrary] = useState(false);
-  const [mainSearchOpen, setMainSearchOpen] = useState(false);
-  const mainSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mainSearchReqId = useRef(0);
-  const mainSearchInputRef = useRef<HTMLInputElement | null>(null);
-  const mobileSearchInputRef = useRef<HTMLInputElement | null>(null);
-
-  const focusMainSearchInput = () => {
-    const mobile =
-      typeof window !== "undefined" &&
-      window.matchMedia("(max-width: 900px)").matches;
-    const input = mobile
-      ? mobileSearchInputRef.current
-      : mainSearchInputRef.current;
-    input?.focus();
-    input?.select();
-  };
-
-  const openMainSearch = () => {
-    setMainSearchOpen(true);
-  };
-  const closeMainSearch = () => {
-    setMainSearchOpen(false);
-    setMainSearchQuery("");
-    setMainSearchHits([]);
-    setMainSearchFullLibrary(false);
-  };
-  const toggleMainSearch = () => {
-    if (mainSearchOpen) closeMainSearch();
-    else openMainSearch();
-  };
+  const {
+    mainSearchQuery,
+    setMainSearchQuery,
+    mainSearchHits,
+    mainSearchLoading,
+    mainSearchFullLibrary,
+    setMainSearchFullLibrary,
+    mainSearchOpen,
+    mainSearchInputRef,
+    mobileSearchInputRef,
+    focusMainSearchInput,
+    openMainSearch,
+    closeMainSearch,
+    toggleMainSearch,
+  } = useLibrarySearch();
 
   // Delete-playlist confirmation modal
   const [deletePlaylistConfirm, setDeletePlaylistConfirm] = useState<{
@@ -306,62 +276,45 @@ function App() {
   const [showDeviceList, setShowDeviceList] = useState(false);
 
   // Equalizer
-  const [showEqPanel, setShowEqPanel] = useState(false);
-  const [eqSettings, setEqSettings] = useState<EqSettings>({
-    bands: Array(10).fill(0),
-    enabled: false,
+  const {
+    showEqPanel,
+    setShowEqPanel,
+    eqSettings,
+    crossfadeDuration,
+    gaplessEnabled,
+    autoLyricsDownload,
+    eqAnchor,
+    setEqAnchor,
+    volumeIconRef,
+    loadEqSettings,
+    handleToggleEqPanel,
+    handleEqEnabled,
+    handleEqBandChange,
+    handleEqBandsChange,
+    handleEqPreset,
+    handleEqReset,
+    handleCrossfadeChange,
+    handleGaplessChange,
+    handleAutoLyricsDownloadChange,
+  } = useEqualizerSettings(setError);
+
+  const {
+    sidebarWidth,
+    rightPanelWidth,
+    setRightPanelWidth,
+    rightPanelOpen,
+    rightPanelClosing,
+    isMobileLayout,
+    closeRightPanelDelayed,
+    cancelCloseRightPanel,
+    clampRightPanelWidth,
+    onDragStart,
+  } = useResizablePanels({
+    panelOpen: showQueue || !!lyricsPanelTrack || showDeviceList,
+    onCloseQueue: () => setShowQueue(false),
+    onCloseDeviceList: () => setShowDeviceList(false),
+    onCloseLyrics: () => setLyricsPanelTrack(null),
   });
-  const [crossfadeDuration, setCrossfadeDurationState] = useState(0.0);
-  const crossfadeSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [gaplessEnabled, setGaplessEnabledState] = useState(true);
-  const [autoLyricsDownload, setAutoLyricsDownloadState] = useState(true);
-  const [eqAnchor, setEqAnchor] = useState<{
-    bottom: number;
-    right: number;
-  } | null>(null);
-  const volumeIconRef = useRef<HTMLButtonElement>(null);
-
-  // Resizable columns
-  const [sidebarWidth, setSidebarWidth] = useState(252);
-  const [rightPanelWidth, setRightPanelWidth] = useState(320);
-  const rightPanelOpen = showQueue || !!lyricsPanelTrack || showDeviceList;
-  const [rightPanelClosing, setRightPanelClosing] = useState(false);
-  const rightPanelClosingRef = useRef(false);
-  const rightPanelCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
-
-  const isMobileLayout = () => window.innerWidth <= 900;
-
-  const closeRightPanelDelayed = () => {
-    if (rightPanelClosingRef.current) return;
-    if (!isMobileLayout()) {
-      setShowQueue(false);
-      setShowDeviceList(false);
-      setLyricsPanelTrack(null);
-      return;
-    }
-    rightPanelClosingRef.current = true;
-    setRightPanelClosing(true);
-    rightPanelCloseTimer.current = setTimeout(() => {
-      rightPanelClosingRef.current = false;
-      setRightPanelClosing(false);
-      setShowQueue(false);
-      setShowDeviceList(false);
-      setLyricsPanelTrack(null);
-    }, 280);
-  };
-
-  const cancelCloseRightPanel = () => {
-    if (rightPanelCloseTimer.current) {
-      clearTimeout(rightPanelCloseTimer.current);
-      rightPanelCloseTimer.current = null;
-    }
-    if (rightPanelClosingRef.current) {
-      rightPanelClosingRef.current = false;
-      setRightPanelClosing(false);
-    }
-  };
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [androidHost, setAndroidHost] = useState(false);
@@ -403,12 +356,6 @@ function App() {
     const id = window.setTimeout(() => focusMainSearchInput(), 180);
     return () => window.clearTimeout(id);
   }, [mainSearchOpen]);
-
-  const clampRightPanelWidth = (width: number, sidebar = sidebarWidth) => {
-    const reserved = sidebar + 24 + 340; // resize gutters + minimum main column
-    const max = Math.max(280, Math.min(400, window.innerWidth - reserved));
-    return Math.max(280, Math.min(max, width));
-  };
 
   // Track context menu
   const [menuTrackPath, setMenuTrackPath] = useState<string | null>(null);
@@ -775,10 +722,6 @@ function App() {
     return fromPlaylist ?? null;
   }, [playbackState.current_path, queueData.tracks, playlist]);
 
-  // Drag-to-resize for sidebar and right panel
-  const [dragging, setDragging] = useState<"sidebar" | "right" | null>(null);
-  const dragStartRef = useRef({ x: 0, width: 0 });
-
   useEffect(() => {
     const media = window.matchMedia("(max-width: 900px)");
     const onChange = () => {
@@ -937,14 +880,6 @@ function App() {
   };
 
   useEffect(() => {
-    const clamp = () =>
-      setRightPanelWidth((width) => clampRightPanelWidth(width));
-    clamp();
-    window.addEventListener("resize", clamp);
-    return () => window.removeEventListener("resize", clamp);
-  }, [sidebarWidth]);
-
-  useEffect(() => {
     if (!mobileNavOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setMobileNavOpen(false);
@@ -952,48 +887,6 @@ function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [mobileNavOpen]);
-
-  useEffect(() => {
-    if (!dragging) return;
-    const onMouseMove = (e: MouseEvent) => {
-      const dx = e.clientX - dragStartRef.current.x;
-      if (dragging === "sidebar") {
-        setSidebarWidth(
-          Math.max(180, Math.min(400, dragStartRef.current.width + dx)),
-        );
-      } else {
-        setRightPanelWidth(
-          clampRightPanelWidth(dragStartRef.current.width - dx),
-        );
-      }
-    };
-    const onMouseUp = () => {
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      document.documentElement.style.userSelect = "";
-      setDragging(null);
-    };
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp, { once: true });
-    return () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      document.documentElement.style.userSelect = "";
-    };
-  }, [dragging]);
-
-  const onDragStart = (which: "sidebar" | "right") => (e: React.MouseEvent) => {
-    e.preventDefault();
-    dragStartRef.current = {
-      x: e.clientX,
-      width: which === "sidebar" ? sidebarWidth : rightPanelWidth,
-    };
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    document.documentElement.style.userSelect = "none";
-    setDragging(which);
-  };
 
   // Close lyrics panel and auto-fetch lyrics when track changes
   useEffect(() => {
@@ -1558,38 +1451,6 @@ function App() {
     };
   }, [showAddFromLibrary, librarySearchQuery]);
 
-  // Realtime main search — short debounce so typing stays tactile.
-  useEffect(() => {
-    const q = mainSearchQuery.trim();
-    if (!q) {
-      setMainSearchHits([]);
-      setMainSearchLoading(false);
-      return;
-    }
-    if (mainSearchTimer.current) clearTimeout(mainSearchTimer.current);
-    setMainSearchLoading(true);
-    const reqId = ++mainSearchReqId.current;
-    mainSearchTimer.current = setTimeout(() => {
-      searchLibrary(q, 100)
-        .then((hits) => {
-          if (mainSearchReqId.current !== reqId) return;
-          setMainSearchHits(hits);
-        })
-        .catch(() => {
-          if (mainSearchReqId.current !== reqId) return;
-          setMainSearchHits([]);
-        })
-        .finally(() => {
-          if (mainSearchReqId.current === reqId) setMainSearchLoading(false);
-        });
-    }, 80);
-    return () => {
-      if (mainSearchTimer.current) {
-        clearTimeout(mainSearchTimer.current);
-        mainSearchTimer.current = null;
-      }
-    };
-  }, [mainSearchQuery]);
 
   // Cmd/Ctrl+K opens/focuses search; Escape clears or collapses it.
   useEffect(() => {
@@ -2290,133 +2151,6 @@ function App() {
       await updatePlaybackState();
     } catch (err) {
       setError(formatInvokeError(err, "Failed to set volume"));
-    }
-  };
-
-  const loadEqSettings = async () => {
-    try {
-      const settings = await getEqSettings();
-      const bands = Array.from(
-        { length: 10 },
-        (_, i) => settings.bands[i] ?? 0,
-      );
-      setEqSettings({ bands, enabled: settings.enabled });
-      const crossfade = await getCrossfadeDuration();
-      setCrossfadeDurationState(crossfade);
-      const gapless = await getGaplessEnabled();
-      setGaplessEnabledState(gapless);
-      const autoLyrics = await getAutoLyricsDownload();
-      setAutoLyricsDownloadState(autoLyrics);
-    } catch (err) {
-      console.error("Failed to load EQ settings", err);
-    }
-  };
-
-  const handleToggleEqPanel = async () => {
-    if (showEqPanel) {
-      setShowEqPanel(false);
-      setEqAnchor(null);
-      return;
-    }
-    await loadEqSettings();
-    if (volumeIconRef.current) {
-      const rect = volumeIconRef.current.getBoundingClientRect();
-      setEqAnchor({
-        bottom: window.innerHeight - rect.top + 8,
-        right: Math.max(12, window.innerWidth - rect.right),
-      });
-    }
-    setShowEqPanel(true);
-  };
-
-  const handleEqEnabled = async (enabled: boolean) => {
-    const previous = eqSettings;
-    setEqSettings((s) => ({ ...s, enabled }));
-    try {
-      await setEqEnabled(enabled);
-    } catch (err) {
-      setEqSettings(previous);
-      setError(formatInvokeError(err, "Failed to toggle equalizer"));
-    }
-  };
-
-  const handleEqBandChange = async (index: number, gain: number) => {
-    const bands = eqSettings.bands.map((value, i) =>
-      i === index ? gain : value,
-    );
-    setEqSettings((s) => ({ ...s, bands, enabled: true }));
-    try {
-      await setEqBands(bands);
-      if (!eqSettings.enabled) await setEqEnabled(true);
-    } catch (err) {
-      setError(formatInvokeError(err, "Failed to update EQ band"));
-      await loadEqSettings();
-    }
-  };
-
-  const handleEqBandsChange = async (bands: number[]) => {
-    setEqSettings((s) => ({ ...s, bands, enabled: true }));
-    try {
-      await setEqBands(bands);
-      if (!eqSettings.enabled) await setEqEnabled(true);
-    } catch (err) {
-      setError(formatInvokeError(err, "Failed to update equalizer"));
-      await loadEqSettings();
-    }
-  };
-
-  const handleEqPreset = async (presetId: string) => {
-    const preset = EQ_PRESETS.find((p) => p.id === presetId);
-    if (!preset) return;
-    const bands = [...preset.bands];
-    setEqSettings({ bands, enabled: true });
-    try {
-      await setEqBands(bands);
-      await setEqEnabled(true);
-    } catch (err) {
-      setError(formatInvokeError(err, "Failed to apply EQ preset"));
-      await loadEqSettings();
-    }
-  };
-
-  const handleEqReset = async () => {
-    await handleEqPreset("flat");
-  };
-
-  const handleCrossfadeChange = (duration: number) => {
-    const clamped = Math.max(0, Math.min(8, duration));
-    setCrossfadeDurationState(clamped);
-    if (crossfadeSaveTimer.current) {
-      clearTimeout(crossfadeSaveTimer.current);
-    }
-    // Debounce disk/IPC writes so dragging the slider stays responsive.
-    crossfadeSaveTimer.current = setTimeout(() => {
-      setCrossfadeDuration(clamped).catch(async (err) => {
-        setError(formatInvokeError(err, "Failed to set crossfade duration"));
-        await loadEqSettings();
-      });
-    }, 120);
-  };
-
-  const handleGaplessChange = async (enabled: boolean) => {
-    setGaplessEnabledState(enabled);
-    try {
-      await setGaplessEnabled(enabled);
-    } catch (err) {
-      setError(formatInvokeError(err, "Failed to set gapless playback"));
-      const gapless = await getGaplessEnabled();
-      setGaplessEnabledState(gapless);
-    }
-  };
-
-  const handleAutoLyricsDownloadChange = async (enabled: boolean) => {
-    setAutoLyricsDownloadState(enabled);
-    try {
-      await setAutoLyricsDownload(enabled);
-    } catch (err) {
-      setError(formatInvokeError(err, "Failed to update auto lyric download"));
-      const autoLyrics = await getAutoLyricsDownload();
-      setAutoLyricsDownloadState(autoLyrics);
     }
   };
 
