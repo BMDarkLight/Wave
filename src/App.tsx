@@ -2,24 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import trayTemplate from "../assets/tray-template.svg";
-import {
-  BiPlay,
-  BiPause,
-  BiHeart,
-  BiSolidHeart,
-  BiDotsHorizontalRounded,
-  BiX,
-  BiPlus,
-  BiTrash,
-  BiMusic,
-  BiFolderOpen,
-  BiMenu,
-  BiSync,
-  BiMinus,
-  BiImage,
-  BiAlignLeft,
-  BiSearch,
-} from "react-icons/bi";
+import { BiX, BiFolderOpen, BiMenu, BiSearch } from "react-icons/bi";
 import {
   addTrackToPlaylistById,
   addToQueue,
@@ -151,11 +134,11 @@ import LyricsPanel from "./components/LyricsPanel";
 import DeviceListPanel from "./components/DeviceListPanel";
 import PlayerBar from "./components/PlayerBar";
 import Sidebar, { type MainView } from "./components/Sidebar";
+import LibraryTrackList from "./components/LibraryTrackList";
 import MobileNowPlaying, {
   type MobileNowPlayingView,
 } from "./components/MobileNowPlaying";
 import MobileSettings from "./components/MobileSettings";
-import VirtualizedList from "./components/VirtualizedList";
 import "./App.css";
 import "./touch-hover.css";
 
@@ -3697,445 +3680,58 @@ function App() {
           onResetApp={handleResetApp}
         />
       ) : (
-        <main className="main-content">
-          <div className="hero-copy">
-            <div className="hero-top">
-              <h1>
-                {mainSearchQuery.trim()
-                  ? "Search"
-                  : (selectedPlaylist?.name ?? LIBRARY_PLAYLIST_NAME)}
-              </h1>
-              <div className="hero-actions">
-              {!mainSearchQuery.trim() && (
-                <>
-                  <button
-                    className="big-play"
-                    onClick={handlePlayPause}
-                    type="button"
-                    title="Play or pause"
-                  >
-                    {playbackState.is_playing ? <BiPause /> : <BiPlay />}
-                  </button>
-                  {selectedPlaylist?.name !== "Favorites" && (
-                    <div className="add-track-wrap">
-                      <button
-                        ref={addTrackBtnRef}
-                        className="btn-secondary"
-                        onClick={async () => {
-                          if (androidHost) {
-                            // Library playlist: scan media folders.
-                            // Custom playlists: searchable library picker.
-                            const isLibrary = isLibraryPlaylistName(
-                              selectedPlaylist?.name,
-                            );
-                            if (isLibrary) {
-                              void handleAddFolderAndroid();
-                            } else {
-                              openAddFromLibrary();
-                            }
-                            return;
-                          }
-                          if (addTrackBtnRef.current) {
-                            const rect =
-                              addTrackBtnRef.current.getBoundingClientRect();
-                            setAddTrackMenuAnchor({
-                              top: rect.bottom + 6,
-                              left: rect.left,
-                            });
-                          }
-                          setShowAddTrackMenu((v) => !v);
-                        }}
-                        disabled={isAddingTracks}
-                        type="button"
-                        title={
-                          androidHost
-                            ? isLibraryPlaylistName(selectedPlaylist?.name)
-                              ? "Scan media folder"
-                              : "Add from library"
-                            : "Add tracks"
-                        }
-                      >
-                        <BiPlus />
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-              <div
-                className={`hero-search-wrap${mainSearchOpen || mainSearchQuery ? " is-open" : ""}`}
-              >
-                {!(mainSearchOpen || mainSearchQuery) ? (
-                  <button
-                    className="btn-secondary hero-search-btn"
-                    type="button"
-                    onClick={openMainSearch}
-                    title="Search library"
-                    aria-label="Search library"
-                  >
-                    <BiSearch />
-                  </button>
-                ) : (
-                  <div className="library-search-bar">
-                    <BiSearch className="library-search-icon" aria-hidden />
-                    <input
-                      ref={mainSearchInputRef}
-                      className="library-search-input"
-                      type="search"
-                      placeholder="Search songs, artists, albums, lyrics…"
-                      value={mainSearchQuery}
-                      onChange={(e) => setMainSearchQuery(e.target.value)}
-                      aria-label="Search library"
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                    {mainSearchQuery ? (
-                      <button
-                        className="library-search-clear"
-                        type="button"
-                        onClick={() => setMainSearchQuery("")}
-                        title="Clear search"
-                        aria-label="Clear search"
-                      >
-                        <BiX />
-                      </button>
-                    ) : (
-                      <button
-                        className="library-search-clear"
-                        type="button"
-                        onClick={closeMainSearch}
-                        title="Close search"
-                        aria-label="Close search"
-                      >
-                        <BiX />
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-              {!mainSearchQuery.trim() &&
-                playlist.length > 0 &&
-                !isLibraryPlaylistName(selectedPlaylist?.name) &&
-                selectedPlaylist?.name !== "Favorites" &&
-                !selectedPlaylist?.sync_folder && (
-                  <button
-                    className="btn-ghost"
-                    onClick={handleClearPlaylist}
-                    type="button"
-                  >
-                    Clear
-                  </button>
-                )}
-            </div>
-            </div>
-            <p>
-              {mainSearchQuery.trim()
-                ? mainSearchResultsSubtitle
-                : playlist.length
-                  ? `${playlist.length} tracks in this playlist`
-                  : isLoadingPlaylist
-                    ? "Loading tracks…"
-                    : "No tracks in this playlist"}
-              {!mainSearchQuery.trim() &&
-              ((isScanningFolder &&
-                (selectedPlaylist?.sync_folder ||
-                  isLibraryPlaylistName(selectedPlaylist?.name))) ||
-                (isImporting && selectedPlaylist?.sync_folder)) ? (
-                <>
-                  {" · "}
-                  <span className="playlist-sync-badge playlist-sync-badge-active">
-                    <BiSync className="playlist-sync-spin" /> Syncing…
-                  </span>
-                </>
-              ) : !mainSearchQuery.trim() && selectedPlaylist?.sync_folder ? (
-                <>
-                  {" · "}
-                  <span
-                    className="playlist-sync-badge"
-                    title={selectedPlaylist.sync_folder}
-                    onClick={() => handleSyncPlaylistFolder(selectedPlaylist!.id)}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <BiSync /> Synced folder
-                  </span>
-                </>
-              ) : null}
-            </p>
-          </div>
-
-          <section className="playlist-container">
-            {mainSearchQuery.trim() ? (
-              mainSearchResultsPanel
-            ) : playlist.length === 0 && isLoadingPlaylist ? (
-              <div className="empty-state">
-                <div className="empty-icon">
-                  <span className="import-spinner" />
-                </div>
-                <h2>Loading…</h2>
-              </div>
-            ) : importingPlaylistId != null &&
-              selectedPlaylistId === importingPlaylistId ? (
-              <div className="empty-state">
-                <div className="empty-icon">
-                  <span className="import-spinner" />
-                </div>
-                <h2>
-                  Importing songs
-                  {importedCount > 0 ? ` (${importedCount} added)` : ""}…
-                </h2>
-                <p className="import-subtitle">
-                  Your songs will appear here as they are added.
-                </p>
-              </div>
-            ) : playlist.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">
-                  <BiMusic />
-                </div>
-                <h2>Your playlist is empty</h2>
-                {!isLibraryPlaylistName(selectedPlaylist?.name) &&
-                  selectedPlaylist?.name !== "Favorites" && (
-                    <button
-                      className="btn-primary"
-                      onClick={() => {
-                        if (androidHost) openAddFromLibrary();
-                        else void handleAddTrack(false);
-                      }}
-                      disabled={isAddingTracks}
-                      type="button"
-                    >
-                      {androidHost ? "Add from library" : "Add your first track"}
-                    </button>
-                  )}
-              </div>
-            ) : (
-              <div
-                className="track-list"
-                style={{ "--track-grid": trackGridCols } as React.CSSProperties}
-              >
-                <div className="track-list-header">
-                  <div
-                    className="track-col-index sort-header"
-                    onClick={() => handleSort("index")}
-                  >
-                    #
-                    {sortColumn === "index" && sortDirection !== "none"
-                      ? sortDirection === "asc"
-                        ? " ▲"
-                        : " ▼"
-                      : ""}
-                  </div>
-                  <div
-                    className="track-title-cell sort-header"
-                    onClick={() => handleSort("title")}
-                  >
-                    Title
-                    {sortColumn === "title" && sortDirection !== "none"
-                      ? sortDirection === "asc"
-                        ? " ▲"
-                        : " ▼"
-                      : ""}
-                    <div
-                      className="resize-handle"
-                      onMouseDown={handleAlbumColResizeStart}
-                      onClick={(e) => e.stopPropagation()}
-                      title="Resize columns"
-                      role="separator"
-                      aria-orientation="vertical"
-                      aria-label="Resize title and album columns"
-                    />
-                  </div>
-                  <div
-                    className="track-album sort-header"
-                    onClick={() => handleSort("album")}
-                  >
-                    Album
-                    {sortColumn === "album" && sortDirection !== "none"
-                      ? sortDirection === "asc"
-                        ? " ▲"
-                        : " ▼"
-                      : ""}
-                  </div>
-                  <div className="track-duration track-duration-header">
-                    Duration
-                  </div>
-                </div>
-                <VirtualizedList
-                  count={sortedPlaylist.length}
-                  estimateSize={typeof window !== "undefined" && window.innerWidth <= 900 ? 58 : 64}
-                  className="track-list-virtual"
-                >
-                  {(index) => {
-                    const track = sortedPlaylist[index];
-                    if (!track) return null;
-                    return (
-
-                  <div
-                    key={track.id}
-                    className={`track-item ${isCurrentTrack(track) ? "active" : ""}`}
-                    onClick={() => handlePlayTrack(index)}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      openTrackContextMenu(track.path, {
-                        top: event.clientY,
-                        left: event.clientX,
-                        flipAbove: event.clientY,
-                      });
-                    }}
-                  >
-                    <div className="track-col-index">
-                      {isCurrentTrack(track) && playbackState.is_playing ? (
-                        <span className="mini-bars">
-                          <i />
-                          <i />
-                          <i />
-                        </span>
-                      ) : (
-                        index + 1
-                      )}
-                    </div>
-                    <div className="track-title-cell">
-                      <Artwork
-                        track={track}
-                        fallback={getTrackTitle(track)
-                          .slice(0, 1)
-                          .toUpperCase()}
-                        className="track-thumb"
-                      />
-                      <div>
-                        <div className="track-name">{getTrackTitle(track)}</div>
-                        <div className="track-meta">
-                          <button
-                            className="track-meta-link"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              // On responsive layouts the artist name sits under
-                              // the title — taps here should play the row, not
-                              // navigate away (pointer-events also disabled in CSS).
-                              if (window.innerWidth <= 900) return;
-                              openArtistPage(track.artist);
-                            }}
-                            type="button"
-                          >
-                            {track.artist}
-                          </button>
-                          {(track.lyrics ||
-                            track.cover_art_source === "cover-art-archive") && (
-                            <span className="track-meta-icons">
-                              {track.lyrics ? (
-                                <span
-                                  className="track-meta-icon-wrap"
-                                  title="Has lyrics"
-                                  aria-label="Has lyrics"
-                                >
-                                  <BiAlignLeft className="track-meta-icon" aria-hidden />
-                                </span>
-                              ) : null}
-                              {track.cover_art_source === "cover-art-archive" ? (
-                                <span
-                                  className="track-meta-icon-wrap"
-                                  title="Online cover"
-                                  aria-label="Online cover"
-                                >
-                                  <BiImage className="track-meta-icon" aria-hidden />
-                                </span>
-                              ) : null}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    <div
-                      className="track-album"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (window.innerWidth <= 900) return;
-                        openAlbumPage(track.album, track.album_artist || track.artist,);
-                      }}
-                    >
-                      {track.album}
-                    </div>
-                    <div className="track-duration">
-                      {formatTime(track.duration_seconds)}
-                    </div>
-                    <div className="track-actions-cell">
-                      <div className="track-actions-hover">
-                        <button
-                          className="track-action-btn"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            if (menuTrackPath === track.path) {
-                              setMenuTrackPath(null);
-                              setMenuAnchor(null);
-                              setAddToPlaylistTrack(null);
-                            } else {
-                              const rect =
-                                event.currentTarget.getBoundingClientRect();
-                              openTrackContextMenu(track.path, {
-                                top: rect.bottom + 4,
-                                flipAbove: rect.top - 4,
-                                right: window.innerWidth - rect.right,
-                              });
-                            }
-                          }}
-                          title="More"
-                          type="button"
-                        >
-                          <BiDotsHorizontalRounded />
-                        </button>
-                        {!isLibraryPlaylistName(selectedPlaylist?.name) && (
-                          <button
-                            className="track-action-btn track-remove-action"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleRemoveFromPlaylist(track.path);
-                            }}
-                            title="Remove from playlist"
-                            type="button"
-                          >
-                            <BiMinus />
-                          </button>
-                        )}
-                        <button
-                          className="track-action-btn track-remove-action"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleRemoveFromLibrary(track.path);
-                          }}
-                          title="Remove from library"
-                          type="button"
-                        >
-                          <BiTrash />
-                        </button>
-                      </div>
-                      <button
-                        className={`track-action-btn favorite-btn ${favoritePaths.has(track.path) ? "active" : ""}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleToggleFavorite(track.path);
-                        }}
-                        title={
-                          favoritePaths.has(track.path)
-                            ? "Remove from Favorites"
-                            : "Add to Favorites"
-                        }
-                        type="button"
-                      >
-                        {favoritePaths.has(track.path) ? (
-                          <BiSolidHeart />
-                        ) : (
-                          <BiHeart />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                    );
-                  }}
-                </VirtualizedList>
-              </div>
-            )}
-          </section>
-        </main>
+        <LibraryTrackList
+          mainSearchQuery={mainSearchQuery}
+          onMainSearchQueryChange={setMainSearchQuery}
+          mainSearchOpen={mainSearchOpen}
+          onOpenMainSearch={openMainSearch}
+          onCloseMainSearch={closeMainSearch}
+          mainSearchInputRef={mainSearchInputRef}
+          mainSearchResultsSubtitle={mainSearchResultsSubtitle}
+          mainSearchResultsPanel={mainSearchResultsPanel}
+          selectedPlaylist={selectedPlaylist}
+          playlist={playlist}
+          sortedPlaylist={sortedPlaylist}
+          isLoadingPlaylist={isLoadingPlaylist}
+          isScanningFolder={isScanningFolder}
+          isImporting={isImporting}
+          isAddingTracks={isAddingTracks}
+          importingPlaylistId={importingPlaylistId}
+          selectedPlaylistId={selectedPlaylistId}
+          importedCount={importedCount}
+          playbackState={playbackState}
+          androidHost={androidHost}
+          addTrackBtnRef={addTrackBtnRef}
+          trackGridCols={trackGridCols}
+          sortColumn={sortColumn}
+          sortDirection={sortDirection}
+          favoritePaths={favoritePaths}
+          menuTrackPath={menuTrackPath}
+          onPlayPause={handlePlayPause}
+          onAddFolderAndroid={() => void handleAddFolderAndroid()}
+          onOpenAddFromLibrary={openAddFromLibrary}
+          onOpenAddTrackMenu={() => {
+            if (addTrackBtnRef.current) {
+              const rect = addTrackBtnRef.current.getBoundingClientRect();
+              setAddTrackMenuAnchor({ top: rect.bottom + 6, left: rect.left });
+            }
+            setShowAddTrackMenu((v) => !v);
+          }}
+          onAddTrack={() => void handleAddTrack(false)}
+          onClearPlaylist={handleClearPlaylist}
+          onSort={handleSort}
+          onResizeAlbumColumn={handleAlbumColResizeStart}
+          onSyncPlaylist={(id) => void handleSyncPlaylistFolder(id)}
+          isCurrentTrack={isCurrentTrack}
+          onPlayTrack={handlePlayTrack}
+          onOpenArtist={openArtistPage}
+          onOpenAlbum={openAlbumPage}
+          onOpenTrackContextMenu={openTrackContextMenu}
+          onCloseTrackMenu={closeTrackContextMenu}
+          onRemoveFromPlaylist={(path) => void handleRemoveFromPlaylist(path)}
+          onRemoveFromLibrary={(path) => void handleRemoveFromLibrary(path)}
+          onToggleFavorite={handleToggleFavorite}
+        />
       )}
 
       {(rightPanelOpen || rightPanelClosing) && (
