@@ -24,8 +24,12 @@ const initTauri = async () => {
   }
 };
 
-let tauriInitialized = initTauri();
+const tauriInitialized = initTauri();
 
+// Callers without an explicit <T> rely on `any` being assignable to their
+// declared Promise<void>/Promise<SomeType> return types; `unknown` would
+// break every such call site's return-type inference.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const safeInvoke = async <T = any>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
   await tauriInitialized;
 
@@ -295,7 +299,7 @@ export const selectMediaFolder = async (): Promise<{ uri: string; displayName?: 
       return null;
     }
     console.error("Failed to pick media folder:", err);
-    throw new Error(message);
+    throw new Error(message, { cause: err });
   }
 };
 
@@ -1119,6 +1123,7 @@ export const scanDirectoryRecursive = async (dirUri: string): Promise<string[]> 
     } catch (err) {
       throw new Error(
         invokeErrorMessage(err, "Failed to scan the selected folder"),
+        { cause: err },
       );
     }
   }

@@ -1697,3 +1697,385 @@ impl AudioPlayer {
         Ok(path)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queue_of(paths: &[&str]) -> Queue {
+        let mut queue = Queue::default();
+        queue.set_tracks(paths.iter().map(|p| p.to_string()).collect());
+        queue
+    }
+
+    // ── set_tracks ───────────────────────────────────────────────────────
+
+    #[test]
+    fn set_tracks_resets_current_index_and_shuffle_state() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(2);
+        queue.set_shuffle(true);
+        assert!(queue.current_index().is_some());
+        assert!(queue.is_shuffled());
+
+        queue.set_tracks(vec!["x".to_string(), "y".to_string()]);
+        assert_eq!(queue.current_index(), None);
+        assert!(!queue.is_shuffled());
+        assert_eq!(queue.shuffle_pos, 0);
+        assert_eq!(queue.tracks(), &["x".to_string(), "y".to_string()]);
+    }
+
+    // ── jump ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn jump_to_valid_index_sets_current_and_returns_path() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        let result = queue.jump(1);
+        assert_eq!(result, Some("b"));
+        assert_eq!(queue.current_index(), Some(1));
+    }
+
+    #[test]
+    fn jump_out_of_bounds_returns_none() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        assert_eq!(queue.jump(5), None);
+    }
+
+    // ── next ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn next_returns_none_past_last_track_when_repeat_off_or_one() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(2);
+        assert_eq!(queue.next(&RepeatMode::Off), None);
+        assert_eq!(queue.current_index(), Some(2));
+        assert_eq!(queue.next(&RepeatMode::One), None);
+        assert_eq!(queue.current_index(), Some(2));
+    }
+
+    #[test]
+    fn next_wraps_to_first_track_under_repeat_all() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(2);
+        let result = queue.next(&RepeatMode::All);
+        assert_eq!(result, Some("a"));
+        assert_eq!(queue.current_index(), Some(0));
+    }
+
+    #[test]
+    fn next_wraps_to_shuffle_order_start_under_repeat_all() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(2);
+        queue.set_shuffle(true);
+        // Pinned: shuffle_order[0] must equal the index that was current at
+        // shuffle time (2, "c").
+        assert_eq!(queue.shuffle_order.as_ref().unwrap()[0], 2);
+
+        let last_pos = queue.shuffle_order.as_ref().unwrap().len() - 1;
+        queue.shuffle_pos = last_pos;
+        queue.current_index = Some(queue.shuffle_order.as_ref().unwrap()[last_pos]);
+
+        let result = queue.next(&RepeatMode::All);
+        assert_eq!(result, Some("c"));
+        assert_eq!(queue.current_index(), Some(2));
+    }
+
+    // ── previous ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn previous_returns_none_before_first_track_when_repeat_off_or_one() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(0);
+        assert_eq!(queue.previous(&RepeatMode::Off), None);
+        // Unlike `next`, `previous` unconditionally writes
+        // `current_index = prev_idx` (no early-return `?`), so it becomes
+        // None here rather than staying at 0.
+        assert_eq!(queue.current_index(), None);
+        assert_eq!(queue.previous(&RepeatMode::One), None);
+        assert_eq!(queue.current_index(), None);
+    }
+
+    #[test]
+    fn previous_wraps_to_last_track_under_repeat_all() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(0);
+        let result = queue.previous(&RepeatMode::All);
+        assert_eq!(result, Some("c"));
+        assert_eq!(queue.current_index(), Some(2));
+    }
+
+    // ── peek_next ────────────────────────────────────────────────────────
+
+    #[test]
+    fn peek_next_does_not_mutate_state() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(0);
+        let first = queue.peek_next(&RepeatMode::Off);
+        let index_after_first_peek = queue.current_index();
+        let second = queue.peek_next(&RepeatMode::Off);
+        assert_eq!(first, second);
+        assert_eq!(index_after_first_peek, queue.current_index());
+        assert_eq!(queue.current_index(), Some(0));
+    }
+
+    // ── set_shuffle / is_shuffled ────────────────────────────────────────
+
+    #[test]
+    fn set_shuffle_true_builds_valid_permutation_pinned_to_current() {
+        let mut queue = queue_of(&["a", "b", "c", "d", "e"]);
+        queue.jump(2);
+        queue.set_shuffle(true);
+        assert!(queue.is_shuffled());
+
+        let order = queue.shuffle_order.clone().unwrap();
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![0, 1, 2, 3, 4]);
+        // Current track is pinned to the front of the shuffle order.
+        assert_eq!(order[0], 2);
+    }
+
+    #[test]
+    fn set_shuffle_false_clears_order() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.set_shuffle(true);
+        assert!(queue.is_shuffled());
+        queue.set_shuffle(false);
+        assert!(!queue.is_shuffled());
+        assert!(queue.shuffle_order.is_none());
+    }
+
+    // ── enqueue ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn enqueue_appends_to_tracks() {
+        let mut queue = queue_of(&["a", "b"]);
+        queue.enqueue("c".to_string());
+        assert_eq!(queue.tracks(), &["a".to_string(), "b".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn enqueue_while_shuffled_appends_new_index_to_shuffle_order() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.set_shuffle(true);
+        queue.enqueue("d".to_string());
+        let order = queue.shuffle_order.clone().unwrap();
+        assert_eq!(order.len(), 4);
+        assert!(order.contains(&3));
+    }
+
+    // ── insert_next ──────────────────────────────────────────────────────
+
+    #[test]
+    fn insert_next_inserts_right_after_current() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(0);
+        queue.insert_next("x".to_string());
+        assert_eq!(
+            queue.tracks(),
+            &["a".to_string(), "x".to_string(), "b".to_string(), "c".to_string()]
+        );
+        assert_eq!(queue.current_index(), Some(0));
+    }
+
+    #[test]
+    fn insert_next_appends_when_nothing_current() {
+        let mut queue = queue_of(&["a", "b"]);
+        queue.insert_next("z".to_string());
+        assert_eq!(
+            queue.tracks(),
+            &["a".to_string(), "b".to_string(), "z".to_string()]
+        );
+    }
+
+    #[test]
+    fn insert_next_while_shuffled_updates_shuffle_order() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(0);
+        queue.set_shuffle(true);
+        assert_eq!(queue.shuffle_order.as_ref().unwrap()[0], 0);
+
+        queue.insert_next("x".to_string());
+
+        let order = queue.shuffle_order.clone().unwrap();
+        assert_eq!(order.len(), 4);
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![0, 1, 2, 3]);
+        // Pin at position 0 is untouched, and the newly inserted index (1)
+        // lands right after the shuffle cursor.
+        assert_eq!(order[0], 0);
+        assert_eq!(order[1], 1);
+    }
+
+    // ── remove_at ────────────────────────────────────────────────────────
+
+    #[test]
+    fn remove_at_out_of_bounds_returns_none() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        assert_eq!(queue.remove_at(10), None);
+    }
+
+    #[test]
+    fn remove_at_current_last_track_clamps_current_index() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(2);
+        let removed = queue.remove_at(2);
+        assert_eq!(removed, Some("c".to_string()));
+        assert_eq!(queue.tracks(), &["a".to_string(), "b".to_string()]);
+        assert_eq!(queue.current_index(), Some(1));
+    }
+
+    #[test]
+    fn remove_at_current_non_last_track_keeps_index() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(0);
+        let removed = queue.remove_at(0);
+        assert_eq!(removed, Some("a".to_string()));
+        assert_eq!(queue.tracks(), &["b".to_string(), "c".to_string()]);
+        assert_eq!(queue.current_index(), Some(0));
+    }
+
+    #[test]
+    fn remove_at_before_current_decrements_current_index() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(2);
+        let removed = queue.remove_at(0);
+        assert_eq!(removed, Some("a".to_string()));
+        assert_eq!(queue.tracks(), &["b".to_string(), "c".to_string()]);
+        assert_eq!(queue.current_index(), Some(1));
+    }
+
+    #[test]
+    fn remove_at_after_current_leaves_current_index_unchanged() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(0);
+        let removed = queue.remove_at(2);
+        assert_eq!(removed, Some("c".to_string()));
+        assert_eq!(queue.current_index(), Some(0));
+    }
+
+    #[test]
+    fn remove_at_last_remaining_track_clears_current_index() {
+        let mut queue = queue_of(&["only"]);
+        queue.jump(0);
+        let removed = queue.remove_at(0);
+        assert_eq!(removed, Some("only".to_string()));
+        assert!(queue.tracks().is_empty());
+        assert_eq!(queue.current_index(), None);
+    }
+
+    // ── move_track ───────────────────────────────────────────────────────
+
+    #[test]
+    fn move_track_same_index_returns_false() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        assert!(!queue.move_track(1, 1));
+    }
+
+    #[test]
+    fn move_track_out_of_bounds_returns_false() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        assert!(!queue.move_track(0, 10));
+        assert!(!queue.move_track(10, 0));
+    }
+
+    #[test]
+    fn move_track_from_before_current_to_after_keeps_same_track_current() {
+        let mut queue = queue_of(&["a", "b", "c", "d"]);
+        queue.jump(1); // "b"
+        let moved = queue.move_track(0, 2);
+        assert!(moved);
+        assert_eq!(
+            queue.tracks(),
+            &["b".to_string(), "c".to_string(), "a".to_string(), "d".to_string()]
+        );
+        // current_index must still point at "b".
+        let idx = queue.current_index().unwrap();
+        assert_eq!(queue.tracks()[idx], "b");
+    }
+
+    #[test]
+    fn move_track_from_after_current_to_before_keeps_same_track_current() {
+        let mut queue = queue_of(&["a", "b", "c", "d"]);
+        queue.jump(2); // "c"
+        let moved = queue.move_track(3, 0);
+        assert!(moved);
+        assert_eq!(
+            queue.tracks(),
+            &["d".to_string(), "a".to_string(), "b".to_string(), "c".to_string()]
+        );
+        let idx = queue.current_index().unwrap();
+        assert_eq!(queue.tracks()[idx], "c");
+    }
+
+    // ── clear_upcoming ───────────────────────────────────────────────────
+
+    #[test]
+    fn clear_upcoming_keeps_only_current_track() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(1);
+        queue.set_shuffle(true);
+        queue.clear_upcoming();
+        assert_eq!(queue.tracks(), &["b".to_string()]);
+        assert_eq!(queue.current_index(), Some(0));
+        assert!(!queue.is_shuffled());
+    }
+
+    #[test]
+    fn clear_upcoming_with_no_current_clears_all() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.clear_upcoming();
+        assert!(queue.tracks().is_empty());
+        assert_eq!(queue.current_index(), None);
+    }
+
+    // ── paths_from_current_forward ───────────────────────────────────────
+
+    #[test]
+    fn paths_from_current_forward_never_exceeds_track_count_under_repeat_all() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(0);
+        let paths = queue.paths_from_current_forward(&RepeatMode::All);
+        assert!(!paths.is_empty());
+        assert!(paths.len() <= queue.tracks().len());
+    }
+
+    #[test]
+    fn paths_from_current_forward_empty_when_nothing_current() {
+        let queue = queue_of(&["a", "b", "c"]);
+        let paths = queue.paths_from_current_forward(&RepeatMode::Off);
+        assert!(paths.is_empty());
+    }
+
+    // ── PlaybackClock ────────────────────────────────────────────────────
+
+    #[test]
+    fn stopped_clock_is_zeroed() {
+        let clock = PlaybackClock::stopped();
+        assert!(clock.started_at.is_none());
+        assert_eq!(clock.elapsed_before_start, Duration::ZERO);
+        assert_eq!(clock.duration, None);
+        assert_eq!(clock.raw_elapsed(), Duration::ZERO);
+        assert_eq!(clock.position(), Duration::ZERO);
+    }
+
+    #[test]
+    fn clock_elapsed_and_position_advance_after_start() {
+        let mut clock = PlaybackClock::stopped();
+        clock.started_at = Some(Instant::now());
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(clock.raw_elapsed() >= Duration::from_millis(5));
+        assert!(clock.position() >= Duration::from_millis(5));
+    }
+
+    #[test]
+    fn clock_position_clamps_to_duration() {
+        let mut clock = PlaybackClock::stopped();
+        clock.duration = Some(Duration::from_millis(1));
+        clock.started_at = Some(Instant::now());
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(clock.position(), Duration::from_millis(1));
+        assert!(clock.raw_elapsed() > clock.position());
+    }
+}

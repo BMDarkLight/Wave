@@ -737,3 +737,154 @@ impl Source for SoftFade {
         Ok(())
     }
 }
+
+// Note: `Crossfade::configured_fade_secs` and `Crossfade::fade_window` are not
+// covered here — `Crossfade` holds `Box<dyn Source<Item = f32> + Send>` fields
+// per its struct definition, so constructing a real instance in a unit test
+// would require a full `rodio::Source` implementation for a fake source. That's
+// more scaffolding than is justified for two pure-math helper methods; the
+// `EqConfig`/`Biquad` tests below are the clear wins for this file.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── EqConfig::apply_preset / list_presets ───────────────────────────────
+
+    #[test]
+    fn apply_preset_sets_bands_and_enables() {
+        let mut config = EqConfig::default();
+        let (key, _desc, bands) = EQ_PRESETS
+            .iter()
+            .find(|(key, _, _)| *key == "bass-boost")
+            .expect("bass-boost preset exists");
+        let result = config.apply_preset(key);
+        assert_eq!(result, Some(()));
+        assert_eq!(config.bands, *bands);
+        assert!(config.enabled);
+    }
+
+    #[test]
+    fn apply_preset_unknown_name_returns_none_and_leaves_state_unchanged() {
+        let mut config = EqConfig::default();
+        config.bands[0] = 3.5;
+        config.enabled = false;
+        let before = config.clone();
+        let result = config.apply_preset("not-a-real-preset");
+        assert_eq!(result, None);
+        assert_eq!(config.bands, before.bands);
+        assert_eq!(config.enabled, before.enabled);
+    }
+
+    #[test]
+    fn list_presets_matches_eq_presets_const() {
+        let listed: Vec<(&str, &str)> = EqConfig::list_presets().collect();
+        let expected: Vec<(&str, &str)> = EQ_PRESETS.iter().map(|(k, d, _)| (*k, *d)).collect();
+        assert_eq!(listed, expected);
+        assert_eq!(listed.len(), EQ_PRESETS.len());
+    }
+
+    // ── EqConfig::bass_gain / treble_gain ───────────────────────────────────
+
+    #[test]
+    fn bass_gain_reads_first_band() {
+        let mut config = EqConfig::default();
+        config.bands[0] = 5.0;
+        assert_eq!(config.bass_gain(), 5.0);
+    }
+
+    #[test]
+    fn treble_gain_reads_last_band() {
+        let mut config = EqConfig::default();
+        config.bands[9] = -3.0;
+        assert_eq!(config.treble_gain(), -3.0);
+    }
+
+    #[test]
+    fn bass_and_treble_gain_are_clamped() {
+        let mut config = EqConfig::default();
+        config.bands[0] = 100.0;
+        config.bands[9] = -100.0;
+        assert_eq!(config.bass_gain(), 12.0);
+        assert_eq!(config.treble_gain(), -12.0);
+    }
+
+    // ── EqConfig::apply_bass_treble ──────────────────────────────────────────
+
+    #[test]
+    fn apply_bass_treble_sets_edge_bands_per_decay_formula() {
+        let mut config = EqConfig::default();
+        let decay = EqConfig::TONE_WEIGHT_DECAY;
+        let bass = 6.0f32;
+        let treble = -3.0f32;
+        config.apply_bass_treble(bass, treble);
+
+        let expected_band0 = (bass * decay.powi(0) + treble * decay.powi(9)).clamp(-12.0, 12.0);
+        let expected_band9 = (bass * decay.powi(9) + treble * decay.powi(0)).clamp(-12.0, 12.0);
+
+        assert!((config.bands[0] - expected_band0).abs() < 1e-4);
+        assert!((config.bands[9] - expected_band9).abs() < 1e-4);
+        assert!(config.enabled);
+    }
+
+    #[test]
+    fn apply_bass_treble_clamps_inputs_and_outputs() {
+        let mut config = EqConfig::default();
+        config.apply_bass_treble(1000.0, -1000.0);
+        for band in config.bands {
+            assert!((-12.0..=12.0).contains(&band));
+        }
+    }
+
+    // ── Biquad ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn peaking_eq_zero_gain_is_transparent() {
+        let mut filter = Biquad::peaking_eq(44_100.0, 1_000.0, 0.0, 1.41);
+        let samples = [-0.5f32, 0.3, 0.9, -0.2, 0.0, 1.0, -1.0, 0.42];
+        for &sample in &samples {
+            let output = filter.process(sample);
+            assert!(
+                (output - sample).abs() < 1e-4,
+                "expected {sample}, got {output}"
+            );
+        }
+    }
+
+    #[test]
+    fn reset_after_zero_gain_processing_matches_fresh_filter() {
+        let mut filter = Biquad::peaking_eq(44_100.0, 1_000.0, 0.0, 1.41);
+        for &sample in &[0.8f32, -0.6, 0.4, -0.2] {
+            filter.process(sample);
+        }
+        filter.reset();
+
+        let mut fresh = Biquad::peaking_eq(44_100.0, 1_000.0, 0.0, 1.41);
+        let first_input = 0.37f32;
+        let after_reset_output = filter.process(first_input);
+        let fresh_output = fresh.process(first_input);
+        assert!((after_reset_output - fresh_output).abs() < 1e-4);
+    }
+
+    #[test]
+    fn reset_actually_clears_internal_state_for_nonzero_gain() {
+        // Unlike the 0 dB case, a filter with real gain is *not* an all-pass,
+        // so its output depends on prior state -- this exercises reset()
+        // meaningfully by comparing two runs of the same impulse sequence.
+        let sequence = [1.0f32, 0.0, 0.0, 0.0, 0.5, -0.5];
+
+        let mut filter = Biquad::peaking_eq(44_100.0, 1_000.0, 6.0, 1.41);
+        let first_run: Vec<f32> = sequence.iter().map(|&s| filter.process(s)).collect();
+
+        // Perturb state with unrelated samples, then reset.
+        filter.process(0.9);
+        filter.process(-0.9);
+        filter.reset();
+
+        let second_run: Vec<f32> = sequence.iter().map(|&s| filter.process(s)).collect();
+
+        for (a, b) in first_run.iter().zip(second_run.iter()) {
+            assert!((a - b).abs() < 1e-5, "expected {a}, got {b}");
+        }
+    }
+}

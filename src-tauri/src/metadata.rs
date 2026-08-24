@@ -721,3 +721,119 @@ fn timestamp(system_time: SystemTime) -> i64 {
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── supported_audio_extensions / is_supported_audio_file ───────────────
+
+    #[test]
+    fn supported_audio_extensions_matches_const_list() {
+        let mut extensions = supported_audio_extensions();
+        extensions.sort();
+        let mut expected: Vec<String> = SUPPORTED_EXTENSIONS.iter().map(|s| s.to_string()).collect();
+        expected.sort();
+        assert_eq!(extensions, expected);
+        assert_eq!(extensions.len(), 20);
+        assert!(extensions.contains(&"mp3".to_string()));
+        assert!(extensions.contains(&"flac".to_string()));
+    }
+
+    #[test]
+    fn is_supported_audio_file_is_case_insensitive() {
+        assert!(is_supported_audio_file(Path::new("song.MP3")));
+        assert!(is_supported_audio_file(Path::new("song.mp3")));
+    }
+
+    #[test]
+    fn is_supported_audio_file_rejects_unsupported_extension() {
+        assert!(!is_supported_audio_file(Path::new("document.txt")));
+    }
+
+    #[test]
+    fn is_supported_audio_file_rejects_no_extension() {
+        assert!(!is_supported_audio_file(Path::new("noextension")));
+    }
+
+    // ── fallback_fields ──────────────────────────────────────────────────
+
+    #[test]
+    fn fallback_fields_splits_artist_and_title_on_dash() {
+        let fields = fallback_fields(Path::new("/music/SomeAlbum/Artist - Title.mp3"));
+        assert_eq!(fields.artist, "Artist");
+        assert_eq!(fields.title, "Title");
+        assert_eq!(fields.album, "SomeAlbum");
+    }
+
+    #[test]
+    fn fallback_fields_uses_whole_stem_when_no_separator() {
+        let fields = fallback_fields(Path::new("/music/SomeAlbum/JustAFilename.mp3"));
+        assert_eq!(fields.artist, "Unknown Artist");
+        assert_eq!(fields.title, "JustAFilename");
+    }
+
+    #[test]
+    fn fallback_fields_album_falls_back_to_local_files_without_parent() {
+        let fields = fallback_fields(Path::new("Track.mp3"));
+        assert_eq!(fields.album, "Local Files");
+    }
+
+    // ── parse_year ───────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_year_extracts_year_from_iso_date() {
+        assert_eq!(parse_year("2023-05-01"), Some(2023));
+    }
+
+    #[test]
+    fn parse_year_rejects_two_digit_year() {
+        assert_eq!(parse_year("'99"), None);
+    }
+
+    #[test]
+    fn parse_year_extracts_four_digit_run_from_free_text() {
+        assert_eq!(parse_year("circa 1975 or so"), Some(1975));
+    }
+
+    #[test]
+    fn parse_year_empty_string_is_none() {
+        assert_eq!(parse_year(""), None);
+    }
+
+    // ── parse_number ─────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_number_takes_numerator_of_fraction() {
+        assert_eq!(parse_number("3/12"), Some(3));
+    }
+
+    #[test]
+    fn parse_number_parses_plain_integer() {
+        assert_eq!(parse_number("4"), Some(4));
+    }
+
+    #[test]
+    fn parse_number_rejects_non_numeric() {
+        assert_eq!(parse_number("abc"), None);
+    }
+
+    #[test]
+    fn parse_number_trims_whitespace_around_numerator() {
+        assert_eq!(parse_number("  4 /12"), Some(4));
+    }
+
+    // ── escape_musicbrainz_query ─────────────────────────────────────────
+
+    #[test]
+    fn escape_musicbrainz_query_escapes_backslash_and_quote() {
+        let input = "back\\slash\"quote";
+        let expected = "back\\\\slash\\\"quote";
+        assert_eq!(escape_musicbrainz_query(input), expected);
+    }
+
+    #[test]
+    fn escape_musicbrainz_query_leaves_plain_text_untouched() {
+        assert_eq!(escape_musicbrainz_query("plain text"), "plain text");
+    }
+}
