@@ -24,6 +24,12 @@ public final class PeakAnalyzer {
     private static final String TAG = "PeakAnalyzer";
     private static final long TIMEOUT_US = 10_000L;
     private static final float DEFAULT_PEAK = 0.5f;
+    // Hard wall-clock cap on a single scan. Peak amplitude is normally
+    // established well within this window; the cap exists so a very long or
+    // pathological file can't tie up the background analysis thread
+    // indefinitely. Runs off the player lock, so this only bounds one
+    // background thread's lifetime, not playback.
+    private static final long MAX_SCAN_MS = 8_000L;
 
     private PeakAnalyzer() {}
 
@@ -60,8 +66,12 @@ public final class PeakAnalyzer {
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             float peak = 0f;
             boolean inputDone = false;
+            long deadline = System.currentTimeMillis() + MAX_SCAN_MS;
 
             while (true) {
+                if (System.currentTimeMillis() > deadline) {
+                    break;
+                }
                 if (!inputDone) {
                     int inIndex = codec.dequeueInputBuffer(TIMEOUT_US);
                     if (inIndex >= 0) {

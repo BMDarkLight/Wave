@@ -43,6 +43,13 @@ impl VolumeNormalizer {
         self.peak_cache.get(path).copied()
     }
 
+    /// Cache a peak value without counting it toward the running session
+    /// median. Used for a peeked/upcoming track that was analyzed in the
+    /// background but hasn't actually started playing yet.
+    pub fn cache_peak(&mut self, path: &str, peak: f32) {
+        self.peak_cache.insert(path.to_string(), peak.clamp(MIN_PEAK, 1.0));
+    }
+
     /// Median peak of tracks analyzed this session.
     pub fn median_peak(&self) -> Option<f32> {
         if self.session_peaks.is_empty() {

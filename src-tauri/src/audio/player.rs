@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rodio::source::UniformSourceIterator;
@@ -439,7 +441,16 @@ pub struct AudioPlayer {
     gapless_enabled: bool,
     /// Boost quieter tracks toward the session median peak (off by default).
     volume_normalization_enabled: bool,
-    normalizer: VolumeNormalizer,
+    /// Shared separately from the rest of `AudioPlayer` so a background peak
+    /// analysis thread can update it without holding the player-wide lock for
+    /// the duration of a full-file decode.
+    normalizer: Arc<Mutex<VolumeNormalizer>>,
+    /// Bumped on every track change; a background analysis result that
+    /// arrives for a stale generation is dropped instead of being applied to
+    /// whatever now-current track it no longer matches. Only Android defers
+    /// analysis to a background thread, so this is unused elsewhere.
+    #[cfg(target_os = "android")]
+    normalization_generation: Arc<AtomicU64>,
     /// Active ExoPlayer playlist URIs (Android gapless mode).
     #[cfg(target_os = "android")]
     android_gapless_playlist: Vec<String>,
@@ -467,7 +478,9 @@ impl AudioPlayer {
             prefetched_next: None,
             gapless_enabled: true,
             volume_normalization_enabled: false,
-            normalizer: VolumeNormalizer::new(),
+            normalizer: Arc::new(Mutex::new(VolumeNormalizer::new())),
+            #[cfg(target_os = "android")]
+            normalization_generation: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "android")]
             android_gapless_playlist: Vec::new(),
         }
@@ -585,15 +598,27 @@ impl AudioPlayer {
             prefetched_next: None,
             gapless_enabled: true,
             volume_normalization_enabled: false,
-            normalizer: VolumeNormalizer::new(),
+            normalizer: Arc::new(Mutex::new(VolumeNormalizer::new())),
+            #[cfg(target_os = "android")]
+            normalization_generation: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "android")]
             android_gapless_playlist: Vec::new(),
         })
         }
     }
 
+    /// Peak lookup used by the desktop (rodio) playback path, where the gain
+    /// must be known before the source is built and so has to be resolved
+    /// synchronously. Android does not use this — see
+    /// `apply_android_normalization_for_path`, which resolves gain in the
+    /// background instead of blocking playback on a full-file decode.
     fn peak_for_path(&self, path: &str) -> f32 {
-        if let Some(peak) = self.normalizer.cached_peak(path) {
+        if let Some(peak) = self
+            .normalizer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cached_peak(path)
+        {
             return peak;
         }
         match analyze_peak_amplitude(path) {
@@ -610,7 +635,10 @@ impl AudioPlayer {
             return 1.0;
         }
         let peak = self.peak_for_path(path);
-        self.normalizer.register_peak(path, peak)
+        self.normalizer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .register_peak(path, peak)
     }
 
     fn peek_normalization_gain_for_path(&self, path: &str) -> f32 {
@@ -618,28 +646,105 @@ impl AudioPlayer {
             return 1.0;
         }
         let peak = self.peak_for_path(path);
-        let median = self.normalizer.median_peak().unwrap_or(peak);
+        let median = self
+            .normalizer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .median_peak()
+            .unwrap_or(peak);
         VolumeNormalizer::compute_gain(peak, median)
     }
 
+    /// Apply normalization gain for the track that just started playing.
+    ///
+    /// A full-file peak scan (`PeakAnalyzer` on the Java side) can take
+    /// seconds. Blocking here would hold the player lock for that long and
+    /// stall every other command (queue navigation, playback-state polling,
+    /// etc. all serialize on the same lock), which is exactly the "backend
+    /// freezes" symptom normalization used to cause. So: apply a cached gain
+    /// immediately if we have one, otherwise start at neutral gain and
+    /// refine in the background once analysis finishes.
     #[cfg(target_os = "android")]
     fn apply_android_normalization_for_path(&mut self, path: &str) {
-        let gain = self.normalization_gain_for_path(path);
-        let _ = crate::android::audio::exo_set_track_normalization_gain(gain);
+        if !self.volume_normalization_enabled {
+            let _ = crate::android::audio::exo_set_track_normalization_gain(1.0);
+            return;
+        }
+        let gen = self.normalization_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let cached_gain = {
+            let mut normalizer = self.normalizer.lock().unwrap_or_else(|e| e.into_inner());
+            normalizer
+                .cached_peak(path)
+                .map(|peak| normalizer.register_peak(path, peak))
+        };
+        if let Some(gain) = cached_gain {
+            let _ = crate::android::audio::exo_set_track_normalization_gain(gain);
+            return;
+        }
+        let _ = crate::android::audio::exo_set_track_normalization_gain(1.0);
+        self.spawn_android_peak_analysis(path.to_string(), gen, false);
+    }
+
+    /// Analyze `path` off the player lock and push the resulting gain once
+    /// ready. `incoming` selects the crossfade "next track" gain slot instead
+    /// of the active track's, and skips updating the session median (the
+    /// track may never actually play, e.g. if crossfade settings change).
+    #[cfg(target_os = "android")]
+    fn spawn_android_peak_analysis(&self, path: String, gen: u64, incoming: bool) {
+        let normalizer = self.normalizer.clone();
+        let generation = self.normalization_generation.clone();
+        std::thread::spawn(move || {
+            let peak = analyze_peak_amplitude(&path).unwrap_or_else(|error| {
+                tracing::warn!("Peak analysis failed for \"{path}\": {error}");
+                0.5
+            });
+            let gain = {
+                let mut normalizer = normalizer.lock().unwrap_or_else(|e| e.into_inner());
+                if incoming {
+                    normalizer.cache_peak(&path, peak);
+                    let median = normalizer.median_peak().unwrap_or(peak);
+                    VolumeNormalizer::compute_gain(peak, median)
+                } else {
+                    normalizer.register_peak(&path, peak)
+                }
+            };
+            // The active/upcoming track changed while this ran; applying the
+            // gain now would land on the wrong track.
+            if generation.load(Ordering::SeqCst) != gen {
+                return;
+            }
+            let _ = if incoming {
+                crate::android::audio::exo_set_incoming_normalization_gain(gain)
+            } else {
+                crate::android::audio::exo_set_track_normalization_gain(gain)
+            };
+        });
     }
 
     #[cfg(target_os = "android")]
     fn sync_android_crossfade_normalization(&self) {
-        if self.crossfade_duration <= 0.0 {
+        if self.crossfade_duration <= 0.0 || !self.volume_normalization_enabled {
             let _ = crate::android::audio::exo_set_incoming_normalization_gain(1.0);
             return;
         }
-        let next_gain = self
-            .queue
-            .peek_next(&self.repeat)
-            .map(|next| self.peek_normalization_gain_for_path(next))
-            .unwrap_or(1.0);
-        let _ = crate::android::audio::exo_set_incoming_normalization_gain(next_gain);
+        let Some(next) = self.queue.peek_next(&self.repeat).map(str::to_string) else {
+            let _ = crate::android::audio::exo_set_incoming_normalization_gain(1.0);
+            return;
+        };
+        let cached_gain = {
+            let normalizer = self.normalizer.lock().unwrap_or_else(|e| e.into_inner());
+            normalizer.cached_peak(&next).map(|peak| {
+                let median = normalizer.median_peak().unwrap_or(peak);
+                VolumeNormalizer::compute_gain(peak, median)
+            })
+        };
+        if let Some(gain) = cached_gain {
+            let _ = crate::android::audio::exo_set_incoming_normalization_gain(gain);
+            return;
+        }
+        let _ = crate::android::audio::exo_set_incoming_normalization_gain(1.0);
+        let gen = self.normalization_generation.load(Ordering::SeqCst);
+        self.spawn_android_peak_analysis(next, gen, true);
     }
 
     /// List all available audio output device names.
@@ -1657,7 +1762,10 @@ impl AudioPlayer {
 
     pub fn set_volume_normalization_enabled(&mut self, enabled: bool) {
         self.volume_normalization_enabled = enabled;
-        self.normalizer.set_enabled(enabled);
+        self.normalizer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_enabled(enabled);
         #[cfg(target_os = "android")]
         {
             if !enabled {
