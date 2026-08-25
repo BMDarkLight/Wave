@@ -228,7 +228,7 @@ pub struct Equalizer<S> {
 impl<S: Source<Item = f32>> Equalizer<S> {
     pub fn new(source: S, config: Arc<Mutex<EqConfig>>, version: Arc<Mutex<u64>>) -> Self {
         let sr = source.sample_rate() as f32;
-        let cfg = config.lock().unwrap();
+        let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
         let enabled = cfg.enabled;
         let mut filters = core::array::from_fn(|_| Biquad::peaking_eq(sr, 1000.0, 0.0, 1.41));
         for (i, (freq, gain)) in EQ_BANDS_HZ.iter().zip(cfg.bands.iter()).enumerate() {
@@ -248,12 +248,12 @@ impl<S: Source<Item = f32>> Equalizer<S> {
     }
 
     fn sync_config(&mut self) {
-        let v = *self.version.lock().unwrap();
+        let v = *self.version.lock().unwrap_or_else(|e| e.into_inner());
         if v == self.last_version {
             return;
         }
         self.last_version = v;
-        let cfg = self.config.lock().unwrap();
+        let cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
         self.enabled = cfg.enabled;
         for (i, (freq, gain)) in EQ_BANDS_HZ.iter().zip(cfg.bands.iter()).enumerate() {
             self.filters[i] = Biquad::peaking_eq(self.sr, *freq, *gain, 1.41);
@@ -645,21 +645,41 @@ impl Source for Crossfade {
     }
 }
 
+/// Live-adjustable gain shared between a running [`VolumeGain`] source and
+/// whoever computes the actual normalization value for its track.
+///
+/// Peak analysis can take a while (a full-file decode), so playback starts
+/// at neutral gain (1.0) and a background analysis thread swaps in the real
+/// value once it's ready — this cell is how it reaches the audio thread
+/// without touching the player-wide lock. Each track load gets its own cell,
+/// so a slow analysis that finishes after the track has already changed just
+/// writes into an orphaned cell nobody reads anymore instead of needing
+/// explicit cancellation.
+pub type SharedGain = Arc<std::sync::atomic::AtomicU32>;
+
+pub fn shared_gain(initial: f32) -> SharedGain {
+    Arc::new(std::sync::atomic::AtomicU32::new(initial.to_bits()))
+}
+
+pub fn set_shared_gain(cell: &SharedGain, value: f32) {
+    cell.store(value.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Per-track linear gain applied after decode (volume normalization).
 pub struct VolumeGain<S> {
     inner: S,
-    gain: f32,
+    gain: SharedGain,
     channels: u16,
     sr: u32,
 }
 
 impl<S: Source<Item = f32>> VolumeGain<S> {
-    pub fn new(inner: S, gain: f32) -> Self {
+    pub fn new(inner: S, gain: SharedGain) -> Self {
         let channels = inner.channels();
         let sr = inner.sample_rate();
         Self {
             inner,
-            gain: gain.clamp(0.0, MAX_NORMALIZATION_GAIN),
+            gain,
             channels,
             sr,
         }
@@ -695,9 +715,9 @@ impl<S: Source<Item = f32>> Iterator for VolumeGain<S> {
     type Item = f32;
 
     fn next(&mut self) -> Option<f32> {
-        self.inner
-            .next()
-            .map(|sample| (sample * self.gain).clamp(-1.0, 1.0))
+        let gain = f32::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed))
+            .clamp(0.0, MAX_NORMALIZATION_GAIN);
+        self.inner.next().map(|sample| (sample * gain).clamp(-1.0, 1.0))
     }
 }
 

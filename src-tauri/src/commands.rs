@@ -2348,16 +2348,16 @@ pub async fn set_output_device(
     let volume = guard.volume();
     let queue = std::mem::take(&mut guard.queue);
     let repeat = guard.repeat.clone();
-    let eq_config = guard.eq_config.lock().unwrap().clone();
-    let eq_version = *guard.eq_version.lock().unwrap();
+    let eq_config = guard.eq_config.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let eq_version = *guard.eq_version.lock().unwrap_or_else(|e| e.into_inner());
 
     // Build a new player on the requested device.
     let mut new_player = AudioPlayer::new_with_device(&device_name)?;
     new_player.queue = queue;
     new_player.repeat = repeat;
     new_player.set_volume(volume)?;
-    *new_player.eq_config.lock().unwrap() = eq_config;
-    *new_player.eq_version.lock().unwrap() = eq_version;
+    *new_player.eq_config.lock().unwrap_or_else(|e| e.into_inner()) = eq_config;
+    *new_player.eq_version.lock().unwrap_or_else(|e| e.into_inner()) = eq_version;
 
     // Resume playback if something was playing.
     if let Some(ref path) = current_path {

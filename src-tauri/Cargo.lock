@@ -13,7 +13,7 @@ dependencies = [
  "fs4",
  "image",
  "jni",
- "muda 0.17.2",
+ "muda",
  "ndk-context",
  "objc2-app-kit",
  "objc2-foundation",
@@ -38,7 +38,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "tray-icon 0.21.3",
+ "tray-icon",
  "url",
  "uuid",
  "walkdir",
@@ -2942,27 +2942,6 @@ dependencies = [
 
 [[package]]
 name = "muda"
-version = "0.17.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c9fec5a4e89860383d778d10563a605838f8f0b2f9303868937e5ff32e86177"
-dependencies = [
- "crossbeam-channel",
- "dpi",
- "gtk",
- "keyboard-types",
- "libxdo",
- "objc2",
- "objc2-app-kit",
- "objc2-core-foundation",
- "objc2-foundation",
- "once_cell",
- "png 0.17.16",
- "thiserror 2.0.17",
- "windows-sys 0.60.2",
-]
-
-[[package]]
-name = "muda"
 version = "0.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1dd04e60bc0b07438a6771710ee1698f98f6ebbc7f89b61264af1563b8aeb878"
@@ -2971,6 +2950,7 @@ dependencies = [
  "dpi",
  "gtk",
  "keyboard-types",
+ "libxdo",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",
@@ -5449,7 +5429,7 @@ dependencies = [
  "libc",
  "log",
  "mime",
- "muda 0.19.3",
+ "muda",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -5471,7 +5451,7 @@ dependencies = [
  "tauri-utils",
  "thiserror 2.0.17",
  "tokio",
- "tray-icon 0.24.1",
+ "tray-icon",
  "url",
  "webkit2gtk",
  "webview2-com",
@@ -6130,27 +6110,6 @@ dependencies = [
 
 [[package]]
 name = "tray-icon"
-version = "0.21.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5e85aa143ceb072062fc4d6356c1b520a51d636e7bc8e77ec94be3608e5e80c"
-dependencies = [
- "crossbeam-channel",
- "dirs",
- "libappindicator",
- "muda 0.17.2",
- "objc2",
- "objc2-app-kit",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-foundation",
- "once_cell",
- "png 0.17.16",
- "thiserror 2.0.17",
- "windows-sys 0.60.2",
-]
-
-[[package]]
-name = "tray-icon"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65ba1e5f6b9ef9fd87e21b9c6f351554dbd717960089168fcfdef854686961dc"
@@ -6158,7 +6117,7 @@ dependencies = [
  "crossbeam-channel",
  "dirs",
  "libappindicator",
- "muda 0.19.3",
+ "muda",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",

@@ -9,7 +9,10 @@ use std::time::{Duration, Instant};
 
 use crate::error::AudioError;
 
-use super::dsp::{Crossfade, CrossfadeState, EqConfig, Equalizer, SoftFade, SoftFadeState, VolumeGain, SOFT_FADE_SECS};
+use super::dsp::{
+    set_shared_gain, shared_gain, Crossfade, CrossfadeState, EqConfig, Equalizer, SharedGain,
+    SoftFade, SoftFadeState, VolumeGain, SOFT_FADE_SECS,
+};
 use super::normalization::{analyze_peak_amplitude, VolumeNormalizer};
 use super::symphonia_source::SymphoniaSource;
 
@@ -607,52 +610,90 @@ impl AudioPlayer {
         }
     }
 
-    /// Peak lookup used by the desktop (rodio) playback path, where the gain
-    /// must be known before the source is built and so has to be resolved
-    /// synchronously. Android does not use this — see
-    /// `apply_android_normalization_for_path`, which resolves gain in the
-    /// background instead of blocking playback on a full-file decode.
-    fn peak_for_path(&self, path: &str) -> f32 {
-        if let Some(peak) = self
-            .normalizer
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .cached_peak(path)
-        {
-            return peak;
+    /// Gain cell for the desktop (rodio) playback path.
+    ///
+    /// A full-file peak scan can take a while, and unlike Android there's no
+    /// separate "set gain on the running player" call to defer to — gain is
+    /// baked into the source chain via [`VolumeGain`]. So instead of
+    /// resolving a final `f32` synchronously (which used to block `play()`
+    /// under the player lock for the length of the decode — the same
+    /// "backend freezes" symptom Android had), this returns a
+    /// [`SharedGain`] cell seeded at neutral (1.0) and, on a cache miss,
+    /// kicks off a background analysis thread that writes the real gain
+    /// into the cell once ready. `VolumeGain` reads the cell live, so the
+    /// audible gain updates in place without restarting playback.
+    ///
+    /// Not itself `cfg`-gated: it's reached only through `build_source`'s
+    /// desktop-only call sites, but `build_source` compiles for every
+    /// target (Android's `play()` short-circuits to `play_via_exo` before
+    /// ever calling it), so this has to stay available everywhere too.
+    fn normalization_gain_cell_for_path(&mut self, path: &str) -> SharedGain {
+        if !self.volume_normalization_enabled {
+            return shared_gain(1.0);
         }
-        match analyze_peak_amplitude(path) {
-            Ok(peak) => peak,
-            Err(error) => {
+        let cached_gain = {
+            let mut normalizer = self.normalizer.lock().unwrap_or_else(|e| e.into_inner());
+            normalizer
+                .cached_peak(path)
+                .map(|peak| normalizer.register_peak(path, peak))
+        };
+        if let Some(gain) = cached_gain {
+            return shared_gain(gain);
+        }
+        let cell = shared_gain(1.0);
+        self.spawn_desktop_peak_analysis(path.to_string(), cell.clone(), false);
+        cell
+    }
+
+    /// Same as [`Self::normalization_gain_cell_for_path`] but for a
+    /// peeked/upcoming track (crossfade or gapless prefetch) that may never
+    /// actually play — doesn't count toward the running session median.
+    fn peek_normalization_gain_cell_for_path(&self, path: &str) -> SharedGain {
+        if !self.volume_normalization_enabled {
+            return shared_gain(1.0);
+        }
+        let cached_gain = {
+            let normalizer = self.normalizer.lock().unwrap_or_else(|e| e.into_inner());
+            normalizer.cached_peak(path).map(|peak| {
+                let median = normalizer.median_peak().unwrap_or(peak);
+                VolumeNormalizer::compute_gain(peak, median)
+            })
+        };
+        if let Some(gain) = cached_gain {
+            return shared_gain(gain);
+        }
+        let cell = shared_gain(1.0);
+        self.spawn_desktop_peak_analysis(path.to_string(), cell.clone(), true);
+        cell
+    }
+
+    fn spawn_desktop_peak_analysis(&self, path: String, cell: SharedGain, incoming: bool) {
+        let normalizer = self.normalizer.clone();
+        if !normalizer.lock().unwrap_or_else(|e| e.into_inner()).try_begin_analysis() {
+            // Already at the concurrent-scan cap; leave this cell at neutral
+            // gain. It'll be retried (and likely cached by then) next time
+            // this path is loaded.
+            return;
+        }
+        std::thread::spawn(move || {
+            let peak = analyze_peak_amplitude(&path).unwrap_or_else(|error| {
                 tracing::warn!("Peak analysis failed for \"{path}\": {error}");
                 0.5
-            }
-        }
-    }
-
-    fn normalization_gain_for_path(&mut self, path: &str) -> f32 {
-        if !self.volume_normalization_enabled {
-            return 1.0;
-        }
-        let peak = self.peak_for_path(path);
-        self.normalizer
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .register_peak(path, peak)
-    }
-
-    fn peek_normalization_gain_for_path(&self, path: &str) -> f32 {
-        if !self.volume_normalization_enabled {
-            return 1.0;
-        }
-        let peak = self.peak_for_path(path);
-        let median = self
-            .normalizer
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .median_peak()
-            .unwrap_or(peak);
-        VolumeNormalizer::compute_gain(peak, median)
+            });
+            let gain = {
+                let mut normalizer = normalizer.lock().unwrap_or_else(|e| e.into_inner());
+                let gain = if incoming {
+                    normalizer.cache_peak(&path, peak);
+                    let median = normalizer.median_peak().unwrap_or(peak);
+                    VolumeNormalizer::compute_gain(peak, median)
+                } else {
+                    normalizer.register_peak(&path, peak)
+                };
+                normalizer.end_analysis();
+                gain
+            };
+            set_shared_gain(&cell, gain);
+        });
     }
 
     /// Apply normalization gain for the track that just started playing.
@@ -692,6 +733,12 @@ impl AudioPlayer {
     #[cfg(target_os = "android")]
     fn spawn_android_peak_analysis(&self, path: String, gen: u64, incoming: bool) {
         let normalizer = self.normalizer.clone();
+        if !normalizer.lock().unwrap_or_else(|e| e.into_inner()).try_begin_analysis() {
+            // Already at the concurrent-scan cap (e.g. the user is skipping
+            // through tracks faster than analysis finishes). Leave gain at
+            // neutral for now; the next play/sync of this path retries.
+            return;
+        }
         let generation = self.normalization_generation.clone();
         std::thread::spawn(move || {
             let peak = analyze_peak_amplitude(&path).unwrap_or_else(|error| {
@@ -700,13 +747,15 @@ impl AudioPlayer {
             });
             let gain = {
                 let mut normalizer = normalizer.lock().unwrap_or_else(|e| e.into_inner());
-                if incoming {
+                let gain = if incoming {
                     normalizer.cache_peak(&path, peak);
                     let median = normalizer.median_peak().unwrap_or(peak);
                     VolumeNormalizer::compute_gain(peak, median)
                 } else {
                     normalizer.register_peak(&path, peak)
-                }
+                };
+                normalizer.end_analysis();
+                gain
             };
             // The active/upcoming track changed while this ran; applying the
             // gain now would land on the wrong track.
@@ -772,12 +821,12 @@ impl AudioPlayer {
 
     fn build_source(
         path: &str,
-        track_gain: f32,
+        track_gain: SharedGain,
         eq_config: Arc<Mutex<EqConfig>>,
         eq_version: Arc<Mutex<u64>>,
         crossfade_duration: f32,
         next_path: Option<&str>,
-        next_gain: f32,
+        next_gain: SharedGain,
         soft_fade: Arc<Mutex<SoftFadeState>>,
     ) -> Result<(Box<dyn Source<Item = f32> + Send + 'static>, Option<Duration>, Option<Arc<Mutex<CrossfadeState>>>), AudioError> {
         let source = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -896,11 +945,11 @@ impl AudioPlayer {
             .queue
             .peek_next(&self.repeat)
             .map(|s| s.to_string());
-        let track_gain = self.normalization_gain_for_path(path);
+        let track_gain = self.normalization_gain_cell_for_path(path);
         let next_gain = next_path
             .as_deref()
-            .map(|next| self.peek_normalization_gain_for_path(next))
-            .unwrap_or(1.0);
+            .map(|next| self.peek_normalization_gain_cell_for_path(next))
+            .unwrap_or_else(|| shared_gain(1.0));
         let (source, duration, crossfade_state) = Self::build_source(
             path,
             track_gain,
@@ -1112,7 +1161,7 @@ impl AudioPlayer {
         let Some(next_path) = self.queue.peek_next(&self.repeat).map(str::to_string) else {
             return;
         };
-        let next_gain = self.peek_normalization_gain_for_path(&next_path);
+        let next_gain = self.peek_normalization_gain_cell_for_path(&next_path);
         let Ok((source, duration, _state)) = Self::build_source(
             &next_path,
             next_gain,
@@ -1120,7 +1169,7 @@ impl AudioPlayer {
             self.eq_version.clone(),
             0.0,
             None,
-            1.0,
+            shared_gain(1.0),
             self.soft_fade.clone(),
         ) else {
             return;
@@ -1202,7 +1251,7 @@ impl AudioPlayer {
         self.set_soft_fade_target(1.0);
 
         let offset = Duration::from_secs_f64(position_secs.max(0.0));
-        let track_gain = self.normalization_gain_for_path(path);
+        let track_gain = self.normalization_gain_cell_for_path(path);
         let (source, duration, crossfade_state) = Self::build_source(
             path,
             track_gain,
@@ -1210,7 +1259,7 @@ impl AudioPlayer {
             self.eq_version.clone(),
             0.0,
             None,
-            1.0,
+            shared_gain(1.0),
             self.soft_fade.clone(),
         )?;
 
@@ -1682,13 +1731,13 @@ impl AudioPlayer {
     // ── Equalizer ─────────────────────────────────────────────────────────────
 
     pub fn eq_settings(&self) -> EqConfig {
-        self.eq_config.lock().unwrap().clone()
+        self.eq_config.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn set_eq_bands(&mut self, bands: [f32; 10]) {
-        let mut cfg = self.eq_config.lock().unwrap();
+        let mut cfg = self.eq_config.lock().unwrap_or_else(|e| e.into_inner());
         cfg.bands = bands;
-        *self.eq_version.lock().unwrap() += 1;
+        *self.eq_version.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         #[cfg(target_os = "android")]
         {
             drop(cfg);
@@ -1697,9 +1746,9 @@ impl AudioPlayer {
     }
 
     pub fn set_eq_enabled(&mut self, enabled: bool) {
-        let mut cfg = self.eq_config.lock().unwrap();
+        let mut cfg = self.eq_config.lock().unwrap_or_else(|e| e.into_inner());
         cfg.enabled = enabled;
-        *self.eq_version.lock().unwrap() += 1;
+        *self.eq_version.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         #[cfg(target_os = "android")]
         {
             drop(cfg);
@@ -1708,13 +1757,13 @@ impl AudioPlayer {
     }
 
     pub fn apply_eq_preset(&mut self, name: &str) -> Result<(), String> {
-        let mut cfg = self.eq_config.lock().unwrap();
+        let mut cfg = self.eq_config.lock().unwrap_or_else(|e| e.into_inner());
         cfg.apply_preset(name)
             .ok_or_else(|| {
                 let names: Vec<&str> = EqConfig::list_presets().map(|(n, _)| n).collect();
                 format!("Unknown EQ preset \"{name}\". Available: {}", names.join(", "))
             })?;
-        *self.eq_version.lock().unwrap() += 1;
+        *self.eq_version.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         #[cfg(target_os = "android")]
         {
             drop(cfg);
@@ -1725,7 +1774,7 @@ impl AudioPlayer {
 
     #[cfg(target_os = "android")]
     fn sync_android_eq(&self) {
-        let cfg = self.eq_config.lock().unwrap().clone();
+        let cfg = self.eq_config.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let _ = crate::android::audio::exo_set_eq_bands(&cfg.bands);
         let _ = crate::android::audio::exo_set_eq_enabled(cfg.enabled);
     }

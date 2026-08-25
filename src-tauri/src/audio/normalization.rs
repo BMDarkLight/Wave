@@ -8,6 +8,12 @@ pub const MIN_PEAK: f32 = 0.001;
 pub const MAX_GAIN: f32 = 4.0;
 /// How many recently analyzed peaks feed the session median.
 const SESSION_PEAK_LIMIT: usize = 50;
+/// Ceiling on simultaneous background peak scans (each opens a decoder — a
+/// MediaCodec instance on Android, a decode thread on desktop). Bounds
+/// resource use when the user skips through tracks faster than analysis
+/// finishes; a request over the cap is simply skipped rather than queued —
+/// it just stays un-normalized until it's requested again.
+const MAX_CONCURRENT_ANALYSIS: usize = 3;
 
 /// Tracks per-file peaks and computes median-relative boost gains.
 #[derive(Debug, Clone)]
@@ -15,6 +21,7 @@ pub struct VolumeNormalizer {
     enabled: bool,
     peak_cache: HashMap<String, f32>,
     session_peaks: Vec<f32>,
+    in_flight_analysis: usize,
 }
 
 impl Default for VolumeNormalizer {
@@ -29,7 +36,24 @@ impl VolumeNormalizer {
             enabled: false,
             peak_cache: HashMap::new(),
             session_peaks: Vec::new(),
+            in_flight_analysis: 0,
         }
+    }
+
+    /// Reserve a background-analysis slot. Returns `false` (reserving
+    /// nothing) when [`MAX_CONCURRENT_ANALYSIS`] scans are already running —
+    /// the caller should skip spawning and leave the track at neutral gain
+    /// for now. Pair every `true` result with [`Self::end_analysis`].
+    pub fn try_begin_analysis(&mut self) -> bool {
+        if self.in_flight_analysis >= MAX_CONCURRENT_ANALYSIS {
+            return false;
+        }
+        self.in_flight_analysis += 1;
+        true
+    }
+
+    pub fn end_analysis(&mut self) {
+        self.in_flight_analysis = self.in_flight_analysis.saturating_sub(1);
     }
 
     pub fn set_enabled(&mut self, enabled: bool) {

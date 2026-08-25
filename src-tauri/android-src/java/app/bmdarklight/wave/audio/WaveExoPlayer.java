@@ -561,6 +561,7 @@ public final class WaveExoPlayer {
         trackNormalizationGain = incomingNormalizationGain;
         incomingNormalizationGain = 1f;
         player.setVolume(effectiveVolume(trackNormalizationGain));
+        crossfadePlayer.stop();
         crossfadePlayer.clearMediaItems();
         crossfadePlayer.setVolume(0f);
         releaseEqualizer(crossfadeEq);
