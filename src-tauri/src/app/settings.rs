@@ -34,6 +34,9 @@ pub struct AppSettings {
     /// Automatically fetch missing lyrics from the network when a track plays.
     #[serde(default = "default_auto_lyrics_download")]
     pub auto_lyrics_download: bool,
+    /// Boost quieter tracks toward the median loudness of played tracks.
+    #[serde(default)]
+    pub volume_normalization_enabled: bool,
 }
 
 fn default_gapless_enabled() -> bool {
@@ -60,6 +63,7 @@ impl Default for AppSettings {
             folder_setup_dismissed: false,
             gapless_enabled: true,
             auto_lyrics_download: true,
+            volume_normalization_enabled: false,
         }
     }
 }

@@ -1310,6 +1310,33 @@ pub async fn set_gapless_enabled(
 }
 
 #[tauri::command]
+pub async fn get_volume_normalization_enabled(
+    state: tauri::State<'_, PlayerState>,
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<bool, String> {
+    let guard = lock_player_state(&state);
+    if let Some(player) = guard.as_ref() {
+        return Ok(player.volume_normalization_enabled());
+    }
+    let settings = lock_settings(&settings_state)?;
+    Ok(settings.volume_normalization_enabled)
+}
+
+#[tauri::command]
+pub async fn set_volume_normalization_enabled(
+    enabled: bool,
+    state: tauri::State<'_, PlayerState>,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    lock_player(&state)?.set_volume_normalization_enabled(enabled);
+    let mut settings = lock_settings(&settings_state)?;
+    settings.volume_normalization_enabled = enabled;
+    settings.save(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn get_auto_lyrics_download(
     settings_state: tauri::State<'_, AppSettingsState>,
 ) -> Result<bool, String> {

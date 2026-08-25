@@ -5,11 +5,13 @@ import {
   getCrossfadeDuration,
   getEqSettings,
   getGaplessEnabled,
+  getVolumeNormalizationEnabled,
   setAutoLyricsDownload,
   setCrossfadeDuration,
   setEqBands,
   setEqEnabled,
   setGaplessEnabled,
+  setVolumeNormalizationEnabled,
   type EqSettings,
 } from "../utils/player";
 import { formatInvokeError } from "../utils/errors";
@@ -23,6 +25,7 @@ export function useEqualizerSettings(setError: (message: string | null) => void)
   const [crossfadeDuration, setCrossfadeDurationState] = useState(0.0);
   const crossfadeSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [gaplessEnabled, setGaplessEnabledState] = useState(true);
+  const [volumeNormalizationEnabled, setVolumeNormalizationEnabledState] = useState(false);
   const [autoLyricsDownload, setAutoLyricsDownloadState] = useState(true);
   const [eqAnchor, setEqAnchor] = useState<{
     bottom: number;
@@ -39,6 +42,8 @@ export function useEqualizerSettings(setError: (message: string | null) => void)
       setCrossfadeDurationState(crossfade);
       const gapless = await getGaplessEnabled();
       setGaplessEnabledState(gapless);
+      const volumeNormalization = await getVolumeNormalizationEnabled();
+      setVolumeNormalizationEnabledState(volumeNormalization);
       const autoLyrics = await getAutoLyricsDownload();
       setAutoLyricsDownloadState(autoLyrics);
     } catch (err) {
@@ -140,6 +145,17 @@ export function useEqualizerSettings(setError: (message: string | null) => void)
     }
   };
 
+  const handleVolumeNormalizationChange = async (enabled: boolean) => {
+    setVolumeNormalizationEnabledState(enabled);
+    try {
+      await setVolumeNormalizationEnabled(enabled);
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to set volume normalization"));
+      const volumeNormalization = await getVolumeNormalizationEnabled();
+      setVolumeNormalizationEnabledState(volumeNormalization);
+    }
+  };
+
   const handleAutoLyricsDownloadChange = async (enabled: boolean) => {
     setAutoLyricsDownloadState(enabled);
     try {
@@ -157,6 +173,7 @@ export function useEqualizerSettings(setError: (message: string | null) => void)
     eqSettings,
     crossfadeDuration,
     gaplessEnabled,
+    volumeNormalizationEnabled,
     autoLyricsDownload,
     eqAnchor,
     setEqAnchor,
@@ -170,6 +187,7 @@ export function useEqualizerSettings(setError: (message: string | null) => void)
     handleEqReset,
     handleCrossfadeChange,
     handleGaplessChange,
+    handleVolumeNormalizationChange,
     handleAutoLyricsDownloadChange,
   };
 }

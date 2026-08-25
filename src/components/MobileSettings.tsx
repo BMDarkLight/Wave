@@ -24,6 +24,7 @@ import {
   BiCheck,
   BiErrorCircle,
   BiReset,
+  BiVolumeFull,
 } from "react-icons/bi";
 import {
   listMediaFolders,
@@ -195,6 +196,8 @@ interface MobileSettingsProps {
   onCrossfadeChange: (value: number) => void;
   gaplessEnabled: boolean;
   onGaplessChange: (enabled: boolean) => void;
+  volumeNormalizationEnabled: boolean;
+  onVolumeNormalizationChange: (enabled: boolean) => void;
   currentOutputDevice: string;
   onSelectOutputDevice: (name: string) => Promise<void>;
   onResetApp: () => Promise<void>;
@@ -228,6 +231,8 @@ export default function MobileSettings({
   onCrossfadeChange,
   gaplessEnabled,
   onGaplessChange,
+  volumeNormalizationEnabled,
+  onVolumeNormalizationChange,
   currentOutputDevice,
   onSelectOutputDevice,
   onResetApp,
@@ -753,6 +758,28 @@ export default function MobileSettings({
                 <span className="mset-gapless-label">Gapless playback</span>
                 <span className="mset-gapless-hint">
                   Play consecutive tracks without silence between them.
+                </span>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <section className="mset-section">
+          <h2>
+            <BiVolumeFull /> Volume normalization
+          </h2>
+          <div className="mset-card mset-playback-card">
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={volumeNormalizationEnabled}
+                onChange={(event) => onVolumeNormalizationChange(event.target.checked)}
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Normalize volume</span>
+                <span className="mset-gapless-hint">
+                  Boost quieter tracks to match the median loudness of your queue without
+                  clipping.
                 </span>
               </span>
             </label>

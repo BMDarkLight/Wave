@@ -63,6 +63,7 @@ pub fn run() {
             player.set_eq_enabled(settings.equalizer.enabled);
             player.set_crossfade_duration(settings.equalizer.crossfade_duration);
             player.set_gapless_enabled(settings.gapless_enabled);
+            player.set_volume_normalization_enabled(settings.volume_normalization_enabled);
 
             // Restore playback state from last session.
             if !settings.last_queue.is_empty() {
@@ -262,6 +263,8 @@ pub fn run() {
             commands::set_crossfade_duration,
             commands::get_gapless_enabled,
             commands::set_gapless_enabled,
+            commands::get_volume_normalization_enabled,
+            commands::set_volume_normalization_enabled,
             commands::get_auto_lyrics_download,
             commands::set_auto_lyrics_download,
             commands::get_close_action,

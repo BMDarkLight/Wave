@@ -64,6 +64,8 @@ public final class WaveExoPlayer {
     private volatile int pendingMediaIndexChange = -1;
     private volatile int lastReportedMediaIndex = -1;
     private float userVolume = 1f;
+    private volatile float trackNormalizationGain = 1f;
+    private volatile float incomingNormalizationGain = 1f;
     private volatile boolean eqEnabled = false;
     private final float[] eqBandsDb = new float[WAVE_EQ_HZ.length];
 
@@ -403,7 +405,7 @@ public final class WaveExoPlayer {
             player.stop();
             player.clearMediaItems();
             player.setMediaItems(items, idx, 0L);
-            player.setVolume(userVolume);
+            player.setVolume(effectiveVolume(trackNormalizationGain));
             player.prepare();
             player.play();
             lastReportedMediaIndex = idx;
@@ -473,7 +475,7 @@ public final class WaveExoPlayer {
             crossfadePlayer.setVolume(0f);
         }
         if (player != null) {
-            player.setVolume(userVolume);
+            player.setVolume(effectiveVolume(trackNormalizationGain));
         }
     }
 
@@ -532,8 +534,8 @@ public final class WaveExoPlayer {
         float progress = crossfadeWindowMs > 0L
                 ? Math.min(1f, (float) elapsed / (float) crossfadeWindowMs)
                 : 1f;
-        float outVol = userVolume * (1f - progress);
-        float inVol = userVolume * progress;
+        float outVol = effectiveVolume(trackNormalizationGain) * (1f - progress);
+        float inVol = effectiveVolume(incomingNormalizationGain) * progress;
         player.setVolume(outVol);
         crossfadePlayer.setVolume(inVol);
         if (progress >= 1f) {
@@ -556,8 +558,9 @@ public final class WaveExoPlayer {
         crossfadeEq = outgoingEq;
         crossfadeEqSessionId = outgoingEqSession;
 
-        player.setVolume(userVolume);
-        crossfadePlayer.stop();
+        trackNormalizationGain = incomingNormalizationGain;
+        incomingNormalizationGain = 1f;
+        player.setVolume(effectiveVolume(trackNormalizationGain));
         crossfadePlayer.clearMediaItems();
         crossfadePlayer.setVolume(0f);
         releaseEqualizer(crossfadeEq);
@@ -586,7 +589,7 @@ public final class WaveExoPlayer {
             player.stop();
             player.clearMediaItems();
             player.setMediaItem(MediaItem.fromUri(uri));
-            player.setVolume(userVolume);
+            player.setVolume(effectiveVolume(trackNormalizationGain));
             player.prepare();
             player.play();
             lastReportedMediaIndex = 0;
@@ -611,7 +614,7 @@ public final class WaveExoPlayer {
             player.stop();
             player.clearMediaItems();
             player.setMediaItem(MediaItem.fromUri(uri));
-            player.setVolume(userVolume);
+            player.setVolume(effectiveVolume(trackNormalizationGain));
             player.prepare();
             long clamped = Math.max(0L, positionMs);
             player.seekTo(clamped);
@@ -685,9 +688,40 @@ public final class WaveExoPlayer {
         userVolume = Math.max(0f, Math.min(1f, volume));
         runOnMainAsync(() -> {
             if (player != null && !crossfadeActive) {
-                player.setVolume(userVolume);
+                player.setVolume(effectiveVolume(trackNormalizationGain));
             }
         });
+    }
+
+    public void setTrackNormalizationGain(float gain) {
+        trackNormalizationGain = clampNormalizationGain(gain);
+        runOnMainAsync(() -> {
+            if (player != null && !crossfadeActive) {
+                player.setVolume(effectiveVolume(trackNormalizationGain));
+            }
+        });
+    }
+
+    public void setIncomingNormalizationGain(float gain) {
+        incomingNormalizationGain = clampNormalizationGain(gain);
+    }
+
+    public static float analyzePeak(Context context, String uriString) {
+        return PeakAnalyzer.analyzePeak(context, uriString);
+    }
+
+    private static float clampNormalizationGain(float gain) {
+        if (gain < 0f) {
+            return 0f;
+        }
+        if (gain > 4f) {
+            return 4f;
+        }
+        return gain;
+    }
+
+    private float effectiveVolume(float normalizationGain) {
+        return userVolume * normalizationGain;
     }
 
     public long getCurrentPosition() {

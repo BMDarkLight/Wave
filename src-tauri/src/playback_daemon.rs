@@ -710,6 +710,7 @@ fn apply_settings_to_player(player: &mut AudioPlayer, settings: &AppSettings) {
     player.set_eq_enabled(settings.equalizer.enabled);
     player.set_crossfade_duration(settings.equalizer.crossfade_duration);
     player.set_gapless_enabled(settings.gapless_enabled);
+    player.set_volume_normalization_enabled(settings.volume_normalization_enabled);
     let _ = player.set_volume(settings.volume);
 }
 

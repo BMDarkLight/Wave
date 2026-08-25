@@ -645,6 +645,62 @@ impl Source for Crossfade {
     }
 }
 
+/// Per-track linear gain applied after decode (volume normalization).
+pub struct VolumeGain<S> {
+    inner: S,
+    gain: f32,
+    channels: u16,
+    sr: u32,
+}
+
+impl<S: Source<Item = f32>> VolumeGain<S> {
+    pub fn new(inner: S, gain: f32) -> Self {
+        let channels = inner.channels();
+        let sr = inner.sample_rate();
+        Self {
+            inner,
+            gain: gain.clamp(0.0, MAX_NORMALIZATION_GAIN),
+            channels,
+            sr,
+        }
+    }
+}
+
+/// Matches [`normalization::MAX_GAIN`]; kept here so dsp stays self-contained for Source wiring.
+const MAX_NORMALIZATION_GAIN: f32 = 4.0;
+
+impl<S: Source<Item = f32>> Source for VolumeGain<S> {
+    fn current_frame_len(&self) -> Option<usize> {
+        self.inner.current_frame_len()
+    }
+
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sr
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.inner.try_seek(pos)
+    }
+}
+
+impl<S: Source<Item = f32>> Iterator for VolumeGain<S> {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        self.inner
+            .next()
+            .map(|sample| (sample * self.gain).clamp(-1.0, 1.0))
+    }
+}
+
 /// Soft transport fade — tiny gain ramp for play / pause / seek / stop.
 ///
 /// Multiplies samples by a locally smoothed gain that tracks a shared

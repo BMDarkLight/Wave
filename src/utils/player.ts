@@ -859,6 +859,14 @@ export const setGaplessEnabled = (enabled: boolean): Promise<void> => {
   return safeInvoke("set_gapless_enabled", { enabled });
 };
 
+export const getVolumeNormalizationEnabled = (): Promise<boolean> => {
+  return safeInvoke<boolean>("get_volume_normalization_enabled");
+};
+
+export const setVolumeNormalizationEnabled = (enabled: boolean): Promise<void> => {
+  return safeInvoke("set_volume_normalization_enabled", { enabled });
+};
+
 export const getAutoLyricsDownload = (): Promise<boolean> => {
   return safeInvoke<boolean>("get_auto_lyrics_download");
 };

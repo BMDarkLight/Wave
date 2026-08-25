@@ -215,6 +215,7 @@ function App() {
     eqSettings,
     crossfadeDuration,
     gaplessEnabled,
+    volumeNormalizationEnabled,
     autoLyricsDownload,
     eqAnchor,
     setEqAnchor,
@@ -228,6 +229,7 @@ function App() {
     handleEqReset,
     handleCrossfadeChange,
     handleGaplessChange,
+    handleVolumeNormalizationChange,
     handleAutoLyricsDownloadChange,
   } = useEqualizerSettings(setError);
 
@@ -1730,6 +1732,10 @@ function App() {
           onCrossfadeChange={handleCrossfadeChange}
           gaplessEnabled={gaplessEnabled}
           onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
+          volumeNormalizationEnabled={volumeNormalizationEnabled}
+          onVolumeNormalizationChange={(enabled) =>
+            void handleVolumeNormalizationChange(enabled)
+          }
           currentOutputDevice={playbackState.output_device_name}
           onSelectOutputDevice={handleSelectOutputDeviceSettings}
           onResetApp={handleResetApp}
@@ -2087,6 +2093,10 @@ function App() {
           onCrossfadeChange={handleCrossfadeChange}
           gaplessEnabled={gaplessEnabled}
           onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
+          volumeNormalizationEnabled={volumeNormalizationEnabled}
+          onVolumeNormalizationChange={(enabled) =>
+            void handleVolumeNormalizationChange(enabled)
+          }
           currentOutputDevice={playbackState.output_device_name}
           onSelectOutputDevice={handleSelectOutputDeviceSettings}
           onResetApp={handleResetApp}

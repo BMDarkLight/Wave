@@ -502,3 +502,61 @@ pub fn is_exo_ready() -> bool {
             .ok()
             .is_some_and(|g| g.is_some())
 }
+
+pub fn exo_set_track_normalization_gain(gain: f32) -> Result<(), String> {
+    with_player(|p| p.call_void("setTrackNormalizationGain", "(F)V", &[JValue::Float(gain)]))
+}
+
+pub fn exo_set_incoming_normalization_gain(gain: f32) -> Result<(), String> {
+    with_player(|p| {
+        p.call_void(
+            "setIncomingNormalizationGain",
+            "(F)V",
+            &[JValue::Float(gain)],
+        )
+    })
+}
+
+pub fn exo_analyze_peak(uri: &str) -> Result<f32, String> {
+    ensure_initialized()?;
+    android_jni::ensure_jni_thread_attached();
+
+    let ctx = match std::panic::catch_unwind(ndk_context::android_context) {
+        Ok(ctx) => ctx,
+        Err(_) => return Err("ndk_context not available".into()),
+    };
+
+    let vm = unsafe { JavaVM::from_raw(ctx.vm() as *mut _) }
+        .map_err(|e| format!("JavaVM::from_raw: {e}"))?;
+
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| format!("attach_current_thread: {e}"))?;
+
+    let activity = unsafe { JObject::from_raw(ctx.context() as *mut _) };
+    if activity.is_null() {
+        return Err("Android activity is null".into());
+    }
+
+    let class = load_class(&mut env, &activity, PLAYER_CLASS)?;
+    let j_uri = env
+        .new_string(uri)
+        .map_err(|e| format!("uri string: {e}"))?;
+
+    let result = env
+        .call_static_method(
+            &class,
+            "analyzePeak",
+            "(Landroid/content/Context;Ljava/lang/String;)F",
+            &[JValue::Object(&activity), JValue::Object(&j_uri)],
+        )
+        .map_err(|e| format!("analyzePeak: {e}"))?;
+
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_describe();
+        let _ = env.exception_clear();
+        return Err("analyzePeak threw".into());
+    }
+
+    result.f().map_err(|e| format!("analyzePeak result: {e}"))
+}

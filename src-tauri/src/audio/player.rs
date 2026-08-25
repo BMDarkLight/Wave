@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 
 use crate::error::AudioError;
 
-use super::dsp::{Crossfade, CrossfadeState, EqConfig, Equalizer, SoftFade, SoftFadeState, SOFT_FADE_SECS};
+use super::dsp::{Crossfade, CrossfadeState, EqConfig, Equalizer, SoftFade, SoftFadeState, VolumeGain, SOFT_FADE_SECS};
+use super::normalization::{analyze_peak_amplitude, VolumeNormalizer};
 use super::symphonia_source::SymphoniaSource;
 
 // ── Playback modes ────────────────────────────────────────────────────────────
@@ -436,6 +437,9 @@ pub struct AudioPlayer {
     prefetched_next: Option<(String, Option<Duration>)>,
     /// Seamless queue transitions when crossfade is off.
     gapless_enabled: bool,
+    /// Boost quieter tracks toward the session median peak (off by default).
+    volume_normalization_enabled: bool,
+    normalizer: VolumeNormalizer,
     /// Active ExoPlayer playlist URIs (Android gapless mode).
     #[cfg(target_os = "android")]
     android_gapless_playlist: Vec<String>,
@@ -462,6 +466,8 @@ impl AudioPlayer {
             soft_fade: Arc::new(Mutex::new(SoftFadeState::default())),
             prefetched_next: None,
             gapless_enabled: true,
+            volume_normalization_enabled: false,
+            normalizer: VolumeNormalizer::new(),
             #[cfg(target_os = "android")]
             android_gapless_playlist: Vec::new(),
         }
@@ -578,10 +584,62 @@ impl AudioPlayer {
             soft_fade: Arc::new(Mutex::new(SoftFadeState::default())),
             prefetched_next: None,
             gapless_enabled: true,
+            volume_normalization_enabled: false,
+            normalizer: VolumeNormalizer::new(),
             #[cfg(target_os = "android")]
             android_gapless_playlist: Vec::new(),
         })
         }
+    }
+
+    fn peak_for_path(&self, path: &str) -> f32 {
+        if let Some(peak) = self.normalizer.cached_peak(path) {
+            return peak;
+        }
+        match analyze_peak_amplitude(path) {
+            Ok(peak) => peak,
+            Err(error) => {
+                tracing::warn!("Peak analysis failed for \"{path}\": {error}");
+                0.5
+            }
+        }
+    }
+
+    fn normalization_gain_for_path(&mut self, path: &str) -> f32 {
+        if !self.volume_normalization_enabled {
+            return 1.0;
+        }
+        let peak = self.peak_for_path(path);
+        self.normalizer.register_peak(path, peak)
+    }
+
+    fn peek_normalization_gain_for_path(&self, path: &str) -> f32 {
+        if !self.volume_normalization_enabled {
+            return 1.0;
+        }
+        let peak = self.peak_for_path(path);
+        let median = self.normalizer.median_peak().unwrap_or(peak);
+        VolumeNormalizer::compute_gain(peak, median)
+    }
+
+    #[cfg(target_os = "android")]
+    fn apply_android_normalization_for_path(&mut self, path: &str) {
+        let gain = self.normalization_gain_for_path(path);
+        let _ = crate::android::audio::exo_set_track_normalization_gain(gain);
+    }
+
+    #[cfg(target_os = "android")]
+    fn sync_android_crossfade_normalization(&self) {
+        if self.crossfade_duration <= 0.0 {
+            let _ = crate::android::audio::exo_set_incoming_normalization_gain(1.0);
+            return;
+        }
+        let next_gain = self
+            .queue
+            .peek_next(&self.repeat)
+            .map(|next| self.peek_normalization_gain_for_path(next))
+            .unwrap_or(1.0);
+        let _ = crate::android::audio::exo_set_incoming_normalization_gain(next_gain);
     }
 
     /// List all available audio output device names.
@@ -609,10 +667,12 @@ impl AudioPlayer {
 
     fn build_source(
         path: &str,
+        track_gain: f32,
         eq_config: Arc<Mutex<EqConfig>>,
         eq_version: Arc<Mutex<u64>>,
         crossfade_duration: f32,
         next_path: Option<&str>,
+        next_gain: f32,
         soft_fade: Arc<Mutex<SoftFadeState>>,
     ) -> Result<(Box<dyn Source<Item = f32> + Send + 'static>, Option<Duration>, Option<Arc<Mutex<CrossfadeState>>>), AudioError> {
         let source = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -628,9 +688,10 @@ impl AudioPlayer {
         };
         let duration = source.total_duration();
         let converted = source.convert_samples();
+        let gained = VolumeGain::new(converted, track_gain);
         let eq_config_for_next = eq_config.clone();
         let eq_version_for_next = eq_version.clone();
-        let eq = Equalizer::new(converted, eq_config, eq_version);
+        let eq = Equalizer::new(gained, eq_config, eq_version);
 
         // Wrap in Crossfade if enabled and we have a next track.
         let chain: Box<dyn Source<Item = f32> + Send> = if crossfade_duration > 0.0 {
@@ -650,8 +711,9 @@ impl AudioPlayer {
                 };
 
                 if let Some(next_converted) = next_source {
+                    let next_gained = VolumeGain::new(next_converted, next_gain);
                     let next_eq =
-                        Equalizer::new(next_converted, eq_config_for_next, eq_version_for_next);
+                        Equalizer::new(next_gained, eq_config_for_next, eq_version_for_next);
                     // Match channel count / sample rate so per-sample mixing is valid.
                     let target_channels = eq.channels();
                     let target_sr = eq.sample_rate();
@@ -711,12 +773,6 @@ impl AudioPlayer {
         #[cfg(not(target_os = "android"))]
         {
         self.ensure_output()?;
-        let handle = &self
-            .output
-            .as_ref()
-            .expect("output ensured")
-            .handle;
-
         if self.sink.is_some() && self.is_playing() {
             self.fade_out_blocking();
         }
@@ -731,15 +787,31 @@ impl AudioPlayer {
         // SoftFade instances start at gain 0 and ramp toward this target.
         self.set_soft_fade_target(1.0);
 
-        let next_path = self.queue.peek_next(&self.repeat).map(|s| s.as_ref());
+        let next_path = self
+            .queue
+            .peek_next(&self.repeat)
+            .map(|s| s.to_string());
+        let track_gain = self.normalization_gain_for_path(path);
+        let next_gain = next_path
+            .as_deref()
+            .map(|next| self.peek_normalization_gain_for_path(next))
+            .unwrap_or(1.0);
         let (source, duration, crossfade_state) = Self::build_source(
             path,
+            track_gain,
             self.eq_config.clone(),
             self.eq_version.clone(),
             self.crossfade_duration,
-            next_path,
+            next_path.as_deref(),
+            next_gain,
             self.soft_fade.clone(),
         )?;
+
+        let handle = &self
+            .output
+            .as_ref()
+            .expect("output ensured")
+            .handle;
 
         let sink = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Sink::try_new(handle)
@@ -800,6 +872,7 @@ impl AudioPlayer {
             self.android_gapless_playlist.clear();
             crate::android::audio::exo_play_uri(path).map_err(AudioError::Decode)?;
         }
+        self.apply_android_normalization_for_path(path);
         let _ = crate::android::audio::exo_set_volume(self.volume);
         self.sync_android_eq();
 
@@ -825,6 +898,7 @@ impl AudioPlayer {
     fn sync_android_playback_extras(&self) {
         let _ = crate::android::audio::exo_set_crossfade_duration(self.crossfade_duration);
         let _ = crate::android::audio::exo_set_gapless_enabled(self.gapless_enabled);
+        self.sync_android_crossfade_normalization();
         if self.crossfade_duration > 0.0 {
             let next = self.queue.peek_next(&self.repeat).map(str::to_string);
             let _ = crate::android::audio::exo_set_upcoming_uri(next.as_deref());
@@ -912,6 +986,7 @@ impl AudioPlayer {
             elapsed_before_start: Duration::ZERO,
             duration,
         };
+        self.apply_android_normalization_for_path(&next_path);
         self.sync_android_playback_extras();
         true
     }
@@ -932,12 +1007,15 @@ impl AudioPlayer {
         let Some(next_path) = self.queue.peek_next(&self.repeat).map(str::to_string) else {
             return;
         };
+        let next_gain = self.peek_normalization_gain_for_path(&next_path);
         let Ok((source, duration, _state)) = Self::build_source(
             &next_path,
+            next_gain,
             self.eq_config.clone(),
             self.eq_version.clone(),
             0.0,
             None,
+            1.0,
             self.soft_fade.clone(),
         ) else {
             return;
@@ -1006,11 +1084,6 @@ impl AudioPlayer {
     #[cfg(not(target_os = "android"))]
     fn load_paused_at_desktop(&mut self, path: &str, position_secs: f64) -> Result<(), AudioError> {
         self.ensure_output()?;
-        let handle = &self
-            .output
-            .as_ref()
-            .expect("output ensured")
-            .handle;
 
         if self.sink.is_some() {
             if let Some(sink) = self.sink.take() {
@@ -1024,14 +1097,23 @@ impl AudioPlayer {
         self.set_soft_fade_target(1.0);
 
         let offset = Duration::from_secs_f64(position_secs.max(0.0));
+        let track_gain = self.normalization_gain_for_path(path);
         let (source, duration, crossfade_state) = Self::build_source(
             path,
+            track_gain,
             self.eq_config.clone(),
             self.eq_version.clone(),
             0.0,
             None,
+            1.0,
             self.soft_fade.clone(),
         )?;
+
+        let handle = &self
+            .output
+            .as_ref()
+            .expect("output ensured")
+            .handle;
 
         let sink = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Sink::try_new(handle)
@@ -1567,6 +1649,30 @@ impl AudioPlayer {
         self.gapless_enabled = enabled;
         #[cfg(target_os = "android")]
         self.sync_android_playback_extras();
+    }
+
+    pub fn volume_normalization_enabled(&self) -> bool {
+        self.volume_normalization_enabled
+    }
+
+    pub fn set_volume_normalization_enabled(&mut self, enabled: bool) {
+        self.volume_normalization_enabled = enabled;
+        self.normalizer.set_enabled(enabled);
+        #[cfg(target_os = "android")]
+        {
+            if !enabled {
+                let _ = crate::android::audio::exo_set_track_normalization_gain(1.0);
+                let _ = crate::android::audio::exo_set_incoming_normalization_gain(1.0);
+            } else if let Some(path) = self
+                .current_path
+                .as_ref()
+                .and_then(|p| p.to_str())
+                .map(str::to_string)
+            {
+                self.apply_android_normalization_for_path(&path);
+                self.sync_android_playback_extras();
+            }
+        }
     }
 
     /// Query the current default audio output device name (live, every call).
