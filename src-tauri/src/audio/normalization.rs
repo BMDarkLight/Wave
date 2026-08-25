@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::error::AudioError;
 
@@ -21,6 +21,13 @@ pub struct VolumeNormalizer {
     enabled: bool,
     peak_cache: HashMap<String, f32>,
     session_peaks: Vec<f32>,
+    /// Paths that have actually contributed a sample to `session_peaks`.
+    /// Kept separate from `peak_cache`: a track can get a cached peak from a
+    /// non-counting peek (crossfade/gapless prefetch of a track that hasn't
+    /// played yet) without that peek counting toward the median — this set
+    /// is what makes `register_peak` idempotent per-path regardless of
+    /// whether a peek already populated the cache first.
+    contributed: HashSet<String>,
     in_flight_analysis: usize,
 }
 
@@ -36,6 +43,7 @@ impl VolumeNormalizer {
             enabled: false,
             peak_cache: HashMap::new(),
             session_peaks: Vec::new(),
+            contributed: HashSet::new(),
             in_flight_analysis: 0,
         }
     }
@@ -60,6 +68,7 @@ impl VolumeNormalizer {
         self.enabled = enabled;
         if !enabled {
             self.session_peaks.clear();
+            self.contributed.clear();
         }
     }
 
@@ -107,12 +116,15 @@ impl VolumeNormalizer {
     /// Record a track peak and return the gain to apply (1.0 when disabled).
     pub fn register_peak(&mut self, path: &str, peak: f32) -> f32 {
         let peak = peak.clamp(MIN_PEAK, 1.0);
-        let is_new = !self.peak_cache.contains_key(path);
         self.peak_cache.insert(path.to_string(), peak);
         if !self.enabled {
             return 1.0;
         }
-        if is_new {
+        // `contributed` (not `peak_cache`) gates the median update: a track
+        // can already be cache-only (from a non-counting peek) the first
+        // time it's actually registered, and that first real play must still
+        // count once.
+        if self.contributed.insert(path.to_string()) {
             self.session_peaks.push(peak);
             if self.session_peaks.len() > SESSION_PEAK_LIMIT {
                 self.session_peaks.remove(0);

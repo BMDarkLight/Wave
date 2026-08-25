@@ -1912,7 +1912,7 @@ impl Library {
 
     /// Search playlists by name.
     pub fn search_playlists(&self, query: &str) -> Result<Vec<PlaylistInfo>, String> {
-        let pattern = format!("%{}%", query);
+        let pattern = format!("%{}%", escape_like_pattern(query));
         let connection = self.lock_connection()?;
         let mut stmt = connection
             .prepare(
@@ -1920,7 +1920,7 @@ impl Library {
                         p.sync_folder
                  FROM playlists p
                  LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
-                 WHERE p.name LIKE ?1
+                 WHERE p.name LIKE ?1 ESCAPE '\\'
                  GROUP BY p.id ORDER BY p.updated_at DESC",
             )
             .map_err(|e| format!("Failed to prepare playlist search query: {e}"))?;
@@ -3624,6 +3624,14 @@ fn compact_playlist_positions(
     Ok(())
 }
 
+/// Escape SQL LIKE metacharacters (`%`, `_`, and the escape char itself) so a
+/// user's search term is matched literally. Pair with `LIKE ?N ESCAPE '\'` in
+/// the query — without the `ESCAPE` clause SQLite gives `\` no special
+/// meaning and this escaping has no effect.
+fn escape_like_pattern(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
 /// Stable path key for membership diffs (resolves symlinks when possible).
 fn normalize_path_key(path: &str) -> String {
     let trimmed = path.trim();
@@ -3817,6 +3825,28 @@ fn sort_search_hits(hits: &mut [SearchHitDto]) {
     });
 }
 
+/// Nearest valid `str` char boundary at or before `idx`.
+///
+/// `str::floor_char_boundary` is nightly-only; this is the stable
+/// equivalent. `idx` here is never more than a few UTF-8 code points from a
+/// boundary (bounded loop), so a linear walk is fine.
+fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
+    idx = idx.min(s.len());
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+/// Nearest valid `str` char boundary at or after `idx`. See [`floor_char_boundary`].
+fn ceil_char_boundary(s: &str, mut idx: usize) -> usize {
+    idx = idx.min(s.len());
+    while idx < s.len() && !s.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
+}
+
 fn lyrics_snippet(lyrics: &str, query: &str) -> Option<String> {
     let lower = lyrics.to_lowercase();
     let needle = query
@@ -3827,15 +3857,22 @@ fn lyrics_snippet(lyrics: &str, query: &str) -> Option<String> {
     if needle.is_empty() {
         return None;
     }
-    let idx = lower.find(&needle)?;
+    // `idx` is a byte offset into `lower`, not `lyrics` — case folding can
+    // change a character's UTF-8 length (e.g. Turkish İ → "i̇"), so it isn't
+    // guaranteed to land on a char boundary, or even the right spot, in the
+    // original string. Snapping to a boundary can't recover exact alignment,
+    // but it's what keeps this from panicking on realistic non-ASCII lyrics;
+    // the same snap covers the `±40`/`±60` fallback offsets below too, which
+    // have the identical boundary risk on any multi-byte text.
+    let idx = floor_char_boundary(lyrics, lower.find(&needle)?);
     let start = lyrics[..idx]
         .rfind('\n')
         .map(|i| i + 1)
-        .unwrap_or_else(|| idx.saturating_sub(40));
+        .unwrap_or_else(|| floor_char_boundary(lyrics, idx.saturating_sub(40)));
     let end = lyrics[idx..]
         .find('\n')
         .map(|i| idx + i)
-        .unwrap_or_else(|| (idx + needle.len() + 60).min(lyrics.len()));
+        .unwrap_or_else(|| ceil_char_boundary(lyrics, (idx + needle.len() + 60).min(lyrics.len())));
     let mut snip = lyrics[start..end].trim().to_string();
     if start > 0 {
         snip = format!("…{snip}");
@@ -3916,21 +3953,21 @@ fn search_tracks_like(
     query: &str,
     limit: i64,
 ) -> Result<Vec<SearchHitDto>, String> {
-    let pattern = format!("%{}%", query.trim());
+    let pattern = format!("%{}%", escape_like_pattern(query.trim()));
     let mut stmt = connection
         .prepare(&format!(
             "SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM}
-             WHERE t.title LIKE ?1 COLLATE NOCASE
-                OR t.artist LIKE ?1 COLLATE NOCASE
-                OR t.album LIKE ?1 COLLATE NOCASE
-                OR t.name LIKE ?1 COLLATE NOCASE
-                OR IFNULL(t.lyrics, '') LIKE ?1 COLLATE NOCASE
+             WHERE t.title LIKE ?1 ESCAPE '\\' COLLATE NOCASE
+                OR t.artist LIKE ?1 ESCAPE '\\' COLLATE NOCASE
+                OR t.album LIKE ?1 ESCAPE '\\' COLLATE NOCASE
+                OR t.name LIKE ?1 ESCAPE '\\' COLLATE NOCASE
+                OR IFNULL(t.lyrics, '') LIKE ?1 ESCAPE '\\' COLLATE NOCASE
              ORDER BY
                 CASE
-                  WHEN t.title LIKE ?1 COLLATE NOCASE
-                    OR t.name LIKE ?1 COLLATE NOCASE THEN 0
-                  WHEN t.artist LIKE ?1 COLLATE NOCASE THEN 1
-                  WHEN t.album LIKE ?1 COLLATE NOCASE THEN 2
+                  WHEN t.title LIKE ?1 ESCAPE '\\' COLLATE NOCASE
+                    OR t.name LIKE ?1 ESCAPE '\\' COLLATE NOCASE THEN 0
+                  WHEN t.artist LIKE ?1 ESCAPE '\\' COLLATE NOCASE THEN 1
+                  WHEN t.album LIKE ?1 ESCAPE '\\' COLLATE NOCASE THEN 2
                   ELSE 3
                 END,
                 t.artist, t.album, t.track_number

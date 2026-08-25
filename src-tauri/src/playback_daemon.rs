@@ -978,12 +978,26 @@ fn handle_menu_event(shared: &SharedState, id: &str) {
         request_shutdown(&shared.0);
         return;
     }
-    if id == "next" {
-        let _ = shared.0.lock().map(|mut g| g.player.play_next());
-        return;
-    }
-    if id == "prev" {
-        let _ = shared.0.lock().map(|mut g| g.player.play_previous());
+    if id == "next" || id == "prev" {
+        let mut guard = match shared.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                tracing::warn!("Daemon mutex was poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+        // Mirrors the IPC Next/Previous handlers: without this, the OS Now
+        // Playing widget keeps showing the track that was current before the
+        // tray click, since only manual playback-tick auto-advance re-syncs
+        // metadata otherwise.
+        let result = if id == "next" {
+            guard.player.play_next()
+        } else {
+            guard.player.play_previous()
+        };
+        if let Ok(Some(path)) = result {
+            sync_media_for_path(&mut guard, &path);
+        }
         return;
     }
     if id == "quit" {

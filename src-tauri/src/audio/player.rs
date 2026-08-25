@@ -645,6 +645,25 @@ impl AudioPlayer {
         cell
     }
 
+    /// Counts an already-cached peak toward the session median, for a track
+    /// that was only ever *peeked* (gapless sink-prefetch) and has now
+    /// actually become the playing track via [`Self::adopt_prefetched`].
+    ///
+    /// The prefetch's gain cell is already wired into the running source, so
+    /// this doesn't need to build or return a new one — it only needs the
+    /// `register_peak` side effect (median contribution), which a peek never
+    /// triggers on its own. If analysis hasn't finished caching a peak yet,
+    /// this is a no-op; the track just doesn't contribute this time.
+    fn register_now_playing_for_normalization(&self, path: &str) {
+        if !self.volume_normalization_enabled {
+            return;
+        }
+        let mut normalizer = self.normalizer.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(peak) = normalizer.cached_peak(path) {
+            normalizer.register_peak(path, peak);
+        }
+    }
+
     /// Same as [`Self::normalization_gain_cell_for_path`] but for a
     /// peeked/upcoming track (crossfade or gapless prefetch) that may never
     /// actually play — doesn't count toward the running session median.
@@ -1007,7 +1026,15 @@ impl AudioPlayer {
     #[cfg(target_os = "android")]
     fn play_via_exo(&mut self, path: &str) -> Result<(), AudioError> {
         self.ensure_output()?;
-        let use_gapless = self.gapless_enabled && self.crossfade_duration <= 0.0;
+        // Repeat-One must not hand ExoPlayer a multi-item playlist: gapless
+        // transitions happen entirely inside ExoPlayer's own timeline, so it
+        // would seamlessly auto-advance to the next queued track the moment
+        // this one ends, before `play_next()`'s repeat-one branch (which
+        // replays the current track) ever gets a chance to run. Desktop's
+        // `prefetch_next_into_sink` already refuses to prefetch under
+        // repeat-one for the same reason — this mirrors that.
+        let use_gapless =
+            self.gapless_enabled && self.crossfade_duration <= 0.0 && self.repeat != RepeatMode::One;
         if use_gapless {
             let paths = self.queue.paths_from_current_forward(&self.repeat);
             let paths = if paths.is_empty() {
@@ -1077,6 +1104,11 @@ impl AudioPlayer {
             .ok()
             .filter(|&ms| ms > 0)
             .map(|ms| Duration::from_millis(ms as u64));
+        // ExoPlayer auto-advanced within a playlist built entirely up front
+        // (see `play_via_exo`), which only ever set gain for the first item —
+        // without this, every later track in a gapless run keeps whatever
+        // gain the first track got, right through crossfade/skip handling.
+        self.apply_android_normalization_for_path(&path);
         self.current_path = Some(new_path_buf);
         self.clock = PlaybackClock {
             started_at: Some(Instant::now()),
@@ -1182,6 +1214,13 @@ impl AudioPlayer {
 
     /// Adopt a track that is already playing via sink prefetch (no restart).
     fn adopt_prefetched(&mut self, path: &str, duration: Option<Duration>) {
+        // This track was only ever gain-*peeked* during prefetch (its gain
+        // cell is already live in the sink), which deliberately doesn't
+        // count toward the session median. Now that it's actually the
+        // playing track, let it contribute — otherwise gapless playback
+        // (the common case with normalization + prefetch both on) never
+        // advances the median past whatever `play()` was first called with.
+        self.register_now_playing_for_normalization(path);
         self.current_path = Some(PathBuf::from(path));
         // If the prefetched source has already been audible for a bit (tick
         // latency), keep the clock near zero — we can't know exact sink offset
@@ -1198,6 +1237,12 @@ impl AudioPlayer {
 
     /// Load a track at `position_secs` without starting playback (session restore).
     pub fn load_paused_at(&mut self, path: &str, position_secs: f64) -> Result<(), AudioError> {
+        // `position_secs` is deserialized from the persisted settings JSON —
+        // a hand-edited or corrupted file could contain a huge or infinite
+        // value, which `Duration::from_secs_f64` below panics on outright.
+        // Same cap as `seek()`.
+        const MAX_SEEK_SECONDS: f64 = 1e9;
+        let position_secs = position_secs.max(0.0).min(MAX_SEEK_SECONDS);
         #[cfg(target_os = "android")]
         {
             return self.load_paused_at_exo(path, position_secs);
@@ -1393,6 +1438,13 @@ impl AudioPlayer {
     }
 
     pub fn seek(&mut self, seconds: f64) -> Result<(), AudioError> {
+        // `seconds` comes straight from a Tauri IPC argument. NaN/negative
+        // collapse to 0 via `.max`; the `.min` cap keeps huge or infinite
+        // values (a malformed payload, or a frontend div-by-zero producing
+        // Infinity) from reaching `Duration::from_secs_f64` below, which
+        // panics outright on non-finite or overflowing input.
+        const MAX_SEEK_SECONDS: f64 = 1e9;
+        let seconds = seconds.max(0.0).min(MAX_SEEK_SECONDS);
         #[cfg(target_os = "android")]
         {
             if self.current_path.is_none() {

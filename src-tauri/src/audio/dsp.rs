@@ -686,8 +686,7 @@ impl<S: Source<Item = f32>> VolumeGain<S> {
     }
 }
 
-/// Matches [`normalization::MAX_GAIN`]; kept here so dsp stays self-contained for Source wiring.
-const MAX_NORMALIZATION_GAIN: f32 = 4.0;
+use super::normalization::MAX_GAIN as MAX_NORMALIZATION_GAIN;
 
 impl<S: Source<Item = f32>> Source for VolumeGain<S> {
     fn current_frame_len(&self) -> Option<usize> {

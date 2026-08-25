@@ -318,8 +318,13 @@ pub fn exo_play_media_items(uris: &[String], start_index: usize) -> Result<(), S
                 .map_err(|e| format!("new_object_array: {e}"))?;
             for (i, uri) in uris.iter().enumerate() {
                 let j_uri = env.new_string(uri).map_err(|e| format!("uri string: {e}"))?;
-                env.set_object_array_element(&array, i as i32, j_uri)
+                env.set_object_array_element(&array, i as i32, &j_uri)
                     .map_err(|e| format!("set_object_array_element: {e}"))?;
+                // This thread stays permanently JNI-attached, so nothing else
+                // frees these per-track local refs — without this, playing a
+                // large queue/playlist gapless risks a local reference table
+                // overflow crash.
+                let _ = env.delete_local_ref(j_uri);
             }
             env.call_method(
                 p.instance.as_obj(),

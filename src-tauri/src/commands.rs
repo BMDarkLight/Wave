@@ -2340,13 +2340,15 @@ pub async fn set_output_device(
     let mut slot = lock_player_state(&state);
     let guard = ensure_player(&mut slot)?;
 
-    // Save state from the current player before replacing it.
+    // Read state from the current player without mutating it. If building
+    // the new player or resuming on it fails below, the old player must be
+    // left completely intact (queue included) rather than half-torn-down.
     let was_playing = guard.is_playing();
     let was_paused = guard.is_paused();
     let current_path = guard.get_current_path().and_then(|p| p.to_str().map(String::from));
     let position = guard.position_seconds();
     let volume = guard.volume();
-    let queue = std::mem::take(&mut guard.queue);
+    let queue = guard.queue.clone();
     let repeat = guard.repeat.clone();
     let eq_config = guard.eq_config.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let eq_version = *guard.eq_version.lock().unwrap_or_else(|e| e.into_inner());
@@ -2359,15 +2361,21 @@ pub async fn set_output_device(
     *new_player.eq_config.lock().unwrap_or_else(|e| e.into_inner()) = eq_config;
     *new_player.eq_version.lock().unwrap_or_else(|e| e.into_inner()) = eq_version;
 
-    // Resume playback if something was playing.
+    // Resume playback best-effort: a failure here (e.g. the file that was
+    // playing has since been deleted) shouldn't discard an otherwise-
+    // successful device switch and the queue/EQ we just carried over.
     if let Some(ref path) = current_path {
         if was_playing || was_paused {
-            new_player.play(path)?;
-            if position > 0.0 {
-                new_player.seek(position)?;
-            }
-            if was_paused {
-                new_player.pause()?;
+            match new_player.play(path) {
+                Ok(()) => {
+                    if position > 0.0 {
+                        let _ = new_player.seek(position);
+                    }
+                    if was_paused {
+                        let _ = new_player.pause();
+                    }
+                }
+                Err(e) => tracing::warn!("Resume after output device switch failed: {e}"),
             }
         }
     }

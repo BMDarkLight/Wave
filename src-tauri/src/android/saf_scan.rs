@@ -22,15 +22,23 @@ pub fn list_audio_files(_app: &AppHandle, tree_uri: &str) -> Result<Vec<String>,
         ));
     }
 
+    // Frees the local ref for `obj` before returning. The calling loop runs
+    // on a permanently-attached JNI thread (see `jni::ensure_jni_thread_attached`),
+    // so there's no per-call frame to reclaim these automatically — scanning a
+    // folder with hundreds of files would otherwise fill the local reference
+    // table and crash with a JNI "local reference table overflow".
     fn jstring_to_owned(env: &mut jni::JNIEnv<'_>, obj: JObject<'_>) -> Option<String> {
         if obj.is_null() {
             return None;
         }
         let js: JString = obj.into();
-        env.get_string(&js)
+        let result = env
+            .get_string(&js)
             .ok()
             .map(|s| s.to_string_lossy().into_owned())
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty());
+        let _ = env.delete_local_ref(js);
+        result
     }
 
     fn throwable_message(
