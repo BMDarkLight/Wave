@@ -3783,7 +3783,7 @@ img.queue-thumb {
     justify-content: space-between;
     gap: 12px;
     min-height: var(--mobile-topbar-height);
-    padding: 0 12px;
+    padding: 0 6px;
   }
 
   .mobile-topbar-title {
@@ -3808,16 +3808,28 @@ img.queue-thumb {
   }
 
   .mobile-topbar-btn {
+    position: relative;
     display: grid;
     place-items: center;
-    width: 40px;
-    height: 40px;
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+    min-height: 48px;
     border: 0;
     border-radius: 50%;
     background: transparent;
     color: var(--text);
-    font-size: 24px;
+    font-size: 26px;
     line-height: 1;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Extra invisible tap target beyond the visible control. */
+  .mobile-topbar-btn::before {
+    content: "";
+    position: absolute;
+    inset: -2px -8px;
   }
 
   .mobile-topbar-btn.active {

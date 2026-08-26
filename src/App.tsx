@@ -40,6 +40,8 @@ import {
   takeAndroidCrashReport,
   clearAndroidCrashReport,
   listenToSyncProgress,
+  getRecentlyPlayed,
+  getMostPlayed,
   type PlaylistInfo,
   type Track,
 } from "./utils/player";
@@ -743,42 +745,94 @@ function App() {
     onCloseLyrics: () => setLyricsPanelTrack(null),
   });
 
+  const playlistSearchPaths = useMemo(
+    () => new Set(playlist.map((t) => t.path)),
+    [playlist],
+  );
+
+  // Paths for Recently / Most Played so search stays scoped to those lists.
+  const [playedSearchPaths, setPlayedSearchPaths] = useState<Set<string>>(
+    () => new Set(),
+  );
+  useEffect(() => {
+    if (mainView !== "recently_played" && mainView !== "most_played") {
+      setPlayedSearchPaths(new Set());
+      return;
+    }
+    let cancelled = false;
+    const load =
+      mainView === "recently_played" ? getRecentlyPlayed : getMostPlayed;
+    void load(100)
+      .then((tracks) => {
+        if (!cancelled) {
+          setPlayedSearchPaths(new Set(tracks.map((t) => t.path)));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPlayedSearchPaths(new Set());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mainView]);
+
+  const albumScopeName = viewingAlbum?.name ?? null;
+  const albumScopeArtist = viewingAlbum?.albumArtist ?? null;
+
   const mainSearchScope = useMemo((): MainSearchScope => {
-    if (viewingAlbum) {
+    // Prefer browse stack over mainView so album/artist opened from Home
+    // still scopes search (and can offer "Search full library").
+    if (albumScopeName) {
       return {
         kind: "album",
-        name: viewingAlbum.name,
-        albumArtist: viewingAlbum.albumArtist,
+        name: albumScopeName,
+        albumArtist: albumScopeArtist,
       };
     }
     if (viewingArtist) {
       return { kind: "artist", name: viewingArtist };
     }
-    if (
-      mainView === "home" ||
-      mainView === "recently_played" ||
-      mainView === "most_played" ||
-      mainView === "settings"
-    ) {
+    if (mainView === "home" || mainView === "settings") {
+      return { kind: "library" };
+    }
+    if (mainView === "recently_played" || mainView === "most_played") {
+      return {
+        kind: "playlist",
+        label:
+          mainView === "recently_played" ? "Recently Played" : "Most Played",
+        paths: playedSearchPaths,
+      };
+    }
+    const label = selectedPlaylist?.name ?? LIBRARY_PLAYLIST_NAME;
+    if (isLibraryPlaylistName(label)) {
       return { kind: "library" };
     }
     return {
       kind: "playlist",
-      label: selectedPlaylist?.name ?? LIBRARY_PLAYLIST_NAME,
-      paths: new Set(playlist.map((t) => t.path)),
+      label,
+      paths: playlistSearchPaths,
     };
   }, [
-    viewingAlbum,
+    albumScopeName,
+    albumScopeArtist,
     viewingArtist,
     mainView,
     selectedPlaylist?.name,
-    playlist,
+    playlistSearchPaths,
+    playedSearchPaths,
   ]);
 
-  const mainSearchScopeIsLibrary =
-    mainSearchScope.kind === "library" ||
-    (mainSearchScope.kind === "playlist" &&
-      isLibraryPlaylistName(mainSearchScope.label));
+  const mainSearchScopeIsLibrary = mainSearchScope.kind === "library";
+
+  // Stable key so object identity / path Set refreshes don't reset full-library mode.
+  const mainSearchScopeKey =
+    mainSearchScope.kind === "library"
+      ? "library"
+      : mainSearchScope.kind === "playlist"
+        ? `playlist:${mainSearchScope.label}`
+        : mainSearchScope.kind === "album"
+          ? `album:${mainSearchScope.name}:${mainSearchScope.albumArtist ?? ""}`
+          : `artist:${mainSearchScope.name}`;
 
   const displayedMainSearchHits = useMemo(() => {
     if (mainSearchFullLibrary || mainSearchScopeIsLibrary) {
@@ -797,10 +851,6 @@ function App() {
   const showSearchFullLibraryBtn =
     !!mainSearchQuery.trim() &&
     !mainSearchFullLibrary &&
-    mainView !== "home" &&
-    mainView !== "recently_played" &&
-    mainView !== "most_played" &&
-    mainView !== "settings" &&
     !mainSearchScopeIsLibrary;
 
   const mainSearchResultsSubtitle = useMemo(() => {
@@ -825,7 +875,7 @@ function App() {
 
   useEffect(() => {
     setMainSearchFullLibrary(false);
-  }, [mainSearchQuery, mainSearchScope]);
+  }, [mainSearchQuery, mainSearchScopeKey]);
 
   useEffect(() => {
     const initApp = async () => {
