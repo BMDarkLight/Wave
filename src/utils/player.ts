@@ -604,6 +604,12 @@ export const getArtistAlbums = (artist: string): Promise<AlbumSummary[]> => {
 
 // ── Listen stats / recommendations ───────────────────────────────────────────
 
+export interface DiscoveryArtist {
+  name: string;
+  similar_to: string;
+  cover_url: string | null;
+}
+
 export interface HomeSuggestions {
   featured: Track | null;
   mix: Track[];
@@ -613,6 +619,7 @@ export interface HomeSuggestions {
   favorite_album: AlbumSummary | null;
   favorite_artist: ArtistSummary | null;
   curated: boolean;
+  discovery: DiscoveryArtist[];
 }
 
 export const getRecentlyPlayed = (limit = 100): Promise<Track[]> => {

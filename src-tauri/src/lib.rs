@@ -4,6 +4,7 @@ pub mod cli;
 mod commands;
 mod cover_art;
 mod dto;
+mod enrichment;
 mod error;
 mod integrations;
 mod library;
@@ -21,7 +22,7 @@ pub use integrations::gui_tray;
 pub use integrations::media_controls;
 
 use app_settings::AppSettingsState;
-use commands::{LibraryState, ListenState, MediaBridgeState, PlayerState};
+use commands::{EnrichmentState, LibraryState, ListenState, MediaBridgeState, PlayerState};
 use dto::CloseAction;
 use listen::ListenTracker;
 use tauri::{Manager, WindowEvent};
@@ -84,6 +85,7 @@ pub fn run() {
 
             let library = library::Library::new(app.handle())?;
             app.manage(LibraryState(std::sync::Mutex::new(library)));
+            app.manage(EnrichmentState(std::sync::atomic::AtomicBool::new(false)));
 
             let app_handle = app.handle().clone();
             app.manage(MediaBridgeState(media_controls::MediaBridgeState::new(

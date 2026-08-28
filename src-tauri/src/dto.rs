@@ -120,6 +120,22 @@ pub struct HomeSuggestionsDto {
     pub favorite_artist: Option<ArtistSummaryDto>,
     /// True when listen history influenced the picks.
     pub curated: bool,
+    /// Artists similar to what you listen to but not in your library yet —
+    /// informational only, nothing here is playable.
+    pub discovery: Vec<DiscoveryArtistDto>,
+}
+
+/// A genre/vibe-similar artist not found in the local library, surfaced as a
+/// "you might also like" hint on Home.
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveryArtistDto {
+    pub name: String,
+    /// Display name of the owned artist this suggestion was derived from.
+    pub similar_to: String,
+    /// Cover Art Archive URL for a representative album, when one was
+    /// resolved. Not every release is archived, so this is often absent —
+    /// the frontend falls back to a generic icon.
+    pub cover_url: Option<String>,
 }
 
 /// One named listen rollup (artist / album / genre).

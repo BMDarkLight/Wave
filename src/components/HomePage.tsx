@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BiPlay, BiRefresh, BiMusic } from "react-icons/bi";
+import { BiPlay, BiMusic } from "react-icons/bi";
 import {
   getHomeSuggestions,
   getPlaylistTracksById,
@@ -216,8 +216,7 @@ export default function HomePage({
     initialCache?.fallbackAlbums ?? [],
   );
   const [loading, setLoading] = useState(!initialCache);
-  const [refreshing, setRefreshing] = useState(false);
-  const [seed, setSeed] = useState(initialCache?.seed ?? 0);
+  const [seed] = useState(initialCache?.seed ?? 0);
 
   const loadSuggestions = async (nextSeed: number) => {
     try {
@@ -269,19 +268,6 @@ export default function HomePage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [libraryPlaylistId]);
 
-  const handleRefresh = () => {
-    setRefreshing(true);
-    void (async () => {
-      try {
-        const nextSeed = seed + 1;
-        setSeed(nextSeed);
-        await loadSuggestions(nextSeed);
-      } finally {
-        setRefreshing(false);
-      }
-    })();
-  };
-
   const coldSuggestions = useMemo(() => {
     void seed;
     return shufflePickPreferring(fallbackTracks, 18, trackMetadataScore, 10);
@@ -294,6 +280,8 @@ export default function HomePage({
   const moreRow = suggestions?.more?.length
     ? suggestions.more
     : coldSuggestions.slice(9, 18);
+  const discoveryRow = suggestions?.discovery ?? [];
+  const [brokenCovers, setBrokenCovers] = useState<Set<string>>(new Set());
   const albumPicks = useMemo(() => {
     void seed;
     if (suggestions?.albums?.length) return suggestions.albums.slice(0, 8);
@@ -368,19 +356,7 @@ export default function HomePage({
       <header className="home-header">
         <div>
           <p className="home-eyebrow">Wave</p>
-          <h1>
-            <button
-              className={`home-refresh-btn${refreshing ? " home-refresh-btn--spin" : ""}`}
-              type="button"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              title="Refresh suggestions"
-              aria-label="Refresh suggestions"
-            >
-              <BiRefresh />
-            </button>
-            {greeting}
-          </h1>
+          <h1>{greeting}</h1>
           <p className="home-sub">
             {curated
               ? "Curated from your listening history"
@@ -539,6 +515,45 @@ export default function HomePage({
                 </span>
               </button>
             ))}
+          </div>
+        </section>
+      )}
+
+      {discoveryRow.length > 0 && (
+        <section className="home-section" aria-label="Artists you might also like">
+          <div className="home-section-head">
+            <h3>You might also like</h3>
+            <p>Similar artists based on what you listen to</p>
+          </div>
+          <div className="home-card-row">
+            {discoveryRow.map((artist) => {
+              const key = `${artist.name}-${artist.similar_to}`;
+              const showCover = Boolean(artist.cover_url) && !brokenCovers.has(key);
+              return (
+                <div key={key} className="home-discovery-card">
+                  <div className="home-discovery-art">
+                    {showCover ? (
+                      <img
+                        src={artist.cover_url ?? undefined}
+                        alt=""
+                        loading="lazy"
+                        onError={() =>
+                          setBrokenCovers((prev) => {
+                            const next = new Set(prev);
+                            next.add(key);
+                            return next;
+                          })
+                        }
+                      />
+                    ) : (
+                      <BiMusic aria-hidden />
+                    )}
+                  </div>
+                  <span className="home-card-title">{artist.name}</span>
+                  <span className="home-card-meta">Similar to {artist.similar_to}</span>
+                </div>
+              );
+            })}
           </div>
         </section>
       )}

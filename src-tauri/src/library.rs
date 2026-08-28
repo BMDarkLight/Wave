@@ -1,6 +1,6 @@
 use crate::dto::{
-    AlbumSummaryDto, ArtistSummaryDto, HomeSuggestionsDto, ListenRankDto, ListeningStatsDto,
-    SearchHitDto,
+    AlbumSummaryDto, ArtistSummaryDto, DiscoveryArtistDto, HomeSuggestionsDto, ListenRankDto,
+    ListeningStatsDto, SearchHitDto,
 };
 use crate::metadata::{extract_track, is_supported_audio_file, Track};
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -31,6 +31,23 @@ pub(crate) const TRACK_DETAIL_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.
                         t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri, t.album_art_id";
 
 pub(crate) const TRACK_FROM: &str = "tracks t LEFT JOIN album_art aa ON aa.id = t.album_art_id";
+
+/// Cached artist enrichment (genre tags / similar artists) is reused for this
+/// long before a background refresh is queued again.
+const ARTIST_ENRICHMENT_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+
+/// Bump this whenever `save_artist_enrichment` starts capturing something a
+/// prior version didn't (e.g. cover art) — rows saved under an older version
+/// are treated as needing a refresh immediately, regardless of TTL, so a
+/// capability added here doesn't silently wait out a 30-day-old cache.
+const ARTIST_ENRICHMENT_PROFILE_VERSION: i64 = 2;
+
+/// How many tracks by a single artist may appear in one Home suggestions
+/// response — the fix for "4 Metallica plays -> wall of Metallica".
+const MAX_TRACKS_PER_ARTIST_IN_SUGGESTIONS: usize = 3;
+
+/// How many of your top artists seed the similar-artist / genre lookups.
+const DIVERSITY_SEED_ARTIST_LIMIT: usize = 5;
 
 /// Default virtual playlist that mirrors the full track table.
 pub const LIBRARY_PLAYLIST_NAME: &str = "Library";
@@ -294,6 +311,33 @@ impl Library {
                     ON listen_stats(play_count DESC, listen_seconds DESC);
                 CREATE INDEX IF NOT EXISTS idx_track_transitions_from
                     ON track_transitions(from_track_id, kind, count DESC);
+                -- Expression indexes so the case-insensitive genre/artist
+                -- lookups used by Home suggestion diversity (below) stay
+                -- index-backed instead of scanning the whole tracks table.
+                CREATE INDEX IF NOT EXISTS idx_tracks_genre_lower ON tracks(LOWER(TRIM(genre)));
+                CREATE INDEX IF NOT EXISTS idx_tracks_artist_lower ON tracks(LOWER(TRIM(artist)));
+
+                -- Cached external genre/similar-artist enrichment (see
+                -- `enrichment.rs`). Populated lazily by a background thread,
+                -- never fetched inline on a suggestions request.
+                CREATE TABLE IF NOT EXISTS artist_enrichment (
+                    artist_key TEXT PRIMARY KEY,
+                    artist_name TEXT NOT NULL,
+                    mbid TEXT,
+                    tags TEXT,
+                    status TEXT NOT NULL DEFAULT 'ok',
+                    fetched_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS artist_similar (
+                    artist_key TEXT NOT NULL,
+                    similar_name TEXT NOT NULL,
+                    score REAL NOT NULL DEFAULT 0,
+                    fetched_at INTEGER NOT NULL,
+                    PRIMARY KEY(artist_key, similar_name)
+                );
+                CREATE INDEX IF NOT EXISTS idx_artist_similar_key
+                    ON artist_similar(artist_key, score DESC);
                 ",
             )
             .map_err(|error| format!("Failed to initialize library database: {error}"))?;
@@ -309,6 +353,9 @@ impl Library {
         ensure_track_column(&connection, "is_saf_uri", "INTEGER NOT NULL DEFAULT 0")?;
         ensure_track_column(&connection, "album_art_id", "TEXT")?;
         ensure_playlist_column(&connection, "sync_folder", "TEXT")?;
+        ensure_table_column(&connection, "artist_similar", "similar_mbid", "TEXT")?;
+        ensure_table_column(&connection, "artist_similar", "cover_release_group_mbid", "TEXT")?;
+        ensure_table_column(&connection, "artist_enrichment", "profile_version", "INTEGER NOT NULL DEFAULT 1")?;
 
         if let Err(error) = ensure_tracks_fts(&connection) {
             tracing::warn!("Failed to initialize FTS search index: {error}");
@@ -2750,6 +2797,113 @@ impl Library {
             }
         }
 
+        // Same-genre enrichment: local vibe diversification (no network) —
+        // other artists you own who share your favorite track's genre tag.
+        if let Some(fav) = favorite_track.as_ref() {
+            if let Some(genre) = fav.genre.as_deref().map(str::trim).filter(|g| !g.is_empty()) {
+                let connection = self.read_connection();
+                let mut stmt = connection
+                    .prepare(&format!(
+                        "SELECT {TRACK_SELECT_COLUMNS}
+                         FROM {TRACK_FROM}
+                         WHERE LOWER(TRIM(t.genre)) = LOWER(TRIM(?1))
+                           AND LOWER(TRIM(t.artist)) != LOWER(TRIM(?2))
+                         LIMIT 16"
+                    ))
+                    .map_err(|e| format!("Failed to prepare genre affinity query: {e}"))?;
+                let rows = stmt
+                    .query_map(params![genre, fav.artist], |row| row_to_track(row, &self.cover_root))
+                    .map_err(|e| format!("Failed to query genre affinity: {e}"))?;
+                for row in rows {
+                    push_track(row.map_err(|e| format!("Failed to read genre affinity track: {e}"))?, &mut candidates, &mut seen);
+                }
+            }
+        }
+
+        // Similar-artist enrichment from cached enrichment data (see
+        // `enrichment.rs`): owned tracks by artists similar to your top
+        // artists become candidates; non-owned similar artists become
+        // "you might also like" discovery hints. Both are best-effort —
+        // this table is empty until a background job populates it, so a
+        // cold cache silently yields nothing here.
+        let seed_artists = diversity_seed_artists_from(favorite_artist.as_ref(), &recent);
+        // Discovery hints collected per seed artist, merged round-robin below
+        // so one heavily-cached seed can't crowd out the others.
+        let mut discovery_by_seed: Vec<Vec<DiscoveryArtistDto>> = Vec::new();
+        let mut discovery_seen = std::collections::HashSet::<String>::new();
+        {
+            let connection = self.read_connection();
+            let mut similar_stmt = connection
+                .prepare(
+                    "SELECT similar_name, cover_release_group_mbid FROM artist_similar
+                     WHERE artist_key = ?1
+                     ORDER BY score DESC
+                     LIMIT 8",
+                )
+                .map_err(|e| format!("Failed to prepare similar-artist query: {e}"))?;
+            let mut owned_stmt = connection
+                .prepare(&format!(
+                    "SELECT {TRACK_SELECT_COLUMNS}
+                     FROM {TRACK_FROM}
+                     WHERE LOWER(TRIM(t.artist)) = LOWER(TRIM(?1))
+                     LIMIT 3"
+                ))
+                .map_err(|e| format!("Failed to prepare owned-similar-artist query: {e}"))?;
+
+            for seed in &seed_artists {
+                let key = normalize_artist_key(seed);
+                let similar_rows: Vec<(String, Option<String>)> = similar_stmt
+                    .query_map(params![key], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                    })
+                    .map_err(|e| format!("Failed to query similar artists: {e}"))?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| format!("Failed to read similar artists: {e}"))?;
+
+                let mut this_seed_discovery = Vec::new();
+                for (similar_name, cover_release_group_mbid) in similar_rows {
+                    let owned: Vec<Track> = owned_stmt
+                        .query_map(params![similar_name], |row| row_to_track(row, &self.cover_root))
+                        .map_err(|e| format!("Failed to query owned similar artist: {e}"))?
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|e| format!("Failed to read owned similar artist: {e}"))?;
+
+                    if owned.is_empty() {
+                        if discovery_seen.insert(normalize_artist_key(&similar_name)) {
+                            this_seed_discovery.push(DiscoveryArtistDto {
+                                name: similar_name,
+                                similar_to: seed.clone(),
+                                cover_url: cover_release_group_mbid
+                                    .as_deref()
+                                    .map(crate::enrichment::cover_art_url),
+                            });
+                        }
+                    } else {
+                        for track in owned {
+                            push_track(track, &mut candidates, &mut seen);
+                        }
+                    }
+                }
+                discovery_by_seed.push(this_seed_discovery);
+            }
+        }
+
+        // Merge round-robin (one from each seed, then a second from each,
+        // …) so a seed with many cached similar artists can't crowd out the
+        // others before they get a turn.
+        let mut discovery: Vec<DiscoveryArtistDto> = Vec::new();
+        let max_per_seed = discovery_by_seed.iter().map(Vec::len).max().unwrap_or(0);
+        'merge: for round in 0..max_per_seed {
+            for seed_discovery in &discovery_by_seed {
+                if let Some(entry) = seed_discovery.get(round) {
+                    discovery.push(entry.clone());
+                    if discovery.len() >= 8 {
+                        break 'merge;
+                    }
+                }
+            }
+        }
+
         // Cold-start / fill from library.
         if candidates.len() < 40 {
             let connection = self.read_connection();
@@ -2773,6 +2927,7 @@ impl Library {
         }
 
         shuffle_tracks(&mut candidates);
+        let candidates = cap_tracks_per_artist(candidates, MAX_TRACKS_PER_ARTIST_IN_SUGGESTIONS);
 
         let featured = candidates.first().cloned().or_else(|| favorite_track.clone());
         let mix: Vec<Track> = candidates.iter().skip(1).take(8).cloned().collect();
@@ -2794,7 +2949,107 @@ impl Library {
             favorite_album,
             favorite_artist,
             curated,
+            discovery,
         })
+    }
+
+    /// Artists whose taste should seed genre/similar-artist diversity right
+    /// now — same selection [`get_home_suggestions`] uses internally.
+    /// Exposed so the background enrichment job can decide what to fetch
+    /// without duplicating the query.
+    pub fn diversity_seed_artists(&self) -> Result<Vec<String>, String> {
+        let favorite_artist = self.get_favorite_artist()?;
+        let recent = self.get_recently_played(40)?;
+        Ok(diversity_seed_artists_from(favorite_artist.as_ref(), &recent))
+    }
+
+    /// Which of `artist_names` have no cached enrichment (see
+    /// `artist_enrichment`), whose cache is older than
+    /// [`ARTIST_ENRICHMENT_TTL_SECS`], or whose cache predates
+    /// [`ARTIST_ENRICHMENT_PROFILE_VERSION`] (so a newly added capability —
+    /// e.g. cover art — doesn't sit unused behind a month-old TTL). Used to
+    /// decide what a background enrichment pass should fetch next —
+    /// always DB-only, never touches the network itself.
+    pub fn artists_needing_enrichment(&self, artist_names: &[String]) -> Result<Vec<String>, String> {
+        let connection = self.read_connection();
+        let now = now_timestamp();
+        let mut needing = Vec::new();
+        for name in artist_names {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let key = normalize_artist_key(trimmed);
+            let cached: Option<(i64, i64)> = connection
+                .query_row(
+                    "SELECT fetched_at, profile_version FROM artist_enrichment WHERE artist_key = ?1",
+                    params![key],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|e| format!("Failed to check artist enrichment cache: {e}"))?;
+            let stale = match cached {
+                Some((fetched_at, profile_version)) => {
+                    now - fetched_at > ARTIST_ENRICHMENT_TTL_SECS
+                        || profile_version < ARTIST_ENRICHMENT_PROFILE_VERSION
+                }
+                None => true,
+            };
+            if stale {
+                needing.push(trimmed.to_string());
+            }
+        }
+        Ok(needing)
+    }
+
+    /// Persist a background enrichment result for one artist. Replaces the
+    /// artist's similar-artist set (rather than accumulating it) so a stale
+    /// similarity from an old model doesn't linger forever.
+    pub fn save_artist_enrichment(
+        &self,
+        artist_name: &str,
+        mbid: Option<&str>,
+        tags: &[String],
+        similar: &[crate::enrichment::SimilarArtistEntry],
+        status: &str,
+    ) -> Result<(), String> {
+        let key = normalize_artist_key(artist_name);
+        let now = now_timestamp();
+        let tags_joined = if tags.is_empty() { None } else { Some(tags.join(", ")) };
+
+        let mut connection = self.lock_connection()?;
+        let tx = connection
+            .transaction()
+            .map_err(|e| format!("Failed to begin enrichment transaction: {e}"))?;
+
+        tx.execute(
+            "INSERT INTO artist_enrichment (artist_key, artist_name, mbid, tags, status, fetched_at, profile_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(artist_key) DO UPDATE SET
+               artist_name = excluded.artist_name,
+               mbid = excluded.mbid,
+               tags = excluded.tags,
+               status = excluded.status,
+               fetched_at = excluded.fetched_at,
+               profile_version = excluded.profile_version",
+            params![key, artist_name, mbid, tags_joined, status, now, ARTIST_ENRICHMENT_PROFILE_VERSION],
+        )
+        .map_err(|e| format!("Failed to save artist enrichment: {e}"))?;
+
+        tx.execute("DELETE FROM artist_similar WHERE artist_key = ?1", params![key])
+            .map_err(|e| format!("Failed to clear stale similar artists: {e}"))?;
+        for entry in similar {
+            tx.execute(
+                "INSERT INTO artist_similar (artist_key, similar_name, similar_mbid, cover_release_group_mbid, score, fetched_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![key, entry.name, entry.mbid, entry.cover_release_group_mbid, entry.score, now],
+            )
+            .map_err(|e| format!("Failed to save similar artist: {e}"))?;
+        }
+
+        tx.commit()
+            .map_err(|e| format!("Failed to commit artist enrichment: {e}"))?;
+        Ok(())
     }
 
     fn suggest_albums(
@@ -2874,6 +3129,67 @@ impl Library {
         }
         Ok(out)
     }
+}
+
+/// Case/whitespace-insensitive key used to match an artist name against
+/// cached enrichment rows and against other tracks in the library.
+fn normalize_artist_key(artist_name: &str) -> String {
+    artist_name.trim().to_lowercase()
+}
+
+/// Keep at most `cap` tracks per artist (case-insensitive), preserving the
+/// input order. Used right after shuffling the Home suggestion candidates so
+/// one heavily-played artist can't fill every slot.
+fn cap_tracks_per_artist(tracks: Vec<Track>, cap: usize) -> Vec<Track> {
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    tracks
+        .into_iter()
+        .filter(|track| {
+            let key = normalize_artist_key(&track.artist);
+            let count = counts.entry(key).or_insert(0);
+            *count += 1;
+            *count <= cap
+        })
+        .collect()
+}
+
+/// Same as [`pick_diversity_seed_artists`] but takes the already-resolved
+/// favorite artist summary, for callers that fetched it anyway.
+fn diversity_seed_artists_from(favorite_artist: Option<&ArtistSummaryDto>, recent: &[Track]) -> Vec<String> {
+    pick_diversity_seed_artists(
+        favorite_artist.map(|a| a.name.as_str()),
+        recent,
+        DIVERSITY_SEED_ARTIST_LIMIT,
+    )
+}
+
+/// Pick the artists whose taste should seed genre/similar-artist diversity:
+/// your favorite artist first, then distinct artists from recently played
+/// tracks, most recent first. Case-insensitively deduplicated.
+fn pick_diversity_seed_artists(
+    favorite_artist: Option<&str>,
+    recent: &[Track],
+    limit: usize,
+) -> Vec<String> {
+    let mut seeds = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for name in favorite_artist
+        .into_iter()
+        .chain(recent.iter().map(|t| t.artist.as_str()))
+    {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if seen.insert(normalize_artist_key(trimmed)) {
+            seeds.push(trimmed.to_string());
+            if seeds.len() >= limit {
+                break;
+            }
+        }
+    }
+    seeds
 }
 
 fn shuffle_tracks(items: &mut [Track]) {
@@ -4952,5 +5268,366 @@ mod tests {
         assert!(hits[2].matched_fields.iter().any(|f| f == "album"));
         assert!(hits[3].matched_fields.iter().any(|f| f == "lyrics"));
         assert_eq!(hits[3].track.title, "Something Else");
+    }
+
+    // ── Suggestion diversity (genre/vibe recommendations) ────────────────────
+
+    #[test]
+    fn cap_tracks_per_artist_limits_per_artist_and_preserves_order() {
+        let tracks = vec![
+            Track { artist: "Metallica".into(), ..sample_track("1", "/a1.mp3") },
+            Track { artist: "Metallica".into(), ..sample_track("2", "/a2.mp3") },
+            Track { artist: "Metallica".into(), ..sample_track("3", "/a3.mp3") },
+            Track { artist: "Slayer".into(), ..sample_track("4", "/b1.mp3") },
+            Track { artist: "Metallica".into(), ..sample_track("5", "/a4.mp3") },
+        ];
+        let capped = cap_tracks_per_artist(tracks, 2);
+        let ids: Vec<&str> = capped.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["1", "2", "4"]);
+    }
+
+    #[test]
+    fn cap_tracks_per_artist_matches_case_insensitively() {
+        let tracks = vec![
+            Track { artist: "Metallica".into(), ..sample_track("1", "/a1.mp3") },
+            Track { artist: "METALLICA".into(), ..sample_track("2", "/a2.mp3") },
+            Track { artist: "  metallica  ".into(), ..sample_track("3", "/a3.mp3") },
+        ];
+        let capped = cap_tracks_per_artist(tracks, 1);
+        assert_eq!(capped.len(), 1);
+        assert_eq!(capped[0].id, "1");
+    }
+
+    #[test]
+    fn pick_diversity_seed_artists_prioritizes_favorite_then_recent_dedup() {
+        let recent = vec![
+            Track { artist: "Slayer".into(), ..sample_track("1", "/1.mp3") },
+            Track { artist: "Metallica".into(), ..sample_track("2", "/2.mp3") },
+            Track { artist: "slayer".into(), ..sample_track("3", "/3.mp3") },
+            Track { artist: "Megadeth".into(), ..sample_track("4", "/4.mp3") },
+        ];
+        let seeds = pick_diversity_seed_artists(Some("Metallica"), &recent, 3);
+        assert_eq!(
+            seeds,
+            vec!["Metallica".to_string(), "Slayer".to_string(), "Megadeth".to_string()]
+        );
+    }
+
+    #[test]
+    fn pick_diversity_seed_artists_skips_empty_favorite() {
+        let recent = vec![Track { artist: "Slayer".into(), ..sample_track("1", "/1.mp3") }];
+        let seeds = pick_diversity_seed_artists(Some(""), &recent, 3);
+        assert_eq!(seeds, vec!["Slayer".to_string()]);
+    }
+
+    #[test]
+    fn diversity_seed_artists_reflects_favorite_and_recent_history() {
+        let library = open_test_library().expect("library");
+        {
+            let connection = library.lock_connection().expect("connection");
+            let track = Track { artist: "Metallica".into(), ..sample_track("m0", "/m0.mp3") };
+            let id = upsert_track(&connection, &track).expect("upsert");
+            connection
+                .execute(
+                    "INSERT INTO listen_stats (track_id, play_count, skip_count, listen_seconds, last_played_at)
+                     VALUES (?1, 5, 0, 300, ?2)",
+                    params![id, now_timestamp()],
+                )
+                .expect("listen stats");
+        }
+
+        let seeds = library.diversity_seed_artists().expect("seeds");
+        assert_eq!(seeds, vec!["Metallica".to_string()]);
+    }
+
+    #[test]
+    fn artists_needing_enrichment_filters_fresh_cache_and_includes_missing_and_stale() {
+        let library = open_test_library().expect("library");
+        let now = now_timestamp();
+        {
+            let connection = library.lock_connection().expect("connection");
+            connection
+                .execute(
+                    "INSERT INTO artist_enrichment (artist_key, artist_name, mbid, tags, status, fetched_at, profile_version)
+                     VALUES ('metallica', 'Metallica', NULL, NULL, 'ok', ?1, ?2)",
+                    params![now, ARTIST_ENRICHMENT_PROFILE_VERSION],
+                )
+                .expect("insert fresh");
+            connection
+                .execute(
+                    "INSERT INTO artist_enrichment (artist_key, artist_name, mbid, tags, status, fetched_at, profile_version)
+                     VALUES ('slayer', 'Slayer', NULL, NULL, 'ok', ?1, ?2)",
+                    params![now - 40 * 24 * 60 * 60, ARTIST_ENRICHMENT_PROFILE_VERSION],
+                )
+                .expect("insert stale");
+        }
+
+        let names = vec!["Metallica".to_string(), "Slayer".to_string(), "Megadeth".to_string()];
+        let needing = library.artists_needing_enrichment(&names).expect("query");
+        assert_eq!(needing, vec!["Slayer".to_string(), "Megadeth".to_string()]);
+    }
+
+    #[test]
+    fn artists_needing_enrichment_forces_refresh_when_cache_predates_current_profile_version() {
+        let library = open_test_library().expect("library");
+        let now = now_timestamp();
+        {
+            let connection = library.lock_connection().expect("connection");
+            // Fresh by TTL, but saved under an older profile version (e.g.
+            // before cover-art support existed) — must still be refreshed.
+            connection
+                .execute(
+                    "INSERT INTO artist_enrichment (artist_key, artist_name, mbid, tags, status, fetched_at, profile_version)
+                     VALUES ('pantera', 'Pantera', NULL, NULL, 'ok', ?1, ?2)",
+                    params![now, ARTIST_ENRICHMENT_PROFILE_VERSION - 1],
+                )
+                .expect("insert version-stale");
+        }
+
+        let needing = library
+            .artists_needing_enrichment(&["Pantera".to_string()])
+            .expect("query");
+        assert_eq!(
+            needing,
+            vec!["Pantera".to_string()],
+            "a fresh-by-TTL row saved under an older profile version must still be flagged as needing refresh"
+        );
+    }
+
+    fn sample_similar(name: &str, score: f64) -> crate::enrichment::SimilarArtistEntry {
+        crate::enrichment::SimilarArtistEntry {
+            name: name.to_string(),
+            mbid: None,
+            score,
+            cover_release_group_mbid: None,
+        }
+    }
+
+    #[test]
+    fn save_artist_enrichment_round_trips_and_replaces_similar_on_refresh() {
+        let library = open_test_library().expect("library");
+        library
+            .save_artist_enrichment(
+                "Metallica",
+                Some("65f4f0c5-ef9e-490c-aee3-909e7ae6b2ab"),
+                &["heavy metal".to_string(), "thrash metal".to_string()],
+                &[sample_similar("Slayer", 100.0), sample_similar("Megadeth", 90.0)],
+                "ok",
+            )
+            .expect("save");
+
+        let needing = library
+            .artists_needing_enrichment(&["Metallica".to_string()])
+            .expect("check");
+        assert!(needing.is_empty(), "freshly saved artist should not need refresh");
+
+        // A refresh should replace the similar-artist set, not accumulate it.
+        library
+            .save_artist_enrichment(
+                "Metallica",
+                Some("65f4f0c5-ef9e-490c-aee3-909e7ae6b2ab"),
+                &["heavy metal".to_string()],
+                &[sample_similar("Anthrax", 80.0)],
+                "ok",
+            )
+            .expect("re-save");
+
+        let connection = library.lock_connection().expect("connection");
+        let similar_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM artist_similar WHERE artist_key = 'metallica'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(similar_count, 1);
+    }
+
+    #[test]
+    fn get_home_suggestions_surfaces_owned_similar_artist_without_flooding_favorite() {
+        let library = open_test_library().expect("library");
+        {
+            let connection = library.lock_connection().expect("connection");
+            for i in 0..6 {
+                let track = Track {
+                    artist: "Metallica".into(),
+                    album: "Master of Puppets".into(),
+                    ..sample_track(&format!("m{i}"), &format!("/m{i}.mp3"))
+                };
+                let id = upsert_track(&connection, &track).expect("upsert metallica");
+                connection
+                    .execute(
+                        "INSERT INTO listen_stats (track_id, play_count, skip_count, listen_seconds, last_played_at)
+                         VALUES (?1, 5, 0, 300, ?2)",
+                        params![id, now_timestamp()],
+                    )
+                    .expect("listen stats");
+            }
+            for i in 0..2 {
+                let track = Track {
+                    artist: "Slayer".into(),
+                    album: "Reign in Blood".into(),
+                    ..sample_track(&format!("s{i}"), &format!("/s{i}.mp3"))
+                };
+                upsert_track(&connection, &track).expect("upsert slayer");
+            }
+            connection
+                .execute(
+                    "INSERT INTO artist_similar (artist_key, similar_name, score, fetched_at)
+                     VALUES ('metallica', 'Slayer', 100.0, ?1)",
+                    params![now_timestamp()],
+                )
+                .expect("insert similar");
+        }
+
+        let suggestions = library.get_home_suggestions(None).expect("suggestions");
+        let all: Vec<&Track> = suggestions
+            .featured
+            .iter()
+            .chain(suggestions.mix.iter())
+            .chain(suggestions.more.iter())
+            .collect();
+
+        let metallica_count = all.iter().filter(|t| t.artist == "Metallica").count();
+        assert!(
+            metallica_count <= MAX_TRACKS_PER_ARTIST_IN_SUGGESTIONS,
+            "expected the per-artist cap to hold, got {metallica_count}"
+        );
+        assert!(
+            all.iter().any(|t| t.artist == "Slayer"),
+            "expected an owned similar artist to surface in suggestions"
+        );
+    }
+
+    #[test]
+    fn get_home_suggestions_lists_non_owned_similar_artist_as_discovery() {
+        let library = open_test_library().expect("library");
+        {
+            let connection = library.lock_connection().expect("connection");
+            let track = Track { artist: "Metallica".into(), ..sample_track("m0", "/m0.mp3") };
+            let id = upsert_track(&connection, &track).expect("upsert");
+            connection
+                .execute(
+                    "INSERT INTO listen_stats (track_id, play_count, skip_count, listen_seconds, last_played_at)
+                     VALUES (?1, 5, 0, 300, ?2)",
+                    params![id, now_timestamp()],
+                )
+                .expect("listen stats");
+            connection
+                .execute(
+                    "INSERT INTO artist_similar (artist_key, similar_name, score, fetched_at)
+                     VALUES ('metallica', 'Anthrax', 90.0, ?1)",
+                    params![now_timestamp()],
+                )
+                .expect("insert similar");
+        }
+
+        let suggestions = library.get_home_suggestions(None).expect("suggestions");
+        let anthrax = suggestions
+            .discovery
+            .iter()
+            .find(|d| d.name == "Anthrax" && d.similar_to == "Metallica");
+        assert!(
+            anthrax.is_some(),
+            "expected a non-owned similar artist to appear in discovery, got {:?}",
+            suggestions.discovery
+        );
+        assert_eq!(
+            anthrax.unwrap().cover_url,
+            None,
+            "no cover was cached for this row, so cover_url must stay absent rather than a broken link"
+        );
+        assert!(
+            !suggestions.discovery.iter().any(|d| d.name == "Metallica"),
+            "the owned seed artist itself must never appear as a discovery suggestion"
+        );
+    }
+
+    #[test]
+    fn get_home_suggestions_balances_discovery_across_multiple_seed_artists() {
+        let library = open_test_library().expect("library");
+        {
+            let connection = library.lock_connection().expect("connection");
+            let metallica = Track { artist: "Metallica".into(), ..sample_track("m0", "/m0.mp3") };
+            let metallica_id = upsert_track(&connection, &metallica).expect("upsert metallica");
+            connection
+                .execute(
+                    "INSERT INTO listen_stats (track_id, play_count, skip_count, listen_seconds, last_played_at)
+                     VALUES (?1, 10, 0, 1000, ?2)",
+                    params![metallica_id, now_timestamp()],
+                )
+                .expect("listen stats metallica");
+
+            let slayer = Track { artist: "Slayer".into(), ..sample_track("s0", "/s0.mp3") };
+            let slayer_id = upsert_track(&connection, &slayer).expect("upsert slayer");
+            connection
+                .execute(
+                    "INSERT INTO listen_stats (track_id, play_count, skip_count, listen_seconds, last_played_at)
+                     VALUES (?1, 5, 0, 300, ?2)",
+                    params![slayer_id, now_timestamp()],
+                )
+                .expect("listen stats slayer");
+
+            // Metallica alone has more non-owned similar artists than the
+            // whole discovery cap, so it must not be able to crowd out Slayer.
+            for i in 0..10 {
+                connection
+                    .execute(
+                        "INSERT INTO artist_similar (artist_key, similar_name, score, fetched_at)
+                         VALUES ('metallica', ?1, ?2, ?3)",
+                        params![format!("Metallica Similar {i}"), 100.0 - i as f64, now_timestamp()],
+                    )
+                    .expect("insert metallica similar");
+            }
+            connection
+                .execute(
+                    "INSERT INTO artist_similar (artist_key, similar_name, score, fetched_at)
+                     VALUES ('slayer', 'Exodus', 90.0, ?1)",
+                    params![now_timestamp()],
+                )
+                .expect("insert slayer similar");
+        }
+
+        let suggestions = library.get_home_suggestions(None).expect("suggestions");
+        assert!(
+            suggestions.discovery.iter().any(|d| d.similar_to == "Slayer"),
+            "expected discovery to include a pick derived from a second seed artist, got {:?}",
+            suggestions.discovery
+        );
+    }
+
+    #[test]
+    fn get_home_suggestions_includes_cover_url_when_cached() {
+        let library = open_test_library().expect("library");
+        {
+            let connection = library.lock_connection().expect("connection");
+            let track = Track { artist: "Metallica".into(), ..sample_track("m0", "/m0.mp3") };
+            let id = upsert_track(&connection, &track).expect("upsert");
+            connection
+                .execute(
+                    "INSERT INTO listen_stats (track_id, play_count, skip_count, listen_seconds, last_played_at)
+                     VALUES (?1, 5, 0, 300, ?2)",
+                    params![id, now_timestamp()],
+                )
+                .expect("listen stats");
+            connection
+                .execute(
+                    "INSERT INTO artist_similar (artist_key, similar_name, similar_mbid, cover_release_group_mbid, score, fetched_at)
+                     VALUES ('metallica', 'Anthrax', 'artist-mbid', 'f1afec0b-26dd-3db5-9aa1-c91229a74a24', 90.0, ?1)",
+                    params![now_timestamp()],
+                )
+                .expect("insert similar");
+        }
+
+        let suggestions = library.get_home_suggestions(None).expect("suggestions");
+        let anthrax = suggestions
+            .discovery
+            .iter()
+            .find(|d| d.name == "Anthrax")
+            .expect("anthrax in discovery");
+        assert_eq!(
+            anthrax.cover_url.as_deref(),
+            Some("https://coverartarchive.org/release-group/f1afec0b-26dd-3db5-9aa1-c91229a74a24/front-250")
+        );
     }
 }

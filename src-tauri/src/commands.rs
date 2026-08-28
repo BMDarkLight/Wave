@@ -25,6 +25,9 @@ pub struct PlayerState(pub Mutex<Option<AudioPlayer>>);
 pub struct LibraryState(pub Mutex<Library>);
 pub struct MediaBridgeState(pub crate::media_controls::MediaBridgeState);
 pub struct ListenState(pub Mutex<ListenTracker>);
+/// Guards against overlapping artist-enrichment background jobs (e.g. from
+/// rapid Home page refreshes) — only one runs at a time.
+pub struct EnrichmentState(pub std::sync::atomic::AtomicBool);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -3013,7 +3016,90 @@ pub async fn get_home_suggestions(
             .as_ref()
             .and_then(|p| p.get_current_path().map(|p| p.to_string_lossy().into_owned()))
     };
-    let library = app.state::<LibraryState>();
-    let lib = library.0.lock().map_err(lock_poisoned)?;
-    lib.get_home_suggestions(seed.as_deref())
+    let suggestions = {
+        let library = app.state::<LibraryState>();
+        let lib = library.0.lock().map_err(lock_poisoned)?;
+        lib.get_home_suggestions(seed.as_deref())?
+    };
+
+    maybe_spawn_artist_enrichment(&app);
+
+    Ok(suggestions)
+}
+
+/// Kick off a background genre/similar-artist enrichment pass (see
+/// `enrichment.rs`) if one isn't already running. Fire-and-forget: the
+/// suggestions already returned above used whatever was cached going in,
+/// and this only affects what a *future* request will see. Skips entirely
+/// once the cache is warm, so steady-state Home visits make zero network
+/// calls.
+fn maybe_spawn_artist_enrichment(app: &tauri::AppHandle) {
+    let enrichment_state = app.state::<EnrichmentState>();
+    if enrichment_state.0.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        run_artist_enrichment_job(&app_clone);
+        app_clone
+            .state::<EnrichmentState>()
+            .0
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    });
+}
+
+/// Refreshes cached genre tags / similar artists for whichever top artists
+/// are missing or stale. Every network call lives here, off the command
+/// path — the library lock is only ever held for the brief local reads and
+/// writes around each call, never across a network request, so playback,
+/// scanning, and metadata lookups are never blocked by this.
+fn run_artist_enrichment_job(app: &tauri::AppHandle) {
+    let stale = {
+        let library = app.state::<LibraryState>();
+        let Ok(lib) = library.0.lock() else {
+            return;
+        };
+        let seed_artists = match lib.diversity_seed_artists() {
+            Ok(names) => names,
+            Err(e) => {
+                tracing::warn!("Failed to pick diversity seed artists: {e}");
+                return;
+            }
+        };
+        match lib.artists_needing_enrichment(&seed_artists) {
+            Ok(names) => names,
+            Err(e) => {
+                tracing::warn!("Failed to check artist enrichment cache: {e}");
+                return;
+            }
+        }
+    };
+
+    if stale.is_empty() {
+        return;
+    }
+
+    let client = crate::enrichment::enrichment_client();
+    for (index, artist_name) in stale.iter().enumerate() {
+        if index > 0 {
+            std::thread::sleep(crate::enrichment::RATE_LIMIT_DELAY);
+        }
+        let profile = crate::enrichment::fetch_artist_profile(client, artist_name);
+        let status = if profile.mbid.is_some() { "ok" } else { "not_found" };
+
+        let library = app.state::<LibraryState>();
+        let save_result = library.0.lock().map(|lib| {
+            lib.save_artist_enrichment(
+                artist_name,
+                profile.mbid.as_deref(),
+                &profile.tags,
+                &profile.similar,
+                status,
+            )
+        });
+        if let Ok(Err(e)) = save_result {
+            tracing::warn!("Failed to save artist enrichment for {artist_name}: {e}");
+        }
+    }
 }

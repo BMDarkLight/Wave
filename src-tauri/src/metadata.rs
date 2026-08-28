@@ -662,7 +662,7 @@ fn find_musicbrainz_release_id(track: &Track) -> Option<String> {
         .map(|release| release.id)
 }
 
-fn escape_musicbrainz_query(value: &str) -> String {
+pub(crate) fn escape_musicbrainz_query(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
