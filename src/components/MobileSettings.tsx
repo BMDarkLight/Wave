@@ -778,8 +778,8 @@ export default function MobileSettings({
               <span className="mset-gapless-copy">
                 <span className="mset-gapless-label">Normalize volume</span>
                 <span className="mset-gapless-hint">
-                  Boost quieter tracks to match the median loudness of your queue without
-                  clipping.
+                  Even out volume across your queue by boosting quiet tracks and turning down
+                  loud ones toward the median loudness, without clipping.
                 </span>
               </span>
             </label>

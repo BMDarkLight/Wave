@@ -707,8 +707,8 @@ public final class WaveExoPlayer {
         incomingNormalizationGain = clampNormalizationGain(gain);
     }
 
-    public static float analyzePeak(Context context, String uriString) {
-        return PeakAnalyzer.analyzePeak(context, uriString);
+    public static float[] analyzeLevels(Context context, String uriString) {
+        return PeakAnalyzer.analyzeLevels(context, uriString);
     }
 
     private static float clampNormalizationGain(float gain) {

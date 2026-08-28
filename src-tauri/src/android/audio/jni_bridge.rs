@@ -522,7 +522,8 @@ pub fn exo_set_incoming_normalization_gain(gain: f32) -> Result<(), String> {
     })
 }
 
-pub fn exo_analyze_peak(uri: &str) -> Result<f32, String> {
+/// Returns `(peak, rms)`, both 0.0–1.0.
+pub fn exo_analyze_levels(uri: &str) -> Result<(f32, f32), String> {
     ensure_initialized()?;
     android_jni::ensure_jni_thread_attached();
 
@@ -551,17 +552,28 @@ pub fn exo_analyze_peak(uri: &str) -> Result<f32, String> {
     let result = env
         .call_static_method(
             &class,
-            "analyzePeak",
-            "(Landroid/content/Context;Ljava/lang/String;)F",
+            "analyzeLevels",
+            "(Landroid/content/Context;Ljava/lang/String;)[F",
             &[JValue::Object(&activity), JValue::Object(&j_uri)],
         )
-        .map_err(|e| format!("analyzePeak: {e}"))?;
+        .map_err(|e| format!("analyzeLevels: {e}"))?;
 
     if env.exception_check().unwrap_or(false) {
         let _ = env.exception_describe();
         let _ = env.exception_clear();
-        return Err("analyzePeak threw".into());
+        return Err("analyzeLevels threw".into());
     }
 
-    result.f().map_err(|e| format!("analyzePeak result: {e}"))
+    let array_obj = result
+        .l()
+        .map_err(|e| format!("analyzeLevels result: {e}"))?;
+    if array_obj.is_null() {
+        return Err("analyzeLevels returned null".into());
+    }
+    let array = jni::objects::JFloatArray::from(array_obj);
+    let mut buf = [0f32; 2];
+    env.get_float_array_region(&array, 0, &mut buf)
+        .map_err(|e| format!("analyzeLevels array read: {e}"))?;
+
+    Ok((buf[0], buf[1]))
 }

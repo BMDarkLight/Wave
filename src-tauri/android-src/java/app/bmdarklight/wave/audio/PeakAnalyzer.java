@@ -14,16 +14,20 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * Offline peak-amplitude scan for volume normalization.
+ * Offline peak + RMS amplitude scan for volume normalization.
  *
  * Decodes the audio track via {@link MediaExtractor} + {@link MediaCodec} and
- * returns the maximum absolute sample value normalised to 0.0–1.0.
+ * returns {peak, rms}, both normalised to 0.0–1.0. Peak alone doesn't track
+ * perceived loudness (a sparse mix with one loud transient can have a high
+ * peak while sounding quiet throughout), so gain is driven by RMS; peak is
+ * kept only as a clip-safety guard on boosts.
  */
 @Keep
 public final class PeakAnalyzer {
     private static final String TAG = "PeakAnalyzer";
     private static final long TIMEOUT_US = 10_000L;
     private static final float DEFAULT_PEAK = 0.5f;
+    private static final float DEFAULT_RMS = 0.5f;
     // Hard wall-clock cap on a single scan. Peak amplitude is normally
     // established well within this window; the cap exists so a very long or
     // pathological file can't tie up the background analysis thread
@@ -33,10 +37,18 @@ public final class PeakAnalyzer {
 
     private PeakAnalyzer() {}
 
+    /** Running peak/RMS accumulator for one scan. */
+    private static final class Accumulator {
+        float peak = 0f;
+        double sumSquares = 0.0;
+        long count = 0L;
+    }
+
+    /** Returns {peak, rms}, both 0.0-1.0. */
     @Keep
-    public static float analyzePeak(Context context, String uriString) {
+    public static float[] analyzeLevels(Context context, String uriString) {
         if (context == null || uriString == null || uriString.trim().isEmpty()) {
-            return DEFAULT_PEAK;
+            return new float[] {DEFAULT_PEAK, DEFAULT_RMS};
         }
         MediaExtractor extractor = new MediaExtractor();
         MediaCodec codec = null;
@@ -50,13 +62,13 @@ public final class PeakAnalyzer {
 
             int trackIndex = selectAudioTrack(extractor);
             if (trackIndex < 0) {
-                return DEFAULT_PEAK;
+                return new float[] {DEFAULT_PEAK, DEFAULT_RMS};
             }
             extractor.selectTrack(trackIndex);
             MediaFormat format = extractor.getTrackFormat(trackIndex);
             String mime = format.getString(MediaFormat.KEY_MIME);
             if (mime == null) {
-                return DEFAULT_PEAK;
+                return new float[] {DEFAULT_PEAK, DEFAULT_RMS};
             }
 
             codec = MediaCodec.createDecoderByType(mime);
@@ -64,7 +76,7 @@ public final class PeakAnalyzer {
             codec.start();
 
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-            float peak = 0f;
+            Accumulator acc = new Accumulator();
             boolean inputDone = false;
             long deadline = System.currentTimeMillis() + MAX_SCAN_MS;
 
@@ -109,7 +121,7 @@ public final class PeakAnalyzer {
 
                 ByteBuffer outBuffer = codec.getOutputBuffer(outIndex);
                 if (outBuffer != null && info.size > 0) {
-                    peak = Math.max(peak, scanPcmPeak(outBuffer, info.offset, info.size, format));
+                    scanPcmLevels(outBuffer, info.offset, info.size, format, acc);
                 }
                 codec.releaseOutputBuffer(outIndex, false);
                 if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
@@ -117,10 +129,14 @@ public final class PeakAnalyzer {
                 }
             }
 
-            return peak > 0f ? Math.min(1f, peak) : DEFAULT_PEAK;
+            float peak = acc.peak > 0f ? Math.min(1f, acc.peak) : DEFAULT_PEAK;
+            float rms = acc.count > 0
+                    ? Math.min(1f, (float) Math.sqrt(acc.sumSquares / acc.count))
+                    : DEFAULT_RMS;
+            return new float[] {peak, rms};
         } catch (Exception e) {
-            Log.w(TAG, "Peak analysis failed for " + uriString + ": " + e.getMessage());
-            return DEFAULT_PEAK;
+            Log.w(TAG, "Level analysis failed for " + uriString + ": " + e.getMessage());
+            return new float[] {DEFAULT_PEAK, DEFAULT_RMS};
         } finally {
             if (codec != null) {
                 try {
@@ -147,7 +163,8 @@ public final class PeakAnalyzer {
         return -1;
     }
 
-    private static float scanPcmPeak(ByteBuffer buffer, int offset, int size, MediaFormat format) {
+    private static void scanPcmLevels(
+            ByteBuffer buffer, int offset, int size, MediaFormat format, Accumulator acc) {
         buffer.position(offset);
         buffer.limit(offset + size);
         buffer.order(ByteOrder.LITTLE_ENDIAN);
@@ -157,10 +174,12 @@ public final class PeakAnalyzer {
             encoding = format.getInteger(MediaFormat.KEY_PCM_ENCODING);
         }
 
-        float peak = 0f;
         if (encoding == 4) { // ENCODING_PCM_FLOAT
             while (buffer.remaining() >= 4) {
-                peak = Math.max(peak, Math.abs(buffer.getFloat()));
+                float abs = Math.abs(buffer.getFloat());
+                acc.peak = Math.max(acc.peak, abs);
+                acc.sumSquares += (double) abs * abs;
+                acc.count++;
             }
         } else {
             int sampleBytes = encoding == 3 ? 4 : 2; // 24-bit treated as 32, else 16-bit
@@ -171,10 +190,12 @@ public final class PeakAnalyzer {
                 } else {
                     sample = buffer.getShort() / 32768f;
                 }
-                peak = Math.max(peak, Math.abs(sample));
+                float abs = Math.abs(sample);
+                acc.peak = Math.max(acc.peak, abs);
+                acc.sumSquares += (double) abs * abs;
+                acc.count++;
             }
         }
-        return peak;
     }
 
     private static String normalizeUri(String uriString) {

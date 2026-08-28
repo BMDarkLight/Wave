@@ -13,7 +13,7 @@ use super::dsp::{
     set_shared_gain, shared_gain, Crossfade, CrossfadeState, EqConfig, Equalizer, SharedGain,
     SoftFade, SoftFadeState, VolumeGain, SOFT_FADE_SECS,
 };
-use super::normalization::{analyze_peak_amplitude, VolumeNormalizer};
+use super::normalization::{analyze_track_levels, VolumeNormalizer};
 use super::symphonia_source::SymphoniaSource;
 
 // ── Playback modes ────────────────────────────────────────────────────────────
@@ -634,8 +634,8 @@ impl AudioPlayer {
         let cached_gain = {
             let mut normalizer = self.normalizer.lock().unwrap_or_else(|e| e.into_inner());
             normalizer
-                .cached_peak(path)
-                .map(|peak| normalizer.register_peak(path, peak))
+                .cached_levels(path)
+                .map(|levels| normalizer.register_levels(path, levels))
         };
         if let Some(gain) = cached_gain {
             return shared_gain(gain);
@@ -645,22 +645,22 @@ impl AudioPlayer {
         cell
     }
 
-    /// Counts an already-cached peak toward the session median, for a track
+    /// Counts already-cached levels toward the session median, for a track
     /// that was only ever *peeked* (gapless sink-prefetch) and has now
     /// actually become the playing track via [`Self::adopt_prefetched`].
     ///
     /// The prefetch's gain cell is already wired into the running source, so
     /// this doesn't need to build or return a new one — it only needs the
-    /// `register_peak` side effect (median contribution), which a peek never
-    /// triggers on its own. If analysis hasn't finished caching a peak yet,
-    /// this is a no-op; the track just doesn't contribute this time.
+    /// `register_levels` side effect (median contribution), which a peek
+    /// never triggers on its own. If analysis hasn't finished caching levels
+    /// yet, this is a no-op; the track just doesn't contribute this time.
     fn register_now_playing_for_normalization(&self, path: &str) {
         if !self.volume_normalization_enabled {
             return;
         }
         let mut normalizer = self.normalizer.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(peak) = normalizer.cached_peak(path) {
-            normalizer.register_peak(path, peak);
+        if let Some(levels) = normalizer.cached_levels(path) {
+            normalizer.register_levels(path, levels);
         }
     }
 
@@ -673,9 +673,9 @@ impl AudioPlayer {
         }
         let cached_gain = {
             let normalizer = self.normalizer.lock().unwrap_or_else(|e| e.into_inner());
-            normalizer.cached_peak(path).map(|peak| {
-                let median = normalizer.median_peak().unwrap_or(peak);
-                VolumeNormalizer::compute_gain(peak, median)
+            normalizer.cached_levels(path).map(|levels| {
+                let median = normalizer.median_rms().unwrap_or(levels.rms);
+                VolumeNormalizer::compute_gain(levels.rms, median, levels.peak)
             })
         };
         if let Some(gain) = cached_gain {
@@ -695,18 +695,18 @@ impl AudioPlayer {
             return;
         }
         std::thread::spawn(move || {
-            let peak = analyze_peak_amplitude(&path).unwrap_or_else(|error| {
-                tracing::warn!("Peak analysis failed for \"{path}\": {error}");
-                0.5
+            let levels = analyze_track_levels(&path).unwrap_or_else(|error| {
+                tracing::warn!("Level analysis failed for \"{path}\": {error}");
+                super::normalization::AudioLevels { peak: 0.5, rms: 0.5 }
             });
             let gain = {
                 let mut normalizer = normalizer.lock().unwrap_or_else(|e| e.into_inner());
                 let gain = if incoming {
-                    normalizer.cache_peak(&path, peak);
-                    let median = normalizer.median_peak().unwrap_or(peak);
-                    VolumeNormalizer::compute_gain(peak, median)
+                    normalizer.cache_levels(&path, levels);
+                    let median = normalizer.median_rms().unwrap_or(levels.rms);
+                    VolumeNormalizer::compute_gain(levels.rms, median, levels.peak)
                 } else {
-                    normalizer.register_peak(&path, peak)
+                    normalizer.register_levels(&path, levels)
                 };
                 normalizer.end_analysis();
                 gain
@@ -734,8 +734,8 @@ impl AudioPlayer {
         let cached_gain = {
             let mut normalizer = self.normalizer.lock().unwrap_or_else(|e| e.into_inner());
             normalizer
-                .cached_peak(path)
-                .map(|peak| normalizer.register_peak(path, peak))
+                .cached_levels(path)
+                .map(|levels| normalizer.register_levels(path, levels))
         };
         if let Some(gain) = cached_gain {
             let _ = crate::android::audio::exo_set_track_normalization_gain(gain);
@@ -760,18 +760,18 @@ impl AudioPlayer {
         }
         let generation = self.normalization_generation.clone();
         std::thread::spawn(move || {
-            let peak = analyze_peak_amplitude(&path).unwrap_or_else(|error| {
-                tracing::warn!("Peak analysis failed for \"{path}\": {error}");
-                0.5
+            let levels = analyze_track_levels(&path).unwrap_or_else(|error| {
+                tracing::warn!("Level analysis failed for \"{path}\": {error}");
+                super::normalization::AudioLevels { peak: 0.5, rms: 0.5 }
             });
             let gain = {
                 let mut normalizer = normalizer.lock().unwrap_or_else(|e| e.into_inner());
                 let gain = if incoming {
-                    normalizer.cache_peak(&path, peak);
-                    let median = normalizer.median_peak().unwrap_or(peak);
-                    VolumeNormalizer::compute_gain(peak, median)
+                    normalizer.cache_levels(&path, levels);
+                    let median = normalizer.median_rms().unwrap_or(levels.rms);
+                    VolumeNormalizer::compute_gain(levels.rms, median, levels.peak)
                 } else {
-                    normalizer.register_peak(&path, peak)
+                    normalizer.register_levels(&path, levels)
                 };
                 normalizer.end_analysis();
                 gain
@@ -801,9 +801,9 @@ impl AudioPlayer {
         };
         let cached_gain = {
             let normalizer = self.normalizer.lock().unwrap_or_else(|e| e.into_inner());
-            normalizer.cached_peak(&next).map(|peak| {
-                let median = normalizer.median_peak().unwrap_or(peak);
-                VolumeNormalizer::compute_gain(peak, median)
+            normalizer.cached_levels(&next).map(|levels| {
+                let median = normalizer.median_rms().unwrap_or(levels.rms);
+                VolumeNormalizer::compute_gain(levels.rms, median, levels.peak)
             })
         };
         if let Some(gain) = cached_gain {

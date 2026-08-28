@@ -32,7 +32,7 @@
 -keep class app.bmdarklight.wave.audio.PeakAnalyzer { *; }
 -keepclassmembers class app.bmdarklight.wave.audio.WaveExoPlayer {
     public static app.bmdarklight.wave.audio.WaveExoPlayer getOrCreate(android.content.Context);
-    public static float analyzePeak(android.content.Context, java.lang.String);
+    public static float[] analyzeLevels(android.content.Context, java.lang.String);
     public static boolean isPlayingActive();
     public void playUri(java.lang.String);
     public void playMediaItems(java.lang.String[], int);
