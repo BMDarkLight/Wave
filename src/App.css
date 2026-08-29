@@ -1354,6 +1354,28 @@ input[type="search"]::-webkit-search-decoration {
   font-variant-numeric: tabular-nums;
 }
 
+.mset-source-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mset-source-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.24);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mset-source-input:focus {
+  outline: none;
+  border-color: rgba(90, 160, 255, 0.5);
+}
+
 /* ── Tier 3: remote source results ──────────────────────────────────────── */
 
 /* Sits below the library results, so it reads as the next rung down rather

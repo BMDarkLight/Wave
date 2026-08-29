@@ -1342,6 +1342,33 @@ pub async fn set_volume_normalization_enabled(
 }
 
 #[tauri::command]
+pub async fn get_jamendo_client_id(
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<String, String> {
+    let settings = lock_settings(&settings_state)?;
+    Ok(settings.jamendo_client_id.clone().unwrap_or_default())
+}
+
+/// Store the free Jamendo API client id. Blank clears it, which makes the
+/// Jamendo provider report itself as needing setup rather than failing.
+#[tauri::command]
+pub async fn set_jamendo_client_id(
+    client_id: String,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let trimmed = client_id.trim();
+    let mut settings = lock_settings(&settings_state)?;
+    settings.jamendo_client_id = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    };
+    settings.save(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn get_auto_lyrics_download(
     settings_state: tauri::State<'_, AppSettingsState>,
 ) -> Result<bool, String> {

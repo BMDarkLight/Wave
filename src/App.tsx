@@ -6,6 +6,9 @@ import { BiX, BiFolderOpen, BiMenu, BiSearch } from "react-icons/bi";
 import type { SourceTrack } from "./utils/player";
 import {
   addTrackToPlaylistById,
+  getJamendoClientId,
+  listenToDownloadFallback,
+  setJamendoClientId as setJamendoClientIdCmd,
   clearAudioImports,
   createPlaylist,
   resetApp,
@@ -102,6 +105,7 @@ import "./touch-hover.css";
 function App() {
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [jamendoClientId, setJamendoClientId] = useState("");
   const [crashReport, setCrashReport] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingPlaylist, setIsLoadingPlaylist] = useState(true);
@@ -1381,6 +1385,33 @@ function App() {
   const isCurrentTrack = (track: Track) =>
     track.path === playbackState.current_path;
 
+  useEffect(() => {
+    void getJamendoClientId()
+      .then(setJamendoClientId)
+      .catch(() => {});
+  }, []);
+
+  const handleJamendoClientIdChange = useCallback((clientId: string) => {
+    setJamendoClientId(clientId);
+    void setJamendoClientIdCmd(clientId).catch((e) =>
+      setError(e instanceof Error ? e.message : String(e)),
+    );
+  }, []);
+
+  // A download that fell back to another folder must say so — silently
+  // saving somewhere the user didn't choose is worse than not saving.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listenToDownloadFallback((reason) => setError(reason))
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   /** Play a remote result, streaming it first unless the user already owns it. */
   const handleSourcePlay = useCallback(
     async (track: SourceTrack) => {
@@ -1862,6 +1893,8 @@ function App() {
           onVolumeNormalizationChange={(enabled) =>
             void handleVolumeNormalizationChange(enabled)
           }
+          jamendoClientId={jamendoClientId}
+          onJamendoClientIdChange={handleJamendoClientIdChange}
           currentOutputDevice={playbackState.output_device_name}
           onSelectOutputDevice={handleSelectOutputDeviceSettings}
           onResetApp={handleResetApp}
@@ -2221,6 +2254,8 @@ function App() {
           onVolumeNormalizationChange={(enabled) =>
             void handleVolumeNormalizationChange(enabled)
           }
+          jamendoClientId={jamendoClientId}
+          onJamendoClientIdChange={handleJamendoClientIdChange}
           currentOutputDevice={playbackState.output_device_name}
           onSelectOutputDevice={handleSelectOutputDeviceSettings}
           onResetApp={handleResetApp}

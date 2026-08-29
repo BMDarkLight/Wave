@@ -232,6 +232,8 @@ pub fn run() {
             commands::search_sources,
             commands::stream_source_track,
             commands::download_source_track,
+            commands::get_jamendo_client_id,
+            commands::set_jamendo_client_id,
             commands::add_track_to_playlist_by_id,
             commands::remove_track_from_playlist_by_id,
             commands::remove_track_from_library,

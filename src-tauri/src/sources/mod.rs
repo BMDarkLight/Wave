@@ -324,3 +324,78 @@ mod tests {
         assert_eq!(duration_field(&v, "d"), None);
     }
 }
+
+/// Live network checks. Ignored by default so the normal suite stays offline
+/// and deterministic; run with `cargo test -- --ignored --nocapture` to verify
+/// a provider's real API still matches its parser.
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "hits the network"]
+    fn deezer_search_resolve_and_fetch_round_trip() {
+        let client = source_client();
+        let provider = deezer::Deezer;
+
+        let tracks = provider
+            .search(client, "daft punk", 3)
+            .expect("Deezer search failed");
+        assert!(!tracks.is_empty(), "Deezer returned no parseable results");
+
+        let track = &tracks[0];
+        assert!(!track.id.is_empty());
+        assert!(!track.title.is_empty());
+        assert!(!track.artist.is_empty());
+        assert!(!track.is_full_length, "Deezer must never claim full length");
+        assert!(!track.downloadable, "Deezer previews are not downloadable");
+
+        let url = provider
+            .resolve_audio(client, track)
+            .expect("Deezer preview URL missing");
+
+        let dest = std::env::temp_dir().join(format!("wave-live-{}.mp3", track.id));
+        let _ = std::fs::remove_file(&dest);
+        let written = cache::fetch_to(client, &url, &dest).expect("preview fetch failed");
+
+        assert!(written > 10_000, "preview suspiciously small: {written} bytes");
+        let header = std::fs::read(&dest).expect("cached file unreadable");
+        // ID3 tag or a raw MPEG frame sync — either way, decodable audio.
+        let is_audio = header.starts_with(b"ID3") || (header[0] == 0xFF && header[1] & 0xE0 == 0xE0);
+        assert!(is_audio, "cached bytes are not MP3: {:?}", &header[..4]);
+
+        // The temp `.part` file must never survive a successful fetch.
+        assert!(!dest.with_extension("mp3.part").exists());
+
+        println!(
+            "OK  {} — {} ({} bytes cached to {})",
+            track.artist,
+            track.title,
+            written,
+            dest.display()
+        );
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[test]
+    #[ignore = "hits the network"]
+    fn archive_search_resolves_to_a_real_audio_url() {
+        let client = source_client();
+        let provider = archive::InternetArchive;
+
+        let tracks = provider
+            .search(client, "grateful dead 1977", 3)
+            .expect("Archive search failed");
+        assert!(!tracks.is_empty(), "Archive returned no parseable results");
+
+        // Search is item-level and deliberately defers audio resolution.
+        assert!(tracks.iter().all(|t| t.audio_url.is_none()));
+
+        let resolved = tracks
+            .iter()
+            .find_map(|t| provider.resolve_audio(client, t).ok())
+            .expect("no Archive item resolved to audio");
+        assert!(resolved.starts_with("https://archive.org/download/"));
+        println!("OK  resolved {resolved}");
+    }
+}

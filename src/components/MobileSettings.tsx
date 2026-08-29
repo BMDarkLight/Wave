@@ -7,7 +7,7 @@ import {
   type InputHTMLAttributes,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { BiArrowBack } from "react-icons/bi";
+import { BiArrowBack, BiSearch } from "react-icons/bi";
 import {
   BiFolderOpen,
   BiFolderMinus,
@@ -82,7 +82,10 @@ function ScrollSafeRange({
   onValueChange,
   className,
   ...rest
-}: Omit<InputHTMLAttributes<HTMLInputElement>, "onChange" | "type" | "value"> & {
+}: Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  "onChange" | "type" | "value"
+> & {
   value: number;
   onValueChange: (value: number) => void;
 }) {
@@ -124,7 +127,9 @@ function ScrollSafeRange({
     armTimerRef.current = setTimeout(() => {
       const scrollNow = scrollParentOf(inputRef.current);
       if (!startRef.current) return;
-      if (Math.abs((scrollNow?.scrollTop ?? 0) - startRef.current.scrollTop) > 2) {
+      if (
+        Math.abs((scrollNow?.scrollTop ?? 0) - startRef.current.scrollTop) > 2
+      ) {
         return;
       }
       armedRef.current = true;
@@ -198,6 +203,8 @@ interface MobileSettingsProps {
   onGaplessChange: (enabled: boolean) => void;
   volumeNormalizationEnabled: boolean;
   onVolumeNormalizationChange: (enabled: boolean) => void;
+  jamendoClientId: string;
+  onJamendoClientIdChange: (clientId: string) => void;
   currentOutputDevice: string;
   onSelectOutputDevice: (name: string) => Promise<void>;
   onResetApp: () => Promise<void>;
@@ -233,6 +240,8 @@ export default function MobileSettings({
   onGaplessChange,
   volumeNormalizationEnabled,
   onVolumeNormalizationChange,
+  jamendoClientId,
+  onJamendoClientIdChange,
   currentOutputDevice,
   onSelectOutputDevice,
   onResetApp,
@@ -249,7 +258,9 @@ export default function MobileSettings({
   const [lyricsStatus, setLyricsStatus] = useState<string | null>(null);
 
   const refreshMediaFolders = () => {
-    listMediaFolders().then(setMediaFolders).catch(() => {});
+    listMediaFolders()
+      .then(setMediaFolders)
+      .catch(() => {});
   };
 
   const refreshListenStats = () => {
@@ -265,7 +276,9 @@ export default function MobileSettings({
       // Android only exposes ExoPlayer (system default) — hide the section.
       if (await isAndroid()) return;
       setShowAudioOutput(true);
-      listOutputDevices().then(setOutputDevices).catch(() => {});
+      listOutputDevices()
+        .then(setOutputDevices)
+        .catch(() => {});
     })();
   }, []);
 
@@ -341,7 +354,8 @@ export default function MobileSettings({
     const priority = [LIBRARY_PLAYLIST_NAME, "Favorites"];
     const ai = priority.indexOf(a.name);
     const bi = priority.indexOf(b.name);
-    if (ai !== -1 || bi !== -1) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    if (ai !== -1 || bi !== -1)
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
     return a.name.localeCompare(b.name);
   });
 
@@ -373,82 +387,82 @@ export default function MobileSettings({
 
       <div className="mset-scroll">
         {!embedded && (
-        <section className="mset-section">
-          <div className="mset-section-header">
-            <h2>Media Source Folders</h2>
-            <div className="mset-section-header-actions">
-              <button
-                className="mset-icon-btn"
-                onClick={() => void handleAddExtraSource()}
-                disabled={addingSource || isScanningFolder}
-                type="button"
-                title="Add media source"
-              >
-                <BiFolderPlus />
-              </button>
-            </div>
-          </div>
-          <div className="mset-card">
-            <div className="mset-row">
-              <div className="mset-row-text">
-                <span className="mset-row-label">Library folder</span>
-                <span className="mset-row-value">
-                  {libraryPlaylist?.sync_folder
-                    ? getFileName(libraryPlaylist.sync_folder)
-                    : "Not set"}
-                </span>
-              </div>
-              <div className="mset-row-actions">
-                {libraryPlaylist?.sync_folder && (
-                  <button
-                    className="btn-ghost btn-sm"
-                    onClick={() =>
-                      libraryPlaylist && onSyncPlaylist(libraryPlaylist.id)
-                    }
-                    disabled={isScanningFolder}
-                    type="button"
-                  >
-                    <BiSync /> Sync
-                  </button>
-                )}
+          <section className="mset-section">
+            <div className="mset-section-header">
+              <h2>Media Source Folders</h2>
+              <div className="mset-section-header-actions">
                 <button
-                  className="btn-primary btn-sm"
-                  onClick={() => void handleAddSource()}
+                  className="mset-icon-btn"
+                  onClick={() => void handleAddExtraSource()}
                   disabled={addingSource || isScanningFolder}
                   type="button"
+                  title="Add media source"
                 >
-                  <BiFolderOpen />{" "}
-                  {libraryPlaylist?.sync_folder ? "Change" : "Choose"}
+                  <BiFolderPlus />
                 </button>
               </div>
             </div>
-          </div>
-
-          {mediaFolders.length > 0 && (
-            <div className="mset-card mset-folder-list">
-              <p className="mset-hint">
-                Folders you've added as sources. Removing one just forgets
-                it — your music stays where it is.
-              </p>
-              {mediaFolders.map((folder) => (
-                <div className="mset-row mset-folder-row" key={folder}>
-                  <span className="mset-row-value" title={folder}>
-                    {getFileName(folder)}
+            <div className="mset-card">
+              <div className="mset-row">
+                <div className="mset-row-text">
+                  <span className="mset-row-label">Library folder</span>
+                  <span className="mset-row-value">
+                    {libraryPlaylist?.sync_folder
+                      ? getFileName(libraryPlaylist.sync_folder)
+                      : "Not set"}
                   </span>
+                </div>
+                <div className="mset-row-actions">
+                  {libraryPlaylist?.sync_folder && (
+                    <button
+                      className="btn-ghost btn-sm"
+                      onClick={() =>
+                        libraryPlaylist && onSyncPlaylist(libraryPlaylist.id)
+                      }
+                      disabled={isScanningFolder}
+                      type="button"
+                    >
+                      <BiSync /> Sync
+                    </button>
+                  )}
                   <button
-                    className="mset-icon-btn"
-                    onClick={() => void handleRemoveFolder(folder)}
+                    className="btn-primary btn-sm"
+                    onClick={() => void handleAddSource()}
+                    disabled={addingSource || isScanningFolder}
                     type="button"
-                    title="Forget this folder"
-                    aria-label="Forget this folder"
                   >
-                    <BiFolderMinus />
+                    <BiFolderOpen />{" "}
+                    {libraryPlaylist?.sync_folder ? "Change" : "Choose"}
                   </button>
                 </div>
-              ))}
+              </div>
             </div>
-          )}
-        </section>
+
+            {mediaFolders.length > 0 && (
+              <div className="mset-card mset-folder-list">
+                <p className="mset-hint">
+                  Folders you've added as sources. Removing one just forgets it
+                  — your music stays where it is.
+                </p>
+                {mediaFolders.map((folder) => (
+                  <div className="mset-row mset-folder-row" key={folder}>
+                    <span className="mset-row-value" title={folder}>
+                      {getFileName(folder)}
+                    </span>
+                    <button
+                      className="mset-icon-btn"
+                      onClick={() => void handleRemoveFolder(folder)}
+                      type="button"
+                      title="Forget this folder"
+                      aria-label="Forget this folder"
+                    >
+                      <BiFolderMinus />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         )}
 
         <section className="mset-section">
@@ -475,7 +489,8 @@ export default function MobileSettings({
           </div>
           <div className="mset-card mset-playlist-list">
             {orderedPlaylists.map((pl) => {
-              const locked = isLibraryPlaylistName(pl.name) || pl.name === "Favorites";
+              const locked =
+                isLibraryPlaylistName(pl.name) || pl.name === "Favorites";
               return (
                 <div className="mset-row mset-playlist-row" key={pl.id}>
                   <div className="mset-row-text">
@@ -582,7 +597,9 @@ export default function MobileSettings({
                 </button>
               </div>
             </div>
-            {lyricsStatus && <p className="mset-hint mset-lyrics-status">{lyricsStatus}</p>}
+            {lyricsStatus && (
+              <p className="mset-hint mset-lyrics-status">{lyricsStatus}</p>
+            )}
           </div>
         </section>
 
@@ -623,10 +640,7 @@ export default function MobileSettings({
                     <h3 className="mset-listen-group-title">Top songs</h3>
                     <ul className="mset-listen-rank">
                       {listenStats.top_tracks.map((track, index) => (
-                        <li
-                          key={track.path}
-                          className="mset-listen-rank-row"
-                        >
+                        <li key={track.path} className="mset-listen-rank-row">
                           <span className="mset-listen-rank-index">
                             {index + 1}
                           </span>
@@ -718,7 +732,11 @@ export default function MobileSettings({
                 </div>
               ))}
             </div>
-            <button className="btn-ghost btn-sm" onClick={onEqReset} type="button">
+            <button
+              className="btn-ghost btn-sm"
+              onClick={onEqReset}
+              type="button"
+            >
               Reset EQ
             </button>
           </div>
@@ -740,7 +758,9 @@ export default function MobileSettings({
                   aria-label="Crossfade duration in seconds"
                 />
                 <span className="mset-crossfade-value">
-                  {crossfadeDuration === 0 ? "Off" : `${crossfadeDuration.toFixed(1)}s`}
+                  {crossfadeDuration === 0
+                    ? "Off"
+                    : `${crossfadeDuration.toFixed(1)}s`}
                 </span>
               </div>
               <p className="mset-hint mset-crossfade-hint">
@@ -773,14 +793,45 @@ export default function MobileSettings({
               <input
                 type="checkbox"
                 checked={volumeNormalizationEnabled}
-                onChange={(event) => onVolumeNormalizationChange(event.target.checked)}
+                onChange={(event) =>
+                  onVolumeNormalizationChange(event.target.checked)
+                }
               />
               <span className="mset-gapless-copy">
                 <span className="mset-gapless-label">Normalize volume</span>
                 <span className="mset-gapless-hint">
-                  Even out volume across your queue by boosting quiet tracks and turning down
-                  loud ones toward the median loudness, without clipping.
+                  Even out volume across your queue by boosting quiet tracks and
+                  turning down loud ones toward the median loudness, without
+                  clipping.
                 </span>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <section className="mset-section">
+          <h2>
+            <BiSearch /> Music sources
+          </h2>
+          <div className="mset-card mset-playback-card">
+            <label className="mset-source-row">
+              <span className="mset-gapless-label">Jamendo client ID</span>
+              <input
+                type="text"
+                className="mset-source-input"
+                value={jamendoClientId}
+                placeholder="Paste your free Jamendo client ID"
+                spellCheck={false}
+                autoCapitalize="none"
+                autoCorrect="off"
+                onChange={(event) =>
+                  onJamendoClientIdChange(event.target.value)
+                }
+              />
+              <span className="mset-gapless-hint">
+                Jamendo hosts full-length Creative Commons tracks you can stream
+                and save. It needs a free client ID from developer.jamendo.com.
+                Deezer and Internet Archive work without any setup.
               </span>
             </label>
           </div>

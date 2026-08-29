@@ -555,6 +555,32 @@ export const streamSourceTrack = (track: SourceTrack): Promise<Track> => {
   return safeInvoke<Track>("stream_source_track", { track });
 };
 
+/**
+ * Fires when a download couldn't go to the intended folder and landed in
+ * Wave's own downloads folder instead — on Android that means the music
+ * folder's grant is read-only. The user needs to know where the file went.
+ */
+export const listenToDownloadFallback = async (
+  onFallback: (reason: string) => void,
+): Promise<() => void> => {
+  await tauriInitialized;
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await listen("source-download-fallback", (e) => {
+    onFallback(String(e.payload ?? ""));
+  });
+  return () => {
+    unlisten();
+  };
+};
+
+/** Free Jamendo API client id, or "" when unset. */
+export const getJamendoClientId = (): Promise<string> =>
+  safeInvoke<string>("get_jamendo_client_id");
+
+/** Store the Jamendo client id; blank clears it. */
+export const setJamendoClientId = (clientId: string): Promise<void> =>
+  safeInvoke("set_jamendo_client_id", { clientId });
+
 /** Keep a streamed track: copy it to the download folder and index it. */
 export const downloadSourceTrack = (track: SourceTrack): Promise<Track> => {
   return safeInvoke<Track>("download_source_track", { track });
