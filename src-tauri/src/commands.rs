@@ -533,6 +533,8 @@ fn placeholder_track(path: &str) -> Track {
         file_size: 0,
         modified_at: 0,
         indexed_at: 0,
+        source_provider: None,
+        source_state: None,
         is_saf_uri: false,
     }
 }
@@ -3102,4 +3104,287 @@ fn run_artist_enrichment_job(app: &tauri::AppHandle) {
             tracing::warn!("Failed to save artist enrichment for {artist_name}: {e}");
         }
     }
+}
+
+// ── Remote song sourcing ──────────────────────────────────────────────────────
+//
+// The third search tier. Every command here does blocking network work, so each
+// runs on `spawn_blocking` — never on the async command path. Failures degrade:
+// a provider that is down yields an errored section, not a failed search.
+
+use crate::sources::{self, cache as source_cache, download as source_download, SourceTrack};
+
+/// Providers currently configured, read from settings.
+fn source_config(app: &tauri::AppHandle) -> sources::SourceConfig {
+    let jamendo_client_id = app
+        .try_state::<AppSettingsState>()
+        .and_then(|state| state.0.lock().ok().map(|s| s.jamendo_client_id.clone()))
+        .flatten();
+    sources::SourceConfig { jamendo_client_id }
+}
+
+/// Tier 3: search every remote provider concurrently.
+///
+/// Results are annotated with the local path of any track the user already
+/// owns, so the UI can mark a hit as "in your library" and play the local copy
+/// rather than re-fetching something already on disk.
+#[tauri::command]
+pub async fn search_sources(
+    query: String,
+    limit: Option<u32>,
+    app: tauri::AppHandle,
+    library: tauri::State<'_, LibraryState>,
+) -> Result<Vec<sources::ProviderResults>, String> {
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let capped = limit.unwrap_or(20).min(50) as usize;
+    let config = source_config(&app);
+
+    let mut results = tokio::task::spawn_blocking(move || sources::search_all(&config, &query, capped))
+        .await
+        .map_err(|e| format!("Source search failed: {e}"))?;
+
+    // Annotate against the library while we hold the lock exactly once.
+    {
+        let library = lock_library(&library)?;
+        for section in &mut results {
+            for track in &mut section.tracks {
+                track.already_in_library = library
+                    .find_local_match(&track.title, &track.artist)
+                    .unwrap_or(None);
+            }
+        }
+    }
+    Ok(results)
+}
+
+/// Build the library row for a freshly fetched remote file.
+fn source_track_to_track(
+    source: &SourceTrack,
+    path: &str,
+    album_art_id: Option<String>,
+    file_size: i64,
+) -> Track {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or_default();
+    Track {
+        id: String::new(),
+        path: path.to_string(),
+        name: Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| source.title.clone()),
+        title: source.title.clone(),
+        artist: source.artist.clone(),
+        album: source.album.clone().unwrap_or_else(|| "Singles".to_string()),
+        album_artist: None,
+        genre: None,
+        year: None,
+        track_number: None,
+        disc_number: None,
+        format: source.extension(),
+        duration_seconds: source.duration_seconds,
+        sample_rate: None,
+        channels: None,
+        bit_depth: None,
+        lyrics: None,
+        lyrics_source: None,
+        cover_art_data_url: None,
+        cover_art_mime: album_art_id.as_ref().map(|_| "image/jpeg".to_string()),
+        cover_art_source: Some(source.provider.clone()),
+        album_art_id,
+        fingerprint_sha256: None,
+        acoustid_fingerprint: None,
+        musicbrainz_recording_id: None,
+        file_size,
+        modified_at: now,
+        indexed_at: now,
+        is_saf_uri: false,
+        source_provider: Some(source.provider.clone()),
+        source_state: None,
+    }
+}
+
+/// Fetch provider artwork into the shared album-art store. Best-effort: a
+/// missing or broken image costs the cover, never the track.
+fn fetch_source_artwork(app: &tauri::AppHandle, source: &SourceTrack) -> Option<String> {
+    let url = source.artwork_url.as_deref()?;
+    let bytes = sources::source_client()
+        .get(url)
+        .send()
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .bytes()
+        .ok()?;
+    let saved = crate::cover_art::save_album_art_thumb(
+        app,
+        crate::cover_art::ExtractedCoverArt {
+            data: bytes.to_vec(),
+            mime: "image/jpeg".to_string(),
+        },
+    )
+    .ok()?;
+    Some(saved.id)
+}
+
+/// Trim the stream cache back under its configured cap.
+///
+/// `protected` is the currently playing track plus the live queue — deleting
+/// one of those would pull a file out from under an open decoder.
+fn evict_source_cache(app: &tauri::AppHandle, library: &Library, protected: Vec<String>) {
+    let cap_mb = app
+        .try_state::<AppSettingsState>()
+        .and_then(|state| state.0.lock().ok().map(|s| s.source_cache_limit_mb))
+        .unwrap_or(512);
+    let Ok(candidates) = library.cached_source_tracks() else {
+        return;
+    };
+    let sizes = |path: &str| std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let doomed = source_cache::plan_eviction(
+        &candidates,
+        &sizes,
+        cap_mb.saturating_mul(1024 * 1024),
+        &protected,
+    );
+    for candidate in doomed {
+        let _ = library.forget_cached_source_track(&candidate.track_id);
+    }
+}
+
+/// Paths that must survive eviction: what is playing, and what is queued.
+fn protected_cache_paths(player: &tauri::State<'_, PlayerState>) -> Vec<String> {
+    let guard = lock_player_state(player);
+    match guard.as_ref() {
+        Some(player) => player.queue.tracks().to_vec(),
+        None => Vec::new(),
+    }
+}
+
+/// Stream a remote result: fetch it into the cache and register it as a
+/// playable library row. Re-streaming something already cached reuses the file.
+#[tauri::command]
+pub async fn stream_source_track(
+    track: SourceTrack,
+    app: tauri::AppHandle,
+    library: tauri::State<'_, LibraryState>,
+    player: tauri::State<'_, PlayerState>,
+) -> Result<Track, String> {
+    // Reuse an existing row when its file is still on disk.
+    {
+        let library = lock_library(&library)?;
+        if let Some(existing) = library.find_source_track(&track.provider, &track.id)? {
+            if Path::new(&existing.path).is_file() {
+                return Ok(existing);
+            }
+        }
+    }
+
+    let config = source_config(&app);
+    let app_for_fetch = app.clone();
+    let source = track.clone();
+    let (path, size, art_id, audio_url) = tokio::task::spawn_blocking(move || {
+        let provider = sources::provider_by_id(&config, &source.provider)
+            .ok_or_else(|| format!("Unknown source: {}", source.provider))?;
+        let client = sources::source_client();
+        let audio_url = provider
+            .resolve_audio(client, &source)
+            .map_err(|e| e.to_string())?;
+
+        let mut resolved = source.clone();
+        resolved.audio_url = Some(audio_url.clone());
+        let dest = source_cache::cached_path(&source.provider, &source.id, &resolved.extension());
+        let size = source_cache::fetch_to(client, &audio_url, &dest).map_err(|e| e.to_string())?;
+        let art_id = fetch_source_artwork(&app_for_fetch, &source);
+        Ok::<_, String>((dest, size as i64, art_id, audio_url))
+    })
+    .await
+    .map_err(|e| format!("Stream failed: {e}"))??;
+
+    let path_string = path.to_string_lossy().into_owned();
+    let row = source_track_to_track(&track, &path_string, art_id, size);
+    let protected = protected_cache_paths(&player);
+
+    let library = lock_library(&library)?;
+    let stored =
+        library.upsert_cached_source_track(&row, &track.provider, &track.id, &audio_url)?;
+    // Never evict what we just fetched, nor anything currently in play.
+    let mut protected = protected;
+    protected.push(stored.path.clone());
+    evict_source_cache(&app, &library, protected);
+    Ok(stored)
+}
+
+/// Keep a remote track: copy it into the download destination and promote its
+/// row into the library proper.
+///
+/// Copies rather than moves — see `sources::download` for why moving would
+/// break a track that is playing from the cache on Windows.
+#[tauri::command]
+pub async fn download_source_track(
+    track: SourceTrack,
+    app: tauri::AppHandle,
+    library: tauri::State<'_, LibraryState>,
+    player: tauri::State<'_, PlayerState>,
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<Track, String> {
+    if !track.downloadable {
+        return Err(format!(
+            "{} does not allow saving this track — it can only be streamed",
+            track.provider
+        ));
+    }
+
+    // Make sure the bytes exist locally, reusing the cached copy when present.
+    let cached = stream_source_track(track.clone(), app.clone(), library.clone(), player.clone()).await?;
+
+    let media_folders = lock_settings(&settings_state)?.media_folders.clone();
+    let destination = source_download::choose_destination(
+        &track,
+        &media_folders,
+        &|root| {
+            std::fs::create_dir_all(root).is_ok()
+                && !std::fs::metadata(root)
+                    .map(|m| m.permissions().readonly())
+                    .unwrap_or(true)
+        },
+        &|path| path.exists(),
+    );
+
+    let source_path = cached.path.clone();
+    let dest_path = destination.path.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Some(parent) = dest_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Cannot create download folder: {e}"))?;
+        }
+        std::fs::copy(&source_path, &dest_path).map_err(|e| format!("Download failed: {e}"))?;
+        Ok::<_, String>(())
+    })
+    .await
+    .map_err(|e| format!("Download failed: {e}"))??;
+
+    // Register the destination so the file is browsable without a rescan.
+    {
+        let mut settings = lock_settings(&settings_state)?;
+        let folder = destination.media_folder.to_string_lossy().into_owned();
+        if !settings.media_folders.contains(&folder) {
+            settings.media_folders.push(folder);
+            settings.save(&app)?;
+        }
+    }
+
+    let stored = {
+        let library = lock_library(&library)?;
+        library.promote_source_track(&cached.id, &destination.path.to_string_lossy())?
+    };
+
+    if let Some(reason) = destination.fallback_reason {
+        let _ = app.emit("source-download-fallback", reason);
+    }
+    Ok(stored)
 }

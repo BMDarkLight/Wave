@@ -20,7 +20,8 @@ pub(crate) const TRACK_SELECT_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.
                         NULL AS lyrics, NULL AS lyrics_source,
                         aa.thumb_path, COALESCE(aa.mime, t.cover_art_mime), t.cover_art_source,
                         t.fingerprint_sha256, NULL AS acoustid_fingerprint, t.musicbrainz_recording_id,
-                        t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri, t.album_art_id";
+                        t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri, t.album_art_id,
+                        t.source_provider, t.source_state";
 
 /// Full track row including lyrics (lyrics panel / detail).
 pub(crate) const TRACK_DETAIL_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.artist, t.album, t.album_artist, t.genre,
@@ -28,9 +29,17 @@ pub(crate) const TRACK_DETAIL_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.
                         t.sample_rate, t.channels, t.bit_depth, t.lyrics, t.lyrics_source,
                         aa.thumb_path, COALESCE(aa.mime, t.cover_art_mime), t.cover_art_source,
                         t.fingerprint_sha256, t.acoustid_fingerprint, t.musicbrainz_recording_id,
-                        t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri, t.album_art_id";
+                        t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri, t.album_art_id,
+                        t.source_provider, t.source_state";
 
 pub(crate) const TRACK_FROM: &str = "tracks t LEFT JOIN album_art aa ON aa.id = t.album_art_id";
+
+/// Browse/aggregate FROM clause. Reads the `library_tracks` view so
+/// stream-only rows stay out of album, artist, and count surfaces. Use
+/// [`TRACK_FROM`] instead whenever a row is being looked up by id or path —
+/// playback must still be able to resolve a cached track.
+pub(crate) const LIBRARY_TRACK_FROM: &str =
+    "library_tracks t LEFT JOIN album_art aa ON aa.id = t.album_art_id";
 
 /// Cached artist enrichment (genre tags / similar artists) is reused for this
 /// long before a background refresh is queued again.
@@ -352,6 +361,34 @@ impl Library {
         ensure_track_column(&connection, "musicbrainz_recording_id", "TEXT")?;
         ensure_track_column(&connection, "is_saf_uri", "INTEGER NOT NULL DEFAULT 0")?;
         ensure_track_column(&connection, "album_art_id", "TEXT")?;
+        // Remote-source provenance. NULL on every locally indexed file, so
+        // existing libraries migrate to "all local" with no backfill.
+        ensure_track_column(&connection, "source_provider", "TEXT")?;
+        ensure_track_column(&connection, "source_id", "TEXT")?;
+        ensure_track_column(&connection, "source_url", "TEXT")?;
+        ensure_track_column(&connection, "source_state", "TEXT")?;
+        ensure_track_column(&connection, "source_fetched_at", "INTEGER")?;
+
+        // `library_tracks` is the browse-visible subset: local files plus
+        // downloads the user chose to keep. Rows that exist only because
+        // something was streamed (`source_state = 'cached'`) are playable and
+        // queueable but must never surface in browse, counts, or search — see
+        // `LIBRARY_TRACK_FROM`.
+        connection
+            .execute_batch(
+                "
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_source
+                    ON tracks(source_provider, source_id)
+                    WHERE source_provider IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_tracks_source_state
+                    ON tracks(source_state, source_fetched_at);
+                DROP VIEW IF EXISTS library_tracks;
+                CREATE VIEW library_tracks AS
+                    SELECT * FROM tracks
+                    WHERE source_state IS NULL OR source_state = 'downloaded';
+                ",
+            )
+            .map_err(|error| format!("Failed to initialize source schema: {error}"))?;
         ensure_playlist_column(&connection, "sync_folder", "TEXT")?;
         ensure_table_column(&connection, "artist_similar", "similar_mbid", "TEXT")?;
         ensure_table_column(&connection, "artist_similar", "cover_release_group_mbid", "TEXT")?;
@@ -1695,7 +1732,7 @@ impl Library {
     ) -> Result<Vec<Track>, String> {
         let sql = format!(
             "SELECT {TRACK_SELECT_COLUMNS}
-             FROM {TRACK_FROM}
+             FROM {LIBRARY_TRACK_FROM}
              WHERE t.{column} = ?1
              ORDER BY t.album, COALESCE(t.disc_number, 1), COALESCE(t.track_number, 0)"
         );
@@ -1730,7 +1767,7 @@ impl Library {
                     MIN(aa.thumb_path) AS cover_art_data_url,
                     MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
                     MIN(t.path) AS cover_track_path
-                 FROM {TRACK_FROM}
+                 FROM {LIBRARY_TRACK_FROM}
                  GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
                  ORDER BY album_artist, t.album"
                 ),
@@ -1754,7 +1791,7 @@ impl Library {
                     t.artist,
                     COUNT(*) AS track_count,
                     COUNT(DISTINCT t.album) AS album_count
-                 FROM tracks t
+                 FROM library_tracks t
                  GROUP BY t.artist
                  ORDER BY t.artist",
             )
@@ -1794,7 +1831,7 @@ impl Library {
         let sql = if album_artist.is_some() {
             format!(
                 "SELECT {TRACK_SELECT_COLUMNS}
-                 FROM {TRACK_FROM}
+                 FROM {LIBRARY_TRACK_FROM}
                  WHERE t.album = ?1
                    AND COALESCE(NULLIF(t.album_artist, ''), t.artist) = ?2
                  ORDER BY COALESCE(t.disc_number, 1), COALESCE(t.track_number, 0)"
@@ -1802,7 +1839,7 @@ impl Library {
         } else {
             format!(
                 "SELECT {TRACK_SELECT_COLUMNS}
-                 FROM {TRACK_FROM}
+                 FROM {LIBRARY_TRACK_FROM}
                  WHERE t.album = ?1
                  ORDER BY COALESCE(t.disc_number, 1), COALESCE(t.track_number, 0)"
             )
@@ -1862,7 +1899,7 @@ impl Library {
                     MIN(aa.thumb_path) AS cover_art_data_url,
                     MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
                     MIN(t.path) AS cover_track_path
-                 FROM {TRACK_FROM}
+                 FROM {LIBRARY_TRACK_FROM}
                  WHERE t.artist = ?1
                  GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
                  ORDER BY MIN(COALESCE(t.year, 9999)), t.album"
@@ -3252,6 +3289,8 @@ pub(crate) fn row_to_track(
         indexed_at: row.get(26)?,
         is_saf_uri: row.get(27)?,
         album_art_id,
+        source_provider: row.get(29)?,
+        source_state: row.get(30)?,
     })
 }
 
@@ -3737,6 +3776,167 @@ fn upsert_track(conn: &impl Queryable, track: &Track) -> Result<String, String> 
     Ok(id)
 }
 
+// ── Remote-source tracks ──────────────────────────────────────────────────
+
+impl Library {
+    /// Look up the row for a provider's track, whether cached or downloaded.
+    /// Reads `tracks`, not `library_tracks` — a cached row must stay findable
+    /// so re-streaming reuses it instead of re-fetching.
+    pub fn find_source_track(&self, provider: &str, source_id: &str) -> Result<Option<Track>, String> {
+        let connection = self.read_connection();
+        connection
+            .query_row(
+                &format!(
+                    "SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM}
+                     WHERE t.source_provider = ?1 AND t.source_id = ?2"
+                ),
+                params![provider, source_id],
+                |row| row_to_track(row, &self.cover_root),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to look up source track: {e}"))
+    }
+
+    /// Insert or refresh the row backing a streamed track.
+    ///
+    /// Cached rows are deliberately kept out of the FTS index: tier-2 search
+    /// means "my library", and something you merely previewed is not that. The
+    /// index entry is added later, if and when the track is downloaded.
+    pub fn upsert_cached_source_track(
+        &self,
+        track: &Track,
+        provider: &str,
+        source_id: &str,
+        source_url: &str,
+    ) -> Result<Track, String> {
+        let connection = self.lock_connection()?;
+        let id = upsert_track(&*connection, track)?;
+        connection
+            .execute(
+                "UPDATE tracks
+                 SET source_provider = ?2, source_id = ?3, source_url = ?4,
+                     source_state = COALESCE(source_state, 'cached'),
+                     source_fetched_at = ?5
+                 WHERE id = ?1",
+                params![id, provider, source_id, source_url, now_timestamp()],
+            )
+            .map_err(|e| format!("Failed to record source provenance: {e}"))?;
+
+        // `upsert_track` indexes unconditionally; undo that for a cached row.
+        let state: Option<String> = connection
+            .query_row("SELECT source_state FROM tracks WHERE id = ?1", params![id], |r| r.get(0))
+            .optional()
+            .map_err(|e| format!("Failed to read source state: {e}"))?
+            .flatten();
+        if state.as_deref() == Some("cached") {
+            let _ = connection.execute("DELETE FROM tracks_fts WHERE track_id = ?1", params![id]);
+        }
+
+        connection
+            .query_row(
+                &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM} WHERE t.id = ?1"),
+                params![id],
+                |row| row_to_track(row, &self.cover_root),
+            )
+            .map_err(|e| format!("Failed to reload source track: {e}"))
+    }
+
+    /// Promote a cached row to a kept download at `new_path`, making it part of
+    /// the library and searchable. Idempotent: promoting twice is a no-op.
+    pub fn promote_source_track(&self, track_id: &str, new_path: &str) -> Result<Track, String> {
+        let connection = self.lock_connection()?;
+        let file_size = std::fs::metadata(new_path).map(|m| m.len() as i64).unwrap_or(0);
+        connection
+            .execute(
+                "UPDATE tracks
+                 SET path = ?2, source_state = 'downloaded', file_size = ?3, indexed_at = ?4
+                 WHERE id = ?1",
+                params![track_id, new_path, file_size, now_timestamp()],
+            )
+            .map_err(|e| format!("Failed to promote source track: {e}"))?;
+
+        let track = connection
+            .query_row(
+                &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM} WHERE t.id = ?1"),
+                params![track_id],
+                |row| row_to_track(row, &self.cover_root),
+            )
+            .map_err(|e| format!("Failed to reload downloaded track: {e}"))?;
+        // Now that it is library content, it belongs in tier-2 search.
+        let _ = sync_track_fts(&*connection, &track);
+        Ok(track)
+    }
+
+    /// Every stream-only row, oldest fetch first, for the eviction planner.
+    pub fn cached_source_tracks(&self) -> Result<Vec<crate::sources::cache::EvictionCandidate>, String> {
+        let connection = self.read_connection();
+        let mut statement = connection
+            .prepare(
+                "SELECT id, path, COALESCE(source_fetched_at, 0)
+                 FROM tracks WHERE source_state = 'cached'
+                 ORDER BY COALESCE(source_fetched_at, 0) ASC",
+            )
+            .map_err(|e| format!("Failed to prepare cached track query: {e}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(crate::sources::cache::EvictionCandidate {
+                    track_id: row.get(0)?,
+                    path: row.get(1)?,
+                    fetched_at: row.get(2)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query cached tracks: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read cached tracks: {e}"))?;
+        Ok(rows)
+    }
+
+    /// Drop a cached row and its file. Refuses to touch anything that is not
+    /// stream-only, so a downloaded track can never be evicted by accident.
+    pub fn forget_cached_source_track(&self, track_id: &str) -> Result<(), String> {
+        let connection = self.lock_connection()?;
+        let path: Option<String> = connection
+            .query_row(
+                "SELECT path FROM tracks WHERE id = ?1 AND source_state = 'cached'",
+                params![track_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to look up cached track: {e}"))?;
+        let Some(path) = path else {
+            return Ok(());
+        };
+        connection
+            .execute(
+                "DELETE FROM tracks WHERE id = ?1 AND source_state = 'cached'",
+                params![track_id],
+            )
+            .map_err(|e| format!("Failed to remove cached track: {e}"))?;
+        let _ = connection.execute("DELETE FROM tracks_fts WHERE track_id = ?1", params![track_id]);
+        let _ = std::fs::remove_file(&path);
+        Ok(())
+    }
+
+    /// Path of a library track matching this title/artist, if the user already
+    /// owns it. Lets a remote result be marked "in your library" and play the
+    /// local copy instead of re-fetching. Compares case- and
+    /// whitespace-insensitively; tags in the wild are inconsistent.
+    pub fn find_local_match(&self, title: &str, artist: &str) -> Result<Option<String>, String> {
+        let connection = self.read_connection();
+        connection
+            .query_row(
+                "SELECT path FROM library_tracks
+                 WHERE LOWER(TRIM(title)) = LOWER(TRIM(?1))
+                   AND LOWER(TRIM(artist)) = LOWER(TRIM(?2))
+                 LIMIT 1",
+                params![title, artist],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to match local track: {e}"))
+    }
+}
+
 fn ensure_track_column(
     connection: &Connection,
     column_name: &str,
@@ -3829,12 +4029,19 @@ fn deduplicate_tracks(connection: &Connection) -> Result<(), String> {
                                 ORDER BY indexed_at ASC, id ASC
                             ) AS rn
                      FROM tracks
-                     WHERE trim(title) != '' AND lower(trim(title)) != 'unknown'
+                     WHERE source_provider IS NULL
+                       AND trim(title) != '' AND lower(trim(title)) != 'unknown'
                  )
                  WHERE rn = 1
                  UNION ALL
                  SELECT id FROM tracks
-                 WHERE trim(title) = '' OR lower(trim(title)) = 'unknown'",
+                 WHERE source_provider IS NULL
+                   AND (trim(title) = '' OR lower(trim(title)) = 'unknown')
+                 UNION ALL
+                 -- Sourced rows are keyed by (provider, id), not by tags. A
+                 -- streamed track legitimately shares artist/album/title with
+                 -- a local file, so tag-based dedup must never see them.
+                 SELECT id FROM tracks WHERE source_provider IS NOT NULL",
             )
             .map_err(|e| format!("Failed to prepare dedup query: {e}"))?;
         let rows = stmt
@@ -3986,7 +4193,7 @@ fn ensure_tracks_fts(connection: &Connection) -> Result<(), String> {
         .query_row("SELECT COUNT(*) FROM tracks_fts", [], |row| row.get(0))
         .unwrap_or(0);
     let track_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM library_tracks", [], |row| row.get(0))
         .unwrap_or(0);
 
     if fts_count != track_count {
@@ -4002,7 +4209,8 @@ fn rebuild_tracks_fts(connection: &Connection) -> Result<(), String> {
     connection
         .execute(
             "INSERT INTO tracks_fts(title, artist, album, name, lyrics, track_id)
-             SELECT title, artist, album, name, COALESCE(lyrics, ''), id FROM tracks",
+             SELECT title, artist, album, name, COALESCE(lyrics, ''), id
+             FROM library_tracks",
             [],
         )
         .map_err(|e| format!("Failed to rebuild tracks_fts: {e}"))?;
@@ -4340,6 +4548,203 @@ mod tests {
         Ok(library)
     }
 
+    // ── Remote-source rows ────────────────────────────────────────────────
+
+    fn source_track(path: &str, title: &str) -> Track {
+        Track {
+            title: title.to_string(),
+            ..sample_track("ignored", path)
+        }
+    }
+
+    #[test]
+    fn cached_rows_stay_out_of_the_library_view() {
+        let library = open_test_library().unwrap();
+        library
+            .upsert_cached_source_track(
+                &source_track("/cache/deezer/1.mp3", "Preview Only"),
+                "deezer",
+                "1",
+                "https://example.com/1.mp3",
+            )
+            .unwrap();
+
+        let connection = library.read_connection();
+        let in_tracks: i64 = connection
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        let in_view: i64 = connection
+            .query_row("SELECT COUNT(*) FROM library_tracks", [], |r| r.get(0))
+            .unwrap();
+
+        // Playable and addressable, but not part of the library.
+        assert_eq!(in_tracks, 1);
+        assert_eq!(in_view, 0);
+    }
+
+    #[test]
+    fn cached_rows_are_not_searchable_but_downloads_are() {
+        let library = open_test_library().unwrap();
+        let cached = library
+            .upsert_cached_source_track(
+                &source_track("/cache/jamendo/7.mp3", "Sunrise Over Everything"),
+                "jamendo",
+                "7",
+                "https://example.com/7.mp3",
+            )
+            .unwrap();
+
+        // Tier 2 means "my library" — a preview is not that.
+        let hits = library.search_tracks_rich("Sunrise", Some(10)).unwrap();
+        assert!(hits.is_empty());
+
+        library
+            .promote_source_track(&cached.id, "/music/Artist/Album/Sunrise.mp3")
+            .unwrap();
+
+        let hits = library.search_tracks_rich("Sunrise", Some(10)).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].track.path, "/music/Artist/Album/Sunrise.mp3");
+    }
+
+    #[test]
+    fn promotion_moves_the_row_into_the_library() {
+        let library = open_test_library().unwrap();
+        let cached = library
+            .upsert_cached_source_track(
+                &source_track("/cache/jamendo/9.mp3", "Kept"),
+                "jamendo",
+                "9",
+                "https://example.com/9.mp3",
+            )
+            .unwrap();
+        assert_eq!(cached.source_state.as_deref(), Some("cached"));
+
+        let kept = library
+            .promote_source_track(&cached.id, "/music/kept.mp3")
+            .unwrap();
+        assert_eq!(kept.id, cached.id, "promotion must not create a second row");
+        assert_eq!(kept.source_state.as_deref(), Some("downloaded"));
+        assert_eq!(kept.source_provider.as_deref(), Some("jamendo"));
+        assert_eq!(kept.path, "/music/kept.mp3");
+
+        let visible: i64 = library
+            .read_connection()
+            .query_row("SELECT COUNT(*) FROM library_tracks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(visible, 1);
+    }
+
+    #[test]
+    fn restreaming_reuses_the_existing_row() {
+        let library = open_test_library().unwrap();
+        let first = library
+            .upsert_cached_source_track(
+                &source_track("/cache/deezer/5.mp3", "Same"),
+                "deezer",
+                "5",
+                "https://example.com/5.mp3",
+            )
+            .unwrap();
+        let second = library
+            .upsert_cached_source_track(
+                &source_track("/cache/deezer/5.mp3", "Same"),
+                "deezer",
+                "5",
+                "https://example.com/5.mp3",
+            )
+            .unwrap();
+        assert_eq!(first.id, second.id);
+
+        let count: i64 = library
+            .read_connection()
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let found = library.find_source_track("deezer", "5").unwrap();
+        assert_eq!(found.map(|t| t.id), Some(first.id));
+    }
+
+    #[test]
+    fn eviction_refuses_to_touch_a_downloaded_row() {
+        let library = open_test_library().unwrap();
+        let cached = library
+            .upsert_cached_source_track(
+                &source_track("/cache/jamendo/3.mp3", "Kept"),
+                "jamendo",
+                "3",
+                "https://example.com/3.mp3",
+            )
+            .unwrap();
+        library
+            .promote_source_track(&cached.id, "/music/kept.mp3")
+            .unwrap();
+
+        // A downloaded track is library content and must survive eviction.
+        library.forget_cached_source_track(&cached.id).unwrap();
+        assert!(library.find_source_track("jamendo", "3").unwrap().is_some());
+        assert!(library.cached_source_tracks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dedup_never_collapses_a_stream_into_a_local_file() {
+        let library = open_test_library().unwrap();
+        {
+            let connection = library.lock_connection().unwrap();
+            upsert_track(&*connection, &sample_track("local", "/music/song.mp3")).unwrap();
+        }
+        // Same artist/album/title as the local file — tag-based dedup would
+        // otherwise delete one of them.
+        library
+            .upsert_cached_source_track(
+                &source_track("/cache/deezer/2.mp3", "Song"),
+                "deezer",
+                "2",
+                "https://example.com/2.mp3",
+            )
+            .unwrap();
+
+        {
+            let connection = library.lock_connection().unwrap();
+            deduplicate_tracks(&connection).unwrap();
+        }
+
+        let count: i64 = library
+            .read_connection()
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "local file and cached stream must both survive");
+    }
+
+    #[test]
+    fn find_local_match_ignores_case_and_padding() {
+        let library = open_test_library().unwrap();
+        {
+            let connection = library.lock_connection().unwrap();
+            upsert_track(&*connection, &sample_track("local", "/music/song.mp3")).unwrap();
+        }
+        let hit = library.find_local_match("  song  ", "ARTIST").unwrap();
+        assert_eq!(hit.as_deref(), Some("/music/song.mp3"));
+        assert!(library.find_local_match("Song", "Someone Else").unwrap().is_none());
+    }
+
+    #[test]
+    fn find_local_match_does_not_match_a_cached_stream() {
+        let library = open_test_library().unwrap();
+        library
+            .upsert_cached_source_track(
+                &source_track("/cache/deezer/4.mp3", "Song"),
+                "deezer",
+                "4",
+                "https://example.com/4.mp3",
+            )
+            .unwrap();
+        // Marking a remote hit as "already in your library" because you once
+        // previewed it would be a lie.
+        assert!(library.find_local_match("Song", "Artist").unwrap().is_none());
+    }
+
     fn sample_track(id: &str, path: &str) -> Track {
         Track {
             id: id.to_string(),
@@ -4370,6 +4775,8 @@ mod tests {
             file_size: 1,
             modified_at: 1,
             indexed_at: 1,
+            source_provider: None,
+            source_state: None,
             is_saf_uri: false,
         }
     }

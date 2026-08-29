@@ -37,6 +37,18 @@ pub struct AppSettings {
     /// Boost quieter tracks toward the median loudness of played tracks.
     #[serde(default)]
     pub volume_normalization_enabled: bool,
+    /// Free Jamendo API client id. Empty means the Jamendo source reports
+    /// itself as needing setup instead of silently returning nothing.
+    #[serde(default)]
+    pub jamendo_client_id: Option<String>,
+    /// Size cap for streamed-audio cache. Exceeded only when every cached file
+    /// is protected (playing or queued).
+    #[serde(default = "default_source_cache_limit_mb")]
+    pub source_cache_limit_mb: u64,
+}
+
+fn default_source_cache_limit_mb() -> u64 {
+    512
 }
 
 fn default_gapless_enabled() -> bool {
@@ -64,6 +76,8 @@ impl Default for AppSettings {
             gapless_enabled: true,
             auto_lyrics_download: true,
             volume_normalization_enabled: false,
+            jamendo_client_id: None,
+            source_cache_limit_mb: default_source_cache_limit_mb(),
         }
     }
 }

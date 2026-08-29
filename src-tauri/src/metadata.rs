@@ -66,6 +66,13 @@ pub struct Track {
     pub modified_at: i64,
     pub indexed_at: i64,
     pub is_saf_uri: bool,
+    /// Remote provider this track came from; `None` for locally indexed files.
+    #[serde(default)]
+    pub source_provider: Option<String>,
+    /// `None` local, `"cached"` streamed only, `"downloaded"` kept. Drives the
+    /// preview badge and the download affordance in the UI.
+    #[serde(default)]
+    pub source_state: Option<String>,
 }
 
 #[derive(Default)]
@@ -254,6 +261,8 @@ pub fn extract_track_with_options(
         file_size,
         modified_at,
         indexed_at,
+        source_provider: None,
+        source_state: None,
         is_saf_uri: path.starts_with("content://"),
     };
 
@@ -339,6 +348,8 @@ fn extract_track_content_uri(
         file_size: probed.file_size,
         modified_at: indexed_at,
         indexed_at,
+        source_provider: None,
+        source_state: None,
         is_saf_uri: true,
     };
 

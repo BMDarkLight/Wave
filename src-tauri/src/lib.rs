@@ -11,6 +11,7 @@ mod library;
 mod listen;
 mod metadata;
 mod path_validation;
+mod sources;
 pub mod playback_daemon;
 mod os_media;
 mod android;
@@ -228,6 +229,9 @@ pub fn run() {
             commands::get_playlist_tracks_by_id,
             commands::search_library_tracks,
             commands::search_library,
+            commands::search_sources,
+            commands::stream_source_track,
+            commands::download_source_track,
             commands::add_track_to_playlist_by_id,
             commands::remove_track_from_playlist_by_id,
             commands::remove_track_from_library,
