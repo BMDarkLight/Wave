@@ -135,7 +135,12 @@ mod tests {
             { "identifier": "multi", "title": "Compilation", "creator": ["First Artist", "Second"] },
             { "identifier": "bare", "title": "No Creator" }
         ]);
-        let tracks: Vec<_> = docs.as_array().unwrap().iter().filter_map(parse_item).collect();
+        let tracks: Vec<_> = docs
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(parse_item)
+            .collect();
         assert_eq!(tracks.len(), 3);
         assert_eq!(tracks[0].artist, "Grateful Dead");
         assert_eq!(tracks[1].artist, "First Artist");

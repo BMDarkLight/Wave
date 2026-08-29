@@ -14,6 +14,9 @@ use super::{
     duration_field, get_json, id_field, str_field, SourceError, SourceProvider, SourceTrack,
 };
 
+/// Every Deezer preview is exactly this long.
+const PREVIEW_SECONDS: f64 = 30.0;
+
 pub struct Deezer;
 
 impl SourceProvider for Deezer {
@@ -83,9 +86,10 @@ fn parse_track(item: &serde_json::Value) -> Option<SourceTrack> {
         title,
         artist,
         album,
-        // `duration` is the full track length; the preview is always 30s, and
-        // reporting the full length would make the seek bar lie.
-        duration_seconds: Some(30.0).filter(|_| duration_field(item, "duration").is_some()),
+        // `duration` is the full track length. Verified against the live API:
+        // a 230s track ships a 30s preview. Reporting the full length would
+        // make the seek bar lie about a track that stops a quarter of the way in.
+        duration_seconds: duration_field(item, "duration").map(|_| PREVIEW_SECONDS),
         artwork_url,
         audio_url: Some(audio_url),
         is_full_length: false,

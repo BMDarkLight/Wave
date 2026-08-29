@@ -30,7 +30,10 @@ const tauriInitialized = initTauri();
 // declared Promise<void>/Promise<SomeType> return types; `unknown` would
 // break every such call site's return-type inference.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const safeInvoke = async <T = any>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
+const safeInvoke = async <T = any>(
+  cmd: string,
+  args?: Record<string, unknown>,
+): Promise<T> => {
   await tauriInitialized;
 
   if (!invokeFn) {
@@ -40,7 +43,8 @@ const safeInvoke = async <T = any>(cmd: string, args?: Record<string, unknown>):
   return await invokeFn<T>(cmd, args);
 };
 
-export const safeInvokeHostOs = (): Promise<string> => safeInvoke<string>("host_os");
+export const safeInvokeHostOs = (): Promise<string> =>
+  safeInvoke<string>("host_os");
 
 /** Last Android native crash / soft-failure report (no adb needed). */
 export const takeAndroidCrashReport = (): Promise<string | null> =>
@@ -57,7 +61,9 @@ export interface ImportAudioResult {
   errors: string[];
 }
 
-export const importAudioSources = (paths: string[]): Promise<ImportAudioResult> => {
+export const importAudioSources = (
+  paths: string[],
+): Promise<ImportAudioResult> => {
   return safeInvoke<ImportAudioResult>("import_audio_sources", { paths });
 };
 
@@ -95,6 +101,10 @@ export interface Track {
   cover_art_mime: string | null;
   cover_art_source: string | null;
   album_art_id?: string | null;
+  /** Remote provider this track came from; null for local files. */
+  source_provider?: string | null;
+  /** null local, "cached" streamed only, "downloaded" kept. */
+  source_state?: string | null;
   fingerprint_sha256: string | null;
   acoustid_fingerprint: string | null;
   musicbrainz_recording_id: string | null;
@@ -148,7 +158,7 @@ export interface LyricsImportResult {
 export interface AlbumSummary {
   name: string;
   album_artist: string | null; // resolved: tag album_artist, else track artist
-  artist: string;              // representative track artist
+  artist: string; // representative track artist
   track_count: number;
   year: number | null;
   cover_art_data_url: string | null; // thumb path for list/grid fallback
@@ -197,7 +207,9 @@ export const getPlaybackState = (): Promise<PlaybackState> => {
   return safeInvoke<PlaybackState>("get_playback_state");
 };
 
-export const selectAudioFile = async (multiple: boolean = false): Promise<string[] | null> => {
+export const selectAudioFile = async (
+  multiple: boolean = false,
+): Promise<string[] | null> => {
   await tauriInitialized;
 
   if (!openFn) {
@@ -234,8 +246,26 @@ export const selectAudioFile = async (multiple: boolean = false): Promise<string
           {
             name: "Audio",
             extensions: [
-              "aac", "aiff", "alac", "caf", "flac", "m4a", "m4b", "m4p", "mka", "mkv",
-              "mp1", "mp2", "mp3", "mp4", "oga", "ogg", "opus", "wav", "wave", "weba",
+              "aac",
+              "aiff",
+              "alac",
+              "caf",
+              "flac",
+              "m4a",
+              "m4b",
+              "m4p",
+              "mka",
+              "mkv",
+              "mp1",
+              "mp2",
+              "mp3",
+              "mp4",
+              "oga",
+              "ogg",
+              "opus",
+              "wav",
+              "wave",
+              "weba",
             ],
           },
         ],
@@ -273,7 +303,11 @@ function invokeErrorMessage(err: unknown, fallback: string): string {
     for (const key of ["message", "error", "data"] as const) {
       const value = obj[key];
       if (typeof value === "string" && value.trim()) return value;
-      if (value && typeof value === "object" && "message" in (value as object)) {
+      if (
+        value &&
+        typeof value === "object" &&
+        "message" in (value as object)
+      ) {
         const nested = (value as { message?: unknown }).message;
         if (typeof nested === "string" && nested.trim()) return nested;
       }
@@ -282,7 +316,10 @@ function invokeErrorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
-export const selectMediaFolder = async (): Promise<{ uri: string; displayName?: string } | null> => {
+export const selectMediaFolder = async (): Promise<{
+  uri: string;
+  displayName?: string;
+} | null> => {
   await tauriInitialized;
 
   if (!invokeFn) {
@@ -290,7 +327,9 @@ export const selectMediaFolder = async (): Promise<{ uri: string; displayName?: 
   }
 
   try {
-    const result = await invokeFn<{ uri: string; display_name?: string }>("pick_media_folder");
+    const result = await invokeFn<{ uri: string; display_name?: string }>(
+      "pick_media_folder",
+    );
     return { uri: result.uri, displayName: result.display_name };
   } catch (err) {
     const message = invokeErrorMessage(err, "Failed to pick media folder");
@@ -376,7 +415,7 @@ export const scanDirectory = (directory: string): Promise<string[]> => {
 export const indexMusicLibrary = (
   directory: string,
   profileId?: string,
-  playlistName?: string
+  playlistName?: string,
 ): Promise<Track[]> => {
   return safeInvoke<Track[]>("index_music_library", {
     directory,
@@ -395,7 +434,7 @@ export const getLibraryDatabasePath = (): Promise<string> => {
 
 export const getSupportedAudioExtensions = (): Promise<string[]> => {
   return safeInvoke<string[]>("get_supported_audio_extensions");
-}
+};
 
 // ── Playlist CRUD ────────────────────────────────────────────────────────────
 
@@ -441,12 +480,7 @@ export const searchLibraryTracks = (
   });
 };
 
-export type SearchMatchField =
-  | "title"
-  | "artist"
-  | "album"
-  | "name"
-  | "lyrics";
+export type SearchMatchField = "title" | "artist" | "album" | "name" | "lyrics";
 
 export interface SearchHit {
   track: Track;
@@ -465,7 +499,71 @@ export const searchLibrary = (
   });
 };
 
-export const addTrackToPlaylistById = (id: string, path: string): Promise<Track> => {
+// ── Tier 3: remote sources ──────────────────────────────────────────────────
+
+/** One remote search result. */
+export interface SourceTrack {
+  provider: string;
+  id: string;
+  title: string;
+  artist: string;
+  album: string | null;
+  duration_seconds: number | null;
+  artwork_url: string | null;
+  audio_url: string | null;
+  /** False for Deezer, which only exposes 30-second previews. */
+  is_full_length: boolean;
+  /** False when the provider's terms don't allow keeping a copy. */
+  downloadable: boolean;
+  /** Licence line to show alongside the result. */
+  attribution: string | null;
+  /** Local path when the user already owns this track. */
+  already_in_library: string | null;
+}
+
+/**
+ * One provider's slice of a source search. `error` set with an empty `tracks`
+ * is the normal degraded case — that section renders as unavailable while the
+ * others still show results.
+ */
+export interface ProviderResults {
+  provider: string;
+  display_name: string;
+  tracks: SourceTrack[];
+  error: string | null;
+}
+
+/**
+ * Tier 3 search. Only ever called when the user explicitly asks for it — this
+ * hits the network, unlike the scope and library tiers.
+ */
+export const searchSources = (
+  query: string,
+  limit?: number,
+): Promise<ProviderResults[]> => {
+  return safeInvoke<ProviderResults[]>("search_sources", {
+    query,
+    limit: limit ?? null,
+  });
+};
+
+/**
+ * Fetch a remote track into the local cache and return it as a playable
+ * library row. Safe to call repeatedly — an already-cached track is reused.
+ */
+export const streamSourceTrack = (track: SourceTrack): Promise<Track> => {
+  return safeInvoke<Track>("stream_source_track", { track });
+};
+
+/** Keep a streamed track: copy it to the download folder and index it. */
+export const downloadSourceTrack = (track: SourceTrack): Promise<Track> => {
+  return safeInvoke<Track>("download_source_track", { track });
+};
+
+export const addTrackToPlaylistById = (
+  id: string,
+  path: string,
+): Promise<Track> => {
   return safeInvoke<Track>("add_track_to_playlist_by_id", { id, path });
 };
 
@@ -483,7 +581,10 @@ export const resetApp = (): Promise<ResetAppResult> => {
   return safeInvoke<ResetAppResult>("reset_app");
 };
 
-export const removeTrackFromPlaylistById = (id: string, path: string): Promise<void> => {
+export const removeTrackFromPlaylistById = (
+  id: string,
+  path: string,
+): Promise<void> => {
   return safeInvoke("remove_track_from_playlist_by_id", { id, path });
 };
 
@@ -492,17 +593,23 @@ export const removeTrackFromLibrary = (path: string): Promise<void> => {
 };
 
 export const fetchLyricsForTrack = (path: string): Promise<Track | null> => {
-  return safeInvoke<Track>("fetch_lyrics_for_track", { path }).catch(() => null);
+  return safeInvoke<Track>("fetch_lyrics_for_track", { path }).catch(
+    () => null,
+  );
 };
 
 /** Full track row including lyrics (list queries omit lyrics). */
 export const getTrackDetails = (path: string): Promise<Track | null> => {
-  return safeInvoke<Track | null>("get_track_details", { path }).catch(() => null);
+  return safeInvoke<Track | null>("get_track_details", { path }).catch(
+    () => null,
+  );
 };
 
 /** Full embedded cover as a one-shot data URL (not stored). */
 export const getTrackFullCover = (path: string): Promise<string | null> => {
-  return safeInvoke<string | null>("get_track_full_cover", { path }).catch(() => null);
+  return safeInvoke<string | null>("get_track_full_cover", { path }).catch(
+    () => null,
+  );
 };
 
 /** Resolve cover URL for <img src>. Absolute paths go through convertFileSrc. */
@@ -559,12 +666,18 @@ export const playTrackFromSpecificPlaylist = (
 // ── Albums & artists (browse / query) ─────────────────────────────────────────
 
 /** Create a playlist from every track matching an album name. */
-export const createAlbumPlaylist = (album: string, name?: string): Promise<PlaylistInfo> => {
+export const createAlbumPlaylist = (
+  album: string,
+  name?: string,
+): Promise<PlaylistInfo> => {
   return safeInvoke<PlaylistInfo>("create_album_playlist", { album, name });
 };
 
 /** Create a playlist from every track matching an artist name (a discography). */
-export const createArtistPlaylist = (artist: string, name?: string): Promise<PlaylistInfo> => {
+export const createArtistPlaylist = (
+  artist: string,
+  name?: string,
+): Promise<PlaylistInfo> => {
   return safeInvoke<PlaylistInfo>("create_artist_playlist", { artist, name });
 };
 
@@ -588,7 +701,10 @@ export const listArtists = (): Promise<ArtistSummary[]> => {
  * or a clicked `Track`'s `album_artist ?? artist`) to keep same-named albums by
  * different artists apart; omit it to match the album name only.
  */
-export const getAlbumTracks = (album: string, albumArtist?: string | null): Promise<Track[]> => {
+export const getAlbumTracks = (
+  album: string,
+  albumArtist?: string | null,
+): Promise<Track[]> => {
   return safeInvoke<Track[]>("get_album_tracks", { album, albumArtist });
 };
 
@@ -712,12 +828,15 @@ export const playTrackFromQueue = (index: number): Promise<void> => {
 export const exportPlaylist = (
   playlistId: string,
   path: string,
-  exportFormat: string
+  exportFormat: string,
 ): Promise<void> => {
   return safeInvoke("export_playlist", { playlistId, path, exportFormat });
 };
 
-export const importPlaylist = (path: string, name?: string): Promise<ImportResult> => {
+export const importPlaylist = (
+  path: string,
+  name?: string,
+): Promise<ImportResult> => {
   return safeInvoke<ImportResult>("import_playlist", { path, name });
 };
 
@@ -731,7 +850,9 @@ export const importLyrics = (path: string): Promise<LyricsImportResult> => {
 
 // ── Dialog helpers for export / import ───────────────────────────────────────
 
-export const savePlaylistDialog = async (defaultName?: string): Promise<string | null> => {
+export const savePlaylistDialog = async (
+  defaultName?: string,
+): Promise<string | null> => {
   await tauriInitialized;
   if (!openFn) {
     throw new Error(TAURI_UNAVAILABLE);
@@ -759,7 +880,7 @@ export const openPlaylistDialog = async (): Promise<string | null> => {
   });
   if (selected === null) return null;
   if (typeof selected === "string") return selected;
-  return Array.isArray(selected) ? selected[0] ?? null : null;
+  return Array.isArray(selected) ? (selected[0] ?? null) : null;
 };
 
 export const saveLyricsDialog = async (): Promise<string | null> => {
@@ -787,7 +908,7 @@ export const openLyricsDialog = async (): Promise<string | null> => {
   });
   if (selected === null) return null;
   if (typeof selected === "string") return selected;
-  return Array.isArray(selected) ? selected[0] ?? null : null;
+  return Array.isArray(selected) ? (selected[0] ?? null) : null;
 };
 
 // ── Queue / Playback Mode commands ────────────────────────────────────────────
@@ -823,19 +944,46 @@ export interface EqSettings {
   enabled: boolean;
 }
 
-export const EQ_BAND_LABELS = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"] as const;
+export const EQ_BAND_LABELS = [
+  "31",
+  "62",
+  "125",
+  "250",
+  "500",
+  "1k",
+  "2k",
+  "4k",
+  "8k",
+  "16k",
+] as const;
 
 export const EQ_PRESETS: { id: string; label: string; bands: number[] }[] = [
   { id: "flat", label: "Flat", bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
-  { id: "bass-boost", label: "Bass boost", bands: [4, 4, 2, 0, 0, 0, 0, 0, 0, 0] },
-  { id: "bass-cut", label: "Bass cut", bands: [-4, -4, -2, 0, 0, 0, 0, 0, 0, 0] },
+  {
+    id: "bass-boost",
+    label: "Bass boost",
+    bands: [4, 4, 2, 0, 0, 0, 0, 0, 0, 0],
+  },
+  {
+    id: "bass-cut",
+    label: "Bass cut",
+    bands: [-4, -4, -2, 0, 0, 0, 0, 0, 0, 0],
+  },
   { id: "rock", label: "Rock", bands: [3, 2, 0, -1, -1, 0, 1, 2, 3, 2] },
   { id: "pop", label: "Pop", bands: [1, 1, 2, 3, 3, 2, 1, 1, 1, 1] },
   { id: "jazz", label: "Jazz", bands: [2, 2, 1, 1, 0, 0, 0, 1, 1, 1] },
-  { id: "classical", label: "Classical", bands: [0, 0, 0, 0, 0, 0, 0, 1, 2, 2] },
+  {
+    id: "classical",
+    label: "Classical",
+    bands: [0, 0, 0, 0, 0, 0, 0, 1, 2, 2],
+  },
   { id: "vocal", label: "Vocal", bands: [-2, -2, -1, 1, 3, 4, 3, 1, -1, -2] },
   { id: "loudness", label: "Loudness", bands: [5, 4, 2, 0, -1, 0, 1, 2, 3, 4] },
-  { id: "headphones", label: "Headphones", bands: [0, 0, 0, 1, 1, 0, -1, -1, 0, 0] },
+  {
+    id: "headphones",
+    label: "Headphones",
+    bands: [0, 0, 0, 1, 1, 0, -1, -1, 0, 0],
+  },
 ];
 
 export const getEqSettings = (): Promise<EqSettings> => {
@@ -870,7 +1018,9 @@ export const getVolumeNormalizationEnabled = (): Promise<boolean> => {
   return safeInvoke<boolean>("get_volume_normalization_enabled");
 };
 
-export const setVolumeNormalizationEnabled = (enabled: boolean): Promise<void> => {
+export const setVolumeNormalizationEnabled = (
+  enabled: boolean,
+): Promise<void> => {
   return safeInvoke("set_volume_normalization_enabled", { enabled });
 };
 
@@ -916,7 +1066,10 @@ export const updateMediaMetadata = (metadata: MediaMetadata): Promise<void> => {
  * overlay / Control Center / MPRIS shows an accurate, moving progress bar.
  * Call this periodically (e.g. every 500 ms) while the track is playing.
  */
-export const updateMediaPosition = (position_seconds: number, is_playing: boolean): Promise<void> => {
+export const updateMediaPosition = (
+  position_seconds: number,
+  is_playing: boolean,
+): Promise<void> => {
   return safeInvoke("update_media_position", { position_seconds, is_playing });
 };
 
@@ -966,17 +1119,19 @@ export const listenToSyncProgress = async (
   await tauriInitialized;
   const { listen } = await import("@tauri-apps/api/event");
   const unlisten = await listen("sync-progress", (e) => {
-    onProgress((e.payload ?? {}) as {
-      playlist_id?: string;
-      phase?: string;
-      scanned?: number;
-      to_add?: number;
-      to_remove?: number;
-      processed?: number;
-      extracted?: number;
-      added?: number;
-      removed?: number;
-    });
+    onProgress(
+      (e.payload ?? {}) as {
+        playlist_id?: string;
+        phase?: string;
+        scanned?: number;
+        to_add?: number;
+        to_remove?: number;
+        processed?: number;
+        extracted?: number;
+        added?: number;
+        removed?: number;
+      },
+    );
   });
   return () => {
     unlisten();
@@ -984,30 +1139,33 @@ export const listenToSyncProgress = async (
 };
 
 export const listenToMediaControls = async (
-  handlers: MediaControlHandlers
+  handlers: MediaControlHandlers,
 ): Promise<() => void> => {
   await tauriInitialized;
   const { listen } = await import("@tauri-apps/api/event");
 
   const unlisteners = await Promise.all([
-    handlers.onPlay     && listen("media-control-play",     () => handlers.onPlay!()),
-    handlers.onPause    && listen("media-control-pause",    () => handlers.onPause!()),
-    handlers.onToggle   && listen("media-control-toggle",   () => handlers.onToggle!()),
-    handlers.onNext     && listen("media-control-next",     () => handlers.onNext!()),
-    handlers.onPrevious && listen("media-control-previous", () => handlers.onPrevious!()),
-    handlers.onStop     && listen("media-control-stop",     () => handlers.onStop!()),
-    handlers.onSeekRelative && listen<string>(
-      "media-control-seek-relative",
-      (e) => handlers.onSeekRelative!(e.payload as "forward" | "backward")
-    ),
-    handlers.onSeekBy && listen<number>(
-      "media-control-seek-by",
-      (e) => handlers.onSeekBy!(e.payload)
-    ),
-    handlers.onSetPosition && listen<number>(
-      "media-control-set-position",
-      (e) => handlers.onSetPosition!(e.payload)
-    ),
+    handlers.onPlay && listen("media-control-play", () => handlers.onPlay!()),
+    handlers.onPause &&
+      listen("media-control-pause", () => handlers.onPause!()),
+    handlers.onToggle &&
+      listen("media-control-toggle", () => handlers.onToggle!()),
+    handlers.onNext && listen("media-control-next", () => handlers.onNext!()),
+    handlers.onPrevious &&
+      listen("media-control-previous", () => handlers.onPrevious!()),
+    handlers.onStop && listen("media-control-stop", () => handlers.onStop!()),
+    handlers.onSeekRelative &&
+      listen<string>("media-control-seek-relative", (e) =>
+        handlers.onSeekRelative!(e.payload as "forward" | "backward"),
+      ),
+    handlers.onSeekBy &&
+      listen<number>("media-control-seek-by", (e) =>
+        handlers.onSeekBy!(e.payload),
+      ),
+    handlers.onSetPosition &&
+      listen<number>("media-control-set-position", (e) =>
+        handlers.onSetPosition!(e.payload),
+      ),
   ]);
 
   // Android MediaSession / Bluetooth / notification buttons arrive via the
@@ -1126,7 +1284,9 @@ export const dismissFolderSetup = (): Promise<void> =>
  *  - Android SAF `content://…/tree/…` → native DocumentsContract walk
  *    (`tauri-plugin-fs` readDir cannot list content:// trees).
  *  - Filesystem paths → `@tauri-apps/plugin-fs` readDir. */
-export const scanDirectoryRecursive = async (dirUri: string): Promise<string[]> => {
+export const scanDirectoryRecursive = async (
+  dirUri: string,
+): Promise<string[]> => {
   const trimmed = dirUri.trim();
   if (trimmed.startsWith("content://")) {
     await tauriInitialized;
@@ -1149,8 +1309,20 @@ export const scanDirectoryRecursive = async (dirUri: string): Promise<string[]> 
   let readableDirs = 0;
 
   const AUDIO_EXTENSIONS = new Set([
-    "mp3", "flac", "ogg", "opus", "wav", "m4a", "m4b", "aac",
-    "aiff", "alac", "caf", "mka", "wma", "weba",
+    "mp3",
+    "flac",
+    "ogg",
+    "opus",
+    "wav",
+    "m4a",
+    "m4b",
+    "aac",
+    "aiff",
+    "alac",
+    "caf",
+    "mka",
+    "wma",
+    "weba",
   ]);
 
   const isAudioFile = (name: string): boolean => {
@@ -1170,7 +1342,9 @@ export const scanDirectoryRecursive = async (dirUri: string): Promise<string[]> 
    *  Parent tree: content://.../tree/primary%3AMusic
    *  Child doc:   content://.../document/primary%3AMusic%2Ffile.mp3  */
   const childDocUri = (parentUri: string, childName: string): string =>
-    parentUri.replace("/tree/", "/document/") + "%2F" + encodeURIComponent(childName);
+    parentUri.replace("/tree/", "/document/") +
+    "%2F" +
+    encodeURIComponent(childName);
 
   const walk = async (uri: string, isRoot: boolean) => {
     try {

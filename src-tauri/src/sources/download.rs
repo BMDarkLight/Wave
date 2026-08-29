@@ -78,7 +78,10 @@ pub fn dedupe_filename(desired: &Path, exists: &dyn Fn(&Path) -> bool) -> PathBu
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("track");
-    let ext = desired.extension().and_then(|e| e.to_str()).unwrap_or("mp3");
+    let ext = desired
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("mp3");
     for n in 1..1000 {
         let candidate = parent.join(format!("{stem}-{n}.{ext}"));
         if !exists(&candidate) {
@@ -237,7 +240,8 @@ mod tests {
             return;
         }
         // content:// trees can't be written through std::fs.
-        let folders = vec!["content://com.android.externalstorage/tree/primary%3AMusic".to_string()];
+        let folders =
+            vec!["content://com.android.externalstorage/tree/primary%3AMusic".to_string()];
         let dest = choose_destination(&track(), &folders, &|_| true, &|_| false);
         assert!(dest.fallback_reason.is_some());
     }

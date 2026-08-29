@@ -198,7 +198,11 @@ mod tests {
 
     #[test]
     fn evicts_oldest_first_until_under_cap() {
-        let c = vec![candidate("new", 30), candidate("old", 10), candidate("mid", 20)];
+        let c = vec![
+            candidate("new", 30),
+            candidate("old", 10),
+            candidate("mid", 20),
+        ];
         let doomed = plan_eviction(&c, &flat_sizes, 100, &[]);
         // 300 bytes held, 100 allowed -> drop the two oldest.
         assert_eq!(doomed.len(), 2);

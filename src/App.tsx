@@ -1,8 +1,9 @@
 // The Code for Frontend of Wave is currently completely AI Generated and may contain bugs or rough edges. Please report any issues you encounter at
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import trayTemplate from "../assets/tray-template.svg";
 import { BiX, BiFolderOpen, BiMenu, BiSearch } from "react-icons/bi";
+import type { SourceTrack } from "./utils/player";
 import {
   addTrackToPlaylistById,
   clearAudioImports,
@@ -63,6 +64,8 @@ import {
 import { useEqualizerSettings } from "./hooks/useEqualizerSettings";
 import { useResizablePanels } from "./hooks/useResizablePanels";
 import { useLibrarySearch } from "./hooks/useLibrarySearch";
+import { useSourceSearch } from "./hooks/useSourceSearch";
+import { SourceResults } from "./components/SourceResults";
 import { useLyricsPanel } from "./hooks/useLyricsPanel";
 import { useMobileOverlays } from "./hooks/useMobileOverlays";
 import { usePlaylistManager } from "./hooks/usePlaylistManager";
@@ -109,7 +112,6 @@ function App() {
   );
   /** Top-level main pane: Home suggestions vs playlist vs listen stats / settings. */
   const [mainView, setMainView] = useState<MainView>("home");
-
 
   // Favorited track paths (for heart toggle state in the track list)
   const [favoritePaths, setFavoritePaths] = useState<Set<string>>(new Set());
@@ -205,6 +207,19 @@ function App() {
     closeMainSearch,
     toggleMainSearch,
   } = useLibrarySearch();
+
+  // Tier 3 of the search ladder. Manual by design: unlike scope and library,
+  // this one costs a network round trip per provider.
+  const {
+    sourceResults,
+    sourceLoading,
+    sourceSearched,
+    sourceError,
+    sourceBusy,
+    searchSourcesNow,
+    streamSourceHit,
+    downloadSourceHit,
+  } = useSourceSearch(mainSearchQuery);
 
   // Audio output device selection
   const [outputDevices, setOutputDevices] = useState<string[]>([]);
@@ -667,10 +682,7 @@ function App() {
         // Soft-refresh the open playlist without clearing the list first —
         // but not while a first-time import UI is covering that playlist.
         const viewId = selectedPlaylistIdRef.current;
-        if (
-          !firstTimeFill &&
-          (viewId === pl.id || (!viewId && i === 0))
-        ) {
+        if (!firstTimeFill && (viewId === pl.id || (!viewId && i === 0))) {
           const id = viewId ?? pl.id;
           getPlaylistTracksById(id)
             .then((tracks) => {
@@ -1095,7 +1107,6 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [mainSearchQuery, mainSearchOpen]);
 
-
   // ── Playlist management ────────────────────────────────────────────────────
 
   const submitPlaylistDialog = async () => {
@@ -1135,16 +1146,15 @@ function App() {
           setImportedCount(0);
           const stopProgress = await listenToSyncProgress((p) => {
             if (typeof p.processed === "number") setImportedCount(p.processed);
-            else if (typeof p.extracted === "number") setImportedCount(p.extracted);
+            else if (typeof p.extracted === "number")
+              setImportedCount(p.extracted);
             else if (typeof p.added === "number") setImportedCount(p.added);
           }).catch(() => null);
           try {
             // Playlist was created with sync_folder — use the batched sync path.
             const syncResult = await syncPlaylistFolder(info.id, paths);
             if (syncResult.errors?.length) {
-              setError(
-                `Imported with ${syncResult.errors.length} error(s).`,
-              );
+              setError(`Imported with ${syncResult.errors.length} error(s).`);
             }
             await loadPlaylists();
             await new Promise((r) => setTimeout(r, 0));
@@ -1371,6 +1381,38 @@ function App() {
   const isCurrentTrack = (track: Track) =>
     track.path === playbackState.current_path;
 
+  /** Play a remote result, streaming it first unless the user already owns it. */
+  const handleSourcePlay = useCallback(
+    async (track: SourceTrack) => {
+      try {
+        // Owning it already makes the remote copy pointless — play the local file.
+        const path = track.already_in_library
+          ? track.already_in_library
+          : (await streamSourceHit(track)).path;
+        await playTracks([path], 0);
+        updatePlaybackState();
+        loadQueueTracks();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [streamSourceHit, updatePlaybackState, loadQueueTracks],
+  );
+
+  /** Keep a remote result in the library. */
+  const handleSourceDownload = useCallback(
+    async (track: SourceTrack) => {
+      try {
+        await downloadSourceHit(track);
+        // The row is library content now, so the browse surfaces need it.
+        await loadPlaylists();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [downloadSourceHit, loadPlaylists],
+  );
+
   const mainSearchResultsPanel = (
     <div className="search-results">
       {mainSearchLoading && displayedMainSearchHits.length === 0 ? (
@@ -1400,6 +1442,25 @@ function App() {
               Search full library
             </button>
           )}
+          {mainSearchQuery.trim() && !sourceSearched && !sourceLoading && (
+            <button
+              className="search-sources-btn"
+              type="button"
+              onClick={() => void searchSourcesNow()}
+            >
+              Search Deezer &amp; free catalogs
+            </button>
+          )}
+          <SourceResults
+            results={sourceResults}
+            loading={sourceLoading}
+            searched={sourceSearched}
+            error={sourceError}
+            busy={sourceBusy}
+            query={mainSearchQuery}
+            onPlay={(track) => void handleSourcePlay(track)}
+            onDownload={(track) => void handleSourceDownload(track)}
+          />
         </div>
       ) : (
         <>
@@ -1444,10 +1505,7 @@ function App() {
                   />
                   <div className="search-hit-body">
                     <div className="search-hit-title">
-                      {highlightMatch(
-                        getTrackTitle(track),
-                        mainSearchQuery,
-                      )}
+                      {highlightMatch(getTrackTitle(track), mainSearchQuery)}
                     </div>
                     <div className="search-hit-meta">
                       {highlightMatch(track.artist, mainSearchQuery)}
@@ -1490,6 +1548,25 @@ function App() {
               Search full library
             </button>
           )}
+          {mainSearchQuery.trim() && !sourceSearched && !sourceLoading && (
+            <button
+              className="search-sources-btn"
+              type="button"
+              onClick={() => void searchSourcesNow()}
+            >
+              Search Deezer &amp; free catalogs
+            </button>
+          )}
+          <SourceResults
+            results={sourceResults}
+            loading={sourceLoading}
+            searched={sourceSearched}
+            error={sourceError}
+            busy={sourceBusy}
+            query={mainSearchQuery}
+            onPlay={(track) => void handleSourcePlay(track)}
+            onDownload={(track) => void handleSourceDownload(track)}
+          />
         </>
       )}
     </div>
@@ -1571,10 +1648,7 @@ function App() {
             </button>
           </div>
         </div>
-        <div
-          className="mobile-topbar-search"
-          aria-hidden={!mainSearchOpen}
-        >
+        <div className="mobile-topbar-search" aria-hidden={!mainSearchOpen}>
           <div className="mobile-topbar-search-inner">
             <BiSearch className="library-search-icon" aria-hidden />
             <input
@@ -1659,7 +1733,9 @@ function App() {
             <h1>Search</h1>
             <p>{mainSearchResultsSubtitle}</p>
           </div>
-          <section className="playlist-container">{mainSearchResultsPanel}</section>
+          <section className="playlist-container">
+            {mainSearchResultsPanel}
+          </section>
         </main>
       ) : viewingAlbum ? (
         <AlbumPage
@@ -1945,9 +2021,7 @@ function App() {
               onRemoveFromPlaylist={(path) =>
                 void handleRemoveFromPlaylist(path)
               }
-              onRemoveFromLibrary={(path) =>
-                void handleRemoveFromLibrary(path)
-              }
+              onRemoveFromLibrary={(path) => void handleRemoveFromLibrary(path)}
             />
           );
         })()}

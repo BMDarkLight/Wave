@@ -203,7 +203,9 @@ input:disabled {
   font-weight: 700;
   text-align: left;
   cursor: pointer;
-  transition: background 0.16s ease, color 0.16s ease;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
 }
 
 .sidebar-pin:hover {
@@ -354,7 +356,9 @@ input:disabled {
   max-width: 0;
   overflow: hidden;
   opacity: 0;
-  transition: opacity 0.16s ease, max-width 0.16s ease;
+  transition:
+    opacity 0.16s ease,
+    max-width 0.16s ease;
 }
 
 .playlist-item:hover .playlist-item-actions,
@@ -484,7 +488,9 @@ input:disabled {
   border: 0;
   border-radius: 999px;
   font-weight: 800;
-  transition: transform 0.16s ease, background 0.16s ease;
+  transition:
+    transform 0.16s ease,
+    background 0.16s ease;
 }
 
 .btn-pill,
@@ -543,7 +549,9 @@ input:disabled {
   padding: 12px 22px;
   font-weight: 800;
   border: 0;
-  transition: transform 0.16s ease, background 0.16s ease;
+  transition:
+    transform 0.16s ease,
+    background 0.16s ease;
 }
 
 .btn-danger:hover {
@@ -569,7 +577,11 @@ input:disabled {
   overflow: auto;
   border-radius: 10px;
   background:
-    radial-gradient(circle at 75% 0%, rgba(255, 255, 255, 0.06), transparent 30%),
+    radial-gradient(
+      circle at 75% 0%,
+      rgba(255, 255, 255, 0.06),
+      transparent 30%
+    ),
     linear-gradient(180deg, #1f1f1f 0%, #121212 310px, #121212 100%);
   padding: 24px 0 24px;
 }
@@ -915,7 +927,9 @@ img.track-thumb {
   font-size: 24px;
   opacity: 0;
   transform: translateY(6px);
-  transition: opacity 0.16s ease, transform 0.16s ease;
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
 }
 
@@ -1118,7 +1132,12 @@ img.track-thumb {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease, flex-grow 0.2s ease, max-width 0.2s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease,
+    flex-grow 0.2s ease,
+    max-width 0.2s ease;
 }
 
 .library-search-bar:focus-within {
@@ -1217,7 +1236,9 @@ input[type="search"]::-webkit-search-decoration {
   font-weight: 700;
   text-align: center;
   cursor: pointer;
-  transition: background 0.16s ease, color 0.16s ease;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
 }
 
 .search-full-library-btn:hover {
@@ -1331,6 +1352,252 @@ input[type="search"]::-webkit-search-decoration {
   font-size: 12px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* ── Tier 3: remote source results ──────────────────────────────────────── */
+
+/* Sits below the library results, so it reads as the next rung down rather
+   than a competing list. */
+.search-sources-btn {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(90, 160, 255, 0.14);
+  color: #b7d4ff;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.search-sources-btn:hover {
+  background: rgba(90, 160, 255, 0.22);
+  color: #d9e8ff;
+}
+
+.empty-state .search-sources-btn {
+  width: auto;
+  margin: 10px auto 0;
+  min-width: 200px;
+}
+
+.source-results {
+  margin-top: 18px;
+}
+
+.source-section + .source-section {
+  margin-top: 18px;
+}
+
+.source-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 8px;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.source-section-head h3 {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.source-section-count {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+/* A provider that failed says so in place — never silently vanishes, or the
+   user reads "no results" as "this song doesn't exist". */
+.source-section-error,
+.source-section-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.source-section-error {
+  color: #ffc9a8;
+  background: rgba(255, 150, 90, 0.1);
+}
+
+.source-hit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.source-hit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-radius: 12px;
+  transition: background 0.12s ease;
+}
+
+.source-hit:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.source-hit.busy {
+  opacity: 0.6;
+}
+
+.source-hit-main {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.source-hit-main:disabled {
+  cursor: default;
+}
+
+.source-hit-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.source-hit-thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.source-hit-body {
+  min-width: 0;
+}
+
+.source-hit-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-hit-meta {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 13px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-hit-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Deezer only ever serves 30 seconds; saying so up front avoids the result
+   feeling broken when it stops. */
+.source-chip-preview {
+  background: rgba(255, 190, 110, 0.16);
+  color: #ffd7a8;
+}
+
+.source-chip-owned {
+  background: rgba(120, 220, 160, 0.16);
+  color: #c8f0d6;
+}
+
+.source-chip-licence {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.source-hit-duration {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.source-hit-download {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-right: 10px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 18px;
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    color 0.14s ease;
+}
+
+.source-hit-download:hover:not(:disabled) {
+  background: rgba(120, 220, 160, 0.18);
+  color: #c8f0d6;
+}
+
+.source-hit-download:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .search-hit-mark {
@@ -1552,7 +1819,9 @@ input[type="search"]::-webkit-search-decoration {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .import-spinner {
@@ -2366,8 +2635,15 @@ img.queue-thumb {
 }
 
 @keyframes scan-pulse {
-  0%, 100% { width: 20%; margin-left: 0; }
-  50% { width: 60%; margin-left: 20%; }
+  0%,
+  100% {
+    width: 20%;
+    margin-left: 0;
+  }
+  50% {
+    width: 60%;
+    margin-left: 20%;
+  }
 }
 
 .confirm-dialog {
@@ -2414,12 +2690,22 @@ img.queue-thumb {
   animation: bars 0.8s ease-in-out infinite;
 }
 
-.mini-bars i:nth-child(1) { height: 8px; }
-.mini-bars i:nth-child(2) { height: 14px; animation-delay: 0.12s; }
-.mini-bars i:nth-child(3) { height: 10px; animation-delay: 0.24s; }
+.mini-bars i:nth-child(1) {
+  height: 8px;
+}
+.mini-bars i:nth-child(2) {
+  height: 14px;
+  animation-delay: 0.12s;
+}
+.mini-bars i:nth-child(3) {
+  height: 10px;
+  animation-delay: 0.24s;
+}
 
 @keyframes bars {
-  50% { transform: scaleY(0.45); }
+  50% {
+    transform: scaleY(0.45);
+  }
 }
 
 .control-btn.lyrics-btn.active {
@@ -2523,7 +2809,10 @@ img.queue-thumb {
 
 .lyrics-panel-body pre {
   color: #d7d7d7;
-  font: 400 14px/1.75 "Avenir Next", "Helvetica Neue", sans-serif;
+  font:
+    400 14px/1.75 "Avenir Next",
+    "Helvetica Neue",
+    sans-serif;
   white-space: pre-wrap;
 }
 
@@ -2547,13 +2836,18 @@ img.queue-thumb {
   border: 0;
   background: none;
   color: #8a8a8a;
-  font: 600 16px/1.5 "Avenir Next", "Helvetica Neue", sans-serif;
+  font:
+    600 16px/1.5 "Avenir Next",
+    "Helvetica Neue",
+    sans-serif;
   text-align: left;
   cursor: pointer;
   box-sizing: border-box;
   white-space: normal;
   overflow-wrap: break-word;
-  transition: color 0.2s ease, font-size 0.2s ease;
+  transition:
+    color 0.2s ease,
+    font-size 0.2s ease;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -2680,7 +2974,10 @@ img.queue-thumb {
   bottom: 0;
   z-index: 50;
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.4fr) minmax(180px, 1fr);
+  grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.4fr) minmax(
+      180px,
+      1fr
+    );
   grid-template-rows: auto auto;
   column-gap: 16px;
   row-gap: 6px;
@@ -2943,7 +3240,9 @@ img.queue-thumb {
   color: var(--muted);
   flex-shrink: 0;
   line-height: 1;
-  transition: color 0.16s ease, background 0.16s ease;
+  transition:
+    color 0.16s ease,
+    background 0.16s ease;
 }
 
 .volume-icon:hover,
@@ -3101,14 +3400,20 @@ img.queue-thumb {
   border: 0;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 2px 6px rgba(0, 0, 0, 0.35);
   cursor: pointer;
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.12s ease;
 }
 
 .eq-crossfade input[type="range"]:hover::-webkit-slider-thumb {
   transform: scale(1.15);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25), 0 2px 10px rgba(0, 0, 0, 0.5);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 2px 10px rgba(0, 0, 0, 0.5);
 }
 
 .eq-crossfade input[type="range"]::-moz-range-track {
@@ -3124,7 +3429,9 @@ img.queue-thumb {
   border: 0;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 2px 6px rgba(0, 0, 0, 0.35);
   cursor: pointer;
   transition: transform 0.12s ease;
 }
@@ -3314,7 +3621,9 @@ img.queue-thumb {
   padding: 10px 12px;
   border-radius: 8px;
   cursor: pointer;
-  transition: background 0.16s ease, color 0.16s ease;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
 }
 
 .device-panel-item:hover {
@@ -4013,13 +4322,11 @@ img.queue-thumb {
     grid-row: 1;
     margin: 0;
     border-radius: 0;
-    padding:
-      calc(
+    padding: calc(
         var(--mobile-topbar-height) + var(--mobile-search-panel, 0px) +
           env(safe-area-inset-top, 0px) + 12px
       )
-      0
-      calc(var(--player-height) + 28px);
+      0 calc(var(--player-height) + 28px);
     -webkit-overflow-scrolling: touch;
     transition: padding-top 0.28s cubic-bezier(0.22, 1, 0.36, 1);
   }
@@ -4732,7 +5039,9 @@ img.queue-thumb {
   overflow-wrap: break-word;
   word-break: normal;
   hyphens: none;
-  transition: color 0.2s ease, font-size 0.2s ease;
+  transition:
+    color 0.2s ease,
+    font-size 0.2s ease;
 }
 
 .mnp-lyrics-scroll .lyrics-line.active {
@@ -5269,7 +5578,11 @@ img.queue-thumb {
   border-left: 0;
   box-shadow: none;
   background:
-    radial-gradient(circle at 75% 0%, rgba(255, 255, 255, 0.06), transparent 30%),
+    radial-gradient(
+      circle at 75% 0%,
+      rgba(255, 255, 255, 0.06),
+      transparent 30%
+    ),
     linear-gradient(180deg, #1f1f1f 0%, #121212 310px, #121212 100%);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -5645,7 +5958,9 @@ img.queue-thumb {
   border: 0;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 2px 6px rgba(0, 0, 0, 0.35);
   cursor: pointer;
 }
 
@@ -5662,7 +5977,9 @@ img.queue-thumb {
   border: 0;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 2px 6px rgba(0, 0, 0, 0.35);
   cursor: pointer;
 }
 
