@@ -242,6 +242,137 @@ mp3, mp4, oga, ogg, opus, wav, wave, weba
 
 ---
 
+## Search & sources
+
+Search escalates through three tiers: the current scope (filtered client-side),
+the local library (`search_library`), and remote providers (`search_sources`).
+Only the third reaches the network, and only on explicit user action. See
+[Song sourcing](./sources.md).
+
+### `search_library`
+
+Tier 2. Realtime search across title, artist, album, filename, and lyrics, with
+matched-field metadata and lyric snippets. Reads the `library_tracks` view, so
+streamed-but-not-downloaded tracks never appear.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | `string` | yes | Search text |
+| `limit` | `number \| null` | no | Defaults to 80, capped at 200 |
+
+**Returns:** `SearchHit[]`
+
+---
+
+### `search_sources`
+
+Tier 3. Queries every configured remote provider concurrently and returns one
+section per provider.
+
+Returns an empty array immediately when `outside_sourcing_enabled` is off — no
+provider is contacted. A provider that fails yields a section with `error` set
+and `tracks` empty rather than failing the whole call.
+
+Each result is annotated with `already_in_library`, the local path of a track
+the user already owns, so the UI can mark it and play the local copy instead of
+re-fetching.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | `string` | yes | Search text |
+| `limit` | `number \| null` | no | Per provider. Defaults to 20, capped at 50 |
+
+**Returns:** `ProviderResults[]`
+
+**Example**
+
+```typescript
+const sections = await invoke("search_sources", { query: "blackened", limit: 20 });
+for (const section of sections) {
+  if (section.error) console.warn(`${section.display_name}: ${section.error}`);
+}
+```
+
+---
+
+### `stream_source_track`
+
+Fetch a remote result into the local cache and return it as a playable `Track`.
+Play the returned `path` exactly as you would a local file.
+
+Behavior depends on the result:
+
+- **Full length** — cached to disk and registered as a library row flagged
+  `source_state: "cached"`. Hidden from browse and search until downloaded.
+- **Preview** (`is_full_length: false`) — cached to a session-scoped directory
+  and returned with `source_state: "preview"`. **No database row is created**,
+  and it is excluded from listening statistics and recently-played.
+
+Safe to call repeatedly: an already-cached track is reused rather than
+re-fetched.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `track` | `SourceTrack` | yes | A result from `search_sources` |
+
+**Returns:** `Track`
+
+**Errors (examples):** `"This recording isn't available for download"` (401/403),
+`"The source is rate limiting — try again in a moment"` (429), resolve failures.
+
+---
+
+### `download_source_track`
+
+Keep a remote track: copy it into the platform download destination and promote
+its row into the library, making it browsable and searchable immediately with no
+rescan.
+
+Streams the track first if it is not already cached. Copies rather than moves,
+so a track playing from the cache is never disturbed.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `track` | `SourceTrack` | yes | Must have `downloadable: true` |
+
+**Returns:** `Track` — the promoted library row
+
+**Errors:** rejects a result whose provider does not permit saving. May emit
+[`source-download-fallback`](./events.md) when the intended folder is unusable.
+
+---
+
+### `get_source_settings`
+
+**Arguments:** none
+
+**Returns:** `SourceSettings`
+
+---
+
+### `set_source_settings`
+
+Persist source settings. Blank credentials are stored as unset, which makes the
+affected provider report itself as needing setup rather than failing.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `settings` | `SourceSettings` | yes | Full settings object |
+
+**Returns:** `void`
+
+---
+
 ## Favorites
 
 **Favorites** is a special seeded playlist — just like "All Local Files" — that is created automatically on startup, shows up in `list_playlists`, and **cannot be deleted or renamed**. Use these commands to manage it; it also works with the generic by-id playlist commands (`get_playlist_tracks_by_id`, `play_track_from_specific_playlist`, etc.) using the playlist id from `list_playlists`.

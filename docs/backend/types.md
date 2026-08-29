@@ -247,3 +247,98 @@ import type {
 ```
 
 Or duplicate the interfaces above in a shared `src/types/backend.ts` if you split the API layer later.
+
+---
+
+## `SourceTrack`
+
+One remote search result, returned inside `ProviderResults` by `search_sources`
+and passed back to `stream_source_track` / `download_source_track`.
+
+```typescript
+interface SourceTrack {
+  provider: string;                 // "deezer" | "jamendo" | "archive"
+  id: string;                       // provider's own id
+  title: string;
+  artist: string;
+  album: string | null;
+  duration_seconds: number | null;
+  artwork_url: string | null;
+  audio_url: string | null;
+  is_full_length: boolean;
+  downloadable: boolean;
+  attribution: string | null;
+  already_in_library: string | null;
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `audio_url` | `null` when the provider needs a second call to resolve audio (Internet Archive). Resolved during streaming |
+| `is_full_length` | `false` for Deezer, whose API only serves 30-second previews. Drives the "30s preview" badge |
+| `downloadable` | `false` when the provider's terms do not allow keeping a copy. Drives whether a download button is offered |
+| `attribution` | Licence line to display alongside the result |
+| `already_in_library` | Local path when the user already owns this track, so the UI can mark it and play the local copy |
+
+Prefer these flags over checking `provider` by name — they are what keeps the UI
+truthful as providers are added.
+
+---
+
+## `ProviderResults`
+
+One provider's slice of a source search.
+
+```typescript
+interface ProviderResults {
+  provider: string;
+  display_name: string;
+  tracks: SourceTrack[];
+  error: string | null;
+}
+```
+
+`error` set with `tracks` empty is the **normal degraded case**, not an
+exception: render that section as unavailable and keep showing the others. A
+provider being down must never read as "no results anywhere".
+
+---
+
+## `SourceSettings`
+
+Returned by `get_source_settings`, accepted by `set_source_settings`.
+
+```typescript
+interface SourceSettings {
+  outside_sourcing_enabled: boolean;
+  jamendo_client_id: string;
+  spotify_client_id: string;
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `outside_sourcing_enabled` | Master switch. When off, no provider is contacted and the search escalation button is hidden |
+| `jamendo_client_id` | Free client ID from `developer.jamendo.com`; `""` when unset |
+| `spotify_client_id` | For a future discovery integration. Spotify's API serves no audio, so this can never enable streaming or caching. OAuth is not implemented yet |
+
+---
+
+## `Track` source fields
+
+`Track` carries two fields describing where it came from.
+
+```typescript
+interface Track {
+  // ...
+  source_provider?: string | null;
+  source_state?: string | null;
+}
+```
+
+| `source_state` | Meaning |
+|----------------|---------|
+| `null` | A local file. `source_provider` is also `null` |
+| `"cached"` | Streamed from a provider but not kept. Playable and queueable; hidden from browse, search, and counts |
+| `"downloaded"` | Fetched and kept. Ordinary library content that happens to record its provenance |
+| `"preview"` | A 30-second clip. **Has no database row** — session-scoped, and excluded from listening statistics |

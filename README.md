@@ -8,6 +8,8 @@ It focuses on **performance**, **simplicity**, and **offline-first usage**, whil
 ## Features
 
 - Local music library (folder-based)
+- Three-tier search: current view, then your library, then the internet
+- Stream or download full-length tracks from Internet Archive and Jamendo
 - High-performance audio playback
 - Cross-platform (Windows, macOS, Linux, Android)
 - Portable & lightweight (no heavy runtime)
@@ -63,6 +65,7 @@ Wave/
 │       ├── library.rs          # SQLite-backed library and playlist logic
 │       ├── metadata.rs         # Track metadata extraction and enrichment
 │       ├── path_validation.rs  # Safe path validation helpers
+│       ├── sources/            # Remote song sourcing: providers, cache, downloads
 │       ├── playback_daemon.rs  # Background playback daemon and IPC
 │       ├── lib.rs              # Tauri backend composition root
 │       └── main.rs             # Native process entry point
@@ -79,6 +82,7 @@ Wave/
 - `src/utils/player.ts` is the frontend-facing wrapper around the backend command surface.
 - Detailed backend API docs live in `docs/backend/README.md`.
 - Android ExoPlayer + SAF details: [`docs/backend/android.md`](docs/backend/android.md).
+- Remote sourcing (providers, streaming cache, downloads): [`docs/backend/sources.md`](docs/backend/sources.md).
 
 ---
 
@@ -100,6 +104,20 @@ node -v
 rustc --version
 cargo --version
 ```
+
+---
+
+### Optional: remote sources
+
+Wave works fully offline. Searching the internet for music is opt-in — toggle
+**Search outside sources** in Settings.
+
+Deezer and Internet Archive need no setup. Jamendo needs a free client ID from
+[developer.jamendo.com](https://developer.jamendo.com), entered in Settings.
+
+Note that Deezer's API only serves 30-second previews; previews play but are
+never saved to your library. Full-length audio comes from Internet Archive and
+Jamendo.
 
 ---
 

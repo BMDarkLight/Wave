@@ -34,6 +34,7 @@ Wave separates three layers:
 | **Library playlist** | SQLite (`wave-library.sqlite`) | Persisted track list for the default "All Local Files" playlist |
 | **Playback queue** | In-memory (Rust) | Order used by `play_next`, `play_previous`, shuffle, and repeat |
 | **Audio engine** | Platform-specific | Desktop: Rodio + Symphonia + CPAL. Android: Media3 ExoPlayer (JNI) for decode/output; Rust still owns the queue |
+| **Source cache** | `<data>/source-cache/` | Remote audio fetched to disk so the path-keyed engine can play it unchanged |
 
 Important behaviors:
 
@@ -42,6 +43,8 @@ Important behaviors:
 - **`play_track_from_playlist`** loads the library playlist into the playback queue, sets the current index, and starts playback. Call this (not `play_track`) when the user picks a song from the library UI so next/previous/shuffle/repeat work correctly.
 - **`play_track`** plays a single file by path without updating the queue.
 - On Android, `content://` URIs play directly through ExoPlayer (no copy required for playback). See [Android playback](./android.md).
+- **Remote audio becomes a file before it plays.** The engine only understands paths, so a streamed track is fetched into the source cache and handed over as a path. Nothing in the playback stack is aware of URLs. See [Song sourcing](./sources.md).
+- **`search_library` reads the `library_tracks` view**, not the `tracks` table. Tracks streamed but not downloaded are deliberately absent from browse, search, and counts until the user saves them.
 
 ## Documentation index
 
@@ -52,6 +55,7 @@ Important behaviors:
 | [Events](./events.md) | OS media control events emitted by the backend |
 | [DSP](./dsp.md) | Digital Signal Processing (equalizer, biquad filters) |
 | [Android playback](./android.md) | ExoPlayer backend, SAF import, media session bridge |
+| [Song sourcing](./sources.md) | Remote search tier, streaming cache, downloads |
 
 ## Command summary
 
@@ -80,6 +84,17 @@ Important behaviors:
 | `list_playlists` | List playlists (optionally filtered by profile) |
 | `get_library_database_path` | Absolute path to the SQLite database |
 | `get_supported_audio_extensions` | Lowercase extensions the backend accepts |
+
+### Search & sources
+
+| Command | Description |
+|---------|-------------|
+| `search_library` | Tier 2 — realtime local search with matched fields and lyric snippets |
+| `search_sources` | Tier 3 — query remote providers concurrently (explicit user action only) |
+| `stream_source_track` | Fetch a remote result into the cache and return a playable `Track` |
+| `download_source_track` | Keep a remote track: copy to the download folder and index it |
+| `get_source_settings` | Read the master switch and provider credentials |
+| `set_source_settings` | Persist the master switch and provider credentials |
 
 ### Favorites
 

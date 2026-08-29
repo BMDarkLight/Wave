@@ -158,3 +158,26 @@ The backend currently **does not** forward these platform events to the frontend
 - Set volume
 
 Handle volume in-app with `set_volume` if you add a volume slider.
+
+---
+
+### `source-download-fallback`
+
+Emitted when a download could not be written to its intended destination and
+landed in Wave's own downloads folder instead. On Android this means the music
+folder's grant is read-only.
+
+Surface this to the user: the file saved successfully, but somewhere they did
+not choose.
+
+| Payload | Type |
+|---------|------|
+| reason | `string` — human-readable explanation of where the file went |
+
+```typescript
+import { listen } from "@tauri-apps/api/event";
+
+await listen<string>("source-download-fallback", (event) => {
+  showToast(event.payload);
+});
+```
