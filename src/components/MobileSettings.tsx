@@ -171,6 +171,62 @@ function ScrollSafeRange({
   );
 }
 
+/**
+ * What each source actually delivers.
+ *
+ * `capability` is the honest answer to "what do I get from this?" — the
+ * distinction that matters when you are choosing sources, and the one people
+ * are most often surprised by. It is deliberately separate from readiness: a
+ * source can be fully set up and still only hand back a 30-second clip.
+ */
+const SOURCE_PROVIDERS: Array<{
+  name: string;
+  capability: "full" | "preview" | "search";
+  capabilityLabel: string;
+  blurb: string;
+  credential?: {
+    field: "jamendo_client_id" | "spotify_client_id";
+    placeholder: string;
+  };
+}> = [
+  {
+    name: "Internet Archive",
+    capability: "full",
+    capabilityLabel: "Full length",
+    blurb:
+      "Public-domain and Creative Commons recordings you can play and keep.",
+  },
+  {
+    name: "Jamendo",
+    capability: "full",
+    capabilityLabel: "Full length",
+    blurb:
+      "Creative Commons tracks you can play and keep. The client ID is free.",
+    credential: {
+      field: "jamendo_client_id",
+      placeholder: "Client ID from developer.jamendo.com",
+    },
+  },
+  {
+    name: "Deezer",
+    capability: "preview",
+    capabilityLabel: "30-second clips",
+    blurb:
+      "The best search and artwork of any source, but its API hands out 30-second clips only. Clips play, and are never saved to your library.",
+  },
+  {
+    name: "Spotify",
+    capability: "search",
+    capabilityLabel: "No audio",
+    blurb:
+      "Spotify serves no audio through its API, so no key can play or save a song here. Sign-in is not built yet; once it is, this finds songs and plays your copy instead.",
+    credential: {
+      field: "spotify_client_id",
+      placeholder: "Client ID from developer.spotify.com",
+    },
+  },
+];
+
 interface MobileSettingsProps {
   /** Render in the desktop middle pane instead of a slide-over sheet. */
   embedded?: boolean;
@@ -605,6 +661,86 @@ export default function MobileSettings({
         </section>
 
         <section className="mset-section">
+          <h2>
+            <BiSearch /> Music sources
+          </h2>
+          <div className="mset-card">
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={sourceSettings.outside_sourcing_enabled}
+                onChange={(event) =>
+                  onSourceSettingsChange({
+                    ...sourceSettings,
+                    outside_sourcing_enabled: event.target.checked,
+                  })
+                }
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">
+                  Search outside sources
+                </span>
+                <span className="mset-gapless-hint">
+                  Add a third step to search: after this playlist and your
+                  library, look on the internet. Nothing is contacted until you
+                  ask for it. Leave this off and Wave stays entirely offline.
+                </span>
+              </span>
+            </label>
+
+            {sourceSettings.outside_sourcing_enabled &&
+              SOURCE_PROVIDERS.map((provider) => {
+                const value = provider.credential
+                  ? sourceSettings[provider.credential.field]
+                  : "";
+                const ready = !provider.credential || value.trim().length > 0;
+                return (
+                  <div key={provider.name}>
+                    <div className="mset-playback-divider" role="separator" />
+                    <div className="mset-source">
+                      <div className="mset-source-head">
+                        <span
+                          className={`mset-source-dot ${
+                            ready ? "is-ready" : "is-waiting"
+                          }`}
+                          aria-hidden="true"
+                        />
+                        <span className="mset-source-name">
+                          {provider.name}
+                        </span>
+                        <span
+                          className={`mset-source-gives mset-source-gives-${provider.capability}`}
+                        >
+                          {provider.capabilityLabel}
+                        </span>
+                      </div>
+                      <p className="mset-source-blurb">{provider.blurb}</p>
+                      {provider.credential && (
+                        <input
+                          type="text"
+                          className="mset-source-input"
+                          value={value}
+                          placeholder={provider.credential.placeholder}
+                          spellCheck={false}
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          aria-label={`${provider.name} client ID`}
+                          onChange={(event) =>
+                            onSourceSettingsChange({
+                              ...sourceSettings,
+                              [provider.credential!.field]: event.target.value,
+                            })
+                          }
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        </section>
+
+        <section className="mset-section">
           <h2>Listening</h2>
           <div className="mset-card">
             {!listenStats ||
@@ -808,142 +944,6 @@ export default function MobileSettings({
               </span>
             </label>
           </div>
-        </section>
-
-        <section className="mset-section">
-          <h2>
-            <BiSearch /> Music sources
-          </h2>
-          <div className="mset-card mset-playback-card">
-            <label className="mset-gapless-row">
-              <input
-                type="checkbox"
-                checked={sourceSettings.outside_sourcing_enabled}
-                onChange={(event) =>
-                  onSourceSettingsChange({
-                    ...sourceSettings,
-                    outside_sourcing_enabled: event.target.checked,
-                  })
-                }
-              />
-              <span className="mset-gapless-copy">
-                <span className="mset-gapless-label">
-                  Search outside sources
-                </span>
-                <span className="mset-gapless-hint">
-                  Adds a third step to search: after your playlist and your
-                  library, look for a song on the internet. Nothing is contacted
-                  until you press the button. Turn this off and Wave stays
-                  entirely offline.
-                </span>
-              </span>
-            </label>
-          </div>
-
-          {sourceSettings.outside_sourcing_enabled && (
-            <>
-              <div className="mset-card mset-playback-card mset-source-provider">
-                <div className="mset-source-head">
-                  <span className="mset-gapless-label">Deezer</span>
-                  <span className="mset-source-tag mset-source-tag-ready">
-                    No setup needed
-                  </span>
-                </div>
-                <span className="mset-gapless-hint">
-                  Best search and artwork of any source, but its API only serves
-                  30-second previews. Good for finding a song; previews play but
-                  are never saved to your library.
-                </span>
-              </div>
-
-              <div className="mset-card mset-playback-card mset-source-provider">
-                <div className="mset-source-head">
-                  <span className="mset-gapless-label">Internet Archive</span>
-                  <span className="mset-source-tag mset-source-tag-ready">
-                    No setup needed
-                  </span>
-                </div>
-                <span className="mset-gapless-hint">
-                  Full-length public-domain and Creative Commons recordings you
-                  can stream and save.
-                </span>
-              </div>
-
-              <div className="mset-card mset-playback-card mset-source-provider">
-                <div className="mset-source-head">
-                  <span className="mset-gapless-label">Jamendo</span>
-                  <span
-                    className={`mset-source-tag ${
-                      sourceSettings.jamendo_client_id
-                        ? "mset-source-tag-ready"
-                        : "mset-source-tag-setup"
-                    }`}
-                  >
-                    {sourceSettings.jamendo_client_id
-                      ? "Connected"
-                      : "Needs a client ID"}
-                  </span>
-                </div>
-                <input
-                  type="text"
-                  className="mset-source-input"
-                  value={sourceSettings.jamendo_client_id}
-                  placeholder="Client ID from developer.jamendo.com"
-                  spellCheck={false}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  onChange={(event) =>
-                    onSourceSettingsChange({
-                      ...sourceSettings,
-                      jamendo_client_id: event.target.value,
-                    })
-                  }
-                />
-                <span className="mset-gapless-hint">
-                  Full-length Creative Commons tracks you can stream and save.
-                  The client ID is free.
-                </span>
-              </div>
-
-              <div className="mset-card mset-playback-card mset-source-provider">
-                <div className="mset-source-head">
-                  <span className="mset-gapless-label">Spotify</span>
-                  <span
-                    className={`mset-source-tag ${
-                      sourceSettings.spotify_client_id
-                        ? "mset-source-tag-ready"
-                        : "mset-source-tag-setup"
-                    }`}
-                  >
-                    {sourceSettings.spotify_client_id
-                      ? "Connected"
-                      : "Needs a client ID"}
-                  </span>
-                </div>
-                <input
-                  type="text"
-                  className="mset-source-input"
-                  value={sourceSettings.spotify_client_id}
-                  placeholder="Client ID from developer.spotify.com"
-                  spellCheck={false}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  onChange={(event) =>
-                    onSourceSettingsChange({
-                      ...sourceSettings,
-                      spotify_client_id: event.target.value,
-                    })
-                  }
-                />
-                <span className="mset-gapless-hint mset-source-warning">
-                  Search and playlists only. Spotify&rsquo;s API serves no audio
-                  at all, so nothing here can stream or save a song &mdash; it
-                  finds tracks, then plays your copy or a full-length free
-                  source.
-                </span>
-              </div>
-            </>
-          )}
         </section>
 
         {showAudioOutput && (
