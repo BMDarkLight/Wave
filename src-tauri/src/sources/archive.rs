@@ -17,6 +17,20 @@ use super::{get_json, str_field, SourceError, SourceProvider, SourceTrack};
 /// Audio formats we can decode, best first.
 const PREFERRED_FORMATS: &[&str] = &["flac", "mp3", "ogg", "m4a", "wav"];
 
+/// Narrows a `mediatype:(audio)` search to things a music player should offer.
+///
+/// Both halves are load-bearing, and both are indexed fields so they cost no
+/// extra requests:
+///
+/// - `collection:(audio_music OR etree)` keeps podcasts, lectures, and YouTube
+///   rips out. Without it, searching "blackened" returns a talk-radio episode
+///   before any music.
+/// - `NOT access-restricted-item:true` drops items whose files the Archive
+///   serves as 401/403. Those look identical in search results but fail the
+///   moment you press play.
+const MUSIC_FILTER: &str =
+    "AND collection:(audio_music OR etree) AND NOT access-restricted-item:true";
+
 pub struct InternetArchive;
 
 impl SourceProvider for InternetArchive {
@@ -40,7 +54,7 @@ impl SourceProvider for InternetArchive {
     ) -> Result<Vec<SourceTrack>, SourceError> {
         let url = format!(
             "https://archive.org/advancedsearch.php?q={}&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=creator&fl%5B%5D=year&rows={}&page=1&output=json",
-            urlencoding_encode(&format!("({query}) AND mediatype:(audio)")),
+            urlencoding_encode(&format!("({query}) AND mediatype:(audio) {MUSIC_FILTER}")),
             limit.clamp(1, 50),
         );
         let value = get_json(client, &url)?;
@@ -127,6 +141,15 @@ fn best_audio_file(files: &[serde_json::Value]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_query_excludes_restricted_and_non_music() {
+        // Both filters fix a bug seen in the running app: a 401 on a
+        // restricted podcast item that a bare mediatype:(audio) search
+        // ranked first for a music query.
+        assert!(MUSIC_FILTER.contains("NOT access-restricted-item:true"));
+        assert!(MUSIC_FILTER.contains("collection:(audio_music OR etree)"));
+    }
 
     #[test]
     fn parses_string_and_array_creators() {

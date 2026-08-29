@@ -358,14 +358,30 @@ mod live_tests {
         let _ = std::fs::remove_file(&dest);
         let written = cache::fetch_to(client, &url, &dest).expect("preview fetch failed");
 
-        assert!(written > 10_000, "preview suspiciously small: {written} bytes");
+        assert!(
+            written > 10_000,
+            "preview suspiciously small: {written} bytes"
+        );
         let header = std::fs::read(&dest).expect("cached file unreadable");
         // ID3 tag or a raw MPEG frame sync — either way, decodable audio.
-        let is_audio = header.starts_with(b"ID3") || (header[0] == 0xFF && header[1] & 0xE0 == 0xE0);
+        let is_audio =
+            header.starts_with(b"ID3") || (header[0] == 0xFF && header[1] & 0xE0 == 0xE0);
         assert!(is_audio, "cached bytes are not MP3: {:?}", &header[..4]);
 
         // The temp `.part` file must never survive a successful fetch.
         assert!(!dest.with_extension("mp3.part").exists());
+
+        // Bytes that look like MP3 are not enough: every Deezer preview ships
+        // an empty ID3v2.4 tag that used to fail Symphonia's probe outright.
+        // Decoding is the assertion that actually catches that.
+        crate::audio::symphonia_source::SymphoniaSource::new(dest.to_string_lossy().as_ref())
+            .expect("cached preview must be decodable by the playback engine");
+
+        // Bytes that look like MP3 are not enough: every Deezer preview ships
+        // an empty ID3v2.4 tag that used to fail Symphonia's probe outright.
+        // Decoding is the assertion that actually catches that.
+        crate::audio::symphonia_source::SymphoniaSource::new(dest.to_string_lossy().as_ref())
+            .expect("cached preview must be decodable by the playback engine");
 
         println!(
             "OK  {} — {} ({} bytes cached to {})",
@@ -391,11 +407,34 @@ mod live_tests {
         // Search is item-level and deliberately defers audio resolution.
         assert!(tracks.iter().all(|t| t.audio_url.is_none()));
 
-        let resolved = tracks
+        let (track, resolved) = tracks
             .iter()
-            .find_map(|t| provider.resolve_audio(client, t).ok())
+            .find_map(|t| provider.resolve_audio(client, t).ok().map(|url| (t, url)))
             .expect("no Archive item resolved to audio");
         assert!(resolved.starts_with("https://archive.org/download/"));
-        println!("OK  resolved {resolved}");
+
+        // Asserting the URL's shape is not enough — that is exactly how a 401
+        // on an access-restricted item reached the user. Fetch it and decode.
+        // Derive the extension from the resolved URL exactly as
+        // `stream_source_track` does — Archive tracks carry no audio_url until
+        // resolve, so a cache path built before that would have no extension
+        // and `validate_audio_path` would reject it.
+        let mut resolved_track = track.clone();
+        resolved_track.audio_url = Some(resolved.clone());
+        let dest = std::env::temp_dir().join(format!(
+            "wave-live-archive-{}.{}",
+            track.id,
+            resolved_track.extension()
+        ));
+        let _ = std::fs::remove_file(&dest);
+        let written = cache::fetch_to(client, &resolved, &dest)
+            .unwrap_or_else(|e| panic!("resolved URL was not fetchable: {e}"));
+        assert!(written > 10_000, "suspiciously small: {written} bytes");
+
+        crate::audio::symphonia_source::SymphoniaSource::new(dest.to_string_lossy().as_ref())
+            .expect("fetched Archive audio must be decodable");
+
+        println!("OK  {} — {written} bytes from {resolved}", track.title);
+        let _ = std::fs::remove_file(&dest);
     }
 }

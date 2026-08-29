@@ -72,9 +72,14 @@ pub fn fetch_to(client: &Client, url: &str, dest: &Path) -> Result<u64, SourceEr
     let mut response = client
         .get(url)
         .send()
-        .map_err(|e| SourceError::Network(e.to_string()))?
-        .error_for_status()
         .map_err(|e| SourceError::Network(e.to_string()))?;
+
+    // `error_for_status` renders as a wall of URL, which is useless in a toast.
+    // Say what actually happened instead.
+    let status = response.status();
+    if !status.is_success() {
+        return Err(SourceError::Network(describe_http_failure(status.as_u16())));
+    }
 
     if let Some(len) = response.content_length() {
         if len > MAX_FETCH_BYTES {
@@ -107,6 +112,20 @@ pub fn fetch_to(client: &Client, url: &str, dest: &Path) -> Result<u64, SourceEr
         SourceError::Network(format!("Cannot finalise cache file: {e}"))
     })?;
     Ok(written)
+}
+
+/// Plain-language reason a download failed, for display to the user.
+///
+/// Archive.org in particular serves 401/403 for access-restricted items, which
+/// are indistinguishable from normal ones until you try to fetch them.
+fn describe_http_failure(status: u16) -> String {
+    match status {
+        401 | 403 => "This recording isn't available for download".to_string(),
+        404 => "This recording is no longer available at the source".to_string(),
+        429 => "The source is rate limiting — try again in a moment".to_string(),
+        500..=599 => format!("The source is having problems (HTTP {status})"),
+        other => format!("The source refused the download (HTTP {other})"),
+    }
 }
 
 /// Total bytes held in the cache directory.
@@ -188,6 +207,19 @@ mod tests {
     // Every candidate is 100 bytes, so caps read as "how many files fit".
     fn flat_sizes(_: &str) -> u64 {
         100
+    }
+
+    #[test]
+    fn http_failures_read_as_sentences_not_urls() {
+        // The raw reqwest error dumped a full CDN URL into the error toast.
+        assert_eq!(
+            describe_http_failure(401),
+            "This recording isn't available for download"
+        );
+        assert_eq!(describe_http_failure(403), describe_http_failure(401));
+        assert!(describe_http_failure(503).contains("having problems"));
+        assert!(describe_http_failure(429).contains("rate limiting"));
+        assert!(!describe_http_failure(418).contains("http"));
     }
 
     #[test]
