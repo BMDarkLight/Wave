@@ -24,7 +24,8 @@ pub(crate) const TRACK_SELECT_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.
                         t.source_provider, t.source_state";
 
 /// Full track row including lyrics (lyrics panel / detail).
-pub(crate) const TRACK_DETAIL_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.artist, t.album, t.album_artist, t.genre,
+pub(crate) const TRACK_DETAIL_COLUMNS: &str =
+    "t.id, t.path, t.name, t.title, t.artist, t.album, t.album_artist, t.genre,
                         t.year, t.track_number, t.disc_number, t.format, t.duration_seconds,
                         t.sample_rate, t.channels, t.bit_depth, t.lyrics, t.lyrics_source,
                         aa.thumb_path, COALESCE(aa.mime, t.cover_art_mime), t.cover_art_source,
@@ -391,8 +392,31 @@ impl Library {
             .map_err(|error| format!("Failed to initialize source schema: {error}"))?;
         ensure_playlist_column(&connection, "sync_folder", "TEXT")?;
         ensure_table_column(&connection, "artist_similar", "similar_mbid", "TEXT")?;
-        ensure_table_column(&connection, "artist_similar", "cover_release_group_mbid", "TEXT")?;
-        ensure_table_column(&connection, "artist_enrichment", "profile_version", "INTEGER NOT NULL DEFAULT 1")?;
+        ensure_table_column(
+            &connection,
+            "artist_similar",
+            "cover_release_group_mbid",
+            "TEXT",
+        )?;
+        ensure_table_column(
+            &connection,
+            "artist_enrichment",
+            "profile_version",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+
+        // Previews stopped being library content: they are session-scoped clips
+        // held in memory, never rows. Sweep up rows left by the earlier build
+        // that treated them like cached tracks. Deezer is preview-only by
+        // definition — its API exposes nothing but 30-second clips.
+        if let Ok(removed) = connection.execute(
+            "DELETE FROM tracks WHERE source_provider = 'deezer' AND source_state = 'cached'",
+            [],
+        ) {
+            if removed > 0 {
+                tracing::info!("Removed {removed} legacy preview rows from the library");
+            }
+        }
 
         if let Err(error) = ensure_tracks_fts(&connection) {
             tracing::warn!("Failed to initialize FTS search index: {error}");
@@ -407,8 +431,7 @@ impl Library {
         );
         let playlist_id =
             ensure_playlist_with_connection(&connection, &profile_id, LIBRARY_PLAYLIST_NAME)?;
-        let favorites_id =
-            ensure_playlist_with_connection(&connection, &profile_id, "Favorites")?;
+        let favorites_id = ensure_playlist_with_connection(&connection, &profile_id, "Favorites")?;
 
         // Warm the caches.
         let _ = self.default_playlist_id_cache.set(playlist_id.clone());
@@ -491,30 +514,24 @@ impl Library {
 
         let now = now_timestamp();
         for (track_id, data_url, mime) in rows {
-            let saved = match crate::cover_art::migrate_data_url_to_thumb(&self.cover_root, &data_url)
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::debug!("Skip cover migrate for {track_id}: {e}");
-                    let _ = connection.execute(
-                        "UPDATE tracks SET cover_art_data_url = NULL WHERE id = ?1",
-                        params![track_id],
-                    );
-                    continue;
-                }
-            };
+            let saved =
+                match crate::cover_art::migrate_data_url_to_thumb(&self.cover_root, &data_url) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::debug!("Skip cover migrate for {track_id}: {e}");
+                        let _ = connection.execute(
+                            "UPDATE tracks SET cover_art_data_url = NULL WHERE id = ?1",
+                            params![track_id],
+                        );
+                        continue;
+                    }
+                };
             let mime = mime.unwrap_or_else(|| saved.mime.clone());
             connection
                 .execute(
                     "INSERT OR IGNORE INTO album_art (id, thumb_path, mime, byte_size, created_at)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![
-                        saved.id,
-                        saved.relative_path,
-                        mime,
-                        saved.byte_size,
-                        now
-                    ],
+                    params![saved.id, saved.relative_path, mime, saved.byte_size, now],
                 )
                 .map_err(|e| format!("Failed to insert album_art: {e}"))?;
             connection
@@ -581,8 +598,7 @@ impl Library {
         }
         let connection = self.lock_connection()?;
         let profile_id = ensure_profile_with_connection(&connection, "default", "Default")?;
-        let playlist_id =
-            ensure_playlist_with_connection(&connection, &profile_id, "Favorites")?;
+        let playlist_id = ensure_playlist_with_connection(&connection, &profile_id, "Favorites")?;
         let _ = self.favorites_playlist_id_cache.set(playlist_id.clone());
         Ok(playlist_id)
     }
@@ -762,15 +778,17 @@ impl Library {
         let connection = self.lock_connection()?;
 
         // Library returns every track in the library
-        if self.default_playlist_id_cache.get().map_or(false, |id| id == playlist_id) {
+        if self
+            .default_playlist_id_cache
+            .get()
+            .map_or(false, |id| id == playlist_id)
+        {
             let mut statement = connection
-                .prepare(
-                    &format!(
-                        "SELECT {TRACK_SELECT_COLUMNS}
+                .prepare(&format!(
+                    "SELECT {TRACK_SELECT_COLUMNS}
                      FROM {TRACK_FROM}
                      ORDER BY t.name"
-                    ),
-                )
+                ))
                 .map_err(|error| format!("Failed to prepare all-local-files query: {error}"))?;
 
             let tracks = statement
@@ -782,20 +800,20 @@ impl Library {
         }
 
         let mut statement = connection
-            .prepare(
-                &format!(
-                    "SELECT {TRACK_SELECT_COLUMNS}
+            .prepare(&format!(
+                "SELECT {TRACK_SELECT_COLUMNS}
                  FROM playlist_tracks pt
                  JOIN tracks t ON t.id = pt.track_id
                  LEFT JOIN album_art aa ON aa.id = t.album_art_id
                  WHERE pt.playlist_id = ?1
                  ORDER BY pt.position"
-                ),
-            )
+            ))
             .map_err(|error| format!("Failed to prepare playlist query: {error}"))?;
 
         let tracks = statement
-            .query_map(params![playlist_id], |row| row_to_track(row, &self.cover_root))
+            .query_map(params![playlist_id], |row| {
+                row_to_track(row, &self.cover_root)
+            })
             .map_err(|error| format!("Failed to query playlist: {error}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("Failed to read playlist track: {error}"))?;
@@ -905,8 +923,7 @@ impl Library {
         directory: String,
     ) -> Result<Vec<Track>, String> {
         let profile_id_str = profile_id.unwrap_or_else(|| "default".to_string());
-        let playlist_name_str =
-            playlist_name.unwrap_or_else(|| LIBRARY_PLAYLIST_NAME.to_string());
+        let playlist_name_str = playlist_name.unwrap_or_else(|| LIBRARY_PLAYLIST_NAME.to_string());
 
         // Resolve / create the profile and playlist outside the connection lock.
         let playlist_id = {
@@ -1157,7 +1174,9 @@ impl Library {
             }
         }
 
-        Err(format!("Could not find a unique name for playlist \"{base}\""))
+        Err(format!(
+            "Could not find a unique name for playlist \"{base}\""
+        ))
     }
 
     pub fn delete_playlist(&self, playlist_id: &str) -> Result<(), String> {
@@ -1183,10 +1202,7 @@ impl Library {
         }
 
         let deleted = connection
-            .execute(
-                "DELETE FROM playlists WHERE id = ?1",
-                params![playlist_id],
-            )
+            .execute("DELETE FROM playlists WHERE id = ?1", params![playlist_id])
             .map_err(|error| format!("Failed to delete playlist: {error}"))?;
         if deleted == 0 {
             return Err("Playlist not found".to_string());
@@ -1589,7 +1605,9 @@ impl Library {
             .prepare("SELECT id, path FROM tracks")
             .map_err(|e| format!("Failed to prepare track lookup: {e}"))?;
         let rows = statement
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
             .map_err(|e| format!("Failed to query tracks: {e}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to read tracks: {e}"))?;
@@ -1625,8 +1643,7 @@ impl Library {
         let playlist_name_str = name.to_string();
 
         // Resolve profile and create the playlist outside the transaction.
-        let profile_id =
-            ensure_profile_with_connection(&connection, "default", "Default")?;
+        let profile_id = ensure_profile_with_connection(&connection, "default", "Default")?;
         // Allow duplicate suffixes for auto-generated playlists.
         let final_name =
             self.resolve_unique_playlist_name(&connection, &profile_id, &playlist_name_str)?;
@@ -1651,9 +1668,7 @@ impl Library {
                  VALUES (?1, ?2, ?3, ?4)",
                 params![playlist_id, track.id, index as i64, now],
             )
-            .map_err(|error| {
-                format!("Failed to add track to album playlist: {error}")
-            })?;
+            .map_err(|error| format!("Failed to add track to album playlist: {error}"))?;
         }
 
         tx.commit()
@@ -1685,8 +1700,7 @@ impl Library {
         let name = playlist_name.unwrap_or(artist);
         let playlist_name_str = name.to_string();
 
-        let profile_id =
-            ensure_profile_with_connection(&connection, "default", "Default")?;
+        let profile_id = ensure_profile_with_connection(&connection, "default", "Default")?;
         let final_name =
             self.resolve_unique_playlist_name(&connection, &profile_id, &playlist_name_str)?;
 
@@ -1710,9 +1724,7 @@ impl Library {
                  VALUES (?1, ?2, ?3, ?4)",
                 params![playlist_id, track.id, index as i64, now],
             )
-            .map_err(|error| {
-                format!("Failed to add track to artist playlist: {error}")
-            })?;
+            .map_err(|error| format!("Failed to add track to artist playlist: {error}"))?;
         }
 
         tx.commit()
@@ -1756,9 +1768,8 @@ impl Library {
     pub fn list_albums(&self) -> Result<Vec<AlbumSummaryDto>, String> {
         let connection = self.read_connection();
         let mut statement = connection
-            .prepare(
-                &format!(
-                    "SELECT
+            .prepare(&format!(
+                "SELECT
                     t.album,
                     COALESCE(NULLIF(t.album_artist, ''), t.artist) AS album_artist,
                     MIN(t.artist) AS artist,
@@ -1770,8 +1781,7 @@ impl Library {
                  FROM {LIBRARY_TRACK_FROM}
                  GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
                  ORDER BY album_artist, t.album"
-                ),
-            )
+            ))
             .map_err(|error| format!("Failed to prepare albums query: {error}"))?;
         let albums = statement
             .query_map([], |row| row_to_album_summary(row, &self.cover_root))
@@ -1888,9 +1898,8 @@ impl Library {
         }
         let connection = self.read_connection();
         let mut statement = connection
-            .prepare(
-                &format!(
-                    "SELECT
+            .prepare(&format!(
+                "SELECT
                     t.album,
                     COALESCE(NULLIF(t.album_artist, ''), t.artist) AS album_artist,
                     MIN(t.artist) AS artist,
@@ -1903,11 +1912,12 @@ impl Library {
                  WHERE t.artist = ?1
                  GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
                  ORDER BY MIN(COALESCE(t.year, 9999)), t.album"
-                ),
-            )
+            ))
             .map_err(|error| format!("Failed to prepare artist albums query: {error}"))?;
         let albums = statement
-            .query_map(params![artist], |row| row_to_album_summary(row, &self.cover_root))
+            .query_map(params![artist], |row| {
+                row_to_album_summary(row, &self.cover_root)
+            })
             .map_err(|error| format!("Failed to query artist albums: {error}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("Failed to read artist albums: {error}"))?;
@@ -2119,11 +2129,14 @@ impl Library {
             )
             .map_err(|e| format!("Failed to update track lyrics: {e}"))?;
         // Refresh FTS row for lyrics search.
-        if let Ok(Some(track)) = connection.query_row(
-            &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM} WHERE t.id = ?1"),
-            params![track_id],
-            |row| row_to_track(row, &self.cover_root),
-        ).optional() {
+        if let Ok(Some(track)) = connection
+            .query_row(
+                &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM} WHERE t.id = ?1"),
+                params![track_id],
+                |row| row_to_track(row, &self.cover_root),
+            )
+            .optional()
+        {
             let _ = sync_track_fts(&connection, &track);
         }
         Ok(())
@@ -2156,11 +2169,7 @@ impl Library {
     // ── Export / Import ──────────────────────────────────────────────────────
 
     /// Export a playlist as an M3U8 file (a plain-text list of file paths).
-    pub fn export_playlist_m3u(
-        &self,
-        playlist_id: &str,
-        output_path: &str,
-    ) -> Result<(), String> {
+    pub fn export_playlist_m3u(&self, playlist_id: &str, output_path: &str) -> Result<(), String> {
         let tracks = self.get_playlist_tracks(playlist_id)?;
         let mut content = String::from("#EXTM3U\n");
         for track in &tracks {
@@ -2184,8 +2193,8 @@ impl Library {
         m3u_path: &str,
         playlist_name: Option<&str>,
     ) -> Result<(String, Vec<Track>), String> {
-        let content =
-            std::fs::read_to_string(m3u_path).map_err(|error| format!("Failed to read M3U file: {error}"))?;
+        let content = std::fs::read_to_string(m3u_path)
+            .map_err(|error| format!("Failed to read M3U file: {error}"))?;
         let name = playlist_name.unwrap_or_else(|| {
             Path::new(m3u_path)
                 .file_stem()
@@ -2211,11 +2220,7 @@ impl Library {
     }
 
     /// Export a playlist as a Wave JSON file (paths + metadata).
-    pub fn export_playlist_json(
-        &self,
-        playlist_id: &str,
-        output_path: &str,
-    ) -> Result<(), String> {
+    pub fn export_playlist_json(&self, playlist_id: &str, output_path: &str) -> Result<(), String> {
         let tracks = self.get_playlist_tracks(playlist_id)?;
         let info = self
             .get_playlist_info(playlist_id)?
@@ -2332,10 +2337,7 @@ impl Library {
     /// Import lyrics from a Wave JSON backup into matching library tracks.
     ///
     /// Match order: fingerprint → artist/album/title (+ duration) → legacy path/id.
-    pub fn import_lyrics_json(
-        &self,
-        json_path: &str,
-    ) -> Result<(usize, usize, usize), String> {
+    pub fn import_lyrics_json(&self, json_path: &str) -> Result<(usize, usize, usize), String> {
         let content = std::fs::read_to_string(json_path)
             .map_err(|e| format!("Failed to read lyrics file: {e}"))?;
         let export: LyricsExportJson = serde_json::from_str(&content)
@@ -2457,11 +2459,9 @@ impl Library {
         if let Some(ref id) = entry.id {
             if !id.is_empty() {
                 let exists: Option<String> = connection
-                    .query_row(
-                        "SELECT id FROM tracks WHERE id = ?1",
-                        params![id],
-                        |row| row.get(0),
-                    )
+                    .query_row("SELECT id FROM tracks WHERE id = ?1", params![id], |row| {
+                        row.get(0)
+                    })
                     .optional()
                     .map_err(|e| format!("Failed to look up track by id: {e}"))?;
                 if exists.is_some() {
@@ -2764,7 +2764,9 @@ impl Library {
         let mut candidates: Vec<Track> = Vec::new();
         let mut seen = std::collections::HashSet::<String>::new();
 
-        let push_track = |track: Track, candidates: &mut Vec<Track>, seen: &mut std::collections::HashSet<String>| {
+        let push_track = |track: Track,
+                          candidates: &mut Vec<Track>,
+                          seen: &mut std::collections::HashSet<String>| {
             if seen.insert(track.path.clone()) {
                 candidates.push(track);
             }
@@ -2802,7 +2804,11 @@ impl Library {
                 .query_map(params![seed_id], |row| row_to_track(row, &self.cover_root))
                 .map_err(|e| format!("Failed to query transitions: {e}"))?;
             for row in rows {
-                push_track(row.map_err(|e| format!("Failed to read transition: {e}"))?, &mut candidates, &mut seen);
+                push_track(
+                    row.map_err(|e| format!("Failed to read transition: {e}"))?,
+                    &mut candidates,
+                    &mut seen,
+                );
             }
         }
         drop(connection);
@@ -2837,7 +2843,12 @@ impl Library {
         // Same-genre enrichment: local vibe diversification (no network) —
         // other artists you own who share your favorite track's genre tag.
         if let Some(fav) = favorite_track.as_ref() {
-            if let Some(genre) = fav.genre.as_deref().map(str::trim).filter(|g| !g.is_empty()) {
+            if let Some(genre) = fav
+                .genre
+                .as_deref()
+                .map(str::trim)
+                .filter(|g| !g.is_empty())
+            {
                 let connection = self.read_connection();
                 let mut stmt = connection
                     .prepare(&format!(
@@ -2849,10 +2860,16 @@ impl Library {
                     ))
                     .map_err(|e| format!("Failed to prepare genre affinity query: {e}"))?;
                 let rows = stmt
-                    .query_map(params![genre, fav.artist], |row| row_to_track(row, &self.cover_root))
+                    .query_map(params![genre, fav.artist], |row| {
+                        row_to_track(row, &self.cover_root)
+                    })
                     .map_err(|e| format!("Failed to query genre affinity: {e}"))?;
                 for row in rows {
-                    push_track(row.map_err(|e| format!("Failed to read genre affinity track: {e}"))?, &mut candidates, &mut seen);
+                    push_track(
+                        row.map_err(|e| format!("Failed to read genre affinity track: {e}"))?,
+                        &mut candidates,
+                        &mut seen,
+                    );
                 }
             }
         }
@@ -2900,7 +2917,9 @@ impl Library {
                 let mut this_seed_discovery = Vec::new();
                 for (similar_name, cover_release_group_mbid) in similar_rows {
                     let owned: Vec<Track> = owned_stmt
-                        .query_map(params![similar_name], |row| row_to_track(row, &self.cover_root))
+                        .query_map(params![similar_name], |row| {
+                            row_to_track(row, &self.cover_root)
+                        })
                         .map_err(|e| format!("Failed to query owned similar artist: {e}"))?
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| format!("Failed to read owned similar artist: {e}"))?;
@@ -2956,7 +2975,11 @@ impl Library {
                 .query_map([], |row| row_to_track(row, &self.cover_root))
                 .map_err(|e| format!("Failed to fill suggestions: {e}"))?;
             for row in rows {
-                push_track(row.map_err(|e| format!("Failed to read fill track: {e}"))?, &mut candidates, &mut seen);
+                push_track(
+                    row.map_err(|e| format!("Failed to read fill track: {e}"))?,
+                    &mut candidates,
+                    &mut seen,
+                );
                 if candidates.len() >= 120 {
                     break;
                 }
@@ -2966,7 +2989,10 @@ impl Library {
         shuffle_tracks(&mut candidates);
         let candidates = cap_tracks_per_artist(candidates, MAX_TRACKS_PER_ARTIST_IN_SUGGESTIONS);
 
-        let featured = candidates.first().cloned().or_else(|| favorite_track.clone());
+        let featured = candidates
+            .first()
+            .cloned()
+            .or_else(|| favorite_track.clone());
         let mix: Vec<Track> = candidates.iter().skip(1).take(8).cloned().collect();
         let more: Vec<Track> = candidates
             .iter()
@@ -2997,7 +3023,10 @@ impl Library {
     pub fn diversity_seed_artists(&self) -> Result<Vec<String>, String> {
         let favorite_artist = self.get_favorite_artist()?;
         let recent = self.get_recently_played(40)?;
-        Ok(diversity_seed_artists_from(favorite_artist.as_ref(), &recent))
+        Ok(diversity_seed_artists_from(
+            favorite_artist.as_ref(),
+            &recent,
+        ))
     }
 
     /// Which of `artist_names` have no cached enrichment (see
@@ -3007,7 +3036,10 @@ impl Library {
     /// e.g. cover art — doesn't sit unused behind a month-old TTL). Used to
     /// decide what a background enrichment pass should fetch next —
     /// always DB-only, never touches the network itself.
-    pub fn artists_needing_enrichment(&self, artist_names: &[String]) -> Result<Vec<String>, String> {
+    pub fn artists_needing_enrichment(
+        &self,
+        artist_names: &[String],
+    ) -> Result<Vec<String>, String> {
         let connection = self.read_connection();
         let now = now_timestamp();
         let mut needing = Vec::new();
@@ -3052,7 +3084,11 @@ impl Library {
     ) -> Result<(), String> {
         let key = normalize_artist_key(artist_name);
         let now = now_timestamp();
-        let tags_joined = if tags.is_empty() { None } else { Some(tags.join(", ")) };
+        let tags_joined = if tags.is_empty() {
+            None
+        } else {
+            Some(tags.join(", "))
+        };
 
         let mut connection = self.lock_connection()?;
         let tx = connection
@@ -3073,8 +3109,11 @@ impl Library {
         )
         .map_err(|e| format!("Failed to save artist enrichment: {e}"))?;
 
-        tx.execute("DELETE FROM artist_similar WHERE artist_key = ?1", params![key])
-            .map_err(|e| format!("Failed to clear stale similar artists: {e}"))?;
+        tx.execute(
+            "DELETE FROM artist_similar WHERE artist_key = ?1",
+            params![key],
+        )
+        .map_err(|e| format!("Failed to clear stale similar artists: {e}"))?;
         for entry in similar {
             tx.execute(
                 "INSERT INTO artist_similar (artist_key, similar_name, similar_mbid, cover_release_group_mbid, score, fetched_at)
@@ -3147,7 +3186,11 @@ impl Library {
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::<String>::new();
         if let Some(fav) = favorite {
-            let key = format!("{}::{}", fav.name, fav.album_artist.clone().unwrap_or_default());
+            let key = format!(
+                "{}::{}",
+                fav.name,
+                fav.album_artist.clone().unwrap_or_default()
+            );
             seen.insert(key);
             out.push(fav.clone());
         }
@@ -3192,7 +3235,10 @@ fn cap_tracks_per_artist(tracks: Vec<Track>, cap: usize) -> Vec<Track> {
 
 /// Same as [`pick_diversity_seed_artists`] but takes the already-resolved
 /// favorite artist summary, for callers that fetched it anyway.
-fn diversity_seed_artists_from(favorite_artist: Option<&ArtistSummaryDto>, recent: &[Track]) -> Vec<String> {
+fn diversity_seed_artists_from(
+    favorite_artist: Option<&ArtistSummaryDto>,
+    recent: &[Track],
+) -> Vec<String> {
     pick_diversity_seed_artists(
         favorite_artist.map(|a| a.name.as_str()),
         recent,
@@ -3230,12 +3276,10 @@ fn pick_diversity_seed_artists(
 }
 
 fn shuffle_tracks(items: &mut [Track]) {
-    let mut seed = now_timestamp() as u64
-        ^ (items.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut seed =
+        now_timestamp() as u64 ^ (items.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     for i in (1..items.len()).rev() {
-        seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         let j = (seed as usize) % (i + 1);
         items.swap(i, j);
     }
@@ -3244,21 +3288,17 @@ fn shuffle_tracks(items: &mut [Track]) {
 fn shuffle_pairs<T: Clone>(items: &mut [(T, f64)]) {
     let mut seed = now_timestamp() as u64 ^ (items.len() as u64);
     for i in (1..items.len()).rev() {
-        seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         let j = (seed as usize) % (i + 1);
         items.swap(i, j);
     }
 }
 
-pub(crate) fn row_to_track(
-    row: &rusqlite::Row<'_>,
-    cover_root: &Path,
-) -> rusqlite::Result<Track> {
+pub(crate) fn row_to_track(row: &rusqlite::Row<'_>, cover_root: &Path) -> rusqlite::Result<Track> {
     let thumb_rel: Option<String> = row.get(18)?;
     let album_art_id: Option<String> = row.get(28)?;
-    let cover_art_data_url = resolve_cover_display_path(cover_root, thumb_rel.as_deref(), album_art_id.as_deref());
+    let cover_art_data_url =
+        resolve_cover_display_path(cover_root, thumb_rel.as_deref(), album_art_id.as_deref());
     Ok(Track {
         id: row.get(0)?,
         path: row.get(1)?,
@@ -3514,10 +3554,7 @@ fn lookup_track_id(conn: &impl Queryable, path: &str) -> Result<String, String> 
 }
 
 /// Resolve a track id from a stored or scanned path (exact, then normalized).
-fn resolve_track_id_by_path(
-    conn: &impl Queryable,
-    path: &str,
-) -> Result<Option<String>, String> {
+fn resolve_track_id_by_path(conn: &impl Queryable, path: &str) -> Result<Option<String>, String> {
     if let Some(id) = conn
         .query_opt(
             "SELECT id FROM tracks WHERE path = ?1",
@@ -3782,7 +3819,11 @@ impl Library {
     /// Look up the row for a provider's track, whether cached or downloaded.
     /// Reads `tracks`, not `library_tracks` — a cached row must stay findable
     /// so re-streaming reuses it instead of re-fetching.
-    pub fn find_source_track(&self, provider: &str, source_id: &str) -> Result<Option<Track>, String> {
+    pub fn find_source_track(
+        &self,
+        provider: &str,
+        source_id: &str,
+    ) -> Result<Option<Track>, String> {
         let connection = self.read_connection();
         connection
             .query_row(
@@ -3824,7 +3865,11 @@ impl Library {
 
         // `upsert_track` indexes unconditionally; undo that for a cached row.
         let state: Option<String> = connection
-            .query_row("SELECT source_state FROM tracks WHERE id = ?1", params![id], |r| r.get(0))
+            .query_row(
+                "SELECT source_state FROM tracks WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
             .optional()
             .map_err(|e| format!("Failed to read source state: {e}"))?
             .flatten();
@@ -3845,7 +3890,9 @@ impl Library {
     /// the library and searchable. Idempotent: promoting twice is a no-op.
     pub fn promote_source_track(&self, track_id: &str, new_path: &str) -> Result<Track, String> {
         let connection = self.lock_connection()?;
-        let file_size = std::fs::metadata(new_path).map(|m| m.len() as i64).unwrap_or(0);
+        let file_size = std::fs::metadata(new_path)
+            .map(|m| m.len() as i64)
+            .unwrap_or(0);
         connection
             .execute(
                 "UPDATE tracks
@@ -3868,7 +3915,9 @@ impl Library {
     }
 
     /// Every stream-only row, oldest fetch first, for the eviction planner.
-    pub fn cached_source_tracks(&self) -> Result<Vec<crate::sources::cache::EvictionCandidate>, String> {
+    pub fn cached_source_tracks(
+        &self,
+    ) -> Result<Vec<crate::sources::cache::EvictionCandidate>, String> {
         let connection = self.read_connection();
         let mut statement = connection
             .prepare(
@@ -3912,7 +3961,10 @@ impl Library {
                 params![track_id],
             )
             .map_err(|e| format!("Failed to remove cached track: {e}"))?;
-        let _ = connection.execute("DELETE FROM tracks_fts WHERE track_id = ?1", params![track_id]);
+        let _ = connection.execute(
+            "DELETE FROM tracks_fts WHERE track_id = ?1",
+            params![track_id],
+        );
         let _ = std::fs::remove_file(&path);
         Ok(())
     }
@@ -4106,10 +4158,7 @@ fn deduplicate_tracks(connection: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn compact_playlist_positions(
-    tx: &Transaction<'_>,
-    playlist_id: &str,
-) -> Result<(), String> {
+fn compact_playlist_positions(tx: &Transaction<'_>, playlist_id: &str) -> Result<(), String> {
     let mut statement = tx
         .prepare(
             "SELECT track_id FROM playlist_tracks
@@ -4152,7 +4201,9 @@ fn compact_playlist_positions(
 /// the query — without the `ESCAPE` clause SQLite gives `\` no special
 /// meaning and this escaping has no effect.
 fn escape_like_pattern(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 /// Stable path key for membership diffs (resolves symlinks when possible).
@@ -4270,10 +4321,7 @@ fn matched_fields_for(track: &Track, query: &str) -> Vec<String> {
     if q.is_empty() {
         return Vec::new();
     }
-    let tokens: Vec<&str> = q
-        .split_whitespace()
-        .filter(|t| !t.is_empty())
-        .collect();
+    let tokens: Vec<&str> = q.split_whitespace().filter(|t| !t.is_empty()).collect();
     let check = |value: &str| {
         if tokens.is_empty() {
             field_contains(value, q)
@@ -4295,11 +4343,7 @@ fn matched_fields_for(track: &Track, query: &str) -> Vec<String> {
     if check(&track.name) && !fields.iter().any(|f| f == "title") {
         fields.push("name".into());
     }
-    if track
-        .lyrics
-        .as_deref()
-        .is_some_and(|lyrics| check(lyrics))
-    {
+    if track.lyrics.as_deref().is_some_and(|lyrics| check(lyrics)) {
         fields.push("lyrics".into());
     }
     if fields.is_empty() {
@@ -4413,8 +4457,8 @@ fn search_tracks_fts(
     query: &str,
     limit: i64,
 ) -> Result<Vec<SearchHitDto>, String> {
-    let match_query = build_fts_match_query(query)
-        .ok_or_else(|| "Empty search query".to_string())?;
+    let match_query =
+        build_fts_match_query(query).ok_or_else(|| "Empty search query".to_string())?;
 
     // Over-fetch then re-rank so title hits aren't truncated by bm25 alone.
     let fetch_limit = limit.saturating_mul(3).min(600);
@@ -4432,10 +4476,7 @@ fn search_tracks_fts(
 
     let rows = stmt
         .query_map(params![match_query, fetch_limit], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
         })
         .map_err(|e| format!("Failed to execute FTS search: {e}"))?
         .collect::<Result<Vec<_>, _>>()
@@ -4726,7 +4767,10 @@ mod tests {
         }
         let hit = library.find_local_match("  song  ", "ARTIST").unwrap();
         assert_eq!(hit.as_deref(), Some("/music/song.mp3"));
-        assert!(library.find_local_match("Song", "Someone Else").unwrap().is_none());
+        assert!(library
+            .find_local_match("Song", "Someone Else")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -4742,7 +4786,10 @@ mod tests {
             .unwrap();
         // Marking a remote hit as "already in your library" because you once
         // previewed it would be a lie.
-        assert!(library.find_local_match("Song", "Artist").unwrap().is_none());
+        assert!(library
+            .find_local_match("Song", "Artist")
+            .unwrap()
+            .is_none());
     }
 
     fn sample_track(id: &str, path: &str) -> Track {
@@ -4960,7 +5007,10 @@ mod tests {
         let connection = library.lock_connection().expect("connection");
         for track in tracks {
             if let Some(ref art_id) = track.album_art_id {
-                let thumb = library.cover_root.join("thumbs").join(format!("{art_id}.jpg"));
+                let thumb = library
+                    .cover_root
+                    .join("thumbs")
+                    .join(format!("{art_id}.jpg"));
                 if !thumb.exists() {
                     std::fs::write(&thumb, b"fake").expect("thumb");
                 }
@@ -4974,17 +5024,97 @@ mod tests {
             library,
             &[
                 // "Abbey Road" by The Beatles (album_artist set, 3 tracks).
-                track_with("b1", "/m/abbey-1.flac", "The Beatles", "Abbey Road", Some("The Beatles"), Some(1), Some(1), Some(1969), Some("art_abbey")),
-                track_with("b2", "/m/abbey-2.flac", "The Beatles", "Abbey Road", Some("The Beatles"), Some(2), Some(1), Some(1969), Some("art_abbey")),
-                track_with("b3", "/m/abbey-3.flac", "The Beatles", "Abbey Road", Some("The Beatles"), Some(3), Some(1), Some(1969), Some("art_abbey")),
+                track_with(
+                    "b1",
+                    "/m/abbey-1.flac",
+                    "The Beatles",
+                    "Abbey Road",
+                    Some("The Beatles"),
+                    Some(1),
+                    Some(1),
+                    Some(1969),
+                    Some("art_abbey"),
+                ),
+                track_with(
+                    "b2",
+                    "/m/abbey-2.flac",
+                    "The Beatles",
+                    "Abbey Road",
+                    Some("The Beatles"),
+                    Some(2),
+                    Some(1),
+                    Some(1969),
+                    Some("art_abbey"),
+                ),
+                track_with(
+                    "b3",
+                    "/m/abbey-3.flac",
+                    "The Beatles",
+                    "Abbey Road",
+                    Some("The Beatles"),
+                    Some(3),
+                    Some(1),
+                    Some(1969),
+                    Some("art_abbey"),
+                ),
                 // A second Beatles album so album_count > 1.
-                track_with("b4", "/m/letitbe-1.flac", "The Beatles", "Let It Be", Some("The Beatles"), Some(1), Some(1), Some(1970), Some("art_letitbe")),
+                track_with(
+                    "b4",
+                    "/m/letitbe-1.flac",
+                    "The Beatles",
+                    "Let It Be",
+                    Some("The Beatles"),
+                    Some(1),
+                    Some(1),
+                    Some(1970),
+                    Some("art_letitbe"),
+                ),
                 // "Greatest Hits" collision: Queen (2 tracks) vs ABBA (1 track, no cover).
-                track_with("q1", "/m/queen-1.flac", "Queen", "Greatest Hits", Some("Queen"), Some(1), Some(1), Some(1981), Some("art_queen")),
-                track_with("q2", "/m/queen-2.flac", "Queen", "Greatest Hits", Some("Queen"), Some(2), Some(1), Some(1981), Some("art_queen")),
-                track_with("a1", "/m/abba-1.flac", "ABBA", "Greatest Hits", Some("ABBA"), Some(1), Some(1), Some(1975), None),
+                track_with(
+                    "q1",
+                    "/m/queen-1.flac",
+                    "Queen",
+                    "Greatest Hits",
+                    Some("Queen"),
+                    Some(1),
+                    Some(1),
+                    Some(1981),
+                    Some("art_queen"),
+                ),
+                track_with(
+                    "q2",
+                    "/m/queen-2.flac",
+                    "Queen",
+                    "Greatest Hits",
+                    Some("Queen"),
+                    Some(2),
+                    Some(1),
+                    Some(1981),
+                    Some("art_queen"),
+                ),
+                track_with(
+                    "a1",
+                    "/m/abba-1.flac",
+                    "ABBA",
+                    "Greatest Hits",
+                    Some("ABBA"),
+                    Some(1),
+                    Some(1),
+                    Some(1975),
+                    None,
+                ),
                 // Album with no album_artist tag → resolved album_artist falls back to artist.
-                track_with("s1", "/m/solo-1.flac", "Solo", "No Album Artist", None, Some(1), Some(1), Some(2020), None),
+                track_with(
+                    "s1",
+                    "/m/solo-1.flac",
+                    "Solo",
+                    "No Album Artist",
+                    None,
+                    Some(1),
+                    Some(1),
+                    Some(2020),
+                    None,
+                ),
             ],
         );
     }
@@ -5003,7 +5133,13 @@ mod tests {
         // Ordered by album_artist then album.
         let names: Vec<(&str, &str, i64)> = albums
             .iter()
-            .map(|a| (a.name.as_str(), a.album_artist.as_deref().unwrap_or(""), a.track_count))
+            .map(|a| {
+                (
+                    a.name.as_str(),
+                    a.album_artist.as_deref().unwrap_or(""),
+                    a.track_count,
+                )
+            })
             .collect();
         assert_eq!(
             names,
@@ -5019,10 +5155,16 @@ mod tests {
         let abbey = albums.iter().find(|a| a.name == "Abbey Road").unwrap();
         assert_eq!(abbey.artist, "The Beatles");
         assert_eq!(abbey.year, Some(1969));
-        assert!(abbey.cover_art_data_url.as_ref().is_some_and(|p| p.ends_with("art_abbey.jpg")));
+        assert!(abbey
+            .cover_art_data_url
+            .as_ref()
+            .is_some_and(|p| p.ends_with("art_abbey.jpg")));
         assert_eq!(abbey.cover_art_mime.as_deref(), Some("image/jpeg"));
 
-        let abba = albums.iter().find(|a| a.name == "Greatest Hits" && a.album_artist.as_deref() == Some("ABBA")).unwrap();
+        let abba = albums
+            .iter()
+            .find(|a| a.name == "Greatest Hits" && a.album_artist.as_deref() == Some("ABBA"))
+            .unwrap();
         assert_eq!(abba.year, Some(1975));
         assert!(abba.cover_art_data_url.is_none());
 
@@ -5100,9 +5242,39 @@ mod tests {
         upsert_many(
             &library,
             &[
-                track_with("d1", "/m/d1.flac", "X", "Double", Some("X"), Some(1), Some(2), None, None),
-                track_with("d2", "/m/d2.flac", "X", "Double", Some("X"), Some(2), Some(1), None, None),
-                track_with("d3", "/m/d3.flac", "X", "Double", Some("X"), Some(1), Some(1), None, None),
+                track_with(
+                    "d1",
+                    "/m/d1.flac",
+                    "X",
+                    "Double",
+                    Some("X"),
+                    Some(1),
+                    Some(2),
+                    None,
+                    None,
+                ),
+                track_with(
+                    "d2",
+                    "/m/d2.flac",
+                    "X",
+                    "Double",
+                    Some("X"),
+                    Some(2),
+                    Some(1),
+                    None,
+                    None,
+                ),
+                track_with(
+                    "d3",
+                    "/m/d3.flac",
+                    "X",
+                    "Double",
+                    Some("X"),
+                    Some(1),
+                    Some(1),
+                    None,
+                    None,
+                ),
             ],
         );
 
@@ -5368,7 +5540,11 @@ mod tests {
             .expect("second sync");
 
         let favorites = library.get_playlist_tracks(&favorites_id).expect("tracks");
-        assert_eq!(favorites.len(), 1, "playlist must not grow on path-variant sync");
+        assert_eq!(
+            favorites.len(),
+            1,
+            "playlist must not grow on path-variant sync"
+        );
         assert_eq!(favorites[0].id, "track-a");
         assert_eq!(favorites[0].path, "/other/mount/song.mp3");
 
@@ -5376,7 +5552,10 @@ mod tests {
         let track_count: i64 = connection
             .query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))
             .expect("count");
-        assert_eq!(track_count, 1, "library must not keep a leftover duplicate row");
+        assert_eq!(
+            track_count, 1,
+            "library must not keep a leftover duplicate row"
+        );
     }
 
     #[test]
@@ -5419,9 +5598,7 @@ mod tests {
     #[test]
     fn remove_from_user_playlist_keeps_library_track() {
         let library = open_test_library().expect("library");
-        let playlist = library
-            .create_playlist("Workout", None)
-            .expect("create");
+        let playlist = library.create_playlist("Workout", None).expect("create");
         let path = "/music/only-here.mp3";
 
         {
@@ -5444,7 +5621,10 @@ mod tests {
             1,
             "playlist remove must not delete the library row"
         );
-        assert!(library.get_playlist_tracks(&playlist.id).expect("pl").is_empty());
+        assert!(library
+            .get_playlist_tracks(&playlist.id)
+            .expect("pl")
+            .is_empty());
     }
 
     #[test]
@@ -5468,8 +5648,14 @@ mod tests {
             .expect("remove from library");
 
         let default_id = library.default_playlist_id().expect("default");
-        assert!(library.get_playlist_tracks(&default_id).expect("lib").is_empty());
-        assert!(library.get_playlist_tracks(&playlist.id).expect("pl").is_empty());
+        assert!(library
+            .get_playlist_tracks(&default_id)
+            .expect("lib")
+            .is_empty());
+        assert!(library
+            .get_playlist_tracks(&playlist.id)
+            .expect("pl")
+            .is_empty());
         assert!(library.get_favorites().expect("fav").is_empty());
     }
 
@@ -5549,7 +5735,9 @@ mod tests {
     #[test]
     fn reset_library_wipes_tracks_and_user_playlists() {
         let library = open_test_library().expect("library");
-        let mix = library.create_playlist("Mix", Some("/music/mix")).expect("mix");
+        let mix = library
+            .create_playlist("Mix", Some("/music/mix"))
+            .expect("mix");
         let favorites_id = library.favorites_playlist_id().expect("favorites");
         let library_id = library.default_playlist_id().expect("library");
         let path = "/music/wipe-me.mp3";
@@ -5558,8 +5746,7 @@ mod tests {
             let connection = library.lock_connection().expect("connection");
             let id = upsert_track(&*connection, &sample_track("wipe", path)).expect("upsert");
             insert_playlist_track_with_connection(&connection, &mix.id, &id, 0).expect("mix");
-            insert_playlist_track_with_connection(&connection, &favorites_id, &id, 0)
-                .expect("fav");
+            insert_playlist_track_with_connection(&connection, &favorites_id, &id, 0).expect("fav");
         }
 
         let (tracks, playlists) = library.reset_library().expect("reset");
@@ -5571,7 +5758,10 @@ mod tests {
         assert!(names.contains(&"Library"));
         assert!(names.contains(&"Favorites"));
         assert!(!names.contains(&"Mix"));
-        assert!(library.get_playlist_tracks(&library_id).expect("lib").is_empty());
+        assert!(library
+            .get_playlist_tracks(&library_id)
+            .expect("lib")
+            .is_empty());
         assert!(library.get_favorites().expect("fav").is_empty());
 
         let sync: Option<String> = {
@@ -5607,16 +5797,22 @@ mod tests {
             upsert_track(&*connection, &sunny).expect("upsert sunny");
         }
 
-        let by_title = library.search_tracks_rich("Rainy", Some(20)).expect("title");
+        let by_title = library
+            .search_tracks_rich("Rainy", Some(20))
+            .expect("title");
         assert_eq!(by_title.len(), 1);
         assert_eq!(by_title[0].track.title, "Rainy Day");
         assert!(by_title[0].matched_fields.iter().any(|f| f == "title"));
 
-        let by_artist = library.search_tracks_rich("Storm", Some(20)).expect("artist");
+        let by_artist = library
+            .search_tracks_rich("Storm", Some(20))
+            .expect("artist");
         assert_eq!(by_artist.len(), 1);
         assert!(by_artist[0].matched_fields.iter().any(|f| f == "artist"));
 
-        let by_album = library.search_tracks_rich("Cloud", Some(20)).expect("album");
+        let by_album = library
+            .search_tracks_rich("Cloud", Some(20))
+            .expect("album");
         assert!(by_album.iter().any(|h| h.track.album == "Cloud Nine"));
 
         let by_lyrics = library
@@ -5665,8 +5861,13 @@ mod tests {
             upsert_track(&*connection, &title_hit).expect("title");
         }
 
-        let hits = library.search_tracks_rich("echo", Some(20)).expect("search");
-        assert!(hits.len() >= 4, "expected all four field matches, got {hits:?}");
+        let hits = library
+            .search_tracks_rich("echo", Some(20))
+            .expect("search");
+        assert!(
+            hits.len() >= 4,
+            "expected all four field matches, got {hits:?}"
+        );
         assert_eq!(hits[0].track.title, "Echo");
         assert!(hits[0].matched_fields.iter().any(|f| f == "title"));
         assert_eq!(hits[1].track.artist, "Echo Park");
@@ -5682,11 +5883,26 @@ mod tests {
     #[test]
     fn cap_tracks_per_artist_limits_per_artist_and_preserves_order() {
         let tracks = vec![
-            Track { artist: "Metallica".into(), ..sample_track("1", "/a1.mp3") },
-            Track { artist: "Metallica".into(), ..sample_track("2", "/a2.mp3") },
-            Track { artist: "Metallica".into(), ..sample_track("3", "/a3.mp3") },
-            Track { artist: "Slayer".into(), ..sample_track("4", "/b1.mp3") },
-            Track { artist: "Metallica".into(), ..sample_track("5", "/a4.mp3") },
+            Track {
+                artist: "Metallica".into(),
+                ..sample_track("1", "/a1.mp3")
+            },
+            Track {
+                artist: "Metallica".into(),
+                ..sample_track("2", "/a2.mp3")
+            },
+            Track {
+                artist: "Metallica".into(),
+                ..sample_track("3", "/a3.mp3")
+            },
+            Track {
+                artist: "Slayer".into(),
+                ..sample_track("4", "/b1.mp3")
+            },
+            Track {
+                artist: "Metallica".into(),
+                ..sample_track("5", "/a4.mp3")
+            },
         ];
         let capped = cap_tracks_per_artist(tracks, 2);
         let ids: Vec<&str> = capped.iter().map(|t| t.id.as_str()).collect();
@@ -5696,9 +5912,18 @@ mod tests {
     #[test]
     fn cap_tracks_per_artist_matches_case_insensitively() {
         let tracks = vec![
-            Track { artist: "Metallica".into(), ..sample_track("1", "/a1.mp3") },
-            Track { artist: "METALLICA".into(), ..sample_track("2", "/a2.mp3") },
-            Track { artist: "  metallica  ".into(), ..sample_track("3", "/a3.mp3") },
+            Track {
+                artist: "Metallica".into(),
+                ..sample_track("1", "/a1.mp3")
+            },
+            Track {
+                artist: "METALLICA".into(),
+                ..sample_track("2", "/a2.mp3")
+            },
+            Track {
+                artist: "  metallica  ".into(),
+                ..sample_track("3", "/a3.mp3")
+            },
         ];
         let capped = cap_tracks_per_artist(tracks, 1);
         assert_eq!(capped.len(), 1);
@@ -5708,21 +5933,40 @@ mod tests {
     #[test]
     fn pick_diversity_seed_artists_prioritizes_favorite_then_recent_dedup() {
         let recent = vec![
-            Track { artist: "Slayer".into(), ..sample_track("1", "/1.mp3") },
-            Track { artist: "Metallica".into(), ..sample_track("2", "/2.mp3") },
-            Track { artist: "slayer".into(), ..sample_track("3", "/3.mp3") },
-            Track { artist: "Megadeth".into(), ..sample_track("4", "/4.mp3") },
+            Track {
+                artist: "Slayer".into(),
+                ..sample_track("1", "/1.mp3")
+            },
+            Track {
+                artist: "Metallica".into(),
+                ..sample_track("2", "/2.mp3")
+            },
+            Track {
+                artist: "slayer".into(),
+                ..sample_track("3", "/3.mp3")
+            },
+            Track {
+                artist: "Megadeth".into(),
+                ..sample_track("4", "/4.mp3")
+            },
         ];
         let seeds = pick_diversity_seed_artists(Some("Metallica"), &recent, 3);
         assert_eq!(
             seeds,
-            vec!["Metallica".to_string(), "Slayer".to_string(), "Megadeth".to_string()]
+            vec![
+                "Metallica".to_string(),
+                "Slayer".to_string(),
+                "Megadeth".to_string()
+            ]
         );
     }
 
     #[test]
     fn pick_diversity_seed_artists_skips_empty_favorite() {
-        let recent = vec![Track { artist: "Slayer".into(), ..sample_track("1", "/1.mp3") }];
+        let recent = vec![Track {
+            artist: "Slayer".into(),
+            ..sample_track("1", "/1.mp3")
+        }];
         let seeds = pick_diversity_seed_artists(Some(""), &recent, 3);
         assert_eq!(seeds, vec!["Slayer".to_string()]);
     }
@@ -5732,7 +5976,10 @@ mod tests {
         let library = open_test_library().expect("library");
         {
             let connection = library.lock_connection().expect("connection");
-            let track = Track { artist: "Metallica".into(), ..sample_track("m0", "/m0.mp3") };
+            let track = Track {
+                artist: "Metallica".into(),
+                ..sample_track("m0", "/m0.mp3")
+            };
             let id = upsert_track(&connection, &track).expect("upsert");
             connection
                 .execute(
@@ -5769,7 +6016,11 @@ mod tests {
                 .expect("insert stale");
         }
 
-        let names = vec!["Metallica".to_string(), "Slayer".to_string(), "Megadeth".to_string()];
+        let names = vec![
+            "Metallica".to_string(),
+            "Slayer".to_string(),
+            "Megadeth".to_string(),
+        ];
         let needing = library.artists_needing_enrichment(&names).expect("query");
         assert_eq!(needing, vec!["Slayer".to_string(), "Megadeth".to_string()]);
     }
@@ -5818,7 +6069,10 @@ mod tests {
                 "Metallica",
                 Some("65f4f0c5-ef9e-490c-aee3-909e7ae6b2ab"),
                 &["heavy metal".to_string(), "thrash metal".to_string()],
-                &[sample_similar("Slayer", 100.0), sample_similar("Megadeth", 90.0)],
+                &[
+                    sample_similar("Slayer", 100.0),
+                    sample_similar("Megadeth", 90.0),
+                ],
                 "ok",
             )
             .expect("save");
@@ -5826,7 +6080,10 @@ mod tests {
         let needing = library
             .artists_needing_enrichment(&["Metallica".to_string()])
             .expect("check");
-        assert!(needing.is_empty(), "freshly saved artist should not need refresh");
+        assert!(
+            needing.is_empty(),
+            "freshly saved artist should not need refresh"
+        );
 
         // A refresh should replace the similar-artist set, not accumulate it.
         library
@@ -5911,7 +6168,10 @@ mod tests {
         let library = open_test_library().expect("library");
         {
             let connection = library.lock_connection().expect("connection");
-            let track = Track { artist: "Metallica".into(), ..sample_track("m0", "/m0.mp3") };
+            let track = Track {
+                artist: "Metallica".into(),
+                ..sample_track("m0", "/m0.mp3")
+            };
             let id = upsert_track(&connection, &track).expect("upsert");
             connection
                 .execute(
@@ -5955,7 +6215,10 @@ mod tests {
         let library = open_test_library().expect("library");
         {
             let connection = library.lock_connection().expect("connection");
-            let metallica = Track { artist: "Metallica".into(), ..sample_track("m0", "/m0.mp3") };
+            let metallica = Track {
+                artist: "Metallica".into(),
+                ..sample_track("m0", "/m0.mp3")
+            };
             let metallica_id = upsert_track(&connection, &metallica).expect("upsert metallica");
             connection
                 .execute(
@@ -5965,7 +6228,10 @@ mod tests {
                 )
                 .expect("listen stats metallica");
 
-            let slayer = Track { artist: "Slayer".into(), ..sample_track("s0", "/s0.mp3") };
+            let slayer = Track {
+                artist: "Slayer".into(),
+                ..sample_track("s0", "/s0.mp3")
+            };
             let slayer_id = upsert_track(&connection, &slayer).expect("upsert slayer");
             connection
                 .execute(
@@ -5982,7 +6248,11 @@ mod tests {
                     .execute(
                         "INSERT INTO artist_similar (artist_key, similar_name, score, fetched_at)
                          VALUES ('metallica', ?1, ?2, ?3)",
-                        params![format!("Metallica Similar {i}"), 100.0 - i as f64, now_timestamp()],
+                        params![
+                            format!("Metallica Similar {i}"),
+                            100.0 - i as f64,
+                            now_timestamp()
+                        ],
                     )
                     .expect("insert metallica similar");
             }
@@ -5997,7 +6267,10 @@ mod tests {
 
         let suggestions = library.get_home_suggestions(None).expect("suggestions");
         assert!(
-            suggestions.discovery.iter().any(|d| d.similar_to == "Slayer"),
+            suggestions
+                .discovery
+                .iter()
+                .any(|d| d.similar_to == "Slayer"),
             "expected discovery to include a pick derived from a second seed artist, got {:?}",
             suggestions.discovery
         );
@@ -6008,7 +6281,10 @@ mod tests {
         let library = open_test_library().expect("library");
         {
             let connection = library.lock_connection().expect("connection");
-            let track = Track { artist: "Metallica".into(), ..sample_track("m0", "/m0.mp3") };
+            let track = Track {
+                artist: "Metallica".into(),
+                ..sample_track("m0", "/m0.mp3")
+            };
             let id = upsert_track(&connection, &track).expect("upsert");
             connection
                 .execute(

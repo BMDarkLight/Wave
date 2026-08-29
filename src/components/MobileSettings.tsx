@@ -8,6 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { BiArrowBack, BiSearch } from "react-icons/bi";
+import type { SourceSettings } from "../utils/player";
 import {
   BiFolderOpen,
   BiFolderMinus,
@@ -203,8 +204,8 @@ interface MobileSettingsProps {
   onGaplessChange: (enabled: boolean) => void;
   volumeNormalizationEnabled: boolean;
   onVolumeNormalizationChange: (enabled: boolean) => void;
-  jamendoClientId: string;
-  onJamendoClientIdChange: (clientId: string) => void;
+  sourceSettings: SourceSettings;
+  onSourceSettingsChange: (settings: SourceSettings) => void;
   currentOutputDevice: string;
   onSelectOutputDevice: (name: string) => Promise<void>;
   onResetApp: () => Promise<void>;
@@ -240,8 +241,8 @@ export default function MobileSettings({
   onGaplessChange,
   volumeNormalizationEnabled,
   onVolumeNormalizationChange,
-  jamendoClientId,
-  onJamendoClientIdChange,
+  sourceSettings,
+  onSourceSettingsChange,
   currentOutputDevice,
   onSelectOutputDevice,
   onResetApp,
@@ -814,27 +815,135 @@ export default function MobileSettings({
             <BiSearch /> Music sources
           </h2>
           <div className="mset-card mset-playback-card">
-            <label className="mset-source-row">
-              <span className="mset-gapless-label">Jamendo client ID</span>
+            <label className="mset-gapless-row">
               <input
-                type="text"
-                className="mset-source-input"
-                value={jamendoClientId}
-                placeholder="Paste your free Jamendo client ID"
-                spellCheck={false}
-                autoCapitalize="none"
-                autoCorrect="off"
+                type="checkbox"
+                checked={sourceSettings.outside_sourcing_enabled}
                 onChange={(event) =>
-                  onJamendoClientIdChange(event.target.value)
+                  onSourceSettingsChange({
+                    ...sourceSettings,
+                    outside_sourcing_enabled: event.target.checked,
+                  })
                 }
               />
-              <span className="mset-gapless-hint">
-                Jamendo hosts full-length Creative Commons tracks you can stream
-                and save. It needs a free client ID from developer.jamendo.com.
-                Deezer and Internet Archive work without any setup.
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">
+                  Search outside sources
+                </span>
+                <span className="mset-gapless-hint">
+                  Adds a third step to search: after your playlist and your
+                  library, look for a song on the internet. Nothing is contacted
+                  until you press the button. Turn this off and Wave stays
+                  entirely offline.
+                </span>
               </span>
             </label>
           </div>
+
+          {sourceSettings.outside_sourcing_enabled && (
+            <>
+              <div className="mset-card mset-playback-card mset-source-provider">
+                <div className="mset-source-head">
+                  <span className="mset-gapless-label">Deezer</span>
+                  <span className="mset-source-tag mset-source-tag-ready">
+                    No setup needed
+                  </span>
+                </div>
+                <span className="mset-gapless-hint">
+                  Best search and artwork of any source, but its API only serves
+                  30-second previews. Good for finding a song; previews play but
+                  are never saved to your library.
+                </span>
+              </div>
+
+              <div className="mset-card mset-playback-card mset-source-provider">
+                <div className="mset-source-head">
+                  <span className="mset-gapless-label">Internet Archive</span>
+                  <span className="mset-source-tag mset-source-tag-ready">
+                    No setup needed
+                  </span>
+                </div>
+                <span className="mset-gapless-hint">
+                  Full-length public-domain and Creative Commons recordings you
+                  can stream and save.
+                </span>
+              </div>
+
+              <div className="mset-card mset-playback-card mset-source-provider">
+                <div className="mset-source-head">
+                  <span className="mset-gapless-label">Jamendo</span>
+                  <span
+                    className={`mset-source-tag ${
+                      sourceSettings.jamendo_client_id
+                        ? "mset-source-tag-ready"
+                        : "mset-source-tag-setup"
+                    }`}
+                  >
+                    {sourceSettings.jamendo_client_id
+                      ? "Connected"
+                      : "Needs a client ID"}
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  className="mset-source-input"
+                  value={sourceSettings.jamendo_client_id}
+                  placeholder="Client ID from developer.jamendo.com"
+                  spellCheck={false}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  onChange={(event) =>
+                    onSourceSettingsChange({
+                      ...sourceSettings,
+                      jamendo_client_id: event.target.value,
+                    })
+                  }
+                />
+                <span className="mset-gapless-hint">
+                  Full-length Creative Commons tracks you can stream and save.
+                  The client ID is free.
+                </span>
+              </div>
+
+              <div className="mset-card mset-playback-card mset-source-provider">
+                <div className="mset-source-head">
+                  <span className="mset-gapless-label">Spotify</span>
+                  <span
+                    className={`mset-source-tag ${
+                      sourceSettings.spotify_client_id
+                        ? "mset-source-tag-ready"
+                        : "mset-source-tag-setup"
+                    }`}
+                  >
+                    {sourceSettings.spotify_client_id
+                      ? "Connected"
+                      : "Needs a client ID"}
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  className="mset-source-input"
+                  value={sourceSettings.spotify_client_id}
+                  placeholder="Client ID from developer.spotify.com"
+                  spellCheck={false}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  onChange={(event) =>
+                    onSourceSettingsChange({
+                      ...sourceSettings,
+                      spotify_client_id: event.target.value,
+                    })
+                  }
+                />
+                <span className="mset-gapless-hint mset-source-warning">
+                  Search and playlists only. Spotify&rsquo;s API serves no audio
+                  at all, so nothing here can stream or save a song &mdash; it
+                  finds tracks, then plays your copy or a full-length free
+                  source.
+                </span>
+              </div>
+            </>
+          )}
         </section>
 
         {showAudioOutput && (

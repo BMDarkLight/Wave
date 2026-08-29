@@ -14,7 +14,9 @@ use crate::dto::{
 use crate::library::{Library, PlaylistInfo};
 use crate::listen::{ListenEndReason, ListenFlush, ListenTracker};
 use crate::media_controls::TrackMetadata;
-use crate::metadata::{enrich_lyrics_online, is_supported_audio_file, supported_audio_extensions, Track};
+use crate::metadata::{
+    enrich_lyrics_online, is_supported_audio_file, supported_audio_extensions, Track,
+};
 use crate::path_validation::{validate_audio_path, validate_safe_output_path};
 use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
@@ -82,7 +84,9 @@ impl Deref for PlayerGuard<'_> {
     type Target = AudioPlayer;
 
     fn deref(&self) -> &Self::Target {
-        self.0.as_ref().expect("player must be initialized before deref")
+        self.0
+            .as_ref()
+            .expect("player must be initialized before deref")
     }
 }
 
@@ -94,9 +98,7 @@ impl DerefMut for PlayerGuard<'_> {
     }
 }
 
-fn lock_player<'a>(
-    state: &'a tauri::State<'a, PlayerState>,
-) -> Result<PlayerGuard<'a>, String> {
+fn lock_player<'a>(state: &'a tauri::State<'a, PlayerState>) -> Result<PlayerGuard<'a>, String> {
     // Recover from poisoned mutex: a previous panic may have left the lock in a
     // poisoned state, but the player data is still usable.
     let mut guard = match state.0.lock() {
@@ -176,6 +178,11 @@ pub(crate) fn persist_playback_state(app: &tauri::AppHandle) {
 }
 
 fn apply_listen_flush(app: &tauri::AppHandle, flush: ListenFlush) {
+    // Previewing 30 seconds of a track is not listening to it; letting it reach
+    // listen_stats would skew top artists, recently played, and Home suggestions.
+    if is_preview_path(&flush.path) {
+        return;
+    }
     let library_state = app.state::<LibraryState>();
     let Ok(lib) = library_state.0.lock() else {
         return;
@@ -192,6 +199,9 @@ fn apply_listen_flush(app: &tauri::AppHandle, flush: ListenFlush) {
 }
 
 fn touch_recently_played(app: &tauri::AppHandle, path: &str) {
+    if is_preview_path(path) {
+        return;
+    }
     let library_state = app.state::<LibraryState>();
     let Ok(lib) = library_state.0.lock() else {
         return;
@@ -311,7 +321,11 @@ pub(crate) fn listen_switch_track(
             .get_current_path()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| record_path.to_string());
-        (player_path, player.position_seconds(), player.duration_seconds())
+        (
+            player_path,
+            player.position_seconds(),
+            player.duration_seconds(),
+        )
     };
 
     let listen_state = match app.try_state::<ListenState>() {
@@ -494,7 +508,45 @@ fn sync_queue_from_tracks(player: &mut AudioPlayer, tracks: &[Track], index: usi
 
 /// Build a minimal `Track` for a path that isn't in the library (e.g. a file
 /// that was deleted or moved after being added to the queue).
+/// Metadata for previews cached during this session, keyed by file path.
+///
+/// Previews are not library content, so they get no `tracks` row — that is what
+/// keeps a 30-second clip out of browse, search, counts, listening stats, and
+/// recently-played. But the queue and the player bar still need a title and an
+/// artist to show, and every one of those surfaces already falls back to
+/// [`placeholder_track`] for a path with no row. Registering previews here
+/// means all of them display correctly with no further changes.
+///
+/// In-memory on purpose: previews do not survive a restart, and neither should
+/// this.
+fn preview_registry() -> &'static std::sync::Mutex<std::collections::HashMap<String, Track>> {
+    static REGISTRY: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Track>>,
+    > = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn register_preview(track: &Track) {
+    if let Ok(mut map) = preview_registry().lock() {
+        map.insert(track.path.clone(), track.clone());
+    }
+}
+
+/// Whether this path is a preview clip rather than real library content.
+pub(crate) fn is_preview_path(path: &str) -> bool {
+    preview_registry()
+        .lock()
+        .map(|map| map.contains_key(path))
+        .unwrap_or(false)
+}
+
 fn placeholder_track(path: &str) -> Track {
+    // A cached preview has real metadata even though it has no library row.
+    if let Ok(map) = preview_registry().lock() {
+        if let Some(track) = map.get(path) {
+            return track.clone();
+        }
+    }
     let name = Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -578,8 +630,7 @@ fn resolve_os_cover_url(app: &tauri::AppHandle, track: &Track) -> Option<String>
             return Some(path.to_string_lossy().into_owned());
         }
         // Lazily build media art from the embedded cover once per album.
-        if let Ok(Some(full)) =
-            crate::metadata::extract_full_cover_data_url(Some(app), &track.path)
+        if let Ok(Some(full)) = crate::metadata::extract_full_cover_data_url(Some(app), &track.path)
         {
             if let Ok((bytes, _)) = crate::cover_art::decode_data_url(&full) {
                 if let Some(path) = crate::cover_art::ensure_media_art(app, id, &bytes) {
@@ -708,7 +759,10 @@ pub(crate) fn tick_auto_advance(app: &tauri::AppHandle) {
 /// Apply a media-session action from the Android native JNI bridge.
 /// Used when the WebView is frozen in the background and JS handlers cannot run.
 #[cfg(target_os = "android")]
-pub(crate) fn handle_native_media_action(app: &tauri::AppHandle, action: &str) -> Result<(), String> {
+pub(crate) fn handle_native_media_action(
+    app: &tauri::AppHandle,
+    action: &str,
+) -> Result<(), String> {
     use crate::audio::player::RepeatMode;
 
     if let Some(seconds) = action.strip_prefix("seek:") {
@@ -728,7 +782,8 @@ pub(crate) fn handle_native_media_action(app: &tauri::AppHandle, action: &str) -
     match action {
         "play" => {
             // Optimistic MediaSession update so the notification doesn't lag ExoPlayer.
-            let position = with_app_player(app, |player| Ok(player.position_seconds())).unwrap_or(0.0);
+            let position =
+                with_app_player(app, |player| Ok(player.position_seconds())).unwrap_or(0.0);
             app.state::<MediaBridgeState>().0.set_playing(position);
             let position = with_app_player(app, |player| {
                 if player.get_current_path().is_none() {
@@ -745,7 +800,8 @@ pub(crate) fn handle_native_media_action(app: &tauri::AppHandle, action: &str) -
             Ok(())
         }
         "pause" => {
-            let position = with_app_player(app, |player| Ok(player.position_seconds())).unwrap_or(0.0);
+            let position =
+                with_app_player(app, |player| Ok(player.position_seconds())).unwrap_or(0.0);
             app.state::<MediaBridgeState>().0.set_paused(position);
             let position = with_app_player(app, |player| {
                 let position = player.position_seconds();
@@ -761,9 +817,8 @@ pub(crate) fn handle_native_media_action(app: &tauri::AppHandle, action: &str) -
             Ok(())
         }
         "next" => {
-            let path = with_app_player(app, |player| {
-                player.play_next().map_err(|e| e.to_string())
-            })?;
+            let path =
+                with_app_player(app, |player| player.play_next().map_err(|e| e.to_string()))?;
             if let Some(path) = path {
                 let track = match app.state::<LibraryState>().0.lock() {
                     Ok(lib) => resolve_track(&lib, &path),
@@ -829,7 +884,9 @@ fn sync_bridge_playback_mode(app: &tauri::AppHandle, bridge: &tauri::State<Media
             None => (false, crate::audio::player::RepeatMode::default()),
         }
     };
-    bridge.0.set_playback_mode(shuffle, repeat_mode_str(&repeat).to_string());
+    bridge
+        .0
+        .set_playback_mode(shuffle, repeat_mode_str(&repeat).to_string());
 }
 
 fn repeat_mode_str(mode: &crate::audio::player::RepeatMode) -> &'static str {
@@ -930,20 +987,14 @@ pub async fn pick_media_folder(
 /// Recursively list audio files under a SAF `content://…/tree/…` URI.
 /// Used on Android because `plugin-fs` `readDir` cannot walk content URIs.
 #[tauri::command]
-pub async fn scan_saf_folder(
-    uri: String,
-    app: tauri::AppHandle,
-) -> Result<Vec<String>, String> {
+pub async fn scan_saf_folder(uri: String, app: tauri::AppHandle) -> Result<Vec<String>, String> {
     blocking(move || crate::android::saf_scan::list_audio_files(&app, &uri)).await
 }
 
 // ── Playback commands ─────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn play_track(
-    path: String,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
+pub async fn play_track(path: String, app: tauri::AppHandle) -> Result<(), String> {
     validate_audio_path(&path)?;
     let app_clone = app.clone();
     let path_clone = path.clone();
@@ -959,7 +1010,9 @@ pub async fn play_track(
     let app_clone = app.clone();
     blocking(move || {
         with_app_player(&app_clone, |player| {
-            player.play(&play_path).map_err(|e| format!("Playback failed: {e}"))
+            player
+                .play(&play_path)
+                .map_err(|e| format!("Playback failed: {e}"))
         })
     })
     .await?;
@@ -1192,7 +1245,9 @@ pub async fn set_eq_bands(
             return Err(format!("EQ band {index} must be a finite number"));
         }
         if gain.abs() > 24.0 {
-            return Err(format!("EQ band {index} gain must be between -24 and +24 dB"));
+            return Err(format!(
+                "EQ band {index} gain must be between -24 and +24 dB"
+            ));
         }
     }
     let mut arr = [0.0f32; 10];
@@ -1258,9 +1313,7 @@ pub async fn import_eq_settings(
 }
 
 #[tauri::command]
-pub async fn get_crossfade_duration(
-    state: tauri::State<'_, PlayerState>,
-) -> Result<f32, String> {
+pub async fn get_crossfade_duration(state: tauri::State<'_, PlayerState>) -> Result<f32, String> {
     let guard = lock_player_state(&state);
     let duration = match guard.as_ref() {
         Some(player) => player.crossfade_duration(),
@@ -1341,30 +1394,48 @@ pub async fn set_volume_normalization_enabled(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn get_jamendo_client_id(
-    settings_state: tauri::State<'_, AppSettingsState>,
-) -> Result<String, String> {
-    let settings = lock_settings(&settings_state)?;
-    Ok(settings.jamendo_client_id.clone().unwrap_or_default())
+/// Everything the Settings page needs to configure remote sourcing.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SourceSettingsDto {
+    pub outside_sourcing_enabled: bool,
+    pub jamendo_client_id: String,
+    pub spotify_client_id: String,
 }
 
-/// Store the free Jamendo API client id. Blank clears it, which makes the
-/// Jamendo provider report itself as needing setup rather than failing.
 #[tauri::command]
-pub async fn set_jamendo_client_id(
-    client_id: String,
+pub async fn get_source_settings(
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<SourceSettingsDto, String> {
+    let settings = lock_settings(&settings_state)?;
+    Ok(SourceSettingsDto {
+        outside_sourcing_enabled: settings.outside_sourcing_enabled,
+        jamendo_client_id: settings.jamendo_client_id.clone().unwrap_or_default(),
+        spotify_client_id: settings.spotify_client_id.clone().unwrap_or_default(),
+    })
+}
+
+/// Persist source settings. Blank credentials are stored as `None`, which makes
+/// the affected provider report itself as needing setup rather than failing.
+#[tauri::command]
+pub async fn set_source_settings(
+    settings: SourceSettingsDto,
     settings_state: tauri::State<'_, AppSettingsState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let trimmed = client_id.trim();
-    let mut settings = lock_settings(&settings_state)?;
-    settings.jamendo_client_id = if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    };
-    settings.save(&app)?;
+    fn normalise(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
+    let mut stored = lock_settings(&settings_state)?;
+    stored.outside_sourcing_enabled = settings.outside_sourcing_enabled;
+    stored.jamendo_client_id = normalise(&settings.jamendo_client_id);
+    stored.spotify_client_id = normalise(&settings.spotify_client_id);
+    stored.save(&app)?;
     Ok(())
 }
 
@@ -1391,10 +1462,7 @@ pub async fn set_auto_lyrics_download(
 // ── Library / playlist commands ───────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn add_track_to_playlist(
-    path: String,
-    app: tauri::AppHandle,
-) -> Result<Track, String> {
+pub async fn add_track_to_playlist(path: String, app: tauri::AppHandle) -> Result<Track, String> {
     let app = app.clone();
     blocking(move || {
         let resolved = crate::android::import::resolve_library_source(&app, &path)?;
@@ -1416,26 +1484,19 @@ pub async fn remove_track_from_playlist(
 }
 
 #[tauri::command]
-pub async fn get_playlist(
-    library: tauri::State<'_, LibraryState>,
-) -> Result<Vec<Track>, String> {
+pub async fn get_playlist(library: tauri::State<'_, LibraryState>) -> Result<Vec<Track>, String> {
     lock_library(&library)?.get_default_playlist_tracks()
 }
 
 #[tauri::command]
-pub async fn clear_playlist(
-    library: tauri::State<'_, LibraryState>,
-) -> Result<(), String> {
+pub async fn clear_playlist(library: tauri::State<'_, LibraryState>) -> Result<(), String> {
     lock_library(&library)?.clear_default_playlist()
 }
 
 // ── Favorites ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn add_track_to_favorites(
-    path: String,
-    app: tauri::AppHandle,
-) -> Result<Track, String> {
+pub async fn add_track_to_favorites(path: String, app: tauri::AppHandle) -> Result<Track, String> {
     let app = app.clone();
     blocking(move || {
         let library = app.state::<LibraryState>();
@@ -1454,9 +1515,7 @@ pub async fn remove_track_from_favorites(
 }
 
 #[tauri::command]
-pub async fn get_favorites(
-    library: tauri::State<'_, LibraryState>,
-) -> Result<Vec<Track>, String> {
+pub async fn get_favorites(library: tauri::State<'_, LibraryState>) -> Result<Vec<Track>, String> {
     lock_library(&library)?.get_favorites()
 }
 
@@ -1477,10 +1536,7 @@ pub async fn is_track_in_playlist(
 }
 
 #[tauri::command]
-pub async fn toggle_favorite(
-    path: String,
-    app: tauri::AppHandle,
-) -> Result<bool, String> {
+pub async fn toggle_favorite(path: String, app: tauri::AppHandle) -> Result<bool, String> {
     let app = app.clone();
     blocking(move || {
         let library = app.state::<LibraryState>();
@@ -1491,17 +1547,12 @@ pub async fn toggle_favorite(
 }
 
 #[tauri::command]
-pub async fn clear_favorites(
-    library: tauri::State<'_, LibraryState>,
-) -> Result<(), String> {
+pub async fn clear_favorites(library: tauri::State<'_, LibraryState>) -> Result<(), String> {
     lock_library(&library)?.clear_favorites()
 }
 
 #[tauri::command]
-pub async fn play_track_from_playlist(
-    index: usize,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
+pub async fn play_track_from_playlist(index: usize, app: tauri::AppHandle) -> Result<(), String> {
     let app_clone = app.clone();
     let (raw_tracks, track) = blocking(move || {
         let library = app_clone.state::<LibraryState>();
@@ -1518,24 +1569,23 @@ pub async fn play_track_from_playlist(
     let app_clone = app.clone();
     let raw_track_paths: Vec<String> = raw_tracks.iter().map(|t| t.path.clone()).collect();
     let materialized_paths = blocking(move || {
-        Ok::<_, String>(raw_track_paths
-            .into_iter()
-            .map(|path| {
-                crate::android::import::resolve_playback_source(&app_clone, &path)
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("Failed to resolve track {path}: {e}");
-                        path
-                    })
-            })
-            .collect::<Vec<_>>())
+        Ok::<_, String>(
+            raw_track_paths
+                .into_iter()
+                .map(|path| {
+                    crate::android::import::resolve_playback_source(&app_clone, &path)
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("Failed to resolve track {path}: {e}");
+                            path
+                        })
+                })
+                .collect::<Vec<_>>(),
+        )
     })
     .await?;
 
-    let local_path = materialized_paths
-        .get(index)
-        .cloned()
-        .unwrap_or_default();
+    let local_path = materialized_paths.get(index).cloned().unwrap_or_default();
 
     if local_path.is_empty() {
         return Err(format!("Audio file not found for track at index {index}"));
@@ -1544,7 +1594,10 @@ pub async fn play_track_from_playlist(
     let tracks: Vec<Track> = raw_tracks
         .into_iter()
         .zip(materialized_paths.into_iter())
-        .map(|(mut t, p)| { t.path = p; t })
+        .map(|(mut t, p)| {
+            t.path = p;
+            t
+        })
         .collect();
 
     let app_clone = app.clone();
@@ -1552,7 +1605,9 @@ pub async fn play_track_from_playlist(
     blocking(move || {
         with_app_player(&app_clone, |player| {
             sync_queue_from_tracks(player, &tracks_clone, index);
-            player.play(&local_path).map_err(|e| format!("Playback failed: {e}"))
+            player
+                .play(&local_path)
+                .map_err(|e| format!("Playback failed: {e}"))
         })
     })
     .await?;
@@ -1621,9 +1676,7 @@ pub async fn get_supported_audio_extensions() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub async fn get_queue(
-    state: tauri::State<'_, PlayerState>,
-) -> Result<QueueStateDto, String> {
+pub async fn get_queue(state: tauri::State<'_, PlayerState>) -> Result<QueueStateDto, String> {
     let guard = lock_player_state(&state);
     let Some(player) = guard.as_ref() else {
         return Ok(QueueStateDto {
@@ -1640,9 +1693,7 @@ pub async fn get_queue(
 }
 
 #[tauri::command]
-pub async fn play_next(
-    app: tauri::AppHandle,
-) -> Result<Option<String>, String> {
+pub async fn play_next(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let app_clone = app.clone();
     let path = blocking(move || {
         with_app_player(&app_clone, |guard| {
@@ -1668,9 +1719,7 @@ pub async fn play_next(
 }
 
 #[tauri::command]
-pub async fn play_previous(
-    app: tauri::AppHandle,
-) -> Result<Option<String>, String> {
+pub async fn play_previous(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let app_clone = app.clone();
     let path = blocking(move || {
         with_app_player(&app_clone, |guard| {
@@ -1973,17 +2022,11 @@ pub async fn get_track_full_cover(
 ) -> Result<Option<String>, String> {
     validate_audio_path(&path)?;
     let app_clone = app.clone();
-    blocking(move || {
-        crate::metadata::extract_full_cover_data_url(Some(&app_clone), &path)
-    })
-    .await
+    blocking(move || crate::metadata::extract_full_cover_data_url(Some(&app_clone), &path)).await
 }
 
 #[tauri::command]
-pub async fn fetch_lyrics_for_track(
-    path: String,
-    app: tauri::AppHandle,
-) -> Result<Track, String> {
+pub async fn fetch_lyrics_for_track(path: String, app: tauri::AppHandle) -> Result<Track, String> {
     validate_audio_path(&path)?;
     let p = path.clone();
     let app_clone = app.clone();
@@ -2175,9 +2218,7 @@ pub async fn move_queue_track(
 }
 
 #[tauri::command]
-pub async fn clear_queue(
-    state: tauri::State<'_, PlayerState>,
-) -> Result<(), String> {
+pub async fn clear_queue(state: tauri::State<'_, PlayerState>) -> Result<(), String> {
     lock_player(&state)?.clear_upcoming();
     Ok(())
 }
@@ -2217,10 +2258,7 @@ pub async fn get_queue_tracks(
 }
 
 #[tauri::command]
-pub async fn play_track_from_queue(
-    index: usize,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
+pub async fn play_track_from_queue(index: usize, app: tauri::AppHandle) -> Result<(), String> {
     let app_clone = app.clone();
     let path = blocking(move || {
         with_app_player(&app_clone, |guard| {
@@ -2377,12 +2415,18 @@ pub async fn set_output_device(
     // left completely intact (queue included) rather than half-torn-down.
     let was_playing = guard.is_playing();
     let was_paused = guard.is_paused();
-    let current_path = guard.get_current_path().and_then(|p| p.to_str().map(String::from));
+    let current_path = guard
+        .get_current_path()
+        .and_then(|p| p.to_str().map(String::from));
     let position = guard.position_seconds();
     let volume = guard.volume();
     let queue = guard.queue.clone();
     let repeat = guard.repeat.clone();
-    let eq_config = guard.eq_config.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let eq_config = guard
+        .eq_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let eq_version = *guard.eq_version.lock().unwrap_or_else(|e| e.into_inner());
 
     // Build a new player on the requested device.
@@ -2390,8 +2434,14 @@ pub async fn set_output_device(
     new_player.queue = queue;
     new_player.repeat = repeat;
     new_player.set_volume(volume)?;
-    *new_player.eq_config.lock().unwrap_or_else(|e| e.into_inner()) = eq_config;
-    *new_player.eq_version.lock().unwrap_or_else(|e| e.into_inner()) = eq_version;
+    *new_player
+        .eq_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = eq_config;
+    *new_player
+        .eq_version
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = eq_version;
 
     // Resume playback best-effort: a failure here (e.g. the file that was
     // playing has since been deleted) shouldn't discard an otherwise-
@@ -2471,9 +2521,7 @@ pub async fn update_media_position(
 
 /// Clear the OS media session when nothing is loaded (Stopped, no metadata).
 #[tauri::command]
-pub async fn clear_media_session(
-    bridge: tauri::State<'_, MediaBridgeState>,
-) -> Result<(), String> {
+pub async fn clear_media_session(bridge: tauri::State<'_, MediaBridgeState>) -> Result<(), String> {
     bridge.0.set_stopped();
     Ok(())
 }
@@ -2488,9 +2536,7 @@ fn lock_settings<'a>(
 
 /// Return what the window close button currently does.
 #[tauri::command]
-pub fn get_close_action(
-    state: tauri::State<'_, AppSettingsState>,
-) -> Result<CloseAction, String> {
+pub fn get_close_action(state: tauri::State<'_, AppSettingsState>) -> Result<CloseAction, String> {
     Ok(lock_settings(&state)?.close_action)
 }
 
@@ -2870,10 +2916,8 @@ pub async fn sync_playlist_folder(
                         let _ = lib.apply_track_art_update(&track);
                     }
                 }
-                let _ = enrich_app.emit(
-                    "sync-progress",
-                    serde_json::json!({ "phase": "art_done" }),
-                );
+                let _ =
+                    enrich_app.emit("sync-progress", serde_json::json!({ "phase": "art_done" }));
             });
         }
 
@@ -2913,11 +2957,11 @@ pub fn clear_audio_imports(app: tauri::AppHandle) -> Result<u64, String> {
         .app_data_dir()
         .map_err(|e| format!("Failed to resolve app data dir: {e}"))?
         .join("imports");
-    
+
     if !imports_dir.exists() {
         return Ok(0);
     }
-    
+
     let mut freed = 0u64;
     for entry in std::fs::read_dir(&imports_dir)
         .map_err(|e| format!("Failed to read imports dir: {e}"))?
@@ -2928,7 +2972,7 @@ pub fn clear_audio_imports(app: tauri::AppHandle) -> Result<u64, String> {
         }
         let _ = std::fs::remove_file(entry.path());
     }
-    
+
     Ok(freed)
 }
 
@@ -3035,15 +3079,14 @@ pub async fn get_listening_stats(
 }
 
 #[tauri::command]
-pub async fn get_home_suggestions(
-    app: tauri::AppHandle,
-) -> Result<HomeSuggestionsDto, String> {
+pub async fn get_home_suggestions(app: tauri::AppHandle) -> Result<HomeSuggestionsDto, String> {
     let seed = {
         let state = app.state::<PlayerState>();
         let guard = lock_player_state(&state);
-        guard
-            .as_ref()
-            .and_then(|p| p.get_current_path().map(|p| p.to_string_lossy().into_owned()))
+        guard.as_ref().and_then(|p| {
+            p.get_current_path()
+                .map(|p| p.to_string_lossy().into_owned())
+        })
     };
     let suggestions = {
         let library = app.state::<LibraryState>();
@@ -3064,7 +3107,10 @@ pub async fn get_home_suggestions(
 /// calls.
 fn maybe_spawn_artist_enrichment(app: &tauri::AppHandle) {
     let enrichment_state = app.state::<EnrichmentState>();
-    if enrichment_state.0.swap(true, std::sync::atomic::Ordering::SeqCst) {
+    if enrichment_state
+        .0
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
         return;
     }
 
@@ -3115,7 +3161,11 @@ fn run_artist_enrichment_job(app: &tauri::AppHandle) {
             std::thread::sleep(crate::enrichment::RATE_LIMIT_DELAY);
         }
         let profile = crate::enrichment::fetch_artist_profile(client, artist_name);
-        let status = if profile.mbid.is_some() { "ok" } else { "not_found" };
+        let status = if profile.mbid.is_some() {
+            "ok"
+        } else {
+            "not_found"
+        };
 
         let library = app.state::<LibraryState>();
         let save_result = library.0.lock().map(|lib| {
@@ -3166,12 +3216,21 @@ pub async fn search_sources(
     if query.is_empty() {
         return Ok(Vec::new());
     }
+    if !app
+        .try_state::<AppSettingsState>()
+        .and_then(|state| state.0.lock().ok().map(|s| s.outside_sourcing_enabled))
+        .unwrap_or(true)
+    {
+        // Master switch is off: no provider is contacted at all.
+        return Ok(Vec::new());
+    }
     let capped = limit.unwrap_or(20).min(50) as usize;
     let config = source_config(&app);
 
-    let mut results = tokio::task::spawn_blocking(move || sources::search_all(&config, &query, capped))
-        .await
-        .map_err(|e| format!("Source search failed: {e}"))?;
+    let mut results =
+        tokio::task::spawn_blocking(move || sources::search_all(&config, &query, capped))
+            .await
+            .map_err(|e| format!("Source search failed: {e}"))?;
 
     // Annotate against the library while we hold the lock exactly once.
     {
@@ -3207,7 +3266,10 @@ fn source_track_to_track(
             .unwrap_or_else(|| source.title.clone()),
         title: source.title.clone(),
         artist: source.artist.clone(),
-        album: source.album.clone().unwrap_or_else(|| "Singles".to_string()),
+        album: source
+            .album
+            .clone()
+            .unwrap_or_else(|| "Singles".to_string()),
         album_artist: None,
         genre: None,
         year: None,
@@ -3301,8 +3363,30 @@ pub async fn stream_source_track(
     library: tauri::State<'_, LibraryState>,
     player: tauri::State<'_, PlayerState>,
 ) -> Result<Track, String> {
-    // Reuse an existing row when its file is still on disk.
-    {
+    // A preview is not something the user chose to own, so it never becomes a
+    // library row. Reuse the cached clip if it is still on disk.
+    let is_preview = !track.is_full_length;
+    if is_preview {
+        let existing = preview_registry().lock().ok().and_then(|map| {
+            map.values()
+                .find(|t| {
+                    t.source_provider.as_deref() == Some(track.provider.as_str())
+                        && Path::new(&t.path).is_file()
+                        && t.path
+                            == source_cache::preview_path(
+                                &track.provider,
+                                &track.id,
+                                &track.extension(),
+                            )
+                            .to_string_lossy()
+                })
+                .cloned()
+        });
+        if let Some(existing) = existing {
+            return Ok(existing);
+        }
+    } else {
+        // Reuse an existing row when its file is still on disk.
         let library = lock_library(&library)?;
         if let Some(existing) = library.find_source_track(&track.provider, &track.id)? {
             if Path::new(&existing.path).is_file() {
@@ -3324,7 +3408,11 @@ pub async fn stream_source_track(
 
         let mut resolved = source.clone();
         resolved.audio_url = Some(audio_url.clone());
-        let dest = source_cache::cached_path(&source.provider, &source.id, &resolved.extension());
+        let dest = if resolved.is_full_length {
+            source_cache::cached_path(&source.provider, &source.id, &resolved.extension())
+        } else {
+            source_cache::preview_path(&source.provider, &source.id, &resolved.extension())
+        };
         let size = source_cache::fetch_to(client, &audio_url, &dest).map_err(|e| e.to_string())?;
         let art_id = fetch_source_artwork(&app_for_fetch, &source);
         Ok::<_, String>((dest, size as i64, art_id, audio_url))
@@ -3333,7 +3421,16 @@ pub async fn stream_source_track(
     .map_err(|e| format!("Stream failed: {e}"))??;
 
     let path_string = path.to_string_lossy().into_owned();
-    let row = source_track_to_track(&track, &path_string, art_id, size);
+    let mut row = source_track_to_track(&track, &path_string, art_id, size);
+
+    if is_preview {
+        // Playable, displayable, and entirely absent from the library.
+        row.id = format!("preview:{}:{}", track.provider, track.id);
+        row.source_state = Some("preview".to_string());
+        register_preview(&row);
+        return Ok(row);
+    }
+
     let protected = protected_cache_paths(&player);
 
     let library = lock_library(&library)?;
@@ -3367,7 +3464,8 @@ pub async fn download_source_track(
     }
 
     // Make sure the bytes exist locally, reusing the cached copy when present.
-    let cached = stream_source_track(track.clone(), app.clone(), library.clone(), player.clone()).await?;
+    let cached =
+        stream_source_track(track.clone(), app.clone(), library.clone(), player.clone()).await?;
 
     let media_folders = lock_settings(&settings_state)?.media_folders.clone();
     let destination = source_download::choose_destination(

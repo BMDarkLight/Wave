@@ -30,6 +30,37 @@ pub fn cached_path(provider: &str, id: &str, extension: &str) -> PathBuf {
         .join(format!("{}.{}", sanitize(id), sanitize(extension)))
 }
 
+/// Cache slot for a preview clip.
+///
+/// Kept in its own directory because previews are *not* library content: they
+/// never get a `tracks` row, never survive a restart, and must never be
+/// confused with a full-length track that the user chose to keep.
+pub fn preview_path(provider: &str, id: &str, extension: &str) -> PathBuf {
+    paths::source_cache_dir()
+        .join("previews")
+        .join(sanitize(provider))
+        .join(format!("{}.{}", sanitize(id), sanitize(extension)))
+}
+
+/// Wipe every cached preview. Called at startup: a 30-second clip is worth
+/// re-fetching, and keeping them would slowly fill the disk with audio the
+/// user never asked to own.
+pub fn clear_previews() {
+    let dir = paths::source_cache_dir().join("previews");
+    if dir.exists() {
+        if let Err(error) = std::fs::remove_dir_all(&dir) {
+            tracing::warn!("Failed to clear preview cache: {error}");
+        }
+    }
+    // One-time cleanup: an earlier build cached Deezer previews alongside
+    // library-bound audio. Their rows are removed on startup, so the files are
+    // orphaned and would otherwise sit on disk forever.
+    let legacy = paths::source_cache_dir().join("deezer");
+    if legacy.exists() {
+        let _ = std::fs::remove_dir_all(&legacy);
+    }
+}
+
 /// Replace anything that could escape the cache directory or upset a
 /// filesystem. Long ids are truncated with a hash suffix so they stay unique.
 fn sanitize(raw: &str) -> String {
@@ -274,6 +305,18 @@ mod tests {
         let b = sanitize(&format!("{}y", "x".repeat(299)));
         assert!(a.len() <= 96 && b.len() <= 96);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn previews_are_kept_apart_from_library_cache() {
+        let preview = preview_path("deezer", "123", "mp3");
+        let cached = cached_path("deezer", "123", "mp3");
+        assert_ne!(
+            preview, cached,
+            "a preview must never occupy a library slot"
+        );
+        assert!(preview.to_string_lossy().contains("previews"));
+        assert!(preview.starts_with(paths::source_cache_dir()));
     }
 
     #[test]

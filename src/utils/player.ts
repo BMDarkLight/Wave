@@ -573,13 +573,24 @@ export const listenToDownloadFallback = async (
   };
 };
 
-/** Free Jamendo API client id, or "" when unset. */
-export const getJamendoClientId = (): Promise<string> =>
-  safeInvoke<string>("get_jamendo_client_id");
+/** Settings for the remote-source tier. */
+export interface SourceSettings {
+  /** Master switch. When off, no provider is contacted and tier 3 is hidden. */
+  outside_sourcing_enabled: boolean;
+  /** Free Jamendo API client ID; "" when unset. */
+  jamendo_client_id: string;
+  /**
+   * Spotify application client ID; "" when unset. Spotify's API serves no
+   * audio, so this powers catalogue search and playlist import only.
+   */
+  spotify_client_id: string;
+}
 
-/** Store the Jamendo client id; blank clears it. */
-export const setJamendoClientId = (clientId: string): Promise<void> =>
-  safeInvoke("set_jamendo_client_id", { clientId });
+export const getSourceSettings = (): Promise<SourceSettings> =>
+  safeInvoke<SourceSettings>("get_source_settings");
+
+export const setSourceSettings = (settings: SourceSettings): Promise<void> =>
+  safeInvoke("set_source_settings", { settings });
 
 /** Keep a streamed track: copy it to the download folder and index it. */
 export const downloadSourceTrack = (track: SourceTrack): Promise<Track> => {

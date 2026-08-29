@@ -37,6 +37,17 @@ pub struct AppSettings {
     /// Boost quieter tracks toward the median loudness of played tracks.
     #[serde(default)]
     pub volume_normalization_enabled: bool,
+    /// Master switch for the remote-source search tier. When off, no provider
+    /// is queried and the escalation button never appears — nothing in the app
+    /// reaches the network for music discovery.
+    #[serde(default = "default_outside_sourcing_enabled")]
+    pub outside_sourcing_enabled: bool,
+    /// Spotify application client id, used for OAuth PKCE.
+    ///
+    /// Spotify serves no audio through its API, so this powers catalogue search
+    /// and playlist import only — never streaming or caching.
+    #[serde(default)]
+    pub spotify_client_id: Option<String>,
     /// Free Jamendo API client id. Empty means the Jamendo source reports
     /// itself as needing setup instead of silently returning nothing.
     #[serde(default)]
@@ -49,6 +60,10 @@ pub struct AppSettings {
 
 fn default_source_cache_limit_mb() -> u64 {
     512
+}
+
+fn default_outside_sourcing_enabled() -> bool {
+    true
 }
 
 fn default_gapless_enabled() -> bool {
@@ -76,6 +91,8 @@ impl Default for AppSettings {
             gapless_enabled: true,
             auto_lyrics_download: true,
             volume_normalization_enabled: false,
+            outside_sourcing_enabled: default_outside_sourcing_enabled(),
+            spotify_client_id: None,
             jamendo_client_id: None,
             source_cache_limit_mb: default_source_cache_limit_mb(),
         }

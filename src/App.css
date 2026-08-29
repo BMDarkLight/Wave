@@ -1360,6 +1360,44 @@ input[type="search"]::-webkit-search-decoration {
   gap: 8px;
 }
 
+.mset-source-provider {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mset-source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mset-source-tag {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.mset-source-tag-ready {
+  background: rgba(120, 220, 160, 0.16);
+  color: #c8f0d6;
+}
+
+.mset-source-tag-setup {
+  background: rgba(255, 190, 110, 0.16);
+  color: #ffd7a8;
+}
+
+/* Spotify can never serve audio; the limit needs to read as a caveat, not
+   as ordinary help text. */
+.mset-source-warning {
+  color: rgba(255, 200, 160, 0.72);
+}
+
 .mset-source-input {
   width: 100%;
   padding: 10px 12px;

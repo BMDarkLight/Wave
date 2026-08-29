@@ -55,6 +55,11 @@ pub fn run() {
         .setup(|app| {
             let settings = app_settings::AppSettings::load(app.handle());
 
+            // Previews are session-scoped clips, never library content. Drop
+            // any left by the last run rather than accumulating audio the user
+            // never chose to keep.
+            sources::cache::clear_previews();
+
             // Defer audio device creation until first playback command. Opening
             // cpal/oboe during setup can panic on Android before JNI is ready.
             // The in-memory player itself is safe to initialize now, allowing
@@ -232,8 +237,8 @@ pub fn run() {
             commands::search_sources,
             commands::stream_source_track,
             commands::download_source_track,
-            commands::get_jamendo_client_id,
-            commands::set_jamendo_client_id,
+            commands::get_source_settings,
+            commands::set_source_settings,
             commands::add_track_to_playlist_by_id,
             commands::remove_track_from_playlist_by_id,
             commands::remove_track_from_library,

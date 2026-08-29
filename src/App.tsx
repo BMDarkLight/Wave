@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import trayTemplate from "../assets/tray-template.svg";
 import { BiX, BiFolderOpen, BiMenu, BiSearch } from "react-icons/bi";
-import type { SourceTrack } from "./utils/player";
+import type { SourceSettings, SourceTrack } from "./utils/player";
 import {
   addTrackToPlaylistById,
-  getJamendoClientId,
+  getSourceSettings,
   listenToDownloadFallback,
-  setJamendoClientId as setJamendoClientIdCmd,
+  setSourceSettings,
   clearAudioImports,
   createPlaylist,
   resetApp,
@@ -105,7 +105,11 @@ import "./touch-hover.css";
 function App() {
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [jamendoClientId, setJamendoClientId] = useState("");
+  const [sourceSettings, setSourceSettingsState] = useState<SourceSettings>({
+    outside_sourcing_enabled: true,
+    jamendo_client_id: "",
+    spotify_client_id: "",
+  });
   const [crashReport, setCrashReport] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingPlaylist, setIsLoadingPlaylist] = useState(true);
@@ -1386,14 +1390,15 @@ function App() {
     track.path === playbackState.current_path;
 
   useEffect(() => {
-    void getJamendoClientId()
-      .then(setJamendoClientId)
+    void getSourceSettings()
+      .then(setSourceSettingsState)
       .catch(() => {});
   }, []);
 
-  const handleJamendoClientIdChange = useCallback((clientId: string) => {
-    setJamendoClientId(clientId);
-    void setJamendoClientIdCmd(clientId).catch((e) =>
+  const handleSourceSettingsChange = useCallback((next: SourceSettings) => {
+    // Optimistic: the field stays responsive while the write lands.
+    setSourceSettingsState(next);
+    void setSourceSettings(next).catch((e) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
   }, []);
@@ -1473,15 +1478,18 @@ function App() {
               Search full library
             </button>
           )}
-          {mainSearchQuery.trim() && !sourceSearched && !sourceLoading && (
-            <button
-              className="search-sources-btn"
-              type="button"
-              onClick={() => void searchSourcesNow()}
-            >
-              Search Deezer &amp; free catalogs
-            </button>
-          )}
+          {sourceSettings.outside_sourcing_enabled &&
+            mainSearchQuery.trim() &&
+            !sourceSearched &&
+            !sourceLoading && (
+              <button
+                className="search-sources-btn"
+                type="button"
+                onClick={() => void searchSourcesNow()}
+              >
+                Search Deezer &amp; free catalogs
+              </button>
+            )}
           <SourceResults
             results={sourceResults}
             loading={sourceLoading}
@@ -1579,15 +1587,18 @@ function App() {
               Search full library
             </button>
           )}
-          {mainSearchQuery.trim() && !sourceSearched && !sourceLoading && (
-            <button
-              className="search-sources-btn"
-              type="button"
-              onClick={() => void searchSourcesNow()}
-            >
-              Search Deezer &amp; free catalogs
-            </button>
-          )}
+          {sourceSettings.outside_sourcing_enabled &&
+            mainSearchQuery.trim() &&
+            !sourceSearched &&
+            !sourceLoading && (
+              <button
+                className="search-sources-btn"
+                type="button"
+                onClick={() => void searchSourcesNow()}
+              >
+                Search Deezer &amp; free catalogs
+              </button>
+            )}
           <SourceResults
             results={sourceResults}
             loading={sourceLoading}
@@ -1893,8 +1904,8 @@ function App() {
           onVolumeNormalizationChange={(enabled) =>
             void handleVolumeNormalizationChange(enabled)
           }
-          jamendoClientId={jamendoClientId}
-          onJamendoClientIdChange={handleJamendoClientIdChange}
+          sourceSettings={sourceSettings}
+          onSourceSettingsChange={handleSourceSettingsChange}
           currentOutputDevice={playbackState.output_device_name}
           onSelectOutputDevice={handleSelectOutputDeviceSettings}
           onResetApp={handleResetApp}
@@ -2254,8 +2265,8 @@ function App() {
           onVolumeNormalizationChange={(enabled) =>
             void handleVolumeNormalizationChange(enabled)
           }
-          jamendoClientId={jamendoClientId}
-          onJamendoClientIdChange={handleJamendoClientIdChange}
+          sourceSettings={sourceSettings}
+          onSourceSettingsChange={handleSourceSettingsChange}
           currentOutputDevice={playbackState.output_device_name}
           onSelectOutputDevice={handleSelectOutputDeviceSettings}
           onResetApp={handleResetApp}
