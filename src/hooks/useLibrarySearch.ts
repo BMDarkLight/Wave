@@ -43,6 +43,10 @@ export function useLibrarySearch() {
   useEffect(() => {
     const q = mainSearchQuery.trim();
     if (!q) {
+      // Invalidate any request still in flight. Without this, a response for
+      // the query the user just cleared still counts as current and refills
+      // the list underneath an empty box.
+      mainSearchReqId.current += 1;
       setMainSearchHits([]);
       setMainSearchLoading(false);
       return;

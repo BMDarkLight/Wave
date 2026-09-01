@@ -17,7 +17,9 @@ export function useResizablePanels({
   const [rightPanelWidth, setRightPanelWidth] = useState(320);
   const [rightPanelClosing, setRightPanelClosing] = useState(false);
   const rightPanelClosingRef = useRef(false);
-  const rightPanelCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rightPanelCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const [dragging, setDragging] = useState<"sidebar" | "right" | null>(null);
   const dragStartRef = useRef({ x: 0, width: 0 });
 
@@ -62,7 +64,8 @@ export function useResizablePanels({
   };
 
   useEffect(() => {
-    const clamp = () => setRightPanelWidth((width) => clampRightPanelWidth(width));
+    const clamp = () =>
+      setRightPanelWidth((width) => clampRightPanelWidth(width));
     clamp();
     window.addEventListener("resize", clamp);
     return () => window.removeEventListener("resize", clamp);
@@ -71,24 +74,38 @@ export function useResizablePanels({
 
   useEffect(() => {
     if (!dragging) return;
-    const onMouseMove = (e: MouseEvent) => {
-      const dx = e.clientX - dragStartRef.current.x;
-      if (dragging === "sidebar") {
-        setSidebarWidth(Math.max(180, Math.min(400, dragStartRef.current.width + dx)));
-      } else {
-        setRightPanelWidth(clampRightPanelWidth(dragStartRef.current.width - dx));
-      }
-    };
-    const onMouseUp = () => {
+    const endDrag = () => {
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       document.documentElement.style.userSelect = "";
       setDragging(null);
     };
+    const onMouseMove = (e: MouseEvent) => {
+      // A release outside the window never reaches us, which would leave the
+      // divider stuck to the cursor. The first move back over the app reports
+      // no button held — treat that as the mouseup we missed.
+      if (e.buttons === 0) {
+        endDrag();
+        return;
+      }
+      const dx = e.clientX - dragStartRef.current.x;
+      if (dragging === "sidebar") {
+        setSidebarWidth(
+          Math.max(180, Math.min(400, dragStartRef.current.width + dx)),
+        );
+      } else {
+        setRightPanelWidth(
+          clampRightPanelWidth(dragStartRef.current.width - dx),
+        );
+      }
+    };
     document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp, { once: true });
+    document.addEventListener("mouseup", endDrag);
     return () => {
       document.removeEventListener("mousemove", onMouseMove);
+      // Not `{ once: true }`: a drag interrupted before the release would
+      // otherwise leave this handler on the document for good.
+      document.removeEventListener("mouseup", endDrag);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       document.documentElement.style.userSelect = "";

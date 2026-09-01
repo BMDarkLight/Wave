@@ -1015,6 +1015,7 @@ function App() {
   // Uses backend playback state directly — never opens the file picker.
   useEffect(() => {
     let unlisten: (() => void) | null = null;
+    let cancelled = false;
 
     const osTogglePlayback = async () => {
       const state = await getPlaybackState();
@@ -1041,7 +1042,7 @@ function App() {
     };
 
     const setup = async () => {
-      unlisten = await listenToMediaControls({
+      const stop = await listenToMediaControls({
         onPlay: async () => {
           const state = await getPlaybackState();
           if (!state.is_playing) await osTogglePlayback();
@@ -1093,9 +1094,16 @@ function App() {
           await loadPlaybackMode();
         },
       });
+      // Registration finishes after the effect may already have torn down —
+      // StrictMode does exactly that on every mount. Unsubscribing right away
+      // in that case is what keeps a second listener from stacking up and
+      // firing every OS media key twice.
+      if (cancelled) stop();
+      else unlisten = stop;
     };
     setup();
     return () => {
+      cancelled = true;
       if (unlisten) unlisten();
     };
   }, []);
@@ -1408,12 +1416,18 @@ function App() {
   // saving somewhere the user didn't choose is worse than not saving.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
     void listenToDownloadFallback((reason) => setError(reason))
       .then((fn) => {
-        unlisten = fn;
+        // Same teardown race as the media-control listener above: unsubscribe
+        // immediately if the effect is already gone, or the toast fires once
+        // per stacked registration.
+        if (cancelled) fn();
+        else unlisten = fn;
       })
       .catch(() => {});
     return () => {
+      cancelled = true;
       if (unlisten) unlisten();
     };
   }, []);

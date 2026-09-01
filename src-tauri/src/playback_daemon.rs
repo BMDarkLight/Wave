@@ -18,7 +18,7 @@ use crate::media_controls::TrackMetadata;
 use crate::metadata::Track;
 use crate::path_validation::validate_audio_path;
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -417,6 +417,16 @@ fn request_shutdown(state: &Arc<Mutex<DaemonState>>) {
 
 // ── IPC server ────────────────────────────────────────────────────────────────
 
+/// Longest request line the daemon will read. Every `DaemonRequest` variant
+/// serialises to well under a kilobyte, so this is generous — its job is to
+/// stop a client that never sends a newline from growing the buffer forever.
+const MAX_REQUEST_BYTES: u64 = 64 * 1024;
+
+/// How long a client gets to send its request and take its response. The
+/// socket is loopback-only, but any local process can open one, and without a
+/// deadline a connection that goes quiet holds its handler thread for good.
+const IPC_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn ipc_server_loop(listener: TcpListener, state: Arc<Mutex<DaemonState>>, auth_token: String) {
     for stream in listener.incoming() {
         let Ok(stream) = stream else {
@@ -433,12 +443,28 @@ fn handle_ipc_connection(
     state: Arc<Mutex<DaemonState>>,
     auth_token: String,
 ) {
+    // Both bounds go on before anything is read, because the token check below
+    // happens *after* this read: an unauthenticated client must not be able to
+    // pin a thread open or make us buffer without limit.
+    if stream.set_read_timeout(Some(IPC_TIMEOUT)).is_err()
+        || stream.set_write_timeout(Some(IPC_TIMEOUT)).is_err()
+    {
+        return;
+    }
+
     let mut line = String::new();
     {
-        let mut reader = BufReader::new(&stream);
+        let mut reader = BufReader::new((&stream).take(MAX_REQUEST_BYTES));
         if reader.read_line(&mut line).is_err() {
             return;
         }
+    }
+    // No newline means the client either stopped short or ran past the cap.
+    // Either way there is no complete request here to parse.
+    if !line.ends_with('\n') {
+        let resp = DaemonResponse::err("Request was incomplete or too large");
+        let _ = write_response(&mut stream, &resp);
+        return;
     }
 
     let envelope: DaemonEnvelope = match serde_json::from_str(line.trim()) {
