@@ -2,6 +2,7 @@
 // crossfade, audio output (desktop/non-Android), and app reset.
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type InputHTMLAttributes,
@@ -247,6 +248,9 @@ export default function MobileSettings({
   onSelectOutputDevice,
   onResetApp,
 }: MobileSettingsProps) {
+  // Both the embedded desktop pane and the mobile sheet can be mounted at
+  // once, so the credential fields need ids unique to this instance.
+  const keyIdPrefix = useId();
   const [mediaFolders, setMediaFolders] = useState<string[]>([]);
   const [addingSource, setAddingSource] = useState(false);
   const [outputDevices, setOutputDevices] = useState<string[]>([]);
@@ -635,11 +639,14 @@ export default function MobileSettings({
               <>
                 <div className="mset-playback-divider" role="separator" />
                 <div className="mset-key">
-                  <label className="mset-key-label" htmlFor="src-jamendo">
+                  <label
+                    className="mset-key-label"
+                    htmlFor={`${keyIdPrefix}src-jamendo`}
+                  >
                     Jamendo
                   </label>
                   <input
-                    id="src-jamendo"
+                    id={`${keyIdPrefix}src-jamendo`}
                     type="text"
                     className="mset-key-input"
                     value={sourceSettings.jamendo_client_id}
@@ -656,11 +663,14 @@ export default function MobileSettings({
                   />
                 </div>
                 <div className="mset-key">
-                  <label className="mset-key-label" htmlFor="src-spotify">
+                  <label
+                    className="mset-key-label"
+                    htmlFor={`${keyIdPrefix}src-spotify`}
+                  >
                     Spotify
                   </label>
                   <input
-                    id="src-spotify"
+                    id={`${keyIdPrefix}src-spotify`}
                     type="text"
                     className="mset-key-input"
                     value={sourceSettings.spotify_client_id}
