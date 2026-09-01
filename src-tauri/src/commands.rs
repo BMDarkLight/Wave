@@ -3216,10 +3216,11 @@ pub async fn search_sources(
     if query.is_empty() {
         return Ok(Vec::new());
     }
+    // Fail closed: if settings can't be read, assume the user has not opted in.
     if !app
         .try_state::<AppSettingsState>()
         .and_then(|state| state.0.lock().ok().map(|s| s.outside_sourcing_enabled))
-        .unwrap_or(true)
+        .unwrap_or(false)
     {
         // Master switch is off: no provider is contacted at all.
         return Ok(Vec::new());

@@ -106,7 +106,8 @@ function App() {
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [sourceSettings, setSourceSettingsState] = useState<SourceSettings>({
-    outside_sourcing_enabled: true,
+    // Matches the backend default, so the tier stays hidden until settings load.
+    outside_sourcing_enabled: false,
     jamendo_client_id: "",
     spotify_client_id: "",
   });

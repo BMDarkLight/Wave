@@ -318,7 +318,7 @@ interface SourceSettings {
 
 | Field | Description |
 |-------|-------------|
-| `outside_sourcing_enabled` | Master switch. When off, no provider is contacted and the search escalation button is hidden |
+| `outside_sourcing_enabled` | Master switch, **off by default**. When off, no provider is contacted and the search escalation button is hidden |
 | `jamendo_client_id` | Free client ID from `developer.jamendo.com`; `""` when unset |
 | `spotify_client_id` | For a future discovery integration. Spotify's API serves no audio, so this can never enable streaming or caching. OAuth is not implemented yet |
 

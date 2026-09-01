@@ -40,6 +40,11 @@ pub struct AppSettings {
     /// Master switch for the remote-source search tier. When off, no provider
     /// is queried and the escalation button never appears — nothing in the app
     /// reaches the network for music discovery.
+    ///
+    /// Off by default: Wave is offline-first, so reaching the internet is a
+    /// thing the user opts into rather than something they discover it already
+    /// did. Existing installs keep whatever they had — serde only applies this
+    /// when the field is absent.
     #[serde(default = "default_outside_sourcing_enabled")]
     pub outside_sourcing_enabled: bool,
     /// Spotify application client id, used for OAuth PKCE.
@@ -63,7 +68,7 @@ fn default_source_cache_limit_mb() -> u64 {
 }
 
 fn default_outside_sourcing_enabled() -> bool {
-    true
+    false
 }
 
 fn default_gapless_enabled() -> bool {

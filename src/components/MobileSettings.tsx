@@ -171,62 +171,6 @@ function ScrollSafeRange({
   );
 }
 
-/**
- * What each source actually delivers.
- *
- * `capability` is the honest answer to "what do I get from this?" — the
- * distinction that matters when you are choosing sources, and the one people
- * are most often surprised by. It is deliberately separate from readiness: a
- * source can be fully set up and still only hand back a 30-second clip.
- */
-const SOURCE_PROVIDERS: Array<{
-  name: string;
-  capability: "full" | "preview" | "search";
-  capabilityLabel: string;
-  blurb: string;
-  credential?: {
-    field: "jamendo_client_id" | "spotify_client_id";
-    placeholder: string;
-  };
-}> = [
-  {
-    name: "Internet Archive",
-    capability: "full",
-    capabilityLabel: "Full length",
-    blurb:
-      "Public-domain and Creative Commons recordings you can play and keep.",
-  },
-  {
-    name: "Jamendo",
-    capability: "full",
-    capabilityLabel: "Full length",
-    blurb:
-      "Creative Commons tracks you can play and keep. The client ID is free.",
-    credential: {
-      field: "jamendo_client_id",
-      placeholder: "Client ID from developer.jamendo.com",
-    },
-  },
-  {
-    name: "Deezer",
-    capability: "preview",
-    capabilityLabel: "30-second clips",
-    blurb:
-      "The best search and artwork of any source, but its API hands out 30-second clips only. Clips play, and are never saved to your library.",
-  },
-  {
-    name: "Spotify",
-    capability: "search",
-    capabilityLabel: "No audio",
-    blurb:
-      "Spotify serves no audio through its API, so no key can play or save a song here. Sign-in is not built yet; once it is, this finds songs and plays your copy instead.",
-    credential: {
-      field: "spotify_client_id",
-      placeholder: "Client ID from developer.spotify.com",
-    },
-  },
-];
-
 interface MobileSettingsProps {
   /** Render in the desktop middle pane instead of a slide-over sheet. */
   embedded?: boolean;
@@ -681,62 +625,63 @@ export default function MobileSettings({
                   Search outside sources
                 </span>
                 <span className="mset-gapless-hint">
-                  Add a third step to search: after this playlist and your
-                  library, look on the internet. Nothing is contacted until you
-                  ask for it. Leave this off and Wave stays entirely offline.
+                  Look online when your library comes up empty. Nothing is
+                  contacted until you ask for it.
                 </span>
               </span>
             </label>
 
-            {sourceSettings.outside_sourcing_enabled &&
-              SOURCE_PROVIDERS.map((provider) => {
-                const value = provider.credential
-                  ? sourceSettings[provider.credential.field]
-                  : "";
-                const ready = !provider.credential || value.trim().length > 0;
-                return (
-                  <div key={provider.name}>
-                    <div className="mset-playback-divider" role="separator" />
-                    <div className="mset-source">
-                      <div className="mset-source-head">
-                        <span
-                          className={`mset-source-dot ${
-                            ready ? "is-ready" : "is-waiting"
-                          }`}
-                          aria-hidden="true"
-                        />
-                        <span className="mset-source-name">
-                          {provider.name}
-                        </span>
-                        <span
-                          className={`mset-source-gives mset-source-gives-${provider.capability}`}
-                        >
-                          {provider.capabilityLabel}
-                        </span>
-                      </div>
-                      <p className="mset-source-blurb">{provider.blurb}</p>
-                      {provider.credential && (
-                        <input
-                          type="text"
-                          className="mset-source-input"
-                          value={value}
-                          placeholder={provider.credential.placeholder}
-                          spellCheck={false}
-                          autoCapitalize="none"
-                          autoCorrect="off"
-                          aria-label={`${provider.name} client ID`}
-                          onChange={(event) =>
-                            onSourceSettingsChange({
-                              ...sourceSettings,
-                              [provider.credential!.field]: event.target.value,
-                            })
-                          }
-                        />
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+            {sourceSettings.outside_sourcing_enabled && (
+              <>
+                <div className="mset-playback-divider" role="separator" />
+                <div className="mset-key">
+                  <label className="mset-key-label" htmlFor="src-jamendo">
+                    Jamendo
+                  </label>
+                  <input
+                    id="src-jamendo"
+                    type="text"
+                    className="mset-key-input"
+                    value={sourceSettings.jamendo_client_id}
+                    placeholder="Client ID"
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    onChange={(event) =>
+                      onSourceSettingsChange({
+                        ...sourceSettings,
+                        jamendo_client_id: event.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="mset-key">
+                  <label className="mset-key-label" htmlFor="src-spotify">
+                    Spotify
+                  </label>
+                  <input
+                    id="src-spotify"
+                    type="text"
+                    className="mset-key-input"
+                    value={sourceSettings.spotify_client_id}
+                    placeholder="Client ID"
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    onChange={(event) =>
+                      onSourceSettingsChange({
+                        ...sourceSettings,
+                        spotify_client_id: event.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <p className="mset-hint mset-key-note">
+                  Deezer and Internet Archive need no key. Deezer returns
+                  30-second clips; Spotify serves no audio at all.
+                </p>
+              </>
+            )}
           </div>
         </section>
 

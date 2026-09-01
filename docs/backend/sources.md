@@ -11,6 +11,11 @@ fires only when the user presses the escalation button, and only while the
 master switch in Settings is on. Nothing in this subsystem touches the network
 otherwise.
 
+That master switch is **off by default**. Wave is offline-first, so reaching the
+internet is something the user turns on deliberately rather than something they
+discover the app already did. `search_sources` also fails closed — if settings
+cannot be read it behaves as though the switch were off.
+
 ---
 
 ## Design constraints
