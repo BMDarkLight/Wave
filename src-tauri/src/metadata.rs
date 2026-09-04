@@ -28,8 +28,8 @@ fn metadata_client() -> &'static Client {
 }
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "aac", "aiff", "alac", "caf", "flac", "m4a", "m4b", "m4p", "mka", "mkv", "mp1", "mp2",
-    "mp3", "mp4", "oga", "ogg", "opus", "wav", "wave", "weba",
+    "aac", "aiff", "alac", "caf", "flac", "m4a", "m4b", "m4p", "mka", "mkv", "mp1", "mp2", "mp3",
+    "mp4", "oga", "ogg", "opus", "wav", "wave", "weba",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,7 +106,10 @@ struct MusicBrainzRelease {
 }
 
 pub fn supported_audio_extensions() -> Vec<String> {
-    SUPPORTED_EXTENSIONS.iter().map(|value| value.to_string()).collect()
+    SUPPORTED_EXTENSIONS
+        .iter()
+        .map(|value| value.to_string())
+        .collect()
 }
 
 pub fn is_supported_audio_file(path: &Path) -> bool {
@@ -163,10 +166,14 @@ pub fn extract_track_with_options(
         None
     };
 
-    let file = File::open(&path_buf).map_err(|error| format!("Failed to open audio file: {error}"))?;
+    let file =
+        File::open(&path_buf).map_err(|error| format!("Failed to open audio file: {error}"))?;
     let source = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
     let mut hint = Hint::new();
-    if let Some(extension) = path_buf.extension().and_then(|extension| extension.to_str()) {
+    if let Some(extension) = path_buf
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
         hint.with_extension(extension);
     }
 
@@ -195,7 +202,9 @@ pub fn extract_track_with_options(
                 time.seconds as f64 + time.frac
             })
     });
-    let sample_rate = codec_params.and_then(|params| params.sample_rate).map(|value| value as i32);
+    let sample_rate = codec_params
+        .and_then(|params| params.sample_rate)
+        .map(|value| value as i32);
     let channels = codec_params
         .and_then(|params| params.channels)
         .map(|channels| channels.count() as i32);
@@ -291,15 +300,12 @@ fn extract_track_content_uri(
     let indexed_at = timestamp(SystemTime::now());
     let track_id = Uuid::new_v4().to_string();
 
-    let display = probed
-        .display_name
-        .clone()
-        .unwrap_or_else(|| {
-            path.rsplit(['/', ':'])
-                .next()
-                .unwrap_or("Unknown")
-                .to_string()
-        });
+    let display = probed.display_name.clone().unwrap_or_else(|| {
+        path.rsplit(['/', ':'])
+            .next()
+            .unwrap_or("Unknown")
+            .to_string()
+    });
     let stem = display
         .rsplit_once('.')
         .map(|(s, _)| s.to_string())
@@ -309,11 +315,7 @@ fn extract_track_content_uri(
         .as_deref()
         .and_then(|mime| mime.rsplit('/').next())
         .map(|s| s.to_uppercase())
-        .or_else(|| {
-            display
-                .rsplit_once('.')
-                .map(|(_, ext)| ext.to_uppercase())
-        })
+        .or_else(|| display.rsplit_once('.').map(|(_, ext)| ext.to_uppercase()))
         .unwrap_or_else(|| "AUDIO".to_string());
 
     let mut track = Track {
@@ -478,15 +480,18 @@ fn extract_cover_art(visuals: &[Visual]) -> Option<CoverArt> {
 }
 
 /// Extract full embedded cover as a one-shot data URL (not persisted).
-pub fn extract_full_cover_data_url(app: Option<&tauri::AppHandle>, path: &str) -> Result<Option<String>, String> {
+pub fn extract_full_cover_data_url(
+    app: Option<&tauri::AppHandle>,
+    path: &str,
+) -> Result<Option<String>, String> {
     if path.starts_with("content://") {
         let Some(app_handle) = app else {
             return Err("content:// cover requires an app handle".into());
         };
         let probed = crate::android::metadata::probe_content_uri(app_handle, path)?;
-        return Ok(probed.cover_jpeg.map(|bytes| {
-            crate::cover_art::full_cover_data_url(bytes, "image/jpeg")
-        }));
+        return Ok(probed
+            .cover_jpeg
+            .map(|bytes| crate::cover_art::full_cover_data_url(bytes, "image/jpeg")));
     }
 
     let path_buf = PathBuf::from(path);
@@ -494,10 +499,14 @@ pub fn extract_full_cover_data_url(app: Option<&tauri::AppHandle>, path: &str) -
         return Err("Audio file does not exist".to_string());
     }
 
-    let file = File::open(&path_buf).map_err(|error| format!("Failed to open audio file: {error}"))?;
+    let file =
+        File::open(&path_buf).map_err(|error| format!("Failed to open audio file: {error}"))?;
     let source = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
     let mut hint = Hint::new();
-    if let Some(extension) = path_buf.extension().and_then(|extension| extension.to_str()) {
+    if let Some(extension) = path_buf
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
         hint.with_extension(extension);
     }
 
@@ -525,8 +534,21 @@ pub fn extract_full_cover_data_url(app: Option<&tauri::AppHandle>, path: &str) -
     Ok(cover_art.map(|art| crate::cover_art::full_cover_data_url(art.data, &art.mime)))
 }
 
+/// Sidecar lyric files sitting beside the audio, in preference order.
+///
+/// Word-level timings are ordered first deliberately. `.ttml` carries
+/// per-syllable timing plus duet and background-vocal attribution, and `.elrc`
+/// is the conventional extension for Enhanced LRC, whose `<mm:ss.xx>` word
+/// tags also produce a karaoke wipe. Plain `.lrc` gives line timings, and
+/// `.txt` gives none — so a track with both a `.ttml` and a `.txt` beside it
+/// should get the richer one.
+///
+/// This preference is the main way word timings reach Wave at all: no free
+/// lyrics API serves them. LRCLIB, the built-in provider, is line-level only.
+const SIDECAR_LYRIC_EXTENSIONS: [&str; 4] = ["ttml", "elrc", "lrc", "txt"];
+
 fn read_sidecar_lyrics(path: &Path) -> Option<String> {
-    ["lrc", "txt"]
+    SIDECAR_LYRIC_EXTENSIONS
         .iter()
         .map(|extension| path.with_extension(extension))
         .find(|candidate| candidate.is_file())
@@ -546,7 +568,8 @@ fn hash_file_sha256(path: &Path) -> Result<String, String> {
         ));
     }
 
-    let mut file = File::open(path).map_err(|error| format!("Failed to open file for hashing: {error}"))?;
+    let mut file =
+        File::open(path).map_err(|error| format!("Failed to open file for hashing: {error}"))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
 
@@ -581,24 +604,16 @@ pub fn enrich_cover_art_online(app: &tauri::AppHandle, track: &mut Track) {
         Err(_) => return,
     };
 
-    apply_extracted_cover(
-        Some(app),
-        track,
-        bytes,
-        "image/jpeg",
-        "cover-art-archive",
-    );
+    apply_extracted_cover(Some(app), track, bytes, "image/jpeg", "cover-art-archive");
 }
 
 pub fn enrich_lyrics_online(track: &mut Track) {
     let client = metadata_client();
 
-    let mut request = client
-        .get("https://lrclib.net/api/get")
-        .query(&[
-            ("artist_name", track.artist.as_str()),
-            ("track_name", track.title.as_str()),
-        ]);
+    let mut request = client.get("https://lrclib.net/api/get").query(&[
+        ("artist_name", track.artist.as_str()),
+        ("track_name", track.title.as_str()),
+    ]);
 
     if track.album != "Local Files" {
         request = request.query(&[("album_name", track.album.as_str())]);
@@ -610,7 +625,10 @@ pub fn enrich_lyrics_online(track: &mut Track) {
         request = request.query(&[("duration", duration_string.as_str())]);
     }
 
-    let response = match request.send().and_then(|response| response.error_for_status()) {
+    let response = match request
+        .send()
+        .and_then(|response| response.error_for_status())
+    {
         Ok(response) => response,
         Err(_) => return,
     };
@@ -638,13 +656,22 @@ fn find_musicbrainz_release_id(track: &Track) -> Option<String> {
 
     let mut query_parts = Vec::new();
     if !track.title.trim().is_empty() {
-        query_parts.push(format!("recording:\"{}\"", escape_musicbrainz_query(&track.title)));
+        query_parts.push(format!(
+            "recording:\"{}\"",
+            escape_musicbrainz_query(&track.title)
+        ));
     }
     if !track.artist.trim().is_empty() && track.artist != "Unknown Artist" {
-        query_parts.push(format!("artist:\"{}\"", escape_musicbrainz_query(&track.artist)));
+        query_parts.push(format!(
+            "artist:\"{}\"",
+            escape_musicbrainz_query(&track.artist)
+        ));
     }
     if !track.album.trim().is_empty() && track.album != "Local Files" {
-        query_parts.push(format!("release:\"{}\"", escape_musicbrainz_query(&track.album)));
+        query_parts.push(format!(
+            "release:\"{}\"",
+            escape_musicbrainz_query(&track.album)
+        ));
     }
 
     if query_parts.is_empty() {
@@ -735,6 +762,48 @@ fn timestamp(system_time: SystemTime) -> i64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn sidecar_lyrics_prefer_word_level_formats() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join(format!("wave-sidecar-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let audio = dir.join("song.mp3");
+        std::fs::File::create(&audio).unwrap();
+
+        let write = |ext: &str, body: &str| {
+            let mut f = std::fs::File::create(dir.join(format!("song.{ext}"))).unwrap();
+            f.write_all(body.as_bytes()).unwrap();
+        };
+
+        // Least informative first, so a naive implementation would pick it.
+        write("txt", "plain");
+        assert_eq!(read_sidecar_lyrics(&audio).as_deref(), Some("plain"));
+
+        write("lrc", "line");
+        assert_eq!(
+            read_sidecar_lyrics(&audio).as_deref(),
+            Some("line"),
+            "line timings beat plain text"
+        );
+
+        write("elrc", "enhanced");
+        assert_eq!(
+            read_sidecar_lyrics(&audio).as_deref(),
+            Some("enhanced"),
+            "word timings beat line timings"
+        );
+
+        write("ttml", "syllable");
+        assert_eq!(
+            read_sidecar_lyrics(&audio).as_deref(),
+            Some("syllable"),
+            "TTML is the richest and must win"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     // ── supported_audio_extensions / is_supported_audio_file ───────────────
@@ -743,7 +812,8 @@ mod tests {
     fn supported_audio_extensions_matches_const_list() {
         let mut extensions = supported_audio_extensions();
         extensions.sort();
-        let mut expected: Vec<String> = SUPPORTED_EXTENSIONS.iter().map(|s| s.to_string()).collect();
+        let mut expected: Vec<String> =
+            SUPPORTED_EXTENSIONS.iter().map(|s| s.to_string()).collect();
         expected.sort();
         assert_eq!(extensions, expected);
         assert_eq!(extensions.len(), 20);

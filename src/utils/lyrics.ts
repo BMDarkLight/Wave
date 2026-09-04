@@ -1,34 +1,15 @@
-export type LyricLine = { time: number; text: string };
+/**
+ * Lyrics parsing lives in Rust (`src-tauri/src/lyrics.rs`) so that plain text,
+ * LRC, Enhanced LRC, and TTML share one tested implementation.
+ *
+ * What remains here is the one question the UI needs to answer synchronously:
+ * does this text already carry timings? That gates the "fetch lyrics for this
+ * track" effect, which must not await a round trip just to decide it has
+ * nothing to do.
+ */
 
-const LRC_TAG_RE = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
+/** LRC line tag `[mm:ss]`, or a TTML `begin` attribute. */
+const TIMESTAMP_RE = /\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]|\bbegin\s*=\s*["']/;
 
-/** Parses LRC-style "[mm:ss.xx] text" lyrics into timestamped lines. Returns
- * null if the text doesn't look like it has real timestamps (plain lyrics),
- * so the caller can fall back to rendering the raw text. */
-export const parseTimedLyrics = (raw?: string | null): LyricLine[] | null => {
-  if (!raw) return null;
-  const lines = raw.split(/\r?\n/);
-  const result: LyricLine[] = [];
-  let matchedLines = 0;
-  let nonEmptyLines = 0;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    nonEmptyLines++;
-    const tags = [...trimmed.matchAll(LRC_TAG_RE)];
-    if (tags.length === 0) continue;
-    matchedLines++;
-    const text = trimmed.replace(LRC_TAG_RE, "").trim();
-    for (const tag of tags) {
-      const minutes = parseInt(tag[1], 10);
-      const seconds = parseInt(tag[2], 10);
-      const fraction = tag[3] ? parseFloat(`0.${tag[3]}`) : 0;
-      result.push({ time: minutes * 60 + seconds + fraction, text });
-    }
-  }
-
-  if (nonEmptyLines === 0 || matchedLines < nonEmptyLines * 0.4) return null;
-  result.sort((a, b) => a.time - b.time);
-  return result;
-};
+export const hasTimestamps = (raw?: string | null): boolean =>
+  !!raw && TIMESTAMP_RE.test(raw);

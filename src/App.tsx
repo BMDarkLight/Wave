@@ -2011,6 +2011,8 @@ function App() {
             timedLyrics={timedLyrics}
             activeLyricIndex={activeLyricIndex}
             activeLyricLineRef={activeLyricLineRef}
+            position={displayPosition}
+            isPlaying={playbackState.is_playing}
             isCurrentTrack={isLyricsPanelOnCurrentTrack}
             onSeek={(time) => void handleSeek(time)}
             scrollHandlers={lyricsScrollHandlers}

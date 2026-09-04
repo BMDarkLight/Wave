@@ -1394,6 +1394,18 @@ pub async fn set_volume_normalization_enabled(
     Ok(())
 }
 
+/// Parse lyrics text into a structured sheet.
+///
+/// Detection is by content, so this handles plain text, LRC, Enhanced LRC, and
+/// TTML without the caller needing to know which it has. Parsing lives in Rust
+/// rather than the UI so it is covered by the test suite and so any future
+/// consumer — a mobile notification, a fullscreen view — shares one
+/// implementation.
+#[tauri::command]
+pub async fn parse_lyrics_sheet(text: String) -> Result<crate::lyrics::LyricsSheet, String> {
+    Ok(crate::lyrics::parse_sheet(&text))
+}
+
 /// Everything the Settings page needs to configure remote sourcing.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SourceSettingsDto {

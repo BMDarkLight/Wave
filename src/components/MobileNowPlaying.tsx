@@ -3,6 +3,8 @@
 // a lyrics view toggle, and a bottom-sheet menu with the volume dial + EQ.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLyricsAutoScroll } from "../hooks/useLyricsAutoScroll";
+import { useLyricsSheet } from "../hooks/useLyricsSheet";
+import { LyricsLines } from "./LyricsLines";
 import {
   BiChevronDown,
   BiHeart,
@@ -46,37 +48,6 @@ const getTrackTitle = (track?: Track | null) => {
   if (track?.title) return track.title;
   if (track?.name) return track.name;
   return "Unknown";
-};
-
-type LyricLine = { time: number; text: string };
-const LRC_TAG_RE = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]/g;
-
-const parseTimedLyrics = (raw?: string | null): LyricLine[] | null => {
-  if (!raw) return null;
-  const lines = raw.split(/\r?\n/);
-  const result: LyricLine[] = [];
-  let matchedLines = 0;
-  let nonEmptyLines = 0;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    nonEmptyLines++;
-    const tags = [...trimmed.matchAll(LRC_TAG_RE)];
-    if (tags.length === 0) continue;
-    matchedLines++;
-    const text = trimmed.replace(LRC_TAG_RE, "").trim();
-    for (const tag of tags) {
-      const minutes = parseInt(tag[1], 10);
-      const seconds = parseInt(tag[2], 10);
-      const fraction = tag[3] ? parseFloat(`0.${tag[3]}`) : 0;
-      result.push({ time: minutes * 60 + seconds + fraction, text });
-    }
-  }
-
-  if (nonEmptyLines === 0 || matchedLines < nonEmptyLines * 0.4) return null;
-  result.sort((a, b) => a.time - b.time);
-  return result;
 };
 
 const Artwork = ({
@@ -206,7 +177,9 @@ function CircularDial({
 
       if (gesture.mode === "vertical" && verticalAdjust) {
         const steps = Math.round(dy / 10);
-        const native = verticalAdjust.toNative(gesture.startValue) + steps * verticalAdjust.step;
+        const native =
+          verticalAdjust.toNative(gesture.startValue) +
+          steps * verticalAdjust.step;
         onChange(verticalAdjust.fromNative(verticalAdjust.clampNative(native)));
         return;
       }
@@ -332,9 +305,7 @@ const TONE_WEIGHT_DECAY = 0.7;
 const EQ_BAND_COUNT = EQ_BAND_LABELS.length;
 
 const clampEqGain = (gain: number) =>
-  Math.round(
-    Math.max(EQ_GAIN_MIN, Math.min(EQ_GAIN_MAX, gain)) * 2,
-  ) / 2;
+  Math.round(Math.max(EQ_GAIN_MIN, Math.min(EQ_GAIN_MAX, gain)) * 2) / 2;
 
 const gainToDial = (gain: number) =>
   (clampEqGain(gain) - EQ_GAIN_MIN) / (EQ_GAIN_MAX - EQ_GAIN_MIN);
@@ -596,7 +567,14 @@ export default function MobileNowPlaying({
     }
   }, [track.lyrics, track.lyrics_source]);
 
-  const timedLyrics = useMemo(() => parseTimedLyrics(lyricsText), [lyricsText]);
+  // Same Rust parser the desktop panel uses, so LRC, Enhanced LRC, and TTML
+  // behave identically on both surfaces.
+  const lyricsSheet = useLyricsSheet(lyricsText);
+  const timedLyrics = useMemo(
+    () =>
+      lyricsSheet && lyricsSheet.lines.length > 0 ? lyricsSheet.lines : null,
+    [lyricsSheet],
+  );
 
   const activeLyricIndex = useMemo(() => {
     if (!timedLyrics) return -1;
@@ -620,9 +598,7 @@ export default function MobileNowPlaying({
   const resolveQueueDropIndex = (clientY: number) => {
     const list = queueListRef.current;
     if (!list) return null;
-    const items = [
-      ...list.querySelectorAll<HTMLElement>("[data-queue-index]"),
-    ];
+    const items = [...list.querySelectorAll<HTMLElement>("[data-queue-index]")];
     if (items.length === 0) return null;
     let best = 0;
     let bestDist = Number.POSITIVE_INFINITY;
@@ -653,8 +629,7 @@ export default function MobileNowPlaying({
   const endQueueDrag = (clientY?: number) => {
     const from = dragIndexRef.current;
     if (from == null) return;
-    const target =
-      clientY != null ? resolveQueueDropIndex(clientY) : overIndex;
+    const target = clientY != null ? resolveQueueDropIndex(clientY) : overIndex;
     dragIndexRef.current = null;
     setDragIndex(null);
     setOverIndex(null);
@@ -761,19 +736,14 @@ export default function MobileNowPlaying({
           onWheel={lyricsScrollHandlers.onLyricsWheel}
         >
           {timedLyrics ? (
-            <div className="lyrics-lines">
-              {timedLyrics.map((line, index) => (
-                <button
-                  key={`${line.time}-${index}`}
-                  ref={index === activeLyricIndex ? activeLineRef : null}
-                  type="button"
-                  className={`lyrics-line ${index === activeLyricIndex ? "active" : ""}`}
-                  onClick={() => onSeekCommit(line.time)}
-                >
-                  {line.text || "\u00A0"}
-                </button>
-              ))}
-            </div>
+            <LyricsLines
+              lines={timedLyrics}
+              activeIndex={activeLyricIndex}
+              position={displayPosition}
+              isPlaying={isPlaying}
+              onSeekToLine={onSeekCommit}
+              activeLineRef={activeLineRef}
+            />
           ) : lyricsText ? (
             <pre>{lyricsText}</pre>
           ) : (

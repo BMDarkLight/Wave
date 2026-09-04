@@ -216,37 +216,6 @@ Details: [`docs/backend/android.md`](docs/backend/android.md).
 
 ---
 
-## Screens
-
-### Desktop
-
-| | |
-|---|---|
-| ![Home](docs/screenshots/desktop-home.png) | ![Library](docs/screenshots/desktop-library.png) |
-| **Home** — discovery built from your history | **Library** — virtualized, sortable track list |
-| ![Album](docs/screenshots/desktop-album.png) | ![Search](docs/screenshots/desktop-search.png) |
-| **Album** — cover, tracklist, save as playlist | **Search** — matched fields and lyric snippets |
-| ![Sources](docs/screenshots/desktop-sources.png) | ![Lyrics](docs/screenshots/desktop-lyrics.png) |
-| **Sources** — free catalogs, grouped by provider | **Lyrics** — synced, line-by-line |
-| ![Queue](docs/screenshots/desktop-queue.png) | ![Equalizer](docs/screenshots/desktop-equalizer.png) |
-| **Queue** — reorderable up-next list | **Equalizer** — 10 bands, crossfade, gapless |
-| ![Settings](docs/screenshots/desktop-settings.png) | ![Stats](docs/screenshots/desktop-stats.png) |
-| **Settings** — playlists, lyrics, sources | **Stats** — top songs, artists, albums, genres |
-
-### Android
-
-| | | |
-|---|---|---|
-| ![Android home](docs/screenshots/android-home.png) | ![Android library](docs/screenshots/android-library.png) | ![Android now playing](docs/screenshots/android-now-playing.png) |
-| **Home** | **Library** | **Now Playing** |
-| ![Android lyrics](docs/screenshots/android-lyrics.png) | ![Android queue](docs/screenshots/android-queue.png) | ![Android settings](docs/screenshots/android-settings.png) |
-| **Lyrics** | **Up Next** | **Settings** |
-
-> Screenshots are taken with a sample library; the artists and albums shown are
-> fictional placeholders.
-
----
-
 ## Tech stack
 
 ### Frontend

@@ -8,6 +8,7 @@ mod enrichment;
 mod error;
 mod integrations;
 mod library;
+pub mod lyrics;
 mod listen;
 mod metadata;
 mod path_validation;
@@ -237,6 +238,7 @@ pub fn run() {
             commands::search_sources,
             commands::stream_source_track,
             commands::download_source_track,
+            commands::parse_lyrics_sheet,
             commands::get_source_settings,
             commands::set_source_settings,
             commands::add_track_to_playlist_by_id,

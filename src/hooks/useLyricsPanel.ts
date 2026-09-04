@@ -1,7 +1,21 @@
-import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { fetchLyricsForTrack, getTrackDetails, getTrackFullCover, type QueueTrackState, type Track } from "../utils/player";
-import { parseTimedLyrics } from "../utils/lyrics";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
+import {
+  fetchLyricsForTrack,
+  getTrackDetails,
+  getTrackFullCover,
+  type QueueTrackState,
+  type Track,
+} from "../utils/player";
+import { hasTimestamps } from "../utils/lyrics";
 import { useLyricsAutoScroll } from "./useLyricsAutoScroll";
+import { useLyricsSheet } from "./useLyricsSheet";
 
 /** Lyrics panel state: which track's lyrics are showing, the auto-fetch of
  * missing lyrics on track change, and the timed (LRC) line-highlighting
@@ -89,7 +103,8 @@ export function useLyricsPanel({
     setLyricsPanelTrack(null);
     if (
       currentTrack.lyrics &&
-      (parseTimedLyrics(currentTrack.lyrics) || currentTrack.lyrics_source === "lrclib")
+      (hasTimestamps(currentTrack.lyrics) ||
+        currentTrack.lyrics_source === "lrclib")
     ) {
       setLyricsFetchPath(null);
       return;
@@ -131,10 +146,14 @@ export function useLyricsPanel({
     setLyricsFetchPath(null);
   };
 
-  // Live (LRC-style) timestamped lyrics for the open lyrics panel.
+  // Parsed lyrics for the open panel. Parsing happens in Rust so plain text,
+  // LRC, Enhanced LRC, and TTML all resolve through one tested implementation.
+  const lyricsSheet = useLyricsSheet(lyricsPanelTrack?.lyrics);
+
   const timedLyrics = useMemo(
-    () => parseTimedLyrics(lyricsPanelTrack?.lyrics),
-    [lyricsPanelTrack?.lyrics],
+    () =>
+      lyricsSheet && lyricsSheet.lines.length > 0 ? lyricsSheet.lines : null,
+    [lyricsSheet],
   );
   const isLyricsPanelOnCurrentTrack =
     !!lyricsPanelTrack && lyricsPanelTrack.path === playbackCurrentPath;
@@ -163,6 +182,7 @@ export function useLyricsPanel({
     cancelLyricsFetch,
     applyLyricsToTrack,
     timedLyrics,
+    lyricsSheet,
     isLyricsPanelOnCurrentTrack,
     activeLyricIndex,
     lyricsScrollHandlers,

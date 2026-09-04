@@ -2,7 +2,8 @@ import type { RefObject } from "react";
 import { BiX } from "react-icons/bi";
 import Artwork from "./Artwork";
 import { getTrackTitle } from "../utils/track";
-import type { LyricLine } from "../utils/lyrics";
+import type { LyricsLine } from "../utils/player";
+import { LyricsLines } from "./LyricsLines";
 import type { Track } from "../utils/player";
 import type { useLyricsAutoScroll } from "../hooks/useLyricsAutoScroll";
 
@@ -13,6 +14,8 @@ export default function LyricsPanel({
   onOpenArtist,
   onOpenAlbum,
   timedLyrics,
+  position,
+  isPlaying,
   activeLyricIndex,
   activeLyricLineRef,
   isCurrentTrack,
@@ -24,7 +27,9 @@ export default function LyricsPanel({
   onClose: () => void;
   onOpenArtist: (artist: string) => void;
   onOpenAlbum: (album: string, albumArtist: string | null) => void;
-  timedLyrics: LyricLine[] | null;
+  timedLyrics: LyricsLine[] | null;
+  position: number;
+  isPlaying: boolean;
   activeLyricIndex: number;
   activeLyricLineRef: RefObject<HTMLButtonElement | null>;
   isCurrentTrack: boolean;
@@ -92,24 +97,15 @@ export default function LyricsPanel({
         </div>
         <div className="lyrics-panel-body">
           {timedLyrics ? (
-            <div className="lyrics-lines">
-              {timedLyrics.map((line, index) => (
-                <button
-                  key={`${line.time}-${index}`}
-                  ref={index === activeLyricIndex ? activeLyricLineRef : null}
-                  type="button"
-                  className={`lyrics-line ${index === activeLyricIndex ? "active" : ""}`}
-                  onClick={() => {
-                    if (!isCurrentTrack) return;
-                    onSeek(line.time);
-                  }}
-                  disabled={!isCurrentTrack}
-                  title={isCurrentTrack ? "Jump to this line" : undefined}
-                >
-                  {line.text || " "}
-                </button>
-              ))}
-            </div>
+            <LyricsLines
+              lines={timedLyrics}
+              activeIndex={activeLyricIndex}
+              position={position}
+              isPlaying={isPlaying}
+              onSeekToLine={onSeek}
+              activeLineRef={activeLyricLineRef}
+              seekDisabled={!isCurrentTrack}
+            />
           ) : track.lyrics ? (
             <pre>{track.lyrics}</pre>
           ) : (

@@ -488,6 +488,41 @@ export interface SearchHit {
   lyrics_snippet: string | null;
 }
 
+/** A single timed word inside a lyric line. */
+export interface LyricsWord {
+  time: number;
+  end: number;
+  text: string;
+}
+
+export interface LyricsLine {
+  time: number;
+  end: number | null;
+  text: string;
+  /** Empty for line-level sources such as LRCLIB. */
+  words: LyricsWord[];
+  /** TTML voice id (`v1`, `v2`) — lets a duet render two sides. */
+  agent: string | null;
+  /** TTML background vocals, usually rendered smaller. */
+  background: boolean;
+}
+
+/**
+ * `plain` = no timings, `line` = highlight the active line,
+ * `word` = karaoke wipe is possible.
+ */
+export type LyricsKind = "plain" | "line" | "word";
+
+export interface LyricsSheet {
+  kind: LyricsKind;
+  lines: LyricsLine[];
+  plain: string;
+}
+
+/** Parse lyrics text (plain, LRC, Enhanced LRC, or TTML) into a sheet. */
+export const parseLyricsSheet = (text: string): Promise<LyricsSheet> =>
+  safeInvoke<LyricsSheet>("parse_lyrics_sheet", { text });
+
 /** Realtime search across title, artist, album, filename, and lyrics. */
 export const searchLibrary = (
   query: string,

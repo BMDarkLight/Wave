@@ -6130,3 +6130,60 @@ img.queue-thumb {
     background: rgba(14, 14, 14, 0.92);
   }
 }
+
+/* ── Karaoke word wipe ────────────────────────────────────────────────────
+   Only the active line wipes, and only when the source carries word timings.
+   The animation is driven entirely by CSS: each word gets a delay measured
+   from an anchor captured in LyricsLines, so a word already part-sung starts
+   part-wiped via a negative delay and the compositor runs the rest. Nothing
+   re-renders per frame. */
+.lyrics-line-karaoke {
+  color: var(--lyric-unsung, #6f6f6f);
+}
+
+.lyrics-word {
+  /* Two-stop gradient twice the width of the text: sliding it left reveals
+     the sung colour through the glyphs. */
+  background-image: linear-gradient(
+    to right,
+    var(--lyric-sung, #fff) 50%,
+    var(--lyric-unsung, #6f6f6f) 50%
+  );
+  background-size: 200% 100%;
+  background-position: 100% 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  white-space: pre-wrap;
+  animation-name: lyric-wipe;
+  animation-timing-function: linear;
+  /* `both` matters: before its delay a word holds the unsung state, and after
+     it holds the sung state, so past and future words are correct without any
+     JavaScript bookkeeping. */
+  animation-fill-mode: both;
+}
+
+@keyframes lyric-wipe {
+  to {
+    background-position: 0 0;
+  }
+}
+
+/* Background vocals (TTML `x-bg`) sit quieter and slightly indented. */
+.lyrics-line-bg {
+  font-size: 0.85em;
+  opacity: 0.72;
+  padding-left: 12px;
+}
+
+/* A duet's second voice leans the other way, so the two sides read apart. */
+.lyrics-line[data-agent="v2"] {
+  text-align: right;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the meaning (which words are sung) but drop the sweep. */
+  .lyrics-word {
+    animation-duration: 0.01ms !important;
+  }
+}
