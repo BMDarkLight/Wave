@@ -235,6 +235,7 @@ pub fn run() {
             commands::get_playlist_tracks_by_id,
             commands::search_library_tracks,
             commands::search_library,
+            commands::search_library_collections,
             commands::search_sources,
             commands::stream_source_track,
             commands::download_source_track,

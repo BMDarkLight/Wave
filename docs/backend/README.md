@@ -44,7 +44,7 @@ Important behaviors:
 - **`play_track`** plays a single file by path without updating the queue.
 - On Android, `content://` URIs play directly through ExoPlayer (no copy required for playback). See [Android playback](./android.md).
 - **Remote audio becomes a file before it plays.** The engine only understands paths, so a streamed track is fetched into the source cache and handed over as a path. Nothing in the playback stack is aware of URLs. See [Song sourcing](./sources.md).
-- **`search_library` reads the `library_tracks` view**, not the `tracks` table. Tracks streamed but not downloaded are deliberately absent from browse, search, and counts until the user saves them.
+- **`search_library` and `search_library_collections` read the `library_tracks` view**, not the `tracks` table. Tracks streamed but not downloaded are deliberately absent from browse, search, and counts until the user saves them.
 
 ## Documentation index
 
@@ -90,6 +90,7 @@ Important behaviors:
 | Command | Description |
 |---------|-------------|
 | `search_library` | Tier 2 — realtime local search with matched fields and lyric snippets |
+| `search_library_collections` | Tier 2 — album and artist matches for the same query |
 | `search_sources` | Tier 3 — query remote providers concurrently (explicit user action only) |
 | `stream_source_track` | Fetch a remote result into the cache and return a playable `Track` |
 | `download_source_track` | Keep a remote track: copy to the download folder and index it |

@@ -90,6 +90,14 @@ pub struct ArtistSummaryDto {
     pub album_count: i64,
 }
 
+/// Album and artist matches for a query, so search results can show
+/// collections alongside the individual track hits.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchCollectionsDto {
+    pub albums: Vec<AlbumSummaryDto>,
+    pub artists: Vec<ArtistSummaryDto>,
+}
+
 /// One realtime search hit with which fields matched and an optional lyrics snippet.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchHitDto {

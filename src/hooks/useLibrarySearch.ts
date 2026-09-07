@@ -1,11 +1,26 @@
 import { useEffect, useRef, useState } from "react";
-import { searchLibrary, type SearchHit } from "../utils/player";
+import {
+  searchLibrary,
+  searchLibraryCollections,
+  type AlbumSummary,
+  type ArtistSummary,
+  type SearchHit,
+} from "../utils/player";
+
+const NO_COLLECTIONS: { albums: AlbumSummary[]; artists: ArtistSummary[] } = {
+  albums: [],
+  artists: [],
+};
 
 /** Main library search box state: query, debounced results fetch, and
  * open/close of the search overlay (desktop input + mobile topbar). */
 export function useLibrarySearch() {
   const [mainSearchQuery, setMainSearchQuery] = useState("");
   const [mainSearchHits, setMainSearchHits] = useState<SearchHit[]>([]);
+  const [mainSearchAlbums, setMainSearchAlbums] = useState<AlbumSummary[]>([]);
+  const [mainSearchArtists, setMainSearchArtists] = useState<ArtistSummary[]>(
+    [],
+  );
   const [mainSearchLoading, setMainSearchLoading] = useState(false);
   const [mainSearchFullLibrary, setMainSearchFullLibrary] = useState(false);
   const [mainSearchOpen, setMainSearchOpen] = useState(false);
@@ -32,6 +47,8 @@ export function useLibrarySearch() {
     setMainSearchOpen(false);
     setMainSearchQuery("");
     setMainSearchHits([]);
+    setMainSearchAlbums([]);
+    setMainSearchArtists([]);
     setMainSearchFullLibrary(false);
   };
   const toggleMainSearch = () => {
@@ -48,6 +65,8 @@ export function useLibrarySearch() {
       // the list underneath an empty box.
       mainSearchReqId.current += 1;
       setMainSearchHits([]);
+      setMainSearchAlbums([]);
+      setMainSearchArtists([]);
       setMainSearchLoading(false);
       return;
     }
@@ -55,14 +74,17 @@ export function useLibrarySearch() {
     setMainSearchLoading(true);
     const reqId = ++mainSearchReqId.current;
     mainSearchTimer.current = setTimeout(() => {
-      searchLibrary(q, 100)
-        .then((hits) => {
+      // Tracks and collections share one debounce and one request id, so the
+      // three lists can never come from different queries.
+      Promise.all([
+        searchLibrary(q, 100).catch(() => [] as SearchHit[]),
+        searchLibraryCollections(q, 12).catch(() => NO_COLLECTIONS),
+      ])
+        .then(([hits, collections]) => {
           if (mainSearchReqId.current !== reqId) return;
           setMainSearchHits(hits);
-        })
-        .catch(() => {
-          if (mainSearchReqId.current !== reqId) return;
-          setMainSearchHits([]);
+          setMainSearchAlbums(collections.albums);
+          setMainSearchArtists(collections.artists);
         })
         .finally(() => {
           if (mainSearchReqId.current === reqId) setMainSearchLoading(false);
@@ -80,6 +102,8 @@ export function useLibrarySearch() {
     mainSearchQuery,
     setMainSearchQuery,
     mainSearchHits,
+    mainSearchAlbums,
+    mainSearchArtists,
     mainSearchLoading,
     mainSearchFullLibrary,
     setMainSearchFullLibrary,

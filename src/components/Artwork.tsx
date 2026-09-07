@@ -7,12 +7,15 @@ export default function Artwork({
   fallback,
   className,
   overrideSrc,
+  alt,
 }: {
   track?: Track | null;
   fallback: string;
   className: string;
   /** Optional full-resolution cover (lyrics panel). */
   overrideSrc?: string | null;
+  /** Alt text for covers that aren't a track's — an album hit, say. */
+  alt?: string;
 }) {
   const [src, setSrc] = useState<string | null>(null);
 
@@ -32,7 +35,7 @@ export default function Artwork({
       <img
         className={className}
         src={src}
-        alt={`${getTrackTitle(track)} cover`}
+        alt={alt ?? `${getTrackTitle(track)} cover`}
         draggable={false}
       />
     );

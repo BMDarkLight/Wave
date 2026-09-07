@@ -534,6 +534,23 @@ export const searchLibrary = (
   });
 };
 
+/** Album and artist matches for a query, shown above the track hits. */
+export interface SearchCollections {
+  albums: AlbumSummary[];
+  artists: ArtistSummary[];
+}
+
+/** Search albums and artists, grouped the same way the browse views group them. */
+export const searchLibraryCollections = (
+  query: string,
+  limit?: number,
+): Promise<SearchCollections> => {
+  return safeInvoke<SearchCollections>("search_library_collections", {
+    query,
+    limit: limit ?? null,
+  });
+};
+
 // ── Tier 3: remote sources ──────────────────────────────────────────────────
 
 /** One remote search result. */

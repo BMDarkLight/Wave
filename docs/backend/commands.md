@@ -245,8 +245,9 @@ mp3, mp4, oga, ogg, opus, wav, wave, weba
 ## Search & sources
 
 Search escalates through three tiers: the current scope (filtered client-side),
-the local library (`search_library`), and remote providers (`search_sources`).
-Only the third reaches the network, and only on explicit user action. See
+the local library (`search_library` for songs, `search_library_collections` for
+albums and artists), and remote providers (`search_sources`). Only the third
+reaches the network, and only on explicit user action. See
 [Song sourcing](./sources.md).
 
 ### `search_library`
@@ -263,6 +264,30 @@ streamed-but-not-downloaded tracks never appear.
 | `limit` | `number \| null` | no | Defaults to 80, capped at 200 |
 
 **Returns:** `SearchHit[]`
+
+---
+
+### `search_library_collections`
+
+The album and artist half of tier 2, so a search can list collections above the
+individual songs. Albums are grouped exactly like `list_albums` (by album +
+resolved album artist) and artists like `list_artists`, so a hit opens the same
+page the browse views would.
+
+Query words are ANDed across name and artist, so word order doesn't matter
+("floyd dark" finds *The Dark Side of the Moon*). Album results rank
+name-prefix matches first, then name substrings, then artist-only matches;
+artists rank name-prefix first, then by track count. Reads the `library_tracks`
+view, so streamed-but-not-downloaded tracks never appear.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | `string` | yes | Search text |
+| `limit` | `number \| null` | no | Per list. Defaults to 12, capped at 50 |
+
+**Returns:** `{ albums: AlbumSummary[], artists: ArtistSummary[] }`
 
 ---
 

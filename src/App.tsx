@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import trayTemplate from "../assets/tray-template.svg";
-import { BiX, BiFolderOpen, BiMenu, BiSearch } from "react-icons/bi";
+import {
+  BiX,
+  BiFolderOpen,
+  BiMenu,
+  BiSearch,
+  BiChevronRight,
+} from "react-icons/bi";
 import type { SourceSettings, SourceTrack } from "./utils/player";
 import {
   addTrackToPlaylistById,
@@ -205,6 +211,8 @@ function App() {
     mainSearchQuery,
     setMainSearchQuery,
     mainSearchHits,
+    mainSearchAlbums,
+    mainSearchArtists,
     mainSearchLoading,
     mainSearchFullLibrary,
     setMainSearchFullLibrary,
@@ -869,6 +877,18 @@ function App() {
     mainSearchScope,
   ]);
 
+  // Album and artist hits are library-wide, so they'd be misleading under a
+  // playlist/album/artist scope — show them only once the search really is
+  // library-wide.
+  const showSearchCollections =
+    mainSearchFullLibrary || mainSearchScopeIsLibrary;
+  const displayedSearchAlbums = showSearchCollections ? mainSearchAlbums : [];
+  const displayedSearchArtists = showSearchCollections ? mainSearchArtists : [];
+  const mainSearchResultCount =
+    displayedMainSearchHits.length +
+    displayedSearchAlbums.length +
+    displayedSearchArtists.length;
+
   const showSearchFullLibraryBtn =
     !!mainSearchQuery.trim() &&
     !mainSearchFullLibrary &&
@@ -876,10 +896,10 @@ function App() {
 
   const mainSearchResultsSubtitle = useMemo(() => {
     if (!mainSearchQuery.trim()) return "";
-    if (mainSearchLoading && displayedMainSearchHits.length === 0) {
+    if (mainSearchLoading && mainSearchResultCount === 0) {
       return "Searching…";
     }
-    const count = displayedMainSearchHits.length;
+    const count = mainSearchResultCount;
     const matchLabel = `${count} match${count === 1 ? "" : "es"}`;
     if (mainSearchFullLibrary || mainSearchScopeIsLibrary) {
       return matchLabel;
@@ -888,7 +908,7 @@ function App() {
   }, [
     mainSearchQuery,
     mainSearchLoading,
-    displayedMainSearchHits.length,
+    mainSearchResultCount,
     mainSearchFullLibrary,
     mainSearchScopeIsLibrary,
     mainSearchScope,
@@ -1464,16 +1484,27 @@ function App() {
     [downloadSourceHit, loadPlaylists],
   );
 
+  // Opening a collection from search leaves search: closeMainSearch clears the
+  // query, so the browse page it pushes is what the user lands on.
+  const openArtistFromSearch = (name: string) => {
+    closeMainSearch();
+    openArtistPage(name);
+  };
+  const openAlbumFromSearch = (name: string, albumArtist: string | null) => {
+    closeMainSearch();
+    openAlbumPage(name, albumArtist);
+  };
+
   const mainSearchResultsPanel = (
     <div className="search-results">
-      {mainSearchLoading && displayedMainSearchHits.length === 0 ? (
+      {mainSearchLoading && mainSearchResultCount === 0 ? (
         <div className="empty-state">
           <div className="empty-icon">
             <span className="import-spinner" />
           </div>
           <h2>Searching…</h2>
         </div>
-      ) : displayedMainSearchHits.length === 0 ? (
+      ) : mainSearchResultCount === 0 ? (
         <div className="empty-state">
           <div className="empty-icon">
             <BiSearch />
@@ -1518,6 +1549,89 @@ function App() {
         </div>
       ) : (
         <>
+          {displayedSearchArtists.length > 0 && (
+            <section className="search-section">
+              <h3 className="search-section-title">Artists</h3>
+              <div className="search-hit-list">
+                {displayedSearchArtists.map((artist) => (
+                  <button
+                    key={`artist-${artist.name}`}
+                    type="button"
+                    className="search-hit search-hit-collection"
+                    onClick={() => openArtistFromSearch(artist.name)}
+                  >
+                    <div className="search-hit-thumb search-hit-artist-avatar">
+                      {artist.name.slice(0, 1).toUpperCase()}
+                    </div>
+                    <div className="search-hit-body">
+                      <div className="search-hit-title">
+                        {highlightMatch(artist.name, mainSearchQuery)}
+                      </div>
+                      <div className="search-hit-meta">
+                        Artist · {artist.track_count} song
+                        {artist.track_count === 1 ? "" : "s"} ·{" "}
+                        {artist.album_count} album
+                        {artist.album_count === 1 ? "" : "s"}
+                      </div>
+                    </div>
+                    <BiChevronRight
+                      className="search-hit-chevron"
+                      aria-hidden
+                    />
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+          {displayedSearchAlbums.length > 0 && (
+            <section className="search-section">
+              <h3 className="search-section-title">Albums</h3>
+              <div className="search-hit-list">
+                {displayedSearchAlbums.map((album) => (
+                  <button
+                    key={`album-${album.name}-${album.album_artist ?? ""}`}
+                    type="button"
+                    className="search-hit search-hit-collection"
+                    onClick={() =>
+                      openAlbumFromSearch(album.name, album.album_artist)
+                    }
+                  >
+                    <Artwork
+                      overrideSrc={album.cover_art_data_url}
+                      alt={`${album.name} cover`}
+                      fallback={album.name.slice(0, 1).toUpperCase()}
+                      className="track-thumb search-hit-thumb"
+                    />
+                    <div className="search-hit-body">
+                      <div className="search-hit-title">
+                        {highlightMatch(album.name, mainSearchQuery)}
+                      </div>
+                      <div className="search-hit-meta">
+                        Album ·{" "}
+                        {highlightMatch(
+                          album.album_artist || album.artist,
+                          mainSearchQuery,
+                        )}
+                        {" · "}
+                        {album.track_count} song
+                        {album.track_count === 1 ? "" : "s"}
+                        {album.year ? ` · ${album.year}` : ""}
+                      </div>
+                    </div>
+                    <BiChevronRight
+                      className="search-hit-chevron"
+                      aria-hidden
+                    />
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+          {displayedMainSearchHits.length > 0 &&
+            (displayedSearchArtists.length > 0 ||
+              displayedSearchAlbums.length > 0) && (
+              <h3 className="search-section-title">Songs</h3>
+            )}
           <div className="search-hit-list">
             {displayedMainSearchHits.map((hit) => {
               const track = hit.track;

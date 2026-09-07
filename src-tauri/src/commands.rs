@@ -9,7 +9,7 @@ use crate::audio::player::AudioPlayer;
 use crate::dto::{
     AlbumSummaryDto, ArtistSummaryDto, CloseAction, EqSettingsDto, HomeSuggestionsDto,
     ImportResultDto, ListeningStatsDto, LyricsImportResultDto, PlaybackModeDto, PlaybackStateDto,
-    QueueDto, QueueStateDto, SearchHitDto,
+    QueueDto, QueueStateDto, SearchCollectionsDto, SearchHitDto,
 };
 use crate::library::{Library, PlaylistInfo};
 use crate::listen::{ListenEndReason, ListenFlush, ListenTracker};
@@ -1871,6 +1871,22 @@ pub async fn search_library(
 ) -> Result<Vec<SearchHitDto>, String> {
     let capped = limit.unwrap_or(80).min(200);
     lock_library(&library)?.search_tracks_rich(&query, Some(capped))
+}
+
+/// Album and artist matches for the same query, so the search view can show
+/// collections above the track hits.
+#[tauri::command]
+pub async fn search_library_collections(
+    query: String,
+    limit: Option<u32>,
+    library: tauri::State<'_, LibraryState>,
+) -> Result<SearchCollectionsDto, String> {
+    let capped = limit.unwrap_or(12).min(50);
+    let library = lock_library(&library)?;
+    Ok(SearchCollectionsDto {
+        albums: library.search_albums(&query, Some(capped))?,
+        artists: library.search_artists(&query, Some(capped))?,
+    })
 }
 
 #[tauri::command]

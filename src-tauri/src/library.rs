@@ -1814,6 +1814,136 @@ impl Library {
         Ok(artists)
     }
 
+    /// Search albums by album name or album artist.
+    ///
+    /// Grouped exactly like [`Library::list_albums`] so a hit opens the same
+    /// album page a browse grid would. Multi-word queries are matched
+    /// token-wise across name and artist ("floyd dark" finds *The Dark Side of
+    /// the Moon*), then ranked name-prefix first, name-substring next, and
+    /// artist-only matches last.
+    pub fn search_albums(
+        &self,
+        query: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<AlbumSummaryDto>, String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.unwrap_or(12).min(50) as i64;
+        const RESOLVED_ARTIST: &str = "COALESCE(NULLIF(t.album_artist, ''), t.artist)";
+
+        let tokens = search_tokens(query);
+        let mut clauses = Vec::with_capacity(tokens.len());
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        for token in &tokens {
+            let idx = args.len() + 1;
+            clauses.push(format!(
+                "(t.album LIKE ?{idx} ESCAPE '\\' COLLATE NOCASE
+                  OR {RESOLVED_ARTIST} LIKE ?{idx} ESCAPE '\\' COLLATE NOCASE)"
+            ));
+            args.push(Box::new(contains_pattern(token)));
+        }
+        let contains_idx = args.len() + 1;
+        args.push(Box::new(contains_pattern(query)));
+        let prefix_idx = args.len() + 1;
+        args.push(Box::new(prefix_pattern(query)));
+        args.push(Box::new(limit));
+
+        let connection = self.read_connection();
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT
+                    t.album,
+                    {RESOLVED_ARTIST} AS album_artist,
+                    MIN(t.artist) AS artist,
+                    COUNT(*) AS track_count,
+                    MIN(t.year) AS year,
+                    MIN(aa.thumb_path) AS cover_art_data_url,
+                    MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
+                    MIN(t.path) AS cover_track_path
+                 FROM {LIBRARY_TRACK_FROM}
+                 WHERE TRIM(IFNULL(t.album, '')) <> '' AND {}
+                 GROUP BY t.album, {RESOLVED_ARTIST}
+                 ORDER BY
+                    CASE
+                      WHEN t.album LIKE ?{prefix_idx} ESCAPE '\\' COLLATE NOCASE THEN 0
+                      WHEN t.album LIKE ?{contains_idx} ESCAPE '\\' COLLATE NOCASE THEN 1
+                      ELSE 2
+                    END,
+                    track_count DESC,
+                    album_artist, t.album
+                 LIMIT ?{}",
+                clauses.join(" AND "),
+                args.len()
+            ))
+            .map_err(|error| format!("Failed to prepare album search: {error}"))?;
+        let albums = statement
+            .query_map(rusqlite::params_from_iter(args.iter()), |row| {
+                row_to_album_summary(row, &self.cover_root)
+            })
+            .map_err(|error| format!("Failed to execute album search: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to read album search results: {error}"))?;
+        Ok(albums)
+    }
+
+    /// Search artists by name, grouped and counted like
+    /// [`Library::list_artists`]. Name-prefix matches rank first, then the
+    /// artists with the most tracks in the library.
+    pub fn search_artists(
+        &self,
+        query: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<ArtistSummaryDto>, String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.unwrap_or(12).min(50) as i64;
+
+        let tokens = search_tokens(query);
+        let mut clauses = Vec::with_capacity(tokens.len());
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        for token in &tokens {
+            let idx = args.len() + 1;
+            clauses.push(format!("t.artist LIKE ?{idx} ESCAPE '\\' COLLATE NOCASE"));
+            args.push(Box::new(contains_pattern(token)));
+        }
+        let prefix_idx = args.len() + 1;
+        args.push(Box::new(prefix_pattern(query)));
+        args.push(Box::new(limit));
+
+        let connection = self.read_connection();
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT
+                    t.artist,
+                    COUNT(*) AS track_count,
+                    COUNT(DISTINCT t.album) AS album_count
+                 FROM library_tracks t
+                 WHERE TRIM(IFNULL(t.artist, '')) <> '' AND {}
+                 GROUP BY t.artist
+                 ORDER BY
+                    CASE
+                      WHEN t.artist LIKE ?{prefix_idx} ESCAPE '\\' COLLATE NOCASE THEN 0
+                      ELSE 1
+                    END,
+                    track_count DESC,
+                    t.artist
+                 LIMIT ?{}",
+                clauses.join(" AND "),
+                args.len()
+            ))
+            .map_err(|error| format!("Failed to prepare artist search: {error}"))?;
+        let artists = statement
+            .query_map(rusqlite::params_from_iter(args.iter()), row_to_artist_summary)
+            .map_err(|error| format!("Failed to execute artist search: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to read artist search results: {error}"))?;
+        Ok(artists)
+    }
+
     /// Return every track belonging to an album.
     ///
     /// When `album_artist` is provided, tracks are matched on both `album` and
@@ -4200,6 +4330,34 @@ fn compact_playlist_positions(tx: &Transaction<'_>, playlist_id: &str) -> Result
 /// user's search term is matched literally. Pair with `LIKE ?N ESCAPE '\'` in
 /// the query — without the `ESCAPE` clause SQLite gives `\` no special
 /// meaning and this escaping has no effect.
+/// LIKE pattern matching `s` anywhere in a column.
+fn contains_pattern(s: &str) -> String {
+    format!("%{}%", escape_like_pattern(s.trim()))
+}
+
+/// LIKE pattern matching a column that starts with `s`.
+fn prefix_pattern(s: &str) -> String {
+    format!("{}%", escape_like_pattern(s.trim()))
+}
+
+/// Split a query into the whitespace tokens an album/artist search ANDs
+/// together, so word order doesn't matter. Capped so a pathological query
+/// can't build an unbounded WHERE clause; the whole query is still used for
+/// ranking, so the cap only ever widens the candidate set.
+fn search_tokens(query: &str) -> Vec<String> {
+    const MAX_TOKENS: usize = 6;
+    let tokens: Vec<String> = query
+        .split_whitespace()
+        .take(MAX_TOKENS)
+        .map(|t| t.to_string())
+        .collect();
+    if tokens.is_empty() {
+        vec![query.trim().to_string()]
+    } else {
+        tokens
+    }
+}
+
 fn escape_like_pattern(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('%', "\\%")
@@ -5194,6 +5352,63 @@ mod tests {
                 ("The Beatles", 4, 2), // 4 tracks across 2 albums
             ]
         );
+    }
+
+    #[test]
+    fn search_albums_matches_name_and_artist_and_ranks_prefix_first() {
+        let library = open_test_library().expect("library");
+        seed_library_for_browse_tests(&library);
+
+        // Album-name match.
+        let abbey = library.search_albums("abbey", None).expect("abbey");
+        assert_eq!(abbey.len(), 1);
+        assert_eq!(abbey[0].name, "Abbey Road");
+        assert_eq!(abbey[0].album_artist.as_deref(), Some("The Beatles"));
+        assert_eq!(abbey[0].track_count, 3);
+
+        // Artist match returns that artist's albums, biggest first.
+        let beatles = library.search_albums("beatles", None).expect("beatles");
+        assert_eq!(
+            beatles.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+            vec!["Abbey Road", "Let It Be"]
+        );
+
+        // Tokens are ANDed across name and artist, so word order is irrelevant.
+        let mixed = library.search_albums("hits queen", None).expect("mixed");
+        assert_eq!(mixed.len(), 1);
+        assert_eq!(mixed[0].album_artist.as_deref(), Some("Queen"));
+
+        // A name-prefix hit outranks an artist-only hit for the same query.
+        let hits = library.search_albums("greatest", None).expect("greatest");
+        assert!(hits.iter().all(|a| a.name == "Greatest Hits"));
+
+        assert!(library.search_albums("   ", None).expect("blank").is_empty());
+        assert!(library
+            .search_albums("nothing-here", None)
+            .expect("miss")
+            .is_empty());
+    }
+
+    #[test]
+    fn search_artists_matches_name_and_keeps_aggregate_counts() {
+        let library = open_test_library().expect("library");
+        seed_library_for_browse_tests(&library);
+
+        let beatles = library.search_artists("beat", None).expect("beatles");
+        assert_eq!(beatles.len(), 1);
+        assert_eq!(beatles[0].name, "The Beatles");
+        assert_eq!(beatles[0].track_count, 4);
+        assert_eq!(beatles[0].album_count, 2);
+
+        // Substring matches too, not just prefixes.
+        let queen = library.search_artists("ueen", None).expect("queen");
+        assert_eq!(queen.len(), 1);
+        assert_eq!(queen[0].name, "Queen");
+
+        let limited = library.search_artists("a", Some(1)).expect("limited");
+        assert_eq!(limited.len(), 1);
+
+        assert!(library.search_artists("", None).expect("blank").is_empty());
     }
 
     #[test]
