@@ -1,3 +1,13 @@
+/*
+ * Wave
+ * Copyright (C) 2025 BMDarkLight
+ *
+ * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+ * See the LICENSE file in the project root for the full license text
+ * and additional terms (attribution and fork-marking requirements).
+ * https://github.com/BMDarkLight/Wave
+ */
+
 // The Code for Frontend of Wave is currently completely AI Generated and may contain bugs or rough edges. Please report any issues you encounter at
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
