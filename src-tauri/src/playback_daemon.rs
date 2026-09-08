@@ -43,36 +43,68 @@ struct DaemonEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum DaemonRequest {
-    Start { id: String },
+    Start {
+        id: String,
+    },
     Pause,
     Resume,
     Stop,
     Next,
     Previous,
-    Seek { seconds: f64 },
+    Seek {
+        seconds: f64,
+    },
     Status,
     Shutdown,
     QueueList,
-    QueueAdd { track_id: String },
-    QueueRemove { index: usize },
-    QueueInsertNext { track_id: String },
-    QueueShuffle { enable: Option<bool> },
-    QueueRepeat { mode: String },
+    QueueAdd {
+        track_id: String,
+    },
+    QueueRemove {
+        index: usize,
+    },
+    QueueInsertNext {
+        track_id: String,
+    },
+    QueueShuffle {
+        enable: Option<bool>,
+    },
+    QueueRepeat {
+        mode: String,
+    },
     QueueClear,
-    Volume { level: f32 },
-    SetDevice { name: String },
+    Volume {
+        level: f32,
+    },
+    SetDevice {
+        name: String,
+    },
     /// Return EQ / gapless / crossfade state.
     DspStatus,
-    SetEqBands { bands: [f32; 10] },
-    SetEqEnabled { enabled: bool },
+    SetEqBands {
+        bands: [f32; 10],
+    },
+    SetEqEnabled {
+        enabled: bool,
+    },
     ResetEq,
-    ApplyEqPreset { name: String },
-    SetCrossfade { seconds: f32 },
-    SetGapless { enabled: bool },
+    ApplyEqPreset {
+        name: String,
+    },
+    SetCrossfade {
+        seconds: f32,
+    },
+    SetGapless {
+        enabled: bool,
+    },
     /// Set bass dial in dB (−12…+12); preserves current treble.
-    SetBass { db: f32 },
+    SetBass {
+        db: f32,
+    },
     /// Set treble dial in dB (−12…+12); preserves current bass.
-    SetTreble { db: f32 },
+    SetTreble {
+        db: f32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,10 +313,13 @@ pub fn daemon_request(request: DaemonRequest) -> Result<DaemonResponse, String> 
     send_daemon_request(&conn, request)
 }
 
-fn send_daemon_request(conn: &DaemonConnection, request: DaemonRequest) -> Result<DaemonResponse, String> {
+fn send_daemon_request(
+    conn: &DaemonConnection,
+    request: DaemonRequest,
+) -> Result<DaemonResponse, String> {
     let addr = format!("127.0.0.1:{}", conn.port);
-    let mut stream =
-        TcpStream::connect(&addr).map_err(|e| format!("Failed to connect to playback daemon: {e}"))?;
+    let mut stream = TcpStream::connect(&addr)
+        .map_err(|e| format!("Failed to connect to playback daemon: {e}"))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
         .map_err(|e| e.to_string())?;
@@ -404,7 +439,7 @@ pub fn run_daemon() {
 
     #[cfg(not(target_os = "android"))]
     run_tray_loop(state, tooltip);
-    
+
     #[cfg(target_os = "android")]
     {
         // On Android, we don't run the tray loop - the main thread handles the daemon
@@ -515,9 +550,8 @@ fn handle_ipc_connection(
 }
 
 fn write_response(stream: &mut TcpStream, response: &DaemonResponse) -> std::io::Result<()> {
-    let line = serde_json::to_string(response).unwrap_or_else(|_| {
-        r#"{"ok":false,"error":"serialization failed"}"#.to_string()
-    });
+    let line = serde_json::to_string(response)
+        .unwrap_or_else(|_| r#"{"ok":false,"error":"serialization failed"}"#.to_string());
     writeln!(stream, "{line}")
 }
 
@@ -777,12 +811,7 @@ fn apply_treble_dial(player: &mut AudioPlayer, treble: f32) {
 
 fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
     let is_playlist = uuid::Uuid::parse_str(id).is_ok()
-        && state
-            .library
-            .get_playlist_info(id)
-            .ok()
-            .flatten()
-            .is_some();
+        && state.library.get_playlist_info(id).ok().flatten().is_some();
 
     if is_playlist {
         match state.library.get_playlist_tracks(id) {
@@ -800,7 +829,10 @@ fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
                 sync_media_for_track(state, &tracks[0]);
                 let msg = format!(
                     "Playing playlist \"{}\" — {} track(s), starting with: {} — {}",
-                    tracks[0].album, tracks.len(), tracks[0].artist, tracks[0].title
+                    tracks[0].album,
+                    tracks.len(),
+                    tracks[0].artist,
+                    tracks[0].title
                 );
                 DaemonResponse::ok_msg(msg)
             }
@@ -834,7 +866,9 @@ fn rebuild_player_on_device(state: &mut DaemonState, name: &str) -> Result<(), S
     let eq = old.eq_settings();
     state.player.set_eq_bands(eq.bands);
     state.player.set_eq_enabled(eq.enabled);
-    state.player.set_crossfade_duration(old.crossfade_duration());
+    state
+        .player
+        .set_crossfade_duration(old.crossfade_duration());
     state.player.set_gapless_enabled(old.gapless_enabled());
     let vol = old.volume();
     state.player.set_volume(vol).map_err(|e| e.to_string())?;
@@ -910,13 +944,10 @@ fn run_tray_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>>) {
         });
 
     // Right-click opens the context menu; left-click toggles play/pause.
-    let _ = tray.set_show_menu_on_left_click(false);
+    tray.set_show_menu_on_left_click(false);
 
     let shared = SharedState(Arc::clone(&state));
-    let mut last_play_pause_label = state
-        .lock()
-        .map(|g| play_pause_label(&g))
-        .unwrap_or("Play");
+    let mut last_play_pause_label = state.lock().map(|g| play_pause_label(&g)).unwrap_or("Play");
     let mut last_playlist_refresh = std::time::Instant::now();
 
     loop {
@@ -945,10 +976,7 @@ fn run_tray_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>>) {
             }
         }
 
-        let current_label = state
-            .lock()
-            .map(|g| play_pause_label(&g))
-            .unwrap_or("Play");
+        let current_label = state.lock().map(|g| play_pause_label(&g)).unwrap_or("Play");
         if current_label != last_play_pause_label {
             last_play_pause_label = current_label;
             menu_needs_refresh = true;
@@ -1081,7 +1109,7 @@ fn play_pause_label(state: &DaemonState) -> &'static str {
 #[cfg(not(target_os = "android"))]
 fn refresh_tray_menu(tray: &tray_icon::TrayIcon, state: &Arc<Mutex<DaemonState>>) {
     let menu = build_tray_menu(state);
-    let _ = tray.set_menu(Some(Box::new(menu)));
+    tray.set_menu(Some(Box::new(menu)));
 }
 
 #[cfg(not(target_os = "android"))]
@@ -1104,10 +1132,7 @@ fn build_tray_menu(state: &Arc<Mutex<DaemonState>>) -> Menu {
     let _ = menu.append(&playlists_sub);
     let _ = menu.append(&PredefinedMenuItem::separator());
 
-    let label = state
-        .lock()
-        .map(|g| play_pause_label(&g))
-        .unwrap_or("Play");
+    let label = state.lock().map(|g| play_pause_label(&g)).unwrap_or("Play");
     let _ = menu.append(&MenuItem::with_id("play_pause", label, true, None));
     let _ = menu.append(&MenuItem::with_id("prev", "Previous", true, None));
     let _ = menu.append(&MenuItem::with_id("next", "Next", true, None));
@@ -1136,7 +1161,7 @@ fn load_tray_icon() -> Result<tray_icon::Icon, String> {
         png::ColorType::Rgba => buf,
         png::ColorType::Rgb => {
             let mut rgba = Vec::with_capacity((buf.len() / 3) * 4);
-            for chunk in buf.chunks_exact(3) {
+            for chunk in buf.as_chunks::<3>().0 {
                 rgba.extend_from_slice(chunk);
                 rgba.push(255);
             }
@@ -1259,7 +1284,10 @@ fn build_status(player: &AudioPlayer, library: &Library) -> PlaybackStatus {
 }
 
 fn current_tooltip(player: &AudioPlayer, library: &Library) -> String {
-    if let Some(path) = player.get_current_path().map(|p| p.to_string_lossy().to_string()) {
+    if let Some(path) = player
+        .get_current_path()
+        .map(|p| p.to_string_lossy().to_string())
+    {
         if let Some(t) = track_for_path(library, &path) {
             let state = if player.is_playing() {
                 "Playing"

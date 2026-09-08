@@ -73,7 +73,6 @@ pub enum AudioError {
 
     #[error("Audio device not available: {0}")]
     DeviceUnavailable(String),
-
 }
 
 #[derive(Error, Debug)]
@@ -92,7 +91,6 @@ pub enum DatabaseError {
 
     #[error("Record not found: {0}")]
     NotFound(String),
-
 }
 
 #[derive(Error, Debug)]

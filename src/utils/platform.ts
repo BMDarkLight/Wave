@@ -34,5 +34,8 @@ export async function isMobileHost(): Promise<boolean> {
 
 /** Narrow layout breakpoint used by Wave's mobile CSS. */
 export function isMobileLayout(): boolean {
-  return typeof window !== "undefined" && window.matchMedia("(max-width: 900px)").matches;
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia("(max-width: 900px)").matches
+  );
 }

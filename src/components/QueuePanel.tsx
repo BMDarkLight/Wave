@@ -43,7 +43,11 @@ export default function QueuePanel({
         <h2>Queue</h2>
         <div className="right-panel-header-actions">
           {tracks.length > 0 && (
-            <button className="btn-ghost btn-sm" onClick={onClear} type="button">
+            <button
+              className="btn-ghost btn-sm"
+              onClick={onClear}
+              type="button"
+            >
               Clear
             </button>
           )}
@@ -94,7 +98,9 @@ export default function QueuePanel({
                     className="queue-thumb"
                   />
                   <div className="queue-item-info">
-                    <div className="queue-item-name">{getTrackTitle(track)}</div>
+                    <div className="queue-item-name">
+                      {getTrackTitle(track)}
+                    </div>
                     <div className="queue-item-artist">{track.artist}</div>
                   </div>
                   <div className="queue-item-duration">

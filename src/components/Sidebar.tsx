@@ -27,11 +27,7 @@ import trayTemplate from "../../assets/tray-template.svg";
 import type { PlaylistInfo } from "../utils/player";
 
 export type MainView =
-  | "home"
-  | "playlist"
-  | "recently_played"
-  | "most_played"
-  | "settings";
+  "home" | "playlist" | "recently_played" | "most_played" | "settings";
 
 export default function Sidebar({
   isScanningFolder,

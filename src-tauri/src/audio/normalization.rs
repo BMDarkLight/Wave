@@ -101,7 +101,8 @@ impl VolumeNormalizer {
     /// Used for a peeked/upcoming track that was analyzed in the background
     /// but hasn't actually started playing yet.
     pub fn cache_levels(&mut self, path: &str, levels: AudioLevels) {
-        self.levels_cache.insert(path.to_string(), clamp_levels(levels));
+        self.levels_cache
+            .insert(path.to_string(), clamp_levels(levels));
     }
 
     /// Median RMS of tracks analyzed this session.
@@ -112,7 +113,7 @@ impl VolumeNormalizer {
         let mut sorted = self.session_rms.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mid = sorted.len() / 2;
-        Some(if sorted.len() % 2 == 0 {
+        Some(if sorted.len().is_multiple_of(2) {
             (sorted[mid - 1] + sorted[mid]) * 0.5
         } else {
             sorted[mid]
@@ -173,11 +174,11 @@ fn clamp_levels(levels: AudioLevels) -> AudioLevels {
 pub fn analyze_track_levels(path: &str) -> Result<AudioLevels, AudioError> {
     use crate::audio::symphonia_source::SymphoniaSource;
 
-    let mut source = SymphoniaSource::new(path)?;
+    let source = SymphoniaSource::new(path)?;
     let mut peak = 0.0f32;
     let mut sum_squares = 0.0f64;
     let mut count = 0u64;
-    while let Some(sample) = source.next() {
+    for sample in source {
         let abs = (sample as f32 / i16::MAX as f32).abs();
         if abs > peak {
             peak = abs;
@@ -242,8 +243,20 @@ mod tests {
     fn median_of_session_rms() {
         let mut n = VolumeNormalizer::new();
         n.set_enabled(true);
-        n.register_levels("a", AudioLevels { peak: 0.2, rms: 0.2 });
-        n.register_levels("b", AudioLevels { peak: 0.8, rms: 0.8 });
+        n.register_levels(
+            "a",
+            AudioLevels {
+                peak: 0.2,
+                rms: 0.2,
+            },
+        );
+        n.register_levels(
+            "b",
+            AudioLevels {
+                peak: 0.8,
+                rms: 0.8,
+            },
+        );
         assert!((n.median_rms().unwrap() - 0.5).abs() < 1e-4);
     }
 

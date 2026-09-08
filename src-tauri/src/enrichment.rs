@@ -147,7 +147,10 @@ fn fetch_artist_genres(client: &Client, mbid: &str) -> Vec<String> {
 fn fetch_similar_artists(client: &Client, mbid: &str) -> Vec<SimilarArtistEntry> {
     let body = client
         .get("https://labs.api.listenbrainz.org/similar-artists/json")
-        .query(&[("artist_mbids", mbid), ("algorithm", LISTENBRAINZ_ALGORITHM)])
+        .query(&[
+            ("artist_mbids", mbid),
+            ("algorithm", LISTENBRAINZ_ALGORITHM),
+        ])
         .send()
         .and_then(|r| r.error_for_status())
         .ok()
@@ -156,7 +159,11 @@ fn fetch_similar_artists(client: &Client, mbid: &str) -> Vec<SimilarArtistEntry>
         Some(text) => parse_lb_similar_artists(&text),
         None => Vec::new(),
     };
-    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     hits.truncate(MAX_SIMILAR_ARTISTS_STORED);
     hits
 }
@@ -164,7 +171,12 @@ fn fetch_similar_artists(client: &Client, mbid: &str) -> Vec<SimilarArtistEntry>
 fn fetch_representative_release_group(client: &Client, artist_mbid: &str) -> Option<String> {
     let body = client
         .get("https://musicbrainz.org/ws/2/release-group")
-        .query(&[("artist", artist_mbid), ("type", "album"), ("fmt", "json"), ("limit", "1")])
+        .query(&[
+            ("artist", artist_mbid),
+            ("type", "album"),
+            ("fmt", "json"),
+            ("limit", "1"),
+        ])
         .send()
         .ok()?
         .error_for_status()
@@ -208,7 +220,7 @@ fn parse_mb_artist_genres(body: &str) -> Vec<String> {
         return Vec::new();
     };
     let mut genres = parsed.genres.unwrap_or_default();
-    genres.sort_by(|a, b| b.count.cmp(&a.count));
+    genres.sort_by_key(|g| std::cmp::Reverse(g.count));
     genres.into_iter().map(|g| g.name).collect()
 }
 
@@ -268,7 +280,8 @@ mod tests {
 
     #[test]
     fn parse_mb_artist_search_handles_busy_error_payload() {
-        let body = r#"{"error": "The MusicBrainz web server is currently busy. Please try again later."}"#;
+        let body =
+            r#"{"error": "The MusicBrainz web server is currently busy. Please try again later."}"#;
         assert_eq!(parse_mb_artist_search(body), None);
     }
 
@@ -285,7 +298,11 @@ mod tests {
         let body = r#"{"id":"x","genres":[{"name":"hard rock","count":20,"id":"a"},{"name":"heavy metal","count":41,"id":"b"},{"name":"thrash metal","count":5,"id":"c"}]}"#;
         assert_eq!(
             parse_mb_artist_genres(body),
-            vec!["heavy metal".to_string(), "hard rock".to_string(), "thrash metal".to_string()]
+            vec![
+                "heavy metal".to_string(),
+                "hard rock".to_string(),
+                "thrash metal".to_string()
+            ]
         );
     }
 
@@ -327,7 +344,8 @@ mod tests {
 
     #[test]
     fn parse_lb_similar_artists_handles_html_error_body() {
-        let body = "<!doctype html>\n<html lang=en>\n<title>400 Bad Request</title>\n<h1>Bad Request</h1>";
+        let body =
+            "<!doctype html>\n<html lang=en>\n<title>400 Bad Request</title>\n<h1>Bad Request</h1>";
         assert!(parse_lb_similar_artists(body).is_empty());
     }
 

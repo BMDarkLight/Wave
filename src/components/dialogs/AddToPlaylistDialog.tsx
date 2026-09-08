@@ -38,9 +38,7 @@ export default function AddToPlaylistDialog({
         </div>
         <div className="playlist-picker-list">
           {playlists
-            .filter(
-              (p) => p.id !== excludePlaylistId && p.name !== "Favorites",
-            )
+            .filter((p) => p.id !== excludePlaylistId && p.name !== "Favorites")
             .map((p) => (
               <button
                 key={p.id}

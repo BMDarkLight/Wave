@@ -16,7 +16,11 @@ export function formatInvokeError(err: unknown, fallback: string): string {
     for (const key of ["message", "error", "data"] as const) {
       const value = obj[key];
       if (typeof value === "string" && value.trim()) return value;
-      if (value && typeof value === "object" && "message" in (value as object)) {
+      if (
+        value &&
+        typeof value === "object" &&
+        "message" in (value as object)
+      ) {
         const nested = (value as { message?: unknown }).message;
         if (typeof nested === "string" && nested.trim()) return nested;
       }

@@ -246,7 +246,8 @@ mod tests {
     fn validate_playlist_import_path_rejects_oversized_file() {
         let file = temp_path("huge.m3u");
         let f = std::fs::File::create(&file).expect("create test file");
-        f.set_len(MAX_PLAYLIST_IMPORT_BYTES + 1).expect("set sparse len");
+        f.set_len(MAX_PLAYLIST_IMPORT_BYTES + 1)
+            .expect("set sparse len");
         drop(f);
         let result = validate_playlist_import_path(file.to_str().unwrap());
         assert!(result.is_err());

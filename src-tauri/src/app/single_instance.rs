@@ -44,6 +44,9 @@ pub fn try_acquire(mode: InstanceMode) -> Result<InstanceGuard, String> {
         .read(true)
         .write(true)
         .create(true)
+        // Deliberately not truncating at open: the live holder's pid must
+        // survive until we actually own the lock. Cleared via set_len(0) below.
+        .truncate(false)
         .open(lock_path())
         .map_err(|e| format!("Failed to open instance lock: {e}"))?;
 

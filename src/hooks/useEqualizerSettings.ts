@@ -26,7 +26,9 @@ import {
 } from "../utils/player";
 import { formatInvokeError } from "../utils/errors";
 
-export function useEqualizerSettings(setError: (message: string | null) => void) {
+export function useEqualizerSettings(
+  setError: (message: string | null) => void,
+) {
   const [showEqPanel, setShowEqPanel] = useState(false);
   const [eqSettings, setEqSettings] = useState<EqSettings>({
     bands: Array(10).fill(0),
@@ -35,7 +37,8 @@ export function useEqualizerSettings(setError: (message: string | null) => void)
   const [crossfadeDuration, setCrossfadeDurationState] = useState(0.0);
   const crossfadeSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [gaplessEnabled, setGaplessEnabledState] = useState(true);
-  const [volumeNormalizationEnabled, setVolumeNormalizationEnabledState] = useState(false);
+  const [volumeNormalizationEnabled, setVolumeNormalizationEnabledState] =
+    useState(false);
   const [autoLyricsDownload, setAutoLyricsDownloadState] = useState(true);
   const [eqAnchor, setEqAnchor] = useState<{
     bottom: number;
@@ -46,7 +49,10 @@ export function useEqualizerSettings(setError: (message: string | null) => void)
   const loadEqSettings = async () => {
     try {
       const settings = await getEqSettings();
-      const bands = Array.from({ length: 10 }, (_, i) => settings.bands[i] ?? 0);
+      const bands = Array.from(
+        { length: 10 },
+        (_, i) => settings.bands[i] ?? 0,
+      );
       setEqSettings({ bands, enabled: settings.enabled });
       const crossfade = await getCrossfadeDuration();
       setCrossfadeDurationState(crossfade);
@@ -90,7 +96,9 @@ export function useEqualizerSettings(setError: (message: string | null) => void)
   };
 
   const handleEqBandChange = async (index: number, gain: number) => {
-    const bands = eqSettings.bands.map((value, i) => (i === index ? gain : value));
+    const bands = eqSettings.bands.map((value, i) =>
+      i === index ? gain : value,
+    );
     setEqSettings((s) => ({ ...s, bands, enabled: true }));
     try {
       await setEqBands(bands);

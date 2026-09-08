@@ -12,8 +12,9 @@ mod inner {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
+    #[cfg(target_os = "macos")]
+    use tauri::image::Image;
     use tauri::{
-        image::Image,
         menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
         AppHandle, Manager,
@@ -26,7 +27,10 @@ mod inner {
     static TRAY_CLICK_GENERATION: AtomicU64 = AtomicU64::new(0);
     const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(350);
 
-    fn with_player<R>(app: &AppHandle, f: impl FnOnce(&mut AudioPlayer) -> Result<R, String>) -> Option<R> {
+    fn with_player<R>(
+        app: &AppHandle,
+        f: impl FnOnce(&mut AudioPlayer) -> Result<R, String>,
+    ) -> Option<R> {
         let player_state = app.state::<PlayerState>();
         let mut slot = match player_state.0.lock() {
             Ok(g) => g,
@@ -43,7 +47,8 @@ mod inner {
 
     pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let playlists_sub = build_playlists_submenu(app)?;
-        let play_pause = MenuItem::with_id(app, "tray_play_pause", "Play / Pause", true, None::<&str>)?;
+        let play_pause =
+            MenuItem::with_id(app, "tray_play_pause", "Play / Pause", true, None::<&str>)?;
         let prev = MenuItem::with_id(app, "tray_prev", "Previous", true, None::<&str>)?;
         let next = MenuItem::with_id(app, "tray_next", "Next", true, None::<&str>)?;
         let stop = MenuItem::with_id(app, "tray_stop", "Stop", true, None::<&str>)?;
@@ -142,7 +147,7 @@ mod inner {
             png::ColorType::Rgba => buf,
             png::ColorType::Rgb => {
                 let mut rgba = Vec::with_capacity((buf.len() / 3) * 4);
-                for chunk in buf.chunks_exact(3) {
+                for chunk in buf.as_chunks::<3>().0 {
                     rgba.extend_from_slice(chunk);
                     rgba.push(255);
                 }
@@ -164,10 +169,8 @@ mod inner {
             return;
         }
         if id == "tray_prev" {
-            if let Some(path) = with_player(app, |p| {
-                p.play_previous().map_err(|e| e.to_string())
-            })
-            .flatten()
+            if let Some(path) =
+                with_player(app, |p| p.play_previous().map_err(|e| e.to_string())).flatten()
             {
                 crate::commands::listen_switch_track(
                     app,
@@ -178,10 +181,8 @@ mod inner {
             return;
         }
         if id == "tray_next" {
-            if let Some(path) = with_player(app, |p| {
-                p.play_next().map_err(|e| e.to_string())
-            })
-            .flatten()
+            if let Some(path) =
+                with_player(app, |p| p.play_next().map_err(|e| e.to_string())).flatten()
             {
                 crate::commands::listen_switch_track(
                     app,

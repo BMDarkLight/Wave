@@ -21,8 +21,8 @@ use windows::Win32::Graphics::Gdi::{
     CreateBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject,
     DrawTextW, GetDC, ReleaseDC, SelectObject, SetBkMode, SetTextColor, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
-    DEFAULT_PITCH, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE, DT_VCENTER,
-    FW_NORMAL, OUT_DEFAULT_PRECIS, TRANSPARENT,
+    DEFAULT_PITCH, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE, DT_VCENTER, FW_NORMAL,
+    OUT_DEFAULT_PRECIS, TRANSPARENT,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::WinRT::ISystemMediaTransportControlsInterop;
@@ -33,8 +33,8 @@ use windows::Win32::UI::Shell::{
     THUMBBUTTON, THUMBBUTTONMASK,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateIconIndirect, DestroyIcon, GetSystemMetrics, HICON, ICONINFO, PostMessageW,
-    RegisterWindowMessageW, SM_CXICON, WM_COMMAND, WM_NCDESTROY, WM_USER,
+    CreateIconIndirect, DestroyIcon, GetSystemMetrics, PostMessageW, RegisterWindowMessageW, HICON,
+    ICONINFO, SM_CXICON, WM_COMMAND, WM_NCDESTROY, WM_USER,
 };
 
 use crate::media_controls::TrackMetadata;
@@ -120,9 +120,8 @@ impl SmtcSession {
         >()
         .map_err(|e| format!("SMTC factory failed: {e}"))?;
 
-        let controls: SystemMediaTransportControls =
-            unsafe { interop.GetForWindow(HWND(hwnd)) }
-                .map_err(|e| format!("SMTC GetForWindow failed: {e}"))?;
+        let controls: SystemMediaTransportControls = unsafe { interop.GetForWindow(HWND(hwnd)) }
+            .map_err(|e| format!("SMTC GetForWindow failed: {e}"))?;
         let display_updater = controls
             .DisplayUpdater()
             .map_err(|e| format!("SMTC DisplayUpdater failed: {e}"))?;
@@ -201,7 +200,11 @@ impl SmtcSession {
             SmtcStatus::Paused as i32
         };
 
-        if self.controls.SetPlaybackStatus(MediaPlaybackStatus(status)).is_err() {
+        if self
+            .controls
+            .SetPlaybackStatus(MediaPlaybackStatus(status))
+            .is_err()
+        {
             return;
         }
         if !stopped {
@@ -232,15 +235,13 @@ impl SmtcSession {
 
         let duration = meta.duration_seconds.unwrap_or(0.0);
         let _ = self.timeline_properties.SetStartTime(TimeSpan::default());
+        let _ = self.timeline_properties.SetMinSeekTime(TimeSpan::default());
         let _ = self
             .timeline_properties
-            .SetMinSeekTime(TimeSpan::default());
-        let _ = self.timeline_properties.SetEndTime(TimeSpan::from(Duration::from_secs_f64(
-            duration,
-        )));
-        let _ = self.timeline_properties.SetMaxSeekTime(TimeSpan::from(
-            Duration::from_secs_f64(duration),
-        ));
+            .SetEndTime(TimeSpan::from(Duration::from_secs_f64(duration)));
+        let _ = self
+            .timeline_properties
+            .SetMaxSeekTime(TimeSpan::from(Duration::from_secs_f64(duration)));
         let _ = self
             .controls
             .UpdateTimelineProperties(&self.timeline_properties);
@@ -250,7 +251,8 @@ impl SmtcSession {
         }
 
         if let Some(path) = cover_path {
-            if let Ok(op) = windows::Storage::StorageFile::GetFileFromPathAsync(&HSTRING::from(path))
+            if let Ok(op) =
+                windows::Storage::StorageFile::GetFileFromPathAsync(&HSTRING::from(path))
             {
                 if let Ok(file) = op.get() {
                     if let Ok(stream) = RandomAccessStreamReference::CreateFromFile(&file) {
@@ -506,7 +508,7 @@ unsafe fn create_argb_icon(pixels: &[u32], size: i32) -> Result<HICON, String> {
         return Err("icon pixel buffer size mismatch".into());
     }
 
-    let mask_stride = ((size + 31) / 32) * 4;
+    let mask_stride = size.div_ceil(32) * 4;
     let mut and_bits = vec![0xFFu8; mask_stride * size];
     let mut bgra = vec![0u8; size * size * 4];
 
@@ -531,8 +533,7 @@ unsafe fn create_argb_icon(pixels: &[u32], size: i32) -> Result<HICON, String> {
         return Err("CreateCompatibleDC failed".into());
     }
 
-    let and_bitmap =
-        CreateBitmap(size as i32, size as i32, 1, 1, Some(and_bits.as_ptr() as _));
+    let and_bitmap = CreateBitmap(size as i32, size as i32, 1, 1, Some(and_bits.as_ptr() as _));
     if and_bitmap.0 == 0 {
         let _ = DeleteDC(hdc);
         return Err("CreateBitmap (mask) failed".into());
@@ -721,7 +722,10 @@ unsafe extern "system" fn taskbar_subclass(
                     szTip: [0; 260],
                     ..Default::default()
                 };
-                set_tip(&mut btn.szTip, if ctx.is_playing { "Pause" } else { "Play" });
+                set_tip(
+                    &mut btn.szTip,
+                    if ctx.is_playing { "Pause" } else { "Play" },
+                );
                 let _ = tb.ThumbBarUpdateButtons(hwnd, &[btn]);
             }
         }

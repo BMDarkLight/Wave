@@ -26,7 +26,12 @@ import {
 import Artwork from "./Artwork";
 import { formatTime } from "../utils/format";
 import { getTrackTitle } from "../utils/track";
-import type { EqSettings, PlaybackMode, PlaybackState, Track } from "../utils/player";
+import type {
+  EqSettings,
+  PlaybackMode,
+  PlaybackState,
+  Track,
+} from "../utils/player";
 
 export default function PlayerBar({
   currentTrack,
@@ -146,7 +151,10 @@ export default function PlayerBar({
             // Mobile: the whole info block opens Now Playing (large hit
             // target). Desktop keeps per-field buttons below.
             if (!isMobileLayout() || !currentTrack) return;
-            if (mobilePlayerOpenRef.current && !mobilePlayerClosingRef.current) {
+            if (
+              mobilePlayerOpenRef.current &&
+              !mobilePlayerClosingRef.current
+            ) {
               return;
             }
             onOpenMobilePlayer();
@@ -183,7 +191,10 @@ export default function PlayerBar({
             className="now-playing-path"
             onClick={() => {
               if (!currentTrack?.album) return;
-              onOpenAlbum(currentTrack.album, currentTrack.album_artist || currentTrack.artist);
+              onOpenAlbum(
+                currentTrack.album,
+                currentTrack.album_artist || currentTrack.artist,
+              );
             }}
             type="button"
             disabled={!currentTrack?.album}
@@ -268,7 +279,9 @@ export default function PlayerBar({
           onPointerDown={() => document.body.classList.add("is-seeking")}
           onPointerCancel={() => document.body.classList.remove("is-seeking")}
           onChange={(event) => onSeekChange(Number(event.target.value))}
-          onPointerUp={(event) => onSeekCommit(Number(event.currentTarget.value))}
+          onPointerUp={(event) =>
+            onSeekCommit(Number(event.currentTarget.value))
+          }
         />
         <span>{formatTime(displayDuration)}</span>
       </div>

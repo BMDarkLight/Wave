@@ -30,8 +30,7 @@ export default function DeletePlaylistDialog({
           <h2>Delete playlist?</h2>
         </div>
         <p className="confirm-text">
-          This will permanently delete "{name}". This action cannot be
-          undone.
+          This will permanently delete "{name}". This action cannot be undone.
         </p>
         <div className="modal-actions">
           <button className="btn-ghost" onClick={onCancel} type="button">

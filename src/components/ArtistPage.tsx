@@ -9,11 +9,7 @@
  */
 
 import { useEffect, useState } from "react";
-import {
-  BiArrowBack,
-  BiChevronDown,
-  BiChevronRight,
-} from "react-icons/bi";
+import { BiArrowBack, BiChevronDown, BiChevronRight } from "react-icons/bi";
 import {
   getArtistTracks,
   getArtistAlbums,
@@ -112,7 +108,9 @@ const AlbumArt = ({
       />
     );
   }
-  return <div className={className}>{album.name.slice(0, 2).toUpperCase()}</div>;
+  return (
+    <div className={className}>{album.name.slice(0, 2).toUpperCase()}</div>
+  );
 };
 
 interface ArtistPageProps {
@@ -308,11 +306,15 @@ export default function ArtistPage({
                       <div className="track-title-cell">
                         <Artwork
                           track={track}
-                          fallback={getTrackTitle(track).slice(0, 1).toUpperCase()}
+                          fallback={getTrackTitle(track)
+                            .slice(0, 1)
+                            .toUpperCase()}
                           className="track-thumb"
                         />
                         <div>
-                          <div className="track-name">{getTrackTitle(track)}</div>
+                          <div className="track-name">
+                            {getTrackTitle(track)}
+                          </div>
                           <div className="track-meta">{track.album}</div>
                         </div>
                       </div>

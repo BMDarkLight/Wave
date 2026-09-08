@@ -29,17 +29,11 @@ fn main() {
             .expect("No host toolchain directory found in NDK prebuilt")
             .path();
 
-        for base in &[
-            host_path.join("lib64/clang"),
-            host_path.join("lib/clang"),
-        ] {
+        for base in &[host_path.join("lib64/clang"), host_path.join("lib/clang")] {
             if let Ok(entries) = std::fs::read_dir(base) {
                 for version_dir in entries.filter_map(Result::ok) {
-                    for sub in &[
-                        format!("lib/linux/{ndk_arch}"),
-                        format!("lib/{ndk_triple}"),
-                    ] {
-                        let path = version_dir.path().join(&sub);
+                    for sub in &[format!("lib/linux/{ndk_arch}"), format!("lib/{ndk_triple}")] {
+                        let path = version_dir.path().join(sub);
                         if path.exists() {
                             println!("cargo:rustc-link-search=native={}", path.display());
                         }

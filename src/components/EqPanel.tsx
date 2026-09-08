@@ -128,13 +128,13 @@ export default function EqPanel({
             max={8}
             step={0.5}
             value={crossfadeDuration}
-            onChange={(event) =>
-              onCrossfadeChange(Number(event.target.value))
-            }
+            onChange={(event) => onCrossfadeChange(Number(event.target.value))}
             aria-label="Crossfade duration in seconds"
           />
           <span className="eq-crossfade-value">
-            {crossfadeDuration === 0 ? "Off" : `${crossfadeDuration.toFixed(1)}s`}
+            {crossfadeDuration === 0
+              ? "Off"
+              : `${crossfadeDuration.toFixed(1)}s`}
           </span>
         </div>
         <label

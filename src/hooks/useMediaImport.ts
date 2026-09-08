@@ -79,7 +79,9 @@ export function useMediaImport({
 }) {
   const [isAddingTracks, setIsAddingTracks] = useState(false);
   /** Playlist currently undergoing a first-time folder import (blocks list UI). */
-  const [importingPlaylistId, setImportingPlaylistId] = useState<string | null>(null);
+  const [importingPlaylistId, setImportingPlaylistId] = useState<string | null>(
+    null,
+  );
   const importingPlaylistIdRef = useRef<string | null>(null);
   const isImporting = importingPlaylistId != null;
   const [importedCount, setImportedCount] = useState(0);
@@ -111,7 +113,9 @@ export function useMediaImport({
   const [showAddFromLibrary, setShowAddFromLibrary] = useState(false);
   const [librarySearchQuery, setLibrarySearchQuery] = useState("");
   const [librarySearchResults, setLibrarySearchResults] = useState<Track[]>([]);
-  const [librarySearchSelected, setLibrarySearchSelected] = useState<Set<string>>(new Set());
+  const [librarySearchSelected, setLibrarySearchSelected] = useState<
+    Set<string>
+  >(new Set());
   const [librarySearchLoading, setLibrarySearchLoading] = useState(false);
   const [librarySearchAdding, setLibrarySearchAdding] = useState(false);
   const librarySearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -286,7 +290,9 @@ export function useMediaImport({
       // One bulk IPC: extract outside the DB lock in Rust batches.
       const result = await importScannedAudio(paths, playlistId);
       if (result.errors?.length) {
-        setError(`Finished importing folder with ${result.errors.length} failure(s).`);
+        setError(
+          `Finished importing folder with ${result.errors.length} failure(s).`,
+        );
       }
       if (selectedPlaylistIdRef.current === playlistId) {
         await loadPlaylists();
@@ -368,7 +374,8 @@ export function useMediaImport({
       // Android media scan always targets Library.
       const list = playlists.length > 0 ? playlists : await loadPlaylists();
       const playlistId =
-        list.find((p) => isLibraryPlaylistName(p.name))?.id ?? getDefaultPlaylistId(list);
+        list.find((p) => isLibraryPlaylistName(p.name))?.id ??
+        getDefaultPlaylistId(list);
       if (!playlistId) {
         setError("No playlist selected.");
         setIsScanningFolder(false);
@@ -440,7 +447,8 @@ export function useMediaImport({
       }
       const list = playlists.length > 0 ? playlists : await loadPlaylists();
       const playlistId =
-        list.find((p) => isLibraryPlaylistName(p.name))?.id ?? getDefaultPlaylistId(list);
+        list.find((p) => isLibraryPlaylistName(p.name))?.id ??
+        getDefaultPlaylistId(list);
       if (!playlistId) {
         setIsScanningFolder(false);
         setFolderScanIsSync(false);
@@ -512,7 +520,8 @@ export function useMediaImport({
 
       const list = playlists.length > 0 ? playlists : await loadPlaylists();
       const playlistId =
-        list.find((p) => isLibraryPlaylistName(p.name))?.id ?? getDefaultPlaylistId(list);
+        list.find((p) => isLibraryPlaylistName(p.name))?.id ??
+        getDefaultPlaylistId(list);
       if (!playlistId) {
         setError("No playlist selected.");
         setIsScanningFolder(false);

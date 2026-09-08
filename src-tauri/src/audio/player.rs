@@ -192,6 +192,9 @@ impl Queue {
     }
 
     /// Paths from the current queue position through the end of playback order.
+    // Only reached from the Android ExoPlayer gapless path; the unit tests
+    // below cover it on every target.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub fn paths_from_current_forward(&self, repeat: &RepeatMode) -> Vec<String> {
         let mut sim = self.clone();
         let mut paths = Vec::new();
@@ -300,19 +303,16 @@ impl Queue {
 
         let removed = self.tracks.remove(index);
 
-        match self.current_index {
-            Some(current) => {
-                if current == index {
-                    if self.tracks.is_empty() {
-                        self.current_index = None;
-                    } else if current >= self.tracks.len() {
-                        self.current_index = Some(self.tracks.len() - 1);
-                    }
-                } else if current > index {
-                    self.current_index = Some(current - 1);
+        if let Some(current) = self.current_index {
+            if current == index {
+                if self.tracks.is_empty() {
+                    self.current_index = None;
+                } else if current >= self.tracks.len() {
+                    self.current_index = Some(self.tracks.len() - 1);
                 }
+            } else if current > index {
+                self.current_index = Some(current - 1);
             }
-            None => {}
         }
 
         if let Some(ref mut order) = self.shuffle_order {
@@ -425,6 +425,15 @@ struct AudioOutput {
     handle: OutputStreamHandle,
 }
 
+/// A decoded, fully-wrapped playback source: the boxed sample stream, the
+/// track duration when the decoder could report one, and the crossfade state
+/// shared with the next track (present only while a crossfade is armed).
+type BuiltSource = (
+    Box<dyn Source<Item = f32> + Send + 'static>,
+    Option<Duration>,
+    Option<Arc<Mutex<CrossfadeState>>>,
+);
+
 pub struct AudioPlayer {
     /// Lazily opened so Android can finish JNI setup before cpal/oboe runs.
     output: Option<AudioOutput>,
@@ -509,8 +518,7 @@ impl AudioPlayer {
         {
             // ExoPlayer replaces cpal/rodio on Android.
             crate::android::jni::ensure_jni_thread_attached();
-            return crate::android::audio::ensure_initialized()
-                .map_err(AudioError::StreamCreation);
+            return crate::android::audio::ensure_initialized().map_err(AudioError::StreamCreation);
         }
 
         #[cfg(not(target_os = "android"))]
@@ -571,50 +579,52 @@ impl AudioPlayer {
 
         #[cfg(not(target_os = "android"))]
         {
-        use cpal::traits::{DeviceTrait, HostTrait};
+            use cpal::traits::{DeviceTrait, HostTrait};
 
-        crate::android::jni::ensure_jni_thread_attached();
-        if !crate::android::jni::android_audio_ready() {
-            return Err(AudioError::StreamCreation(
-                "Android audio context is not ready yet — try again in a moment".to_string(),
-            ));
-        }
+            crate::android::jni::ensure_jni_thread_attached();
+            if !crate::android::jni::android_audio_ready() {
+                return Err(AudioError::StreamCreation(
+                    "Android audio context is not ready yet — try again in a moment".to_string(),
+                ));
+            }
 
-        let host = cpal::default_host();
-        let device = host
-            .output_devices()
-            .map_err(|e| AudioError::DeviceUnavailable(e.to_string()))?
-            .find(|d| d.name().map(|n| n == device_name).unwrap_or(false))
-            .ok_or_else(|| AudioError::DeviceUnavailable(format!("Device not found: {device_name}")))?;
+            let host = cpal::default_host();
+            let device = host
+                .output_devices()
+                .map_err(|e| AudioError::DeviceUnavailable(e.to_string()))?
+                .find(|d| d.name().map(|n| n == device_name).unwrap_or(false))
+                .ok_or_else(|| {
+                    AudioError::DeviceUnavailable(format!("Device not found: {device_name}"))
+                })?;
 
-        let (stream, handle) = OutputStream::try_from_device(&device)
-            .map_err(|error| AudioError::StreamCreation(error.to_string()))?;
+            let (stream, handle) = OutputStream::try_from_device(&device)
+                .map_err(|error| AudioError::StreamCreation(error.to_string()))?;
 
-        Ok(Self {
-            output: Some(AudioOutput {
-                _stream: SendableStream(stream),
-                handle,
-            }),
-            sink: None,
-            current_path: None,
-            clock: PlaybackClock::stopped(),
-            volume: 0.8,
-            queue: Queue::default(),
-            repeat: RepeatMode::default(),
-            eq_config: Arc::new(Mutex::new(EqConfig::default())),
-            eq_version: Arc::new(Mutex::new(0)),
-            crossfade_duration: 0.0,
-            crossfade_state: None,
-            soft_fade: Arc::new(Mutex::new(SoftFadeState::default())),
-            prefetched_next: None,
-            gapless_enabled: true,
-            volume_normalization_enabled: false,
-            normalizer: Arc::new(Mutex::new(VolumeNormalizer::new())),
-            #[cfg(target_os = "android")]
-            normalization_generation: Arc::new(AtomicU64::new(0)),
-            #[cfg(target_os = "android")]
-            android_gapless_playlist: Vec::new(),
-        })
+            Ok(Self {
+                output: Some(AudioOutput {
+                    _stream: SendableStream(stream),
+                    handle,
+                }),
+                sink: None,
+                current_path: None,
+                clock: PlaybackClock::stopped(),
+                volume: 0.8,
+                queue: Queue::default(),
+                repeat: RepeatMode::default(),
+                eq_config: Arc::new(Mutex::new(EqConfig::default())),
+                eq_version: Arc::new(Mutex::new(0)),
+                crossfade_duration: 0.0,
+                crossfade_state: None,
+                soft_fade: Arc::new(Mutex::new(SoftFadeState::default())),
+                prefetched_next: None,
+                gapless_enabled: true,
+                volume_normalization_enabled: false,
+                normalizer: Arc::new(Mutex::new(VolumeNormalizer::new())),
+                #[cfg(target_os = "android")]
+                normalization_generation: Arc::new(AtomicU64::new(0)),
+                #[cfg(target_os = "android")]
+                android_gapless_playlist: Vec::new(),
+            })
         }
     }
 
@@ -696,7 +706,11 @@ impl AudioPlayer {
 
     fn spawn_desktop_peak_analysis(&self, path: String, cell: SharedGain, incoming: bool) {
         let normalizer = self.normalizer.clone();
-        if !normalizer.lock().unwrap_or_else(|e| e.into_inner()).try_begin_analysis() {
+        if !normalizer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .try_begin_analysis()
+        {
             // Already at the concurrent-scan cap; leave this cell at neutral
             // gain. It'll be retried (and likely cached by then) next time
             // this path is loaded.
@@ -705,7 +719,10 @@ impl AudioPlayer {
         std::thread::spawn(move || {
             let levels = analyze_track_levels(&path).unwrap_or_else(|error| {
                 tracing::warn!("Level analysis failed for \"{path}\": {error}");
-                super::normalization::AudioLevels { peak: 0.5, rms: 0.5 }
+                super::normalization::AudioLevels {
+                    peak: 0.5,
+                    rms: 0.5,
+                }
             });
             let gain = {
                 let mut normalizer = normalizer.lock().unwrap_or_else(|e| e.into_inner());
@@ -760,7 +777,11 @@ impl AudioPlayer {
     #[cfg(target_os = "android")]
     fn spawn_android_peak_analysis(&self, path: String, gen: u64, incoming: bool) {
         let normalizer = self.normalizer.clone();
-        if !normalizer.lock().unwrap_or_else(|e| e.into_inner()).try_begin_analysis() {
+        if !normalizer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .try_begin_analysis()
+        {
             // Already at the concurrent-scan cap (e.g. the user is skipping
             // through tracks faster than analysis finishes). Leave gain at
             // neutral for now; the next play/sync of this path retries.
@@ -770,7 +791,10 @@ impl AudioPlayer {
         std::thread::spawn(move || {
             let levels = analyze_track_levels(&path).unwrap_or_else(|error| {
                 tracing::warn!("Level analysis failed for \"{path}\": {error}");
-                super::normalization::AudioLevels { peak: 0.5, rms: 0.5 }
+                super::normalization::AudioLevels {
+                    peak: 0.5,
+                    rms: 0.5,
+                }
             });
             let gain = {
                 let mut normalizer = normalizer.lock().unwrap_or_else(|e| e.into_inner());
@@ -831,21 +855,25 @@ impl AudioPlayer {
         }
         #[cfg(not(target_os = "android"))]
         {
-        use cpal::traits::{DeviceTrait, HostTrait};
-        crate::android::jni::ensure_jni_thread_attached();
-        let listed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            match cpal::default_host().output_devices() {
-                Ok(devices) => devices
-                    .filter_map(|d| d.name().ok())
-                    .filter(|n| !n.is_empty())
-                    .collect(),
-                Err(_) => vec![],
-            }
-        }));
-        listed.unwrap_or_default()
+            use cpal::traits::{DeviceTrait, HostTrait};
+            crate::android::jni::ensure_jni_thread_attached();
+            let listed =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || match cpal::default_host().output_devices() {
+                        Ok(devices) => devices
+                            .filter_map(|d| d.name().ok())
+                            .filter(|n| !n.is_empty())
+                            .collect(),
+                        Err(_) => vec![],
+                    },
+                ));
+            listed.unwrap_or_default()
         }
     }
 
+    // Eight parameters, but they are the full set of knobs the decode chain
+    // needs (gain, EQ, crossfade, prefetch) and are always passed together.
+    #[allow(clippy::too_many_arguments)]
     fn build_source(
         path: &str,
         track_gain: SharedGain,
@@ -855,7 +883,7 @@ impl AudioPlayer {
         next_path: Option<&str>,
         next_gain: SharedGain,
         soft_fade: Arc<Mutex<SoftFadeState>>,
-    ) -> Result<(Box<dyn Source<Item = f32> + Send + 'static>, Option<Duration>, Option<Arc<Mutex<CrossfadeState>>>), AudioError> {
+    ) -> Result<BuiltSource, AudioError> {
         let source = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             SymphoniaSource::new(path)
         })) {
@@ -877,19 +905,20 @@ impl AudioPlayer {
         // Wrap in Crossfade if enabled and we have a next track.
         let chain: Box<dyn Source<Item = f32> + Send> = if crossfade_duration > 0.0 {
             if let Some(next_path) = next_path {
-                let next_source = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    SymphoniaSource::new(next_path)
-                })) {
-                    Ok(Ok(source)) => Some(source.convert_samples()),
-                    Ok(Err(error)) => {
-                        tracing::warn!("Crossfade preload failed for \"{next_path}\": {error}");
-                        None
-                    }
-                    Err(_) => {
-                        tracing::warn!("Crossfade preload panicked for \"{next_path}\"");
-                        None
-                    }
-                };
+                let next_source =
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        SymphoniaSource::new(next_path)
+                    })) {
+                        Ok(Ok(source)) => Some(source.convert_samples()),
+                        Ok(Err(error)) => {
+                            tracing::warn!("Crossfade preload failed for \"{next_path}\": {error}");
+                            None
+                        }
+                        Err(_) => {
+                            tracing::warn!("Crossfade preload panicked for \"{next_path}\"");
+                            None
+                        }
+                    };
 
                 if let Some(next_converted) = next_source {
                     let next_gained = VolumeGain::new(next_converted, next_gain);
@@ -898,17 +927,18 @@ impl AudioPlayer {
                     // Match channel count / sample rate so per-sample mixing is valid.
                     let target_channels = eq.channels();
                     let target_sr = eq.sample_rate();
-                    let next_matched: Box<dyn Source<Item = f32> + Send> =
-                        if next_eq.channels() != target_channels || next_eq.sample_rate() != target_sr
-                        {
-                            Box::new(UniformSourceIterator::new(
-                                next_eq,
-                                target_channels,
-                                target_sr,
-                            ))
-                        } else {
-                            Box::new(next_eq)
-                        };
+                    let next_matched: Box<dyn Source<Item = f32> + Send> = if next_eq.channels()
+                        != target_channels
+                        || next_eq.sample_rate() != target_sr
+                    {
+                        Box::new(UniformSourceIterator::new(
+                            next_eq,
+                            target_channels,
+                            target_sr,
+                        ))
+                    } else {
+                        Box::new(next_eq)
+                    };
                     let (crossfade, state) = Crossfade::new(
                         Box::new(eq),
                         Some(next_matched),
@@ -953,81 +983,74 @@ impl AudioPlayer {
 
         #[cfg(not(target_os = "android"))]
         {
-        self.ensure_output()?;
-        if self.sink.is_some() && self.is_playing() {
-            self.fade_out_blocking();
-        }
-
-        if let Some(sink) = self.sink.take() {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                sink.stop();
-            }));
-        }
-        self.prefetched_next = None;
-
-        // SoftFade instances start at gain 0 and ramp toward this target.
-        self.set_soft_fade_target(1.0);
-
-        let next_path = self
-            .queue
-            .peek_next(&self.repeat)
-            .map(|s| s.to_string());
-        let track_gain = self.normalization_gain_cell_for_path(path);
-        let next_gain = next_path
-            .as_deref()
-            .map(|next| self.peek_normalization_gain_cell_for_path(next))
-            .unwrap_or_else(|| shared_gain(1.0));
-        let (source, duration, crossfade_state) = Self::build_source(
-            path,
-            track_gain,
-            self.eq_config.clone(),
-            self.eq_version.clone(),
-            self.crossfade_duration,
-            next_path.as_deref(),
-            next_gain,
-            self.soft_fade.clone(),
-        )?;
-
-        let handle = &self
-            .output
-            .as_ref()
-            .expect("output ensured")
-            .handle;
-
-        let sink = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Sink::try_new(handle)
-        })) {
-            Ok(Ok(sink)) => sink,
-            Ok(Err(error)) => {
-                return Err(AudioError::SinkCreation(format!(
-                    "Could not initialise audio playback: {error}"
-                )));
+            self.ensure_output()?;
+            if self.sink.is_some() && self.is_playing() {
+                self.fade_out_blocking();
             }
-            Err(_) => {
-                return Err(AudioError::SinkCreation(
-                    "Audio playback initialisation crashed. \
+
+            if let Some(sink) = self.sink.take() {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    sink.stop();
+                }));
+            }
+            self.prefetched_next = None;
+
+            // SoftFade instances start at gain 0 and ramp toward this target.
+            self.set_soft_fade_target(1.0);
+
+            let next_path = self.queue.peek_next(&self.repeat).map(|s| s.to_string());
+            let track_gain = self.normalization_gain_cell_for_path(path);
+            let next_gain = next_path
+                .as_deref()
+                .map(|next| self.peek_normalization_gain_cell_for_path(next))
+                .unwrap_or_else(|| shared_gain(1.0));
+            let (source, duration, crossfade_state) = Self::build_source(
+                path,
+                track_gain,
+                self.eq_config.clone(),
+                self.eq_version.clone(),
+                self.crossfade_duration,
+                next_path.as_deref(),
+                next_gain,
+                self.soft_fade.clone(),
+            )?;
+
+            let handle = &self.output.as_ref().expect("output ensured").handle;
+
+            let sink = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Sink::try_new(handle)
+            })) {
+                Ok(Ok(sink)) => sink,
+                Ok(Err(error)) => {
+                    return Err(AudioError::SinkCreation(format!(
+                        "Could not initialise audio playback: {error}"
+                    )));
+                }
+                Err(_) => {
+                    return Err(AudioError::SinkCreation(
+                        "Audio playback initialisation crashed. \
                      Another app may be using the speaker exclusively."
-                        .to_string(),
-                ));
-            }
-        };
+                            .to_string(),
+                    ));
+                }
+            };
 
-        sink.set_volume(self.volume);
-        sink.append(source);
-        sink.play();
+            sink.set_volume(self.volume);
+            sink.append(source);
+            sink.play();
 
-        self.sink = Some(sink);
-        self.current_path = Some(PathBuf::from(path));
-        self.clock = PlaybackClock {
-            started_at: Some(Instant::now()),
-            elapsed_before_start: Duration::ZERO,
-            duration,
-        };
+            self.sink = Some(sink);
+            self.current_path = Some(PathBuf::from(path));
+            self.clock = PlaybackClock {
+                started_at: Some(Instant::now()),
+                elapsed_before_start: Duration::ZERO,
+                duration,
+            };
 
-        self.crossfade_state = crossfade_state;
-        self.prefetch_next_into_sink();
+            self.crossfade_state = crossfade_state;
+            self.prefetch_next_into_sink();
 
-        Ok(())
+            Ok(())
         }
     }
 
@@ -1041,8 +1064,9 @@ impl AudioPlayer {
         // replays the current track) ever gets a chance to run. Desktop's
         // `prefetch_next_into_sink` already refuses to prefetch under
         // repeat-one for the same reason — this mirrors that.
-        let use_gapless =
-            self.gapless_enabled && self.crossfade_duration <= 0.0 && self.repeat != RepeatMode::One;
+        let use_gapless = self.gapless_enabled
+            && self.crossfade_duration <= 0.0
+            && self.repeat != RepeatMode::One;
         if use_gapless {
             let paths = self.queue.paths_from_current_forward(&self.repeat);
             let paths = if paths.is_empty() {
@@ -1250,6 +1274,9 @@ impl AudioPlayer {
         // value, which `Duration::from_secs_f64` below panics on outright.
         // Same cap as `seek()`.
         const MAX_SEEK_SECONDS: f64 = 1e9;
+        // Not `clamp`: `max(0.0)` folds NaN to 0.0, while `f64::clamp`
+        // propagates NaN straight into the panicking `from_secs_f64`.
+        #[allow(clippy::manual_clamp)]
         let position_secs = position_secs.max(0.0).min(MAX_SEEK_SECONDS);
         #[cfg(target_os = "android")]
         {
@@ -1258,7 +1285,7 @@ impl AudioPlayer {
 
         #[cfg(not(target_os = "android"))]
         {
-            return self.load_paused_at_desktop(path, position_secs);
+            self.load_paused_at_desktop(path, position_secs)
         }
     }
 
@@ -1316,11 +1343,7 @@ impl AudioPlayer {
             self.soft_fade.clone(),
         )?;
 
-        let handle = &self
-            .output
-            .as_ref()
-            .expect("output ensured")
-            .handle;
+        let handle = &self.output.as_ref().expect("output ensured").handle;
 
         let sink = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             Sink::try_new(handle)
@@ -1357,11 +1380,7 @@ impl AudioPlayer {
 
     /// True when the sink still has the prefetched follow-up buffered or playing.
     fn has_sink_prefetch(&self) -> bool {
-        self.prefetched_next.is_some()
-            || self
-                .sink
-                .as_ref()
-                .is_some_and(|sink| sink.len() > 1)
+        self.prefetched_next.is_some() || self.sink.as_ref().is_some_and(|sink| sink.len() > 1)
     }
 
     pub fn pause(&mut self) -> Result<(), AudioError> {
@@ -1430,18 +1449,18 @@ impl AudioPlayer {
 
         #[cfg(not(target_os = "android"))]
         {
-        if self.sink.is_some() && self.is_playing() {
-            self.fade_out_blocking();
-        }
-        if let Some(sink) = self.sink.take() {
-            sink.stop();
-        }
-        self.current_path = None;
-        self.prefetched_next = None;
-        self.crossfade_state = None;
-        self.set_soft_fade_target(1.0);
-        self.clock = PlaybackClock::stopped();
-        Ok(())
+            if self.sink.is_some() && self.is_playing() {
+                self.fade_out_blocking();
+            }
+            if let Some(sink) = self.sink.take() {
+                sink.stop();
+            }
+            self.current_path = None;
+            self.prefetched_next = None;
+            self.crossfade_state = None;
+            self.set_soft_fade_target(1.0);
+            self.clock = PlaybackClock::stopped();
+            Ok(())
         }
     }
 
@@ -1452,6 +1471,8 @@ impl AudioPlayer {
         // Infinity) from reaching `Duration::from_secs_f64` below, which
         // panics outright on non-finite or overflowing input.
         const MAX_SEEK_SECONDS: f64 = 1e9;
+        // Not `clamp`: see `load_paused_at` — `clamp` would propagate NaN.
+        #[allow(clippy::manual_clamp)]
         let seconds = seconds.max(0.0).min(MAX_SEEK_SECONDS);
         #[cfg(target_os = "android")]
         {
@@ -1468,59 +1489,59 @@ impl AudioPlayer {
 
         #[cfg(not(target_os = "android"))]
         {
-        let offset = Duration::from_secs_f64(seconds.max(0.0));
-        let path = self
-            .current_path
-            .as_ref()
-            .and_then(|p| p.to_str())
-            .map(str::to_string)
-            .ok_or(AudioError::NoTrackLoaded)?;
+            let offset = Duration::from_secs_f64(seconds.max(0.0));
+            let path = self
+                .current_path
+                .as_ref()
+                .and_then(|p| p.to_str())
+                .map(str::to_string)
+                .ok_or(AudioError::NoTrackLoaded)?;
 
-        let was_playing = self.is_playing();
-        if was_playing {
-            self.fade_out_blocking();
-        }
-
-        // Seeking leaves any sink-appended follow-up track in place. Rebuild so
-        // we don't later hear a few ms of the old next and then restart it.
-        if self.has_sink_prefetch() {
-            self.play(&path)?;
-            if let Some(sink) = self.sink.as_ref() {
-                sink.try_seek(offset)
-                    .map_err(|error| AudioError::Decode(format!("Seek failed: {error}")))?;
+            let was_playing = self.is_playing();
+            if was_playing {
+                self.fade_out_blocking();
             }
-            self.clock.elapsed_before_start = offset;
-            self.clock.started_at = was_playing.then(Instant::now);
-            if !was_playing {
-                let _ = self.pause();
-            } else {
-                // play() already faded in; SoftFade::try_seek reset gain to 0 —
-                // nudge target so the post-seek ramp restarts.
-                self.set_soft_fade_target(1.0);
-            }
-            return Ok(());
-        }
 
-        match &self.sink {
-            Some(sink) => {
-                sink.try_seek(offset)
-                    .map_err(|error| AudioError::Decode(format!("Seek failed: {error}")))?;
-
+            // Seeking leaves any sink-appended follow-up track in place. Rebuild so
+            // we don't later hear a few ms of the old next and then restart it.
+            if self.has_sink_prefetch() {
+                self.play(&path)?;
+                if let Some(sink) = self.sink.as_ref() {
+                    sink.try_seek(offset)
+                        .map_err(|error| AudioError::Decode(format!("Seek failed: {error}")))?;
+                }
                 self.clock.elapsed_before_start = offset;
                 self.clock.started_at = was_playing.then(Instant::now);
-                self.prefetched_next = None;
-                // Crossfade may promote the incoming track inside try_seek when
-                // the UI already handed off at fade-start — adopt that path so
-                // transport and metadata stay on the song the scrubber controls.
-                self.adopt_crossfade_logical_track();
-                if was_playing {
+                if !was_playing {
+                    let _ = self.pause();
+                } else {
+                    // play() already faded in; SoftFade::try_seek reset gain to 0 —
+                    // nudge target so the post-seek ramp restarts.
                     self.set_soft_fade_target(1.0);
                 }
-
-                Ok(())
+                return Ok(());
             }
-            None => Err(AudioError::NoTrackLoaded),
-        }
+
+            match &self.sink {
+                Some(sink) => {
+                    sink.try_seek(offset)
+                        .map_err(|error| AudioError::Decode(format!("Seek failed: {error}")))?;
+
+                    self.clock.elapsed_before_start = offset;
+                    self.clock.started_at = was_playing.then(Instant::now);
+                    self.prefetched_next = None;
+                    // Crossfade may promote the incoming track inside try_seek when
+                    // the UI already handed off at fade-start — adopt that path so
+                    // transport and metadata stay on the song the scrubber controls.
+                    self.adopt_crossfade_logical_track();
+                    if was_playing {
+                        self.set_soft_fade_target(1.0);
+                    }
+
+                    Ok(())
+                }
+                None => Err(AudioError::NoTrackLoaded),
+            }
         }
     }
 
@@ -1608,61 +1629,55 @@ impl AudioPlayer {
             // arrive late after prepare).
             return self.clock.duration.is_some_and(|duration| {
                 let grace = Duration::from_millis(350);
-                self.clock.raw_elapsed() >= duration.saturating_add(grace)
-                    && !self.is_playing()
+                self.clock.raw_elapsed() >= duration.saturating_add(grace) && !self.is_playing()
             });
         }
 
         #[cfg(not(target_os = "android"))]
         {
-        // A crossfade source keeps playing the *next* track in the same sink after
-        // the outgoing track ends. Wall-clock / pending_next alone are not enough:
-        // once the mixer promotes, pending_next flips false while audio is still
-        // mid-song — and a premature play_next() restarts that track from 0.
-        // Only advance when this sink is truly exhausted (then start the following track).
-        if self.crossfade_state.is_some() && !self.sink_exhausted() {
-            return false;
-        }
+            // A crossfade source keeps playing the *next* track in the same sink after
+            // the outgoing track ends. Wall-clock / pending_next alone are not enough:
+            // once the mixer promotes, pending_next flips false while audio is still
+            // mid-song — and a premature play_next() restarts that track from 0.
+            // Only advance when this sink is truly exhausted (then start the following track).
+            if self.crossfade_state.is_some() && !self.sink_exhausted() {
+                return false;
+            }
 
-        let at_duration_end = self.clock.duration.is_some_and(|duration| {
-            let grace = Duration::from_millis(350);
-            self.clock.raw_elapsed() >= duration.saturating_add(grace)
-        });
+            let at_duration_end = self.clock.duration.is_some_and(|duration| {
+                let grace = Duration::from_millis(350);
+                self.clock.raw_elapsed() >= duration.saturating_add(grace)
+            });
 
-        // Prefetched next is already in the sink — only adopt once the current
-        // source has actually finished (sink has drained down to the follow-up).
-        // Adopting earlier and calling play() on a path mismatch was restarting
-        // the next track after a few milliseconds of audio.
-        if self.prefetched_next.is_some() {
-            let sink_len = self.sink.as_ref().map(|s| s.len()).unwrap_or(0);
-            let past_start = self.clock.raw_elapsed() >= Duration::from_millis(500);
-            if sink_len <= 1 && past_start {
+            // Prefetched next is already in the sink — only adopt once the current
+            // source has actually finished (sink has drained down to the follow-up).
+            // Adopting earlier and calling play() on a path mismatch was restarting
+            // the next track after a few milliseconds of audio.
+            if self.prefetched_next.is_some() {
+                let sink_len = self.sink.as_ref().map(|s| s.len()).unwrap_or(0);
+                let past_start = self.clock.raw_elapsed() >= Duration::from_millis(500);
+                if sink_len <= 1 && past_start {
+                    return true;
+                }
+                if at_duration_end && sink_len <= 1 {
+                    return true;
+                }
+                // Still playing the outgoing source (len >= 2) — wait.
+                return false;
+            }
+
+            if self.is_paused() {
+                // Some Android backends pause when the source ends rather than
+                // leaving an idle non-paused empty sink.
+                return self.sink_exhausted() || at_duration_end;
+            }
+
+            if !self.is_playing() {
                 return true;
             }
-            if at_duration_end && sink_len <= 1 {
-                return true;
-            }
-            // Still playing the outgoing source (len >= 2) — wait.
-            return false;
-        }
 
-        if self.is_paused() {
-            // Some Android backends pause when the source ends rather than
-            // leaving an idle non-paused empty sink.
-            return self.sink_exhausted() || at_duration_end;
+            at_duration_end
         }
-
-        if !self.is_playing() {
-            return true;
-        }
-
-        at_duration_end
-        }
-    }
-
-    /// Back-compat alias used by older call sites.
-    pub fn has_finished_naturally(&self) -> bool {
-        self.should_auto_advance()
     }
 
     pub fn get_current_path(&self) -> Option<&PathBuf> {
@@ -1709,45 +1724,45 @@ impl AudioPlayer {
 
         #[cfg(not(target_os = "android"))]
         {
-        let Some(state) = self.crossfade_state.clone() else {
-            return false;
-        };
-        let Ok(mut guard) = state.lock() else {
-            return false;
-        };
-        if !guard.track_switched {
-            return false;
-        }
-        guard.track_switched = false;
+            let Some(state) = self.crossfade_state.clone() else {
+                return false;
+            };
+            let Ok(mut guard) = state.lock() else {
+                return false;
+            };
+            if !guard.track_switched {
+                return false;
+            }
+            guard.track_switched = false;
 
-        let Some(new_path) = guard.current_path.clone() else {
-            return false;
-        };
-        let duration = guard.duration;
-        let position = guard.position;
-        drop(guard);
+            let Some(new_path) = guard.current_path.clone() else {
+                return false;
+            };
+            let duration = guard.duration;
+            let position = guard.position;
+            drop(guard);
 
-        let new_path_buf = PathBuf::from(&new_path);
-        if self.current_path.as_deref() == Some(new_path_buf.as_path()) {
-            return false;
-        }
+            let new_path_buf = PathBuf::from(&new_path);
+            if self.current_path.as_deref() == Some(new_path_buf.as_path()) {
+                return false;
+            }
 
-        // Keep the in-memory queue index aligned with the track now audible.
-        let peeked = self.queue.peek_next(&self.repeat).map(str::to_string);
-        if peeked.as_deref() == Some(new_path.as_str()) {
-            let _ = self.queue.next(&self.repeat);
-        } else if let Some(idx) = self.queue.tracks().iter().position(|p| p == &new_path) {
-            let _ = self.queue.jump(idx);
-        }
+            // Keep the in-memory queue index aligned with the track now audible.
+            let peeked = self.queue.peek_next(&self.repeat).map(str::to_string);
+            if peeked.as_deref() == Some(new_path.as_str()) {
+                let _ = self.queue.next(&self.repeat);
+            } else if let Some(idx) = self.queue.tracks().iter().position(|p| p == &new_path) {
+                let _ = self.queue.jump(idx);
+            }
 
-        let was_playing = self.is_playing();
-        self.current_path = Some(new_path_buf);
-        self.clock = PlaybackClock {
-            started_at: was_playing.then(Instant::now),
-            elapsed_before_start: position,
-            duration,
-        };
-        true
+            let was_playing = self.is_playing();
+            self.current_path = Some(new_path_buf);
+            self.clock = PlaybackClock {
+                started_at: was_playing.then(Instant::now),
+                elapsed_before_start: position,
+                duration,
+            };
+            true
         }
     }
 
@@ -1791,7 +1806,10 @@ impl AudioPlayer {
     // ── Equalizer ─────────────────────────────────────────────────────────────
 
     pub fn eq_settings(&self) -> EqConfig {
-        self.eq_config.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.eq_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn set_eq_bands(&mut self, bands: [f32; 10]) {
@@ -1818,11 +1836,13 @@ impl AudioPlayer {
 
     pub fn apply_eq_preset(&mut self, name: &str) -> Result<(), String> {
         let mut cfg = self.eq_config.lock().unwrap_or_else(|e| e.into_inner());
-        cfg.apply_preset(name)
-            .ok_or_else(|| {
-                let names: Vec<&str> = EqConfig::list_presets().map(|(n, _)| n).collect();
-                format!("Unknown EQ preset \"{name}\". Available: {}", names.join(", "))
-            })?;
+        cfg.apply_preset(name).ok_or_else(|| {
+            let names: Vec<&str> = EqConfig::list_presets().map(|(n, _)| n).collect();
+            format!(
+                "Unknown EQ preset \"{name}\". Available: {}",
+                names.join(", ")
+            )
+        })?;
         *self.eq_version.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         #[cfg(target_os = "android")]
         {
@@ -1834,7 +1854,11 @@ impl AudioPlayer {
 
     #[cfg(target_os = "android")]
     fn sync_android_eq(&self) {
-        let cfg = self.eq_config.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let cfg = self
+            .eq_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let _ = crate::android::audio::exo_set_eq_bands(&cfg.bands);
         let _ = crate::android::audio::exo_set_eq_enabled(cfg.enabled);
     }
@@ -1900,14 +1924,14 @@ impl AudioPlayer {
         }
         #[cfg(not(target_os = "android"))]
         {
-        use cpal::traits::{DeviceTrait, HostTrait};
-        let name = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            cpal::default_host()
-                .default_output_device()
-                .and_then(|d| d.name().ok())
-                .unwrap_or_else(|| "Unknown".to_string())
-        }));
-        name.unwrap_or_else(|_| "Unknown".to_string())
+            use cpal::traits::{DeviceTrait, HostTrait};
+            let name = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cpal::default_host()
+                    .default_output_device()
+                    .and_then(|d| d.name().ok())
+                    .unwrap_or_else(|| "Unknown".to_string())
+            }));
+            name.unwrap_or_else(|_| "Unknown".to_string())
         }
     }
 
@@ -1929,11 +1953,10 @@ impl AudioPlayer {
         // has actually finished. Manual Next must tear down and restart.
         #[cfg(target_os = "android")]
         if self.try_android_gapless_skip_forward()? {
-            return Ok(
-                self.current_path
-                    .as_ref()
-                    .and_then(|p| p.to_str().map(str::to_string)),
-            );
+            return Ok(self
+                .current_path
+                .as_ref()
+                .and_then(|p| p.to_str().map(str::to_string)));
         }
 
         if let Some((prefetched, duration)) = self.prefetched_next.take() {
@@ -2174,7 +2197,10 @@ mod tests {
     fn enqueue_appends_to_tracks() {
         let mut queue = queue_of(&["a", "b"]);
         queue.enqueue("c".to_string());
-        assert_eq!(queue.tracks(), &["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(
+            queue.tracks(),
+            &["a".to_string(), "b".to_string(), "c".to_string()]
+        );
     }
 
     #[test]
@@ -2196,7 +2222,12 @@ mod tests {
         queue.insert_next("x".to_string());
         assert_eq!(
             queue.tracks(),
-            &["a".to_string(), "x".to_string(), "b".to_string(), "c".to_string()]
+            &[
+                "a".to_string(),
+                "x".to_string(),
+                "b".to_string(),
+                "c".to_string()
+            ]
         );
         assert_eq!(queue.current_index(), Some(0));
     }
@@ -2311,7 +2342,12 @@ mod tests {
         assert!(moved);
         assert_eq!(
             queue.tracks(),
-            &["b".to_string(), "c".to_string(), "a".to_string(), "d".to_string()]
+            &[
+                "b".to_string(),
+                "c".to_string(),
+                "a".to_string(),
+                "d".to_string()
+            ]
         );
         // current_index must still point at "b".
         let idx = queue.current_index().unwrap();
@@ -2326,7 +2362,12 @@ mod tests {
         assert!(moved);
         assert_eq!(
             queue.tracks(),
-            &["d".to_string(), "a".to_string(), "b".to_string(), "c".to_string()]
+            &[
+                "d".to_string(),
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string()
+            ]
         );
         let idx = queue.current_index().unwrap();
         assert_eq!(queue.tracks()[idx], "c");

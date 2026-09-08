@@ -25,9 +25,7 @@ pub fn list_audio_files(_app: &AppHandle, tree_uri: &str) -> Result<Vec<String>,
         return Err("SAF scan: tree URI is empty".into());
     }
     if !trimmed.starts_with("content://") {
-        return Err(format!(
-            "SAF scan: expected content:// URI, got: {trimmed}"
-        ));
+        return Err(format!("SAF scan: expected content:// URI, got: {trimmed}"));
     }
 
     // Frees the local ref for `obj` before returning. The calling loop runs
@@ -203,10 +201,7 @@ pub fn list_audio_files(_app: &AppHandle, tree_uri: &str) -> Result<Vec<String>,
                 &scanner_class,
                 "listAudioFiles",
                 "(Landroid/app/Activity;Ljava/lang/String;)[Ljava/lang/String;",
-                &[
-                    JValue::Object(&activity_obj),
-                    JValue::Object(&uri_jstring),
-                ],
+                &[JValue::Object(&activity_obj), JValue::Object(&uri_jstring)],
             )
         },
         "SAF scan: SafMediaScanner.listAudioFiles() failed",

@@ -132,7 +132,9 @@ export default function AddFromLibraryDialog({
               onClick={onAddSelected}
               disabled={adding || selected.size === 0}
             >
-              {adding ? "Adding…" : `Add${selected.size > 0 ? ` (${selected.size})` : ""}`}
+              {adding
+                ? "Adding…"
+                : `Add${selected.size > 0 ? ` (${selected.size})` : ""}`}
             </button>
           </div>
         </div>

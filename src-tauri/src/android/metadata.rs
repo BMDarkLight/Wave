@@ -88,7 +88,12 @@ pub fn probe_content_uri(_app: &AppHandle, uri: &str) -> Result<UriProbeResult, 
     let activity_obj = unsafe { JObject::from_raw(activity as *mut _) };
 
     let loader = env
-        .call_method(&activity_obj, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .call_method(
+            &activity_obj,
+            "getClassLoader",
+            "()Ljava/lang/ClassLoader;",
+            &[],
+        )
         .map_err(|e| format!("getClassLoader: {e}"))?
         .l()
         .map_err(|e| format!("getClassLoader value: {e}"))?;
@@ -137,9 +142,7 @@ pub fn probe_content_uri(_app: &AppHandle, uri: &str) -> Result<UriProbeResult, 
         return Err("MediaMetadataProbe.probe threw".into());
     }
 
-    let json_obj = result
-        .l()
-        .map_err(|e| format!("probe result: {e}"))?;
+    let json_obj = result.l().map_err(|e| format!("probe result: {e}"))?;
     if json_obj.is_null() {
         return Err("MediaMetadataProbe.probe returned null".into());
     }

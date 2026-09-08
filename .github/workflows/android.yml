@@ -410,24 +410,3 @@ jobs:
           name: wave-android-${{ matrix.arch }}
           path: src-tauri/gen/android/app/build/outputs/apk/**/release/*.apk
           if-no-files-found: error
-
-  release:
-    name: Create Release
-    needs: build-android
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/**/*.apk
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

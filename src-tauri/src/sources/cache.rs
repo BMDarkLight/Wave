@@ -167,24 +167,6 @@ fn describe_http_failure(status: u16) -> String {
     }
 }
 
-/// Total bytes held in the cache directory.
-pub fn cache_size_bytes() -> u64 {
-    fn walk(dir: &Path) -> u64 {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return 0;
-        };
-        entries
-            .filter_map(Result::ok)
-            .map(|entry| match entry.file_type() {
-                Ok(t) if t.is_dir() => walk(&entry.path()),
-                Ok(_) => entry.metadata().map(|m| m.len()).unwrap_or(0),
-                Err(_) => 0,
-            })
-            .sum()
-    }
-    walk(&paths::source_cache_dir())
-}
-
 /// One cached row's eviction candidacy, oldest first.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvictionCandidate {

@@ -75,7 +75,8 @@ export default function ContextMenu({
       const right = anchor.right ?? pad;
       left = vw - right - rect.width;
       if (left < pad) left = pad;
-      if (left + rect.width > vw - pad) left = Math.max(pad, vw - pad - rect.width);
+      if (left + rect.width > vw - pad)
+        left = Math.max(pad, vw - pad - rect.width);
     }
 
     setStyle({

@@ -130,7 +130,8 @@ export function useDragDismiss({
   const finish = (event?: ReactPointerEvent<HTMLElement>) => {
     if (!activeRef.current) return;
     const shouldDismiss =
-      offsetRef.current >= threshold || velocityRef.current >= velocityThreshold;
+      offsetRef.current >= threshold ||
+      velocityRef.current >= velocityThreshold;
     activeRef.current = false;
     setDragging(false);
     if (shouldDismiss) {

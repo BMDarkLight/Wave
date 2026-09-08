@@ -14,7 +14,6 @@
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose, Engine as _};
 use sha2::{Digest, Sha256};
@@ -34,7 +33,6 @@ const MEDIA_JPEG_QUALITY: u8 = 85;
 /// Cover art extracted from an audio file or downloaded from the network.
 pub struct ExtractedCoverArt {
     pub data: Vec<u8>,
-    pub mime: String,
 }
 
 /// Result of writing (or reusing) a shared album-art thumb.
@@ -54,8 +52,18 @@ pub fn save_album_art_thumb(
     app: &AppHandle,
     cover_art: ExtractedCoverArt,
 ) -> Result<SavedAlbumArt, String> {
-    let thumb = make_sized_jpeg(&cover_art.data, THUMB_MAX_EDGE, THUMB_MAX_BYTES, THUMB_JPEG_QUALITY)?;
-    let media = make_sized_jpeg(&cover_art.data, MEDIA_MAX_EDGE, MEDIA_MAX_BYTES, MEDIA_JPEG_QUALITY)?;
+    let thumb = make_sized_jpeg(
+        &cover_art.data,
+        THUMB_MAX_EDGE,
+        THUMB_MAX_BYTES,
+        THUMB_JPEG_QUALITY,
+    )?;
+    let media = make_sized_jpeg(
+        &cover_art.data,
+        MEDIA_MAX_EDGE,
+        MEDIA_MAX_BYTES,
+        MEDIA_JPEG_QUALITY,
+    )?;
     let id = hex_sha256(&thumb);
     let relative = format!("{THUMBS_DIR}/{id}.jpg");
     let abs = thumb_abs_path(app, &id)?;
@@ -110,7 +118,8 @@ pub fn ensure_media_art(app: &AppHandle, art_id: &str, source: &[u8]) -> Option<
     if let Some(existing) = media_path_for_id(app, art_id) {
         return Some(existing);
     }
-    let media = make_sized_jpeg(source, MEDIA_MAX_EDGE, MEDIA_MAX_BYTES, MEDIA_JPEG_QUALITY).ok()?;
+    let media =
+        make_sized_jpeg(source, MEDIA_MAX_EDGE, MEDIA_MAX_BYTES, MEDIA_JPEG_QUALITY).ok()?;
     let abs = media_abs_path(app, art_id).ok()?;
     if let Some(parent) = abs.parent() {
         fs::create_dir_all(parent).ok()?;
@@ -132,11 +141,7 @@ pub fn prefer_media_artwork_url(cover_url: Option<&str>) -> Option<String> {
     if let Some(parent) = path.parent() {
         if parent.file_name().and_then(|n| n.to_str()) == Some(THUMBS_DIR) {
             if let Some(name) = path.file_name() {
-                let media = parent
-                    .parent()
-                    .unwrap_or(parent)
-                    .join(MEDIA_DIR)
-                    .join(name);
+                let media = parent.parent().unwrap_or(parent).join(MEDIA_DIR).join(name);
                 if media.is_file() {
                     return Some(media.to_string_lossy().into_owned());
                 }
@@ -154,15 +159,19 @@ pub fn resolve_thumb_abs(app: &AppHandle, relative_or_id: &str) -> Option<PathBu
     let app_dir = app.path().app_data_dir().ok()?;
     let cover_root = app_dir.join(COVER_ART_DIR);
 
-    let candidate = if relative_or_id.contains('/') || relative_or_id.contains('\\') {
-        cover_root.join(relative_or_id)
-    } else if relative_or_id.ends_with(".jpg")
+    // Already a relative path, or a bare filename with a known image
+    // extension — either way it is resolved straight under the cover root.
+    let candidate = if relative_or_id.contains('/')
+        || relative_or_id.contains('\\')
+        || relative_or_id.ends_with(".jpg")
         || relative_or_id.ends_with(".png")
         || relative_or_id.ends_with(".webp")
     {
         cover_root.join(relative_or_id)
     } else {
-        cover_root.join(THUMBS_DIR).join(format!("{relative_or_id}.jpg"))
+        cover_root
+            .join(THUMBS_DIR)
+            .join(format!("{relative_or_id}.jpg"))
     };
 
     if candidate.is_file() {
@@ -235,13 +244,6 @@ pub fn cleanup_legacy_track_covers(app: &AppHandle) {
             let _ = fs::remove_file(&path);
         }
     }
-}
-
-pub fn now_unix() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 fn thumb_abs_path(app: &AppHandle, art_id: &str) -> Result<PathBuf, String> {
@@ -321,15 +323,13 @@ pub fn migrate_data_url_to_thumb(
     let media_abs = cover_root.join(MEDIA_DIR).join(format!("{id}.jpg"));
     if !abs.is_file() {
         if let Some(parent) = abs.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create thumbs dir: {e}"))?;
+            fs::create_dir_all(parent).map_err(|e| format!("Failed to create thumbs dir: {e}"))?;
         }
         fs::write(&abs, &thumb).map_err(|e| format!("Failed to write thumb: {e}"))?;
     }
     if !media_abs.is_file() {
         if let Some(parent) = media_abs.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create media dir: {e}"))?;
+            fs::create_dir_all(parent).map_err(|e| format!("Failed to create media dir: {e}"))?;
         }
         let _ = fs::write(&media_abs, &media);
     }
@@ -362,7 +362,9 @@ fn downscale_for_ipc(
     max_bytes: usize,
 ) -> Result<(Vec<u8>, String), String> {
     let img = image::load_from_memory(&data).map_err(|e| e.to_string())?;
-    let scale = (max_bytes as f64 / data.len() as f64).sqrt().clamp(0.2, 0.9);
+    let scale = (max_bytes as f64 / data.len() as f64)
+        .sqrt()
+        .clamp(0.2, 0.9);
     let w = (img.width() as f64 * scale).round().max(128.0) as u32;
     let h = (img.height() as f64 * scale).round().max(128.0) as u32;
     let resized = img.resize(w, h, image::imageops::FilterType::Triangle);

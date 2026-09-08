@@ -1382,99 +1382,28 @@ export const dismissFolderSetup = (): Promise<void> =>
 /** Recursively scan a directory URI for audio files.
  *  - Android SAF `content://…/tree/…` → native DocumentsContract walk
  *    (`tauri-plugin-fs` readDir cannot list content:// trees).
- *  - Filesystem paths → `@tauri-apps/plugin-fs` readDir. */
+ *  - Filesystem paths → the Rust `scan_directory` walker, which applies the
+ *    same supported-extension filter used during indexing. Walking the
+ *    filesystem in Rust keeps the webview from needing `fs:scope` access to
+ *    arbitrary user directories. */
 export const scanDirectoryRecursive = async (
   dirUri: string,
 ): Promise<string[]> => {
   const trimmed = dirUri.trim();
-  if (trimmed.startsWith("content://")) {
-    await tauriInitialized;
-    if (!invokeFn) {
-      throw new Error(TAURI_UNAVAILABLE);
-    }
-    try {
-      return await invokeFn<string[]>("scan_saf_folder", { uri: trimmed });
-    } catch (err) {
-      throw new Error(
-        invokeErrorMessage(err, "Failed to scan the selected folder"),
-        { cause: err },
-      );
-    }
+  if (!trimmed.startsWith("content://")) {
+    return scanDirectory(trimmed);
   }
 
-  const { readDir } = await import("@tauri-apps/plugin-fs");
-  const results: string[] = [];
-  let rootError: unknown = null;
-  let readableDirs = 0;
-
-  const AUDIO_EXTENSIONS = new Set([
-    "mp3",
-    "flac",
-    "ogg",
-    "opus",
-    "wav",
-    "m4a",
-    "m4b",
-    "aac",
-    "aiff",
-    "alac",
-    "caf",
-    "mka",
-    "wma",
-    "weba",
-  ]);
-
-  const isAudioFile = (name: string): boolean => {
-    const dot = name.lastIndexOf(".");
-    if (dot < 0) return false;
-    const ext = name.slice(dot + 1).toLowerCase();
-    return AUDIO_EXTENSIONS.has(ext);
-  };
-
-  /** Build a child tree URI for SAF content:// URIs.
-   *  Parent: content://.../tree/primary%3AMusic
-   *  Child:  content://.../tree/primary%3AMusic%2Fdirname           */
-  const childTreeUri = (parentUri: string, childName: string): string =>
-    parentUri + "%2F" + encodeURIComponent(childName);
-
-  /** Build a child document URI (for files) from a SAF tree URI.
-   *  Parent tree: content://.../tree/primary%3AMusic
-   *  Child doc:   content://.../document/primary%3AMusic%2Ffile.mp3  */
-  const childDocUri = (parentUri: string, childName: string): string =>
-    parentUri.replace("/tree/", "/document/") +
-    "%2F" +
-    encodeURIComponent(childName);
-
-  const walk = async (uri: string, isRoot: boolean) => {
-    try {
-      const entries = await readDir(uri);
-      readableDirs += 1;
-      for (const entry of entries) {
-        if (!entry.name) continue;
-        if (entry.isDirectory) {
-          await walk(childTreeUri(uri, entry.name), false);
-        } else if (isAudioFile(entry.name)) {
-          results.push(childDocUri(uri, entry.name));
-        }
-      }
-    } catch (err) {
-      if (isRoot) {
-        rootError = err;
-      }
-      // Skip nested directories we can't read (permission denied, etc.)
-    }
-  };
-
-  await walk(trimmed, true);
-
-  if (rootError != null && readableDirs === 0) {
+  await tauriInitialized;
+  if (!invokeFn) {
+    throw new Error(TAURI_UNAVAILABLE);
+  }
+  try {
+    return await invokeFn<string[]>("scan_saf_folder", { uri: trimmed });
+  } catch (err) {
     throw new Error(
-      invokeErrorMessage(
-        rootError,
-        "Failed to read the selected folder (permission or unsupported URI)",
-      ),
+      invokeErrorMessage(err, "Failed to scan the selected folder"),
+      { cause: err },
     );
   }
-
-  return results;
 };

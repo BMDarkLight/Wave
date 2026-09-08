@@ -620,7 +620,7 @@ impl Library {
         let is_default = self
             .default_playlist_id_cache
             .get()
-            .map_or(false, |id| id == playlist_id);
+            .is_some_and(|id| id == playlist_id);
 
         let existing = {
             let connection = self.lock_connection()?;
@@ -702,7 +702,7 @@ impl Library {
         let is_default = self
             .default_playlist_id_cache
             .get()
-            .map_or(false, |id| id == playlist_id);
+            .is_some_and(|id| id == playlist_id);
 
         let mut connection = self.lock_connection()?;
         let tx = connection
@@ -789,7 +789,7 @@ impl Library {
         if self
             .default_playlist_id_cache
             .get()
-            .map_or(false, |id| id == playlist_id)
+            .is_some_and(|id| id == playlist_id)
         {
             let mut statement = connection
                 .prepare(&format!(
@@ -1261,7 +1261,7 @@ impl Library {
         let is_default = self
             .default_playlist_id_cache
             .get()
-            .map_or(false, |id| id == playlist_id);
+            .is_some_and(|id| id == playlist_id);
         let favorites_id = self.favorites_playlist_id()?;
         if favorites_id == playlist_id {
             return Err("Favorites cannot be cleared with clear playlist".to_string());
@@ -1443,7 +1443,7 @@ impl Library {
         let is_default = self
             .default_playlist_id_cache
             .get()
-            .map_or(false, |id| id == playlist_id);
+            .is_some_and(|id| id == playlist_id);
 
         let now = now_timestamp();
         let mut connection = self.lock_connection()?;
@@ -1569,7 +1569,7 @@ impl Library {
         if self
             .default_playlist_id_cache
             .get()
-            .map_or(false, |id| id == playlist_id)
+            .is_some_and(|id| id == playlist_id)
         {
             let mut statement = connection
                 .prepare("SELECT path FROM tracks ORDER BY path")
@@ -1945,7 +1945,10 @@ impl Library {
             ))
             .map_err(|error| format!("Failed to prepare artist search: {error}"))?;
         let artists = statement
-            .query_map(rusqlite::params_from_iter(args.iter()), row_to_artist_summary)
+            .query_map(
+                rusqlite::params_from_iter(args.iter()),
+                row_to_artist_summary,
+            )
             .map_err(|error| format!("Failed to execute artist search: {error}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("Failed to read artist search results: {error}"))?;
@@ -2164,12 +2167,7 @@ impl Library {
     }
 
     /// Update a track's cover art from raw image bytes (stored as shared thumb).
-    pub fn set_track_cover(
-        &self,
-        track_id: &str,
-        image_data: &[u8],
-        mime_type: &str,
-    ) -> Result<(), String> {
+    pub fn set_track_cover(&self, track_id: &str, image_data: &[u8]) -> Result<(), String> {
         let Some(app) = &self.app_handle else {
             return Err("Cover update requires app handle".into());
         };
@@ -2177,7 +2175,6 @@ impl Library {
             app,
             crate::cover_art::ExtractedCoverArt {
                 data: image_data.to_vec(),
-                mime: mime_type.to_string(),
             },
         )?;
         let connection = self.write_connection();
@@ -4509,7 +4506,7 @@ fn matched_fields_for(track: &Track, query: &str) -> Vec<String> {
     if check(&track.name) && !fields.iter().any(|f| f == "title") {
         fields.push("name".into());
     }
-    if track.lyrics.as_deref().is_some_and(|lyrics| check(lyrics)) {
+    if track.lyrics.as_deref().is_some_and(check) {
         fields.push("lyrics".into());
     }
     if fields.is_empty() {
@@ -5143,6 +5140,7 @@ mod tests {
     // ── Album / artist browsing & querying ──────────────────────────────────
 
     /// Build a `Track` with customizable album/artist metadata for browse tests.
+    #[allow(clippy::too_many_arguments)]
     fn track_with(
         id: &str,
         path: &str,
@@ -5390,7 +5388,10 @@ mod tests {
         let hits = library.search_albums("greatest", None).expect("greatest");
         assert!(hits.iter().all(|a| a.name == "Greatest Hits"));
 
-        assert!(library.search_albums("   ", None).expect("blank").is_empty());
+        assert!(library
+            .search_albums("   ", None)
+            .expect("blank")
+            .is_empty());
         assert!(library
             .search_albums("nothing-here", None)
             .expect("miss")

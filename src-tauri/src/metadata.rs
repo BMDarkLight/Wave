@@ -390,10 +390,7 @@ fn apply_extracted_cover(
     if let Some(app_handle) = app {
         match crate::cover_art::save_album_art_thumb(
             app_handle,
-            crate::cover_art::ExtractedCoverArt {
-                data,
-                mime: mime.to_string(),
-            },
+            crate::cover_art::ExtractedCoverArt { data },
         ) {
             Ok(saved) => {
                 track.album_art_id = Some(saved.id);

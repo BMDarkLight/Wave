@@ -8,6 +8,7 @@
 
 //! Android folder picker using Storage Access Framework (SAF) via JNI.
 
+#[cfg(target_os = "android")]
 use tauri::AppHandle;
 
 /// Result from the folder picker.
@@ -237,10 +238,4 @@ pub fn pick_folder(_app: &AppHandle) -> Result<FolderPickerResult, String> {
         uri: uri_string,
         display_name,
     })
-}
-
-/// Fallback for non-Android targets.
-#[cfg(not(target_os = "android"))]
-pub fn pick_folder(_app: &AppHandle) -> Result<FolderPickerResult, String> {
-    Err("Folder picker is only available on Android".to_string())
 }

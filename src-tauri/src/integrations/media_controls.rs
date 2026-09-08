@@ -204,8 +204,8 @@ impl MediaBridge {
                 hwnd: None,
             };
 
-            let mut controls =
-                MediaControls::new(config).map_err(|e| format!("Failed to init media controls: {e:?}"))?;
+            let mut controls = MediaControls::new(config)
+                .map_err(|e| format!("Failed to init media controls: {e:?}"))?;
 
             let app_handle = app.clone();
             controls
@@ -232,10 +232,8 @@ impl MediaBridge {
                             return;
                         }
                         MediaControlEvent::SetPosition(pos) => {
-                            let _ = app_handle.emit(
-                                "media-control-set-position",
-                                pos.0.as_secs_f64(),
-                            );
+                            let _ =
+                                app_handle.emit("media-control-set-position", pos.0.as_secs_f64());
                             return;
                         }
                         MediaControlEvent::OpenUri(_)
@@ -258,9 +256,7 @@ impl MediaBridge {
         #[cfg(target_os = "windows")]
         {
             let preferred = crate::cover_art::prefer_media_artwork_url(meta.cover_url.as_deref());
-            let cover_path = self
-                .cover_art_cache
-                .resolve_path(preferred.as_deref());
+            let cover_path = self.cover_art_cache.resolve_path(preferred.as_deref());
             let cover_ref = cover_path.as_ref().and_then(|p| p.to_str());
             self.backend.set_metadata(meta, cover_ref);
         }
@@ -519,7 +515,6 @@ impl MediaBridgeState {
                 Ok(result) => self.store_bridge(result),
                 Err(_) => tracing::warn!("OS media controls init timed out — will retry"),
             }
-            return;
         }
 
         #[cfg(target_os = "android")]
@@ -562,7 +557,6 @@ impl MediaBridgeState {
                 return;
             }
             let _ = rx.recv_timeout(Duration::from_secs(2));
-            return;
         }
 
         #[cfg(any(
@@ -603,7 +597,9 @@ impl MediaBridgeState {
     }
 
     pub fn set_playback_mode(&self, shuffle_enabled: bool, repeat_mode: String) {
-        self.run_on_ui_thread(move |bridge| bridge.set_playback_mode(shuffle_enabled, &repeat_mode));
+        self.run_on_ui_thread(move |bridge| {
+            bridge.set_playback_mode(shuffle_enabled, &repeat_mode)
+        });
     }
 
     pub fn update_position(&self, position_secs: f64, playing: bool) {

@@ -8,7 +8,13 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import {
   clearPlaylistById,
   deletePlaylist,
@@ -97,14 +103,20 @@ export function usePlaylistManager({
     name: string;
   } | null>(null);
 
-  const [playlistDialog, setPlaylistDialog] = useState<PlaylistDialogState | null>(null);
+  const [playlistDialog, setPlaylistDialog] =
+    useState<PlaylistDialogState | null>(null);
   const [playlistNameInput, setPlaylistNameInput] = useState("");
-  const [playlistSyncFolder, setPlaylistSyncFolderInput] = useState<string | null>(null);
-  const [playlistDialogError, setPlaylistDialogError] = useState<string | null>(null);
+  const [playlistSyncFolder, setPlaylistSyncFolderInput] = useState<
+    string | null
+  >(null);
+  const [playlistDialogError, setPlaylistDialogError] = useState<string | null>(
+    null,
+  );
   const playlistNameInputRef = useRef<HTMLInputElement>(null);
   const playlistLoadSeqRef = useRef(0);
 
-  const selectedPlaylist = playlists.find((p) => p.id === selectedPlaylistId) ?? null;
+  const selectedPlaylist =
+    playlists.find((p) => p.id === selectedPlaylistId) ?? null;
 
   const sortedPlaylists = useMemo(() => {
     const priority = [LIBRARY_PLAYLIST_NAME, "Favorites"];
@@ -124,7 +136,10 @@ export function usePlaylistManager({
     [playlists],
   );
   const userPlaylists = useMemo(
-    () => sortedPlaylists.filter((p) => !isLibraryPlaylistName(p.name) && p.name !== "Favorites"),
+    () =>
+      sortedPlaylists.filter(
+        (p) => !isLibraryPlaylistName(p.name) && p.name !== "Favorites",
+      ),
     [sortedPlaylists],
   );
 
@@ -138,7 +153,10 @@ export function usePlaylistManager({
     const seq = ++playlistLoadSeqRef.current;
     const tracks = await getPlaylistTracksById(playlistId);
     // Ignore stale responses from a prior playlist selection.
-    if (seq !== playlistLoadSeqRef.current || selectedPlaylistIdRef.current !== playlistId) {
+    if (
+      seq !== playlistLoadSeqRef.current ||
+      selectedPlaylistIdRef.current !== playlistId
+    ) {
       return false;
     }
     setPlaylist(tracks);
@@ -148,7 +166,9 @@ export function usePlaylistManager({
 
   // Resolve the default playlist ID from the playlists list.
   const getDefaultPlaylistId = (list: PlaylistInfo[]): string | null => {
-    return (list.find((p) => isLibraryPlaylistName(p.name)) ?? list[0])?.id ?? null;
+    return (
+      (list.find((p) => isLibraryPlaylistName(p.name)) ?? list[0])?.id ?? null
+    );
   };
 
   const handleClearPlaylist = async () => {
@@ -183,7 +203,10 @@ export function usePlaylistManager({
     setPlaylistDialog({ mode: "create" });
   };
 
-  const openRenamePlaylistDialog = (playlistId: string, currentName: string) => {
+  const openRenamePlaylistDialog = (
+    playlistId: string,
+    currentName: string,
+  ) => {
     setMobileNavOpen(false);
     setPlaylistNameInput(currentName);
     setPlaylistSyncFolderInput(null);
@@ -252,12 +275,17 @@ export function usePlaylistManager({
     }
   };
 
-  const handleExportPlaylistById = async (playlistId: string, playlistName: string) => {
+  const handleExportPlaylistById = async (
+    playlistId: string,
+    playlistName: string,
+  ) => {
     try {
       setError(null);
       const path = await savePlaylistDialog(playlistName);
       if (!path) return;
-      const exportFormat = path.toLowerCase().endsWith(".json") ? "json" : "m3u";
+      const exportFormat = path.toLowerCase().endsWith(".json")
+        ? "json"
+        : "m3u";
       await exportPlaylist(playlistId, path, exportFormat);
     } catch (err) {
       setError(formatInvokeError(err, `Failed to export "${playlistName}"`));

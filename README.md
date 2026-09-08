@@ -11,7 +11,7 @@ catalogs — in a single portable app built on Rust + Tauri + React.
 [![Android Build](https://github.com/BMDarkLight/Wave/actions/workflows/android.yml/badge.svg)](https://github.com/BMDarkLight/Wave/actions/workflows/android.yml)
 [![Rust](https://github.com/BMDarkLight/Wave/actions/workflows/rust.yml/badge.svg)](https://github.com/BMDarkLight/Wave/actions/workflows/rust.yml)
 [![Frontend](https://github.com/BMDarkLight/Wave/actions/workflows/frontend.yml/badge.svg)](https://github.com/BMDarkLight/Wave/actions/workflows/frontend.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 
 <img src="docs/screenshots/desktop-home.png" alt="Wave on desktop — Home" width="100%">
 

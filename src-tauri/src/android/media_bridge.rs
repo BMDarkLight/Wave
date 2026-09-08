@@ -84,30 +84,28 @@ pub fn start_worker(app: AppHandle) {
     }
     std::thread::Builder::new()
         .name("wave-android-media".into())
-        .spawn(move || {
-            loop {
-                let action = {
-                    let mut queue = match PENDING.lock() {
+        .spawn(move || loop {
+            let action = {
+                let mut queue = match PENDING.lock() {
+                    Ok(q) => q,
+                    Err(_) => break,
+                };
+                while queue.actions.is_empty() {
+                    queue = match PENDING_CV.wait(queue) {
                         Ok(q) => q,
-                        Err(_) => break,
+                        Err(_) => return,
                     };
-                    while queue.actions.is_empty() {
-                        queue = match PENDING_CV.wait(queue) {
-                            Ok(q) => q,
-                            Err(_) => return,
-                        };
-                    }
-                    queue.actions.pop_front().map(|(a, _)| a)
-                };
-                let Some(action) = action else {
-                    continue;
-                };
-                if !NATIVES_READY.load(Ordering::Acquire) {
-                    try_install();
                 }
-                if let Err(error) = commands::handle_native_media_action(&app, &action) {
-                    tracing::warn!("Android native media action '{action}' failed: {error}");
-                }
+                queue.actions.pop_front().map(|(a, _)| a)
+            };
+            let Some(action) = action else {
+                continue;
+            };
+            if !NATIVES_READY.load(Ordering::Acquire) {
+                try_install();
+            }
+            if let Err(error) = commands::handle_native_media_action(&app, &action) {
+                tracing::warn!("Android native media action '{action}' failed: {error}");
             }
         })
         .ok();
@@ -145,7 +143,11 @@ fn try_install() {
         return;
     }
 
-    let class = match load_app_class(&mut env, &activity, "app.bmdarklight.wave.MediaNativeBridge") {
+    let class = match load_app_class(
+        &mut env,
+        &activity,
+        "app.bmdarklight.wave.MediaNativeBridge",
+    ) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!("MediaNativeBridge class load failed: {e}");

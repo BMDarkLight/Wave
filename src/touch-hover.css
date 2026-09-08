@@ -222,7 +222,9 @@ html.wave-no-hover .lyrics-line:hover:not(:disabled):not(.active) {
   color: #8a8a8a !important;
 }
 
-html.wave-no-hover .mnp-lyrics-scroll .lyrics-line:hover:not(:disabled):not(.active) {
+html.wave-no-hover
+  .mnp-lyrics-scroll
+  .lyrics-line:hover:not(:disabled):not(.active) {
   color: rgba(255, 255, 255, 0.4) !important;
 }
 
@@ -230,7 +232,9 @@ html.wave-no-hover .lyrics-line:active:not(:disabled):not(.active) {
   color: rgba(255, 255, 255, 0.85) !important;
 }
 
-html.wave-no-hover .mnp-lyrics-scroll .lyrics-line:active:not(:disabled):not(.active) {
+html.wave-no-hover
+  .mnp-lyrics-scroll
+  .lyrics-line:active:not(:disabled):not(.active) {
   color: rgba(255, 255, 255, 0.7) !important;
 }
 
@@ -271,7 +275,9 @@ html.wave-no-hover .control-btn:active:not(:disabled) {
 
 html.wave-no-hover .volume-icon:hover,
 html.wave-no-hover .range-slider:hover::-webkit-slider-thumb,
-html.wave-no-hover .eq-crossfade input[type="range"]:hover::-webkit-slider-thumb,
+html.wave-no-hover
+  .eq-crossfade
+  input[type="range"]:hover::-webkit-slider-thumb,
 html.wave-no-hover .eq-band input[type="range"]:hover::-webkit-slider-thumb {
   transform: none !important;
 }

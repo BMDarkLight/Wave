@@ -25,7 +25,8 @@ const getTrackTitle = (track?: Track | null) => {
   return "Unknown";
 };
 
-const UNKNOWN_RE = /^(unknown(\s+artist)?|various(\s+artists)?|untitled|unknown album)?$/i;
+const UNKNOWN_RE =
+  /^(unknown(\s+artist)?|various(\s+artists)?|untitled|unknown album)?$/i;
 
 function hasRealValue(value?: string | null): boolean {
   const trimmed = value?.trim();
@@ -48,7 +49,8 @@ function trackMetadataScore(track: Track): number {
 function albumMetadataScore(album: AlbumSummary): number {
   let score = 0;
   if (hasRealValue(album.name) && album.name !== "Unknown Album") score += 2;
-  if (hasRealValue(album.album_artist) || hasRealValue(album.artist)) score += 3;
+  if (hasRealValue(album.album_artist) || hasRealValue(album.artist))
+    score += 3;
   if (album.cover_art_data_url || album.cover_track_path) score += 4;
   return score;
 }
@@ -231,7 +233,11 @@ export default function HomePage({
   const loadSuggestions = async (nextSeed: number) => {
     try {
       const curated = await getHomeSuggestions();
-      if (curated.featured || curated.mix.length > 0 || curated.more.length > 0) {
+      if (
+        curated.featured ||
+        curated.mix.length > 0 ||
+        curated.more.length > 0
+      ) {
         setSuggestions(curated);
         writeHomeCache({
           libraryPlaylistId,
@@ -378,7 +384,11 @@ export default function HomePage({
       {featured && (
         <section className="home-featured" aria-label="Featured track">
           <div className="home-featured-art">
-            <TrackCover track={featured} className="home-featured-cover" preferFull />
+            <TrackCover
+              track={featured}
+              className="home-featured-cover"
+              preferFull
+            />
             <div className="home-featured-glow" aria-hidden />
           </div>
           <div className="home-featured-copy">
@@ -436,20 +446,26 @@ export default function HomePage({
                 className="home-track-card"
                 type="button"
                 onClick={() =>
-                  onPlayTrack(
-                    track.path,
-                    [track, ...playQueue.filter((t) => t.path !== track.path)],
-                  )
+                  onPlayTrack(track.path, [
+                    track,
+                    ...playQueue.filter((t) => t.path !== track.path),
+                  ])
                 }
               >
                 <div className="home-track-card-art">
-                  <TrackCover track={track} className="home-card-cover" preferFull />
+                  <TrackCover
+                    track={track}
+                    className="home-card-cover"
+                    preferFull
+                  />
                   <span className="home-card-play" aria-hidden>
                     <BiPlay />
                   </span>
                 </div>
                 <span className="home-card-title">{getTrackTitle(track)}</span>
-                <span className="home-card-meta">{track.artist || "Unknown"}</span>
+                <span className="home-card-meta">
+                  {track.artist || "Unknown"}
+                </span>
               </button>
             ))}
           </div>
@@ -472,9 +488,7 @@ export default function HomePage({
                 key={`${album.name}-${album.album_artist ?? ""}`}
                 className="home-track-card"
                 type="button"
-                onClick={() =>
-                  onOpenAlbum(album.name, album.album_artist)
-                }
+                onClick={() => onOpenAlbum(album.name, album.album_artist)}
               >
                 <div className="home-track-card-art">
                   <AlbumCover album={album} className="home-card-cover" />
@@ -506,15 +520,17 @@ export default function HomePage({
                 className="home-suggest-row"
                 type="button"
                 onClick={() =>
-                  onPlayTrack(
-                    track.path,
-                    [track, ...playQueue.filter((t) => t.path !== track.path)],
-                  )
+                  onPlayTrack(track.path, [
+                    track,
+                    ...playQueue.filter((t) => t.path !== track.path),
+                  ])
                 }
               >
                 <TrackCover track={track} className="home-suggest-thumb" />
                 <span className="home-suggest-text">
-                  <span className="home-card-title">{getTrackTitle(track)}</span>
+                  <span className="home-card-title">
+                    {getTrackTitle(track)}
+                  </span>
                   <span className="home-card-meta">
                     {track.artist || "Unknown"}
                     {track.album ? ` · ${track.album}` : ""}
@@ -530,7 +546,10 @@ export default function HomePage({
       )}
 
       {discoveryRow.length > 0 && (
-        <section className="home-section" aria-label="Artists you might also like">
+        <section
+          className="home-section"
+          aria-label="Artists you might also like"
+        >
           <div className="home-section-head">
             <h3>You might also like</h3>
             <p>Similar artists based on what you listen to</p>
@@ -538,7 +557,8 @@ export default function HomePage({
           <div className="home-card-row">
             {discoveryRow.map((artist) => {
               const key = `${artist.name}-${artist.similar_to}`;
-              const showCover = Boolean(artist.cover_url) && !brokenCovers.has(key);
+              const showCover =
+                Boolean(artist.cover_url) && !brokenCovers.has(key);
               return (
                 <div key={key} className="home-discovery-card">
                   <div className="home-discovery-art">
@@ -560,7 +580,9 @@ export default function HomePage({
                     )}
                   </div>
                   <span className="home-card-title">{artist.name}</span>
-                  <span className="home-card-meta">Similar to {artist.similar_to}</span>
+                  <span className="home-card-meta">
+                    Similar to {artist.similar_to}
+                  </span>
                 </div>
               );
             })}

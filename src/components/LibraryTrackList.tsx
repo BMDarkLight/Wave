@@ -29,7 +29,11 @@ import Artwork from "./Artwork";
 import VirtualizedList from "./VirtualizedList";
 import type { ContextMenuAnchor } from "./ContextMenu";
 import { formatTime } from "../utils/format";
-import { LIBRARY_PLAYLIST_NAME, getTrackTitle, isLibraryPlaylistName } from "../utils/track";
+import {
+  LIBRARY_PLAYLIST_NAME,
+  getTrackTitle,
+  isLibraryPlaylistName,
+} from "../utils/track";
 import type { PlaybackState, PlaylistInfo, Track } from "../utils/player";
 
 export type SortColumn = "index" | "title" | "album";
@@ -417,7 +421,9 @@ export default function LibraryTrackList({
                     <div className="track-title-cell">
                       <Artwork
                         track={track}
-                        fallback={getTrackTitle(track).slice(0, 1).toUpperCase()}
+                        fallback={getTrackTitle(track)
+                          .slice(0, 1)
+                          .toUpperCase()}
                         className="track-thumb"
                       />
                       <div>
@@ -443,16 +449,23 @@ export default function LibraryTrackList({
                                   title="Has lyrics"
                                   aria-label="Has lyrics"
                                 >
-                                  <BiAlignLeft className="track-meta-icon" aria-hidden />
+                                  <BiAlignLeft
+                                    className="track-meta-icon"
+                                    aria-hidden
+                                  />
                                 </span>
                               ) : null}
-                              {track.cover_art_source === "cover-art-archive" ? (
+                              {track.cover_art_source ===
+                              "cover-art-archive" ? (
                                 <span
                                   className="track-meta-icon-wrap"
                                   title="Online cover"
                                   aria-label="Online cover"
                                 >
-                                  <BiImage className="track-meta-icon" aria-hidden />
+                                  <BiImage
+                                    className="track-meta-icon"
+                                    aria-hidden
+                                  />
                                 </span>
                               ) : null}
                             </span>
@@ -465,7 +478,10 @@ export default function LibraryTrackList({
                       onClick={(e) => {
                         e.stopPropagation();
                         if (window.innerWidth <= 900) return;
-                        onOpenAlbum(track.album, track.album_artist || track.artist);
+                        onOpenAlbum(
+                          track.album,
+                          track.album_artist || track.artist,
+                        );
                       }}
                     >
                       {track.album}

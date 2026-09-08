@@ -207,7 +207,7 @@ pub fn materialize_audio_source(app: &AppHandle, source: &str) -> Result<PathBuf
 
     let imports = imports_dir(app)?;
     let mut ext = guess_extension(trimmed);
-    let staging = imports.join(format!("staging-{}.{}", Uuid::new_v4(), &ext));
+    let staging = imports.join(format!("staging-{}.{}", Uuid::new_v4(), ext));
     copy_via_fs_plugin(app, trimmed, &staging)?;
 
     if !is_supported_audio_file(&staging) {
@@ -219,9 +219,7 @@ pub fn materialize_audio_source(app: &AppHandle, source: &str) -> Result<PathBuf
 
     if !is_playable_audio_file(&staging) {
         let _ = fs::remove_file(&staging);
-        return Err(format!(
-            "Could not read audio from source: {trimmed}"
-        ));
+        return Err(format!("Could not read audio from source: {trimmed}"));
     }
 
     if ext == "bin" {
@@ -238,27 +236,13 @@ pub fn materialize_audio_source(app: &AppHandle, source: &str) -> Result<PathBuf
         return Ok(final_path);
     }
 
-    fs::rename(&staging, &final_path).or_else(|_| {
-        fs::copy(&staging, &final_path)
-            .map(|_| ())
-            .and_then(|_| fs::remove_file(&staging))
-    }).map_err(|e| format!("Failed to finalize import {}: {e}", final_path.display()))?;
+    fs::rename(&staging, &final_path)
+        .or_else(|_| {
+            fs::copy(&staging, &final_path)
+                .map(|_| ())
+                .and_then(|_| fs::remove_file(&staging))
+        })
+        .map_err(|e| format!("Failed to finalize import {}: {e}", final_path.display()))?;
 
     Ok(final_path)
-}
-
-/// Materialize many audio sources; return successes and per-source errors.
-pub fn materialize_audio_sources(
-    app: &AppHandle,
-    sources: &[String],
-) -> (Vec<String>, Vec<String>) {
-    let mut ok = Vec::new();
-    let mut errors = Vec::new();
-    for source in sources {
-        match materialize_audio_source(app, source) {
-            Ok(path) => ok.push(path.to_string_lossy().into_owned()),
-            Err(err) => errors.push(format!("{source}: {err}")),
-        }
-    }
-    (ok, errors)
 }

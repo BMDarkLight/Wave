@@ -51,7 +51,9 @@ export default function CreatePlaylistDialog({
         }}
       >
         <div className="modal-header">
-          <h2>{dialog.mode === "create" ? "Create playlist" : "Rename playlist"}</h2>
+          <h2>
+            {dialog.mode === "create" ? "Create playlist" : "Rename playlist"}
+          </h2>
           <button
             className="modal-close-btn"
             onClick={onClose}

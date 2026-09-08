@@ -37,16 +37,56 @@ pub const EQ_BANDS_HZ: [f32; 10] = [
 
 /// Named EQ presets indexed by the band labels below.
 pub const EQ_PRESETS: &[(&str, &str, [f32; 10])] = &[
-    ("flat",       "Flat (all 0 dB)",             [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-    ("bass-boost", "Bass boost",                  [4.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-    ("bass-cut",   "Bass cut",                    [-4.0, -4.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-    ("rock",       "Rock (smile curve)",          [3.0, 2.0, 0.0, -1.0, -1.0, 0.0, 1.0, 2.0, 3.0, 2.0]),
-    ("pop",        "Pop (boosted mids)",           [1.0, 1.0, 2.0, 3.0, 3.0, 2.0, 1.0, 1.0, 1.0, 1.0]),
-    ("jazz",       "Jazz (warm, gentle highs)",    [2.0, 2.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
-    ("classical",  "Classical (flat, slight air)", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 2.0]),
-    ("vocal",      "Vocal (cut lows, boost mids)", [-2.0, -2.0, -1.0, 1.0, 3.0, 4.0, 3.0, 1.0, -1.0, -2.0]),
-    ("loudness",   "Loudness (low-volume curve)", [5.0, 4.0, 2.0, 0.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0]),
-    ("headphones", "Headphones (subtle crossfeed)", [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0]),
+    (
+        "flat",
+        "Flat (all 0 dB)",
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ),
+    (
+        "bass-boost",
+        "Bass boost",
+        [4.0, 4.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ),
+    (
+        "bass-cut",
+        "Bass cut",
+        [-4.0, -4.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ),
+    (
+        "rock",
+        "Rock (smile curve)",
+        [3.0, 2.0, 0.0, -1.0, -1.0, 0.0, 1.0, 2.0, 3.0, 2.0],
+    ),
+    (
+        "pop",
+        "Pop (boosted mids)",
+        [1.0, 1.0, 2.0, 3.0, 3.0, 2.0, 1.0, 1.0, 1.0, 1.0],
+    ),
+    (
+        "jazz",
+        "Jazz (warm, gentle highs)",
+        [2.0, 2.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+    ),
+    (
+        "classical",
+        "Classical (flat, slight air)",
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 2.0],
+    ),
+    (
+        "vocal",
+        "Vocal (cut lows, boost mids)",
+        [-2.0, -2.0, -1.0, 1.0, 3.0, 4.0, 3.0, 1.0, -1.0, -2.0],
+    ),
+    (
+        "loudness",
+        "Loudness (low-volume curve)",
+        [5.0, 4.0, 2.0, 0.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0],
+    ),
+    (
+        "headphones",
+        "Headphones (subtle crossfeed)",
+        [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0],
+    ),
 ];
 
 /// Serializable EQ preset file format.
@@ -198,7 +238,8 @@ impl Biquad {
     }
 
     fn process(&mut self, x: f32) -> f32 {
-        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2 - self.a1 * self.y1
+        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
+            - self.a1 * self.y1
             - self.a2 * self.y2;
         self.x2 = self.x1;
         self.x1 = x;
@@ -724,7 +765,9 @@ impl<S: Source<Item = f32>> Iterator for VolumeGain<S> {
     fn next(&mut self) -> Option<f32> {
         let gain = f32::from_bits(self.gain.load(std::sync::atomic::Ordering::Relaxed))
             .clamp(0.0, MAX_NORMALIZATION_GAIN);
-        self.inner.next().map(|sample| (sample * gain).clamp(-1.0, 1.0))
+        self.inner
+            .next()
+            .map(|sample| (sample * gain).clamp(-1.0, 1.0))
     }
 }
 

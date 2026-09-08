@@ -180,7 +180,9 @@ export function useAndroidBackTrap({
     browseDepth: browseStackLength,
   };
 
-  const countHistoryLayers = (s: OverlaySnapshot = overlaySnapshotRef.current) => {
+  const countHistoryLayers = (
+    s: OverlaySnapshot = overlaySnapshotRef.current,
+  ) => {
     let layers = 0;
     if (s.showFolderSetup) layers++;
     if (s.menuTrackPath) layers++;

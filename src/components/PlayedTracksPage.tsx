@@ -34,13 +34,7 @@ const getTrackTitle = (track?: Track | null) => {
   return "Unknown";
 };
 
-const Artwork = ({
-  track,
-  className,
-}: {
-  track: Track;
-  className: string;
-}) => {
+const Artwork = ({ track, className }: { track: Track; className: string }) => {
   const [src, setSrc] = useState<string | null>(null);
   const fallback = getTrackTitle(track).slice(0, 1).toUpperCase();
 

@@ -227,7 +227,9 @@ export default function AlbumPage({
                     <div className="track-title-cell">
                       <Artwork
                         track={track}
-                        fallback={getTrackTitle(track).slice(0, 1).toUpperCase()}
+                        fallback={getTrackTitle(track)
+                          .slice(0, 1)
+                          .toUpperCase()}
                         className="track-thumb"
                       />
                       <div>

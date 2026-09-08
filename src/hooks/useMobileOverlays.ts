@@ -54,15 +54,20 @@ export function useMobileOverlays({
   const [mobilePlayerKey, setMobilePlayerKey] = useState(0);
   const mobilePlayerOpenRef = useRef(false);
   const mobilePlayerClosingRef = useRef(false);
-  const mobilePlayerCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [mobilePlayerView, setMobilePlayerView] = useState<MobileNowPlayingView>("cover");
+  const mobilePlayerCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const [mobilePlayerView, setMobilePlayerView] =
+    useState<MobileNowPlayingView>("cover");
   const [mobilePlayerMenuOpen, setMobilePlayerMenuOpen] = useState(false);
 
   // Settings overlay on narrow layouts; desktop uses mainView === "settings".
   const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
   const [mobileSettingsClosing, setMobileSettingsClosing] = useState(false);
   const mobileSettingsClosingRef = useRef(false);
-  const mobileSettingsCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mobileSettingsCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const forceCloseMobileSettings = () => {
     if (mobileSettingsCloseTimer.current) {

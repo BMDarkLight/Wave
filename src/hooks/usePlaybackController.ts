@@ -73,13 +73,16 @@ export function usePlaybackController({
   loadPlaylists: () => Promise<PlaylistInfo[]>;
   loadPlaylistTracks: (playlistId: string) => Promise<boolean>;
   favoritePaths: Set<string>;
-  setFavoritePaths: (updater: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
+  setFavoritePaths: (
+    updater: Set<string> | ((prev: Set<string>) => Set<string>),
+  ) => void;
   setError: (message: string | null) => void;
   setMenuTrackPath: (path: string | null) => void;
   setAddToPlaylistTrack: (path: string | null) => void;
   onNoTrackFallback: () => void;
 }) {
-  const [playbackState, setPlaybackState] = useState<PlaybackState>(emptyPlaybackState);
+  const [playbackState, setPlaybackState] =
+    useState<PlaybackState>(emptyPlaybackState);
   const [seekValue, setSeekValue] = useState(0);
   const [volumeValue, setVolumeValue] = useState(0.8);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>({
@@ -93,7 +96,8 @@ export function usePlaybackController({
   });
   const [showQueue, setShowQueue] = useState(false);
   const [queueMenuIndex, setQueueMenuIndex] = useState<number | null>(null);
-  const [queueMenuAnchor, setQueueMenuAnchor] = useState<ContextMenuAnchor | null>(null);
+  const [queueMenuAnchor, setQueueMenuAnchor] =
+    useState<ContextMenuAnchor | null>(null);
 
   // Android uses system volume — keep Wave at 100% always.
   useEffect(() => {
@@ -108,7 +112,9 @@ export function usePlaybackController({
       (track) => track.path === playbackState.current_path,
     );
     if (fromQueue) return fromQueue;
-    const fromPlaylist = playlist.find((track) => track.path === playbackState.current_path);
+    const fromPlaylist = playlist.find(
+      (track) => track.path === playbackState.current_path,
+    );
     return fromPlaylist ?? null;
   }, [playbackState.current_path, queueData.tracks, playlist]);
 
@@ -137,7 +143,9 @@ export function usePlaybackController({
     // the live notification / FGS and causes flicker + empty "wave" cards during
     // startup and folder sync. Backend stop/auto-advance already call clear.
     if (state.current_path) {
-      updateMediaPosition(state.position_seconds, state.is_playing).catch(console.error);
+      updateMediaPosition(state.position_seconds, state.is_playing).catch(
+        console.error,
+      );
     }
   };
 
@@ -264,7 +272,8 @@ export function usePlaybackController({
         const fromIndex = sortedPlaylist.findIndex(
           (track) => track.path === playbackState.current_path,
         );
-        const nextIndex = fromIndex >= 0 ? (fromIndex + 1) % sortedPlaylist.length : 0;
+        const nextIndex =
+          fromIndex >= 0 ? (fromIndex + 1) % sortedPlaylist.length : 0;
         await playTrackFromSpecificPlaylist(
           selectedPlaylistId,
           nextIndex,
@@ -308,12 +317,20 @@ export function usePlaybackController({
       if (!(target instanceof HTMLElement)) return false;
       const tag = target.tagName;
       return (
-        tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        target.isContentEditable
       );
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey || isEditableTarget(event.target))
+      if (
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        isEditableTarget(event.target)
+      )
         return;
 
       if (event.code === "Space" || event.key === " ") {
@@ -328,7 +345,9 @@ export function usePlaybackController({
         event.preventDefault();
         const delta = event.key === "ArrowLeft" ? -5 : 5;
         const next = Math.max(0, position + delta);
-        void handleSeekRef.current(duration > 0 ? Math.min(duration, next) : next);
+        void handleSeekRef.current(
+          duration > 0 ? Math.min(duration, next) : next,
+        );
       }
     };
 
@@ -468,7 +487,11 @@ export function usePlaybackController({
   const handleCycleRepeat = async () => {
     try {
       const next =
-        playbackMode.repeat === "off" ? "all" : playbackMode.repeat === "all" ? "one" : "off";
+        playbackMode.repeat === "off"
+          ? "all"
+          : playbackMode.repeat === "all"
+            ? "one"
+            : "off";
       await setRepeat(next);
       await loadPlaybackMode();
     } catch (err) {

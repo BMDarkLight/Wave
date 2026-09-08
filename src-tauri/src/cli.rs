@@ -476,12 +476,10 @@ fn format_duration(secs: u64) -> String {
 
 fn truncate(s: &str, max: usize) -> String {
     let mut idx = 0;
-    let mut count = 0;
-    for c in s.chars() {
+    for (count, c) in s.chars().enumerate() {
         if count >= max.saturating_sub(1) {
             return format!("{}…", &s[..idx]);
         }
-        count += 1;
         idx += c.len_utf8();
     }
     s.to_string()
@@ -589,9 +587,7 @@ fn cmd_tracks_list(playlist_id: Option<String>) {
             .unwrap();
         let cover_root = library.cover_root().to_path_buf();
         let rows = stmt
-            .query_map([], |row| {
-                crate::library::row_to_track(row, &cover_root)
-            })
+            .query_map([], |row| crate::library::row_to_track(row, &cover_root))
             .map_err(|e| format!("Failed to query tracks: {e}"))
             .unwrap();
         let tracks: Vec<Track> = rows
@@ -660,7 +656,7 @@ fn cmd_tracks_info(track_id: String) {
     };
     // Try library first, then extract directly
     let track = library
-        .get_tracks_by_paths(&[path.clone()])
+        .get_tracks_by_paths(std::slice::from_ref(&path))
         .ok()
         .and_then(|v| v.into_iter().next().flatten())
         .or_else(|| extract_track(None, &path).ok());
@@ -682,11 +678,7 @@ fn cmd_tracks_query(query: String) {
                 println!("No tracks matching \"{query}\".");
                 return;
             }
-            println!(
-                "Found {} track(s) matching \"{}\":",
-                tracks.len(),
-                query
-            );
+            println!("Found {} track(s) matching \"{}\":", tracks.len(), query);
             print_track_header();
             for track in &tracks {
                 print_track(track);
@@ -842,7 +834,9 @@ fn cmd_playlists_import(file: String, name: Option<String>) {
     let result = match ext.as_str() {
         "json" => library.import_playlist_json(&file, name.as_deref()),
         "m3u" | "m3u8" => library.import_playlist_m3u(&file, name.as_deref()),
-        _ => Err(format!("Unsupported playlist format: .{ext} (use .m3u, .m3u8, or .json)")),
+        _ => Err(format!(
+            "Unsupported playlist format: .{ext} (use .m3u, .m3u8, or .json)"
+        )),
     };
     match result {
         Ok((id, tracks)) => {
@@ -852,7 +846,10 @@ fn cmd_playlists_import(file: String, name: Option<String>) {
                 .flatten()
                 .map(|info| info.name)
                 .unwrap_or_else(|| "Unknown".to_string());
-            println!("Imported playlist \"{name}\" (ID: {id}) with {} track(s).", tracks.len());
+            println!(
+                "Imported playlist \"{name}\" (ID: {id}) with {} track(s).",
+                tracks.len()
+            );
         }
         Err(e) => {
             eprintln!("Error: {e}");
@@ -933,7 +930,11 @@ fn cmd_playlists_query(query: String) {
                 println!("No playlists matching \"{query}\".");
                 return;
             }
-            println!("Found {} playlist(s) matching \"{}\":", playlists.len(), query);
+            println!(
+                "Found {} playlist(s) matching \"{}\":",
+                playlists.len(),
+                query
+            );
             for pl in &playlists {
                 let sync_tag = match &pl.sync_folder {
                     Some(_) => "  [synced]",
@@ -1112,7 +1113,10 @@ fn daemon_cmd(request: DaemonRequest) {
             }
         }
         Ok(Some(resp)) => {
-            eprintln!("{}", resp.error.unwrap_or_else(|| "Unknown error".to_string()));
+            eprintln!(
+                "{}",
+                resp.error.unwrap_or_else(|| "Unknown error".to_string())
+            );
             std::process::exit(1);
         }
         Ok(None) => {
@@ -1135,7 +1139,11 @@ fn cmd_playback_start(id: String) {
             println!("Playback running in background. Use `wave playback` subcommands to control.");
         }
         Ok(resp) => {
-            eprintln!("{}", resp.error.unwrap_or_else(|| "Failed to start playback".to_string()));
+            eprintln!(
+                "{}",
+                resp.error
+                    .unwrap_or_else(|| "Failed to start playback".to_string())
+            );
             std::process::exit(1);
         }
         Err(e) => {
@@ -1153,7 +1161,11 @@ fn cmd_playback_shutdown() {
             }
         }
         Ok(Some(resp)) => {
-            eprintln!("{}", resp.error.unwrap_or_else(|| "Failed to shut down daemon".to_string()));
+            eprintln!(
+                "{}",
+                resp.error
+                    .unwrap_or_else(|| "Failed to shut down daemon".to_string())
+            );
             std::process::exit(1);
         }
         Ok(None) => println!("Playback daemon is not running."),
@@ -1172,7 +1184,10 @@ fn cmd_playback_status() {
             }
         }
         Ok(Some(resp)) => {
-            eprintln!("{}", resp.error.unwrap_or_else(|| "Daemon error".to_string()));
+            eprintln!(
+                "{}",
+                resp.error.unwrap_or_else(|| "Daemon error".to_string())
+            );
             std::process::exit(1);
         }
         Ok(None) => println!("Playback daemon is not running."),
@@ -1208,38 +1223,43 @@ fn print_playback_status(status: &PlaybackStatus) {
 
 fn run_queue(cmd: QueueCmd) {
     match cmd {
-        QueueCmd::List => {
-            match daemon_request_if_running(DaemonRequest::QueueList) {
-                Ok(Some(resp)) if resp.ok => {
-                    let tracks = resp.queue.unwrap_or_default();
-                    let current = resp
-                        .status
-                        .and_then(|s| if s.queue_index > 0 { Some(s.queue_index - 1) } else { None });
-                    if tracks.is_empty() {
-                        println!("Queue is empty.");
-                        return;
+        QueueCmd::List => match daemon_request_if_running(DaemonRequest::QueueList) {
+            Ok(Some(resp)) if resp.ok => {
+                let tracks = resp.queue.unwrap_or_default();
+                let current = resp.status.and_then(|s| {
+                    if s.queue_index > 0 {
+                        Some(s.queue_index - 1)
+                    } else {
+                        None
                     }
-                    println!("Queue ({} track(s)):", tracks.len());
-                    for (i, path) in tracks.iter().enumerate() {
-                        let marker = if Some(i) == current { ">" } else { " " };
-                        let name = Path::new(path)
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or(path);
-                        println!("  {marker} {:4}. {name}", i);
-                    }
+                });
+                if tracks.is_empty() {
+                    println!("Queue is empty.");
+                    return;
                 }
-                Ok(Some(resp)) => {
-                    eprintln!("{}", resp.error.unwrap_or_else(|| "Daemon error".to_string()));
-                    std::process::exit(1);
-                }
-                Ok(None) => println!("Playback daemon is not running."),
-                Err(e) => {
-                    eprintln!("{e}");
-                    std::process::exit(1);
+                println!("Queue ({} track(s)):", tracks.len());
+                for (i, path) in tracks.iter().enumerate() {
+                    let marker = if Some(i) == current { ">" } else { " " };
+                    let name = Path::new(path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(path);
+                    println!("  {marker} {:4}. {name}", i);
                 }
             }
-        }
+            Ok(Some(resp)) => {
+                eprintln!(
+                    "{}",
+                    resp.error.unwrap_or_else(|| "Daemon error".to_string())
+                );
+                std::process::exit(1);
+            }
+            Ok(None) => println!("Playback daemon is not running."),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        },
         QueueCmd::Add { track_id } => daemon_cmd(DaemonRequest::QueueAdd { track_id }),
         QueueCmd::Remove { index } => daemon_cmd(DaemonRequest::QueueRemove { index }),
         QueueCmd::Next { track_id } => daemon_cmd(DaemonRequest::QueueInsertNext { track_id }),
@@ -1344,7 +1364,9 @@ fn run_favorite(cmd: FavoriteCmd) {
 fn run_metadata(cmd: MetadataCmd) {
     match cmd {
         MetadataCmd::Get { track_id } => cmd_metadata_get(track_id),
-        MetadataCmd::CoverExport { track_id, output } => cmd_metadata_cover_export(track_id, output),
+        MetadataCmd::CoverExport { track_id, output } => {
+            cmd_metadata_cover_export(track_id, output)
+        }
         MetadataCmd::CoverSet { track_id, image } => cmd_metadata_cover_set(track_id, image),
     }
 }
@@ -1359,7 +1381,7 @@ fn cmd_metadata_get(track_id: String) {
         }
     };
     let track = library
-        .get_tracks_by_paths(&[path.clone()])
+        .get_tracks_by_paths(std::slice::from_ref(&path))
         .ok()
         .and_then(|v| v.into_iter().next().flatten())
         .or_else(|| extract_track(None, &path).ok());
@@ -1382,7 +1404,7 @@ fn cmd_metadata_cover_export(track_id: String, output: String) {
         }
     };
     let track = library
-        .get_tracks_by_paths(&[path.clone()])
+        .get_tracks_by_paths(std::slice::from_ref(&path))
         .ok()
         .and_then(|v| v.into_iter().next().flatten())
         .or_else(|| extract_track(None, &path).ok());
@@ -1440,41 +1462,43 @@ fn cmd_metadata_cover_set(track_id: String, image: String) {
         std::process::exit(1);
     });
 
-    // Determine MIME type from extension
-    let mime = match Path::new(&image)
+    // Reject formats the decoder cannot read. The stored thumb is always
+    // re-encoded to JPEG, so the source MIME itself is not retained.
+    match Path::new(&image)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .as_deref()
     {
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("png") => "image/png",
-        Some("webp") => "image/webp",
-        Some("gif") => "image/gif",
-        Some("bmp") => "image/bmp",
+        Some("jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp") => {}
         other => {
-            eprintln!("Unsupported image format: {:?} (use jpg, png, webp, gif, or bmp)", other);
+            eprintln!("Unsupported image format: {other:?} (use jpg, png, webp, gif, or bmp)");
             std::process::exit(1);
         }
-    };
+    }
 
     // Look up the track ID in the database
     let track_id_uuid = library
-        .get_tracks_by_paths(&[path.clone()])
+        .get_tracks_by_paths(std::slice::from_ref(&path))
         .ok()
         .and_then(|v| v.into_iter().next().flatten())
         .map(|t| t.id)
         .unwrap_or_else(|| {
-            library.add_track_to_default_playlist(path.clone()).unwrap_or_else(|e| {
-                eprintln!("Failed to add track to library: {e}");
-                std::process::exit(1);
-            }).id
+            library
+                .add_track_to_default_playlist(path.clone())
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to add track to library: {e}");
+                    std::process::exit(1);
+                })
+                .id
         });
 
-    library.set_track_cover(&track_id_uuid, &image_data, mime).unwrap_or_else(|e| {
-        eprintln!("Failed to set cover art: {e}");
-        std::process::exit(1);
-    });
+    library
+        .set_track_cover(&track_id_uuid, &image_data)
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to set cover art: {e}");
+            std::process::exit(1);
+        });
 
     println!("Cover art set for track {track_id_uuid}");
 }
@@ -1679,7 +1703,10 @@ fn apply_dsp_request(request: DaemonRequest) -> DspStatus {
     match daemon_request_if_running(request.clone()) {
         Ok(Some(resp)) => {
             if !resp.ok {
-                eprintln!("{}", resp.error.unwrap_or_else(|| "DSP request failed".into()));
+                eprintln!(
+                    "{}",
+                    resp.error.unwrap_or_else(|| "DSP request failed".into())
+                );
                 std::process::exit(1);
             }
             LAST_DSP_MESSAGE.with(|cell| {
@@ -1766,10 +1793,7 @@ fn parse_on_off(raw: &str, label: &str) -> bool {
 }
 
 fn print_dsp_status(dsp: &DspStatus) {
-    println!(
-        "Equalizer: {}",
-        if dsp.eq_enabled { "ON" } else { "OFF" }
-    );
+    println!("Equalizer: {}", if dsp.eq_enabled { "ON" } else { "OFF" });
     println!(
         "Gapless:   {}",
         if dsp.gapless_enabled { "ON" } else { "OFF" }
@@ -1818,12 +1842,10 @@ fn run_stats(cmd: StatsCmd) {
     let library = open_library();
     match cmd {
         StatsCmd::Summary { limit } => {
-            let stats = library
-                .get_listening_stats(limit)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to load listening stats: {e}");
-                    std::process::exit(1);
-                });
+            let stats = library.get_listening_stats(limit).unwrap_or_else(|e| {
+                eprintln!("Failed to load listening stats: {e}");
+                std::process::exit(1);
+            });
             println!("Listening overview");
             println!(
                 "  Total listen time: {}",
@@ -1962,27 +1984,91 @@ fn print_full_metadata(track: &Track) {
     println!("Title:           {}", track.title);
     println!("Artist:          {}", track.artist);
     println!("Album:           {}", track.album);
-    println!("Album Artist:    {}", track.album_artist.as_deref().unwrap_or("(none)"));
-    println!("Genre:           {}", track.genre.as_deref().unwrap_or("(none)"));
-    println!("Year:            {}", track.year.map(|y| y.to_string()).unwrap_or_else(|| "(none)".to_string()));
-    println!("Track Number:    {}", track.track_number.map(|n| n.to_string()).unwrap_or_else(|| "(none)".to_string()));
-    println!("Disc Number:     {}", track.disc_number.map(|n| n.to_string()).unwrap_or_else(|| "(none)".to_string()));
+    println!(
+        "Album Artist:    {}",
+        track.album_artist.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "Genre:           {}",
+        track.genre.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "Year:            {}",
+        track
+            .year
+            .map(|y| y.to_string())
+            .unwrap_or_else(|| "(none)".to_string())
+    );
+    println!(
+        "Track Number:    {}",
+        track
+            .track_number
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "(none)".to_string())
+    );
+    println!(
+        "Disc Number:     {}",
+        track
+            .disc_number
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "(none)".to_string())
+    );
     println!("Format:          {}", track.format);
-    println!("Duration:        {}", track.duration_seconds.map(|s| format_duration(s as u64)).unwrap_or_else(|| "Unknown".to_string()));
-    println!("Sample Rate:     {}", track.sample_rate.map(|r| format!("{} Hz", r)).unwrap_or_else(|| "Unknown".to_string()));
-    println!("Channels:        {}", track.channels.map(|c| c.to_string()).unwrap_or_else(|| "Unknown".to_string()));
-    println!("Bit Depth:       {}", track.bit_depth.map(|b| format!("{} bit", b)).unwrap_or_else(|| "Unknown".to_string()));
+    println!(
+        "Duration:        {}",
+        track
+            .duration_seconds
+            .map(|s| format_duration(s as u64))
+            .unwrap_or_else(|| "Unknown".to_string())
+    );
+    println!(
+        "Sample Rate:     {}",
+        track
+            .sample_rate
+            .map(|r| format!("{} Hz", r))
+            .unwrap_or_else(|| "Unknown".to_string())
+    );
+    println!(
+        "Channels:        {}",
+        track
+            .channels
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "Unknown".to_string())
+    );
+    println!(
+        "Bit Depth:       {}",
+        track
+            .bit_depth
+            .map(|b| format!("{} bit", b))
+            .unwrap_or_else(|| "Unknown".to_string())
+    );
     println!("File Size:       {} bytes", track.file_size);
     println!("Modified:        {}", track.modified_at);
     println!("Indexed:         {}", track.indexed_at);
-    println!("Lyrics Source:   {}", track.lyrics_source.as_deref().unwrap_or("(none)"));
-    println!("Cover Art MIME:  {}", track.cover_art_mime.as_deref().unwrap_or("(none)"));
-    println!("Cover Art Src:   {}", track.cover_art_source.as_deref().unwrap_or("(none)"));
-    println!("Fingerprint:     {}", track.fingerprint_sha256.as_deref().unwrap_or("(none)"));
-    println!("MusicBrainz ID:  {}", track.musicbrainz_recording_id.as_deref().unwrap_or("(none)"));
+    println!(
+        "Lyrics Source:   {}",
+        track.lyrics_source.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "Cover Art MIME:  {}",
+        track.cover_art_mime.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "Cover Art Src:   {}",
+        track.cover_art_source.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "Fingerprint:     {}",
+        track.fingerprint_sha256.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "MusicBrainz ID:  {}",
+        track
+            .musicbrainz_recording_id
+            .as_deref()
+            .unwrap_or("(none)")
+    );
     if let Some(lyrics) = &track.lyrics {
         println!("\nLyrics:\n{}", lyrics);
     }
 }
-
-

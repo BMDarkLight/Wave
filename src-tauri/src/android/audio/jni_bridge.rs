@@ -219,7 +219,9 @@ where
 pub fn exo_play_uri(uri: &str) -> Result<(), String> {
     with_player(|p| {
         p.with_env(|env| {
-            let j_uri = env.new_string(uri).map_err(|e| format!("uri string: {e}"))?;
+            let j_uri = env
+                .new_string(uri)
+                .map_err(|e| format!("uri string: {e}"))?;
             env.call_method(
                 p.instance.as_obj(),
                 "playUri",
@@ -240,7 +242,9 @@ pub fn exo_play_uri(uri: &str) -> Result<(), String> {
 pub fn exo_prepare_uri_at(uri: &str, position_ms: i64) -> Result<(), String> {
     with_player(|p| {
         p.with_env(|env| {
-            let j_uri = env.new_string(uri).map_err(|e| format!("uri string: {e}"))?;
+            let j_uri = env
+                .new_string(uri)
+                .map_err(|e| format!("uri string: {e}"))?;
             env.call_method(
                 p.instance.as_obj(),
                 "prepareUriAt",
@@ -325,7 +329,9 @@ pub fn exo_play_media_items(uris: &[String], start_index: usize) -> Result<(), S
                 .new_object_array(uris.len() as i32, string_class, JObject::null())
                 .map_err(|e| format!("new_object_array: {e}"))?;
             for (i, uri) in uris.iter().enumerate() {
-                let j_uri = env.new_string(uri).map_err(|e| format!("uri string: {e}"))?;
+                let j_uri = env
+                    .new_string(uri)
+                    .map_err(|e| format!("uri string: {e}"))?;
                 env.set_object_array_element(&array, i as i32, &j_uri)
                     .map_err(|e| format!("set_object_array_element: {e}"))?;
                 // This thread stays permanently JNI-attached, so nothing else
@@ -356,7 +362,9 @@ pub fn exo_set_upcoming_uri(uri: Option<&str>) -> Result<(), String> {
         p.with_env(|env| {
             match uri {
                 Some(uri) => {
-                    let j_uri = env.new_string(uri).map_err(|e| format!("uri string: {e}"))?;
+                    let j_uri = env
+                        .new_string(uri)
+                        .map_err(|e| format!("uri string: {e}"))?;
                     env.call_method(
                         p.instance.as_obj(),
                         "setUpcomingUri",
@@ -424,7 +432,9 @@ pub fn exo_consume_crossfade_handoff() -> Result<Option<String>, String> {
                 let _ = env.exception_clear();
                 return Err("consumeCrossfadeHandoff threw".into());
             }
-            let obj = result.l().map_err(|e| format!("consumeCrossfadeHandoff value: {e}"))?;
+            let obj = result
+                .l()
+                .map_err(|e| format!("consumeCrossfadeHandoff value: {e}"))?;
             if obj.is_null() {
                 return Ok(None);
             }
@@ -480,10 +490,7 @@ pub fn sync_media_session(position_sec: f64, playing: bool) {
             cls,
             "syncSession",
             "(DZ)V",
-            &[
-                JValue::Double(position_sec),
-                JValue::Bool(playing as u8),
-            ],
+            &[JValue::Double(position_sec), JValue::Bool(playing as u8)],
         ) {
             Ok(_) => {}
             Err(e) => {
@@ -509,11 +516,7 @@ pub fn exo_playback_ended() -> Result<bool, String> {
 }
 
 pub fn is_exo_ready() -> bool {
-    EXO_READY.load(Ordering::Acquire)
-        && EXO_PLAYER
-            .lock()
-            .ok()
-            .is_some_and(|g| g.is_some())
+    EXO_READY.load(Ordering::Acquire) && EXO_PLAYER.lock().ok().is_some_and(|g| g.is_some())
 }
 
 pub fn exo_set_track_normalization_gain(gain: f32) -> Result<(), String> {

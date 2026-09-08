@@ -6,6 +6,7 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
+mod android;
 mod app;
 mod audio;
 pub mod cli;
@@ -16,14 +17,13 @@ mod enrichment;
 mod error;
 mod integrations;
 mod library;
-pub mod lyrics;
 mod listen;
+pub mod lyrics;
 mod metadata;
-mod path_validation;
-mod sources;
-pub mod playback_daemon;
 mod os_media;
-mod android;
+mod path_validation;
+pub mod playback_daemon;
+mod sources;
 
 pub use app::paths as app_paths;
 pub use app::settings as app_settings;

@@ -47,8 +47,8 @@ export default function StatusToasts({
           <div className="crash-report-card">
             <h2 id="crash-report-title">Wave recovered from a crash</h2>
             <p>
-              A previous launch failed. Copy this report when filing a bug —
-              no adb needed. Dismiss once you have copied it.
+              A previous launch failed. Copy this report when filing a bug — no
+              adb needed. Dismiss once you have copied it.
             </p>
             <pre className="crash-report-body">{crashReport}</pre>
             <div className="crash-report-actions">

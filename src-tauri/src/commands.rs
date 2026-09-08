@@ -464,7 +464,6 @@ pub(crate) fn restore_saved_playback(app: &tauri::AppHandle) {
             .map_err(|e| format!("Restore playback: {e}"))
     }) {
         tracing::warn!("{e}");
-        return;
     }
 
     // ExoPlayer holds the paused track for instant UI resume. Do not publish
@@ -1031,7 +1030,7 @@ pub async fn play_track(path: String, app: tauri::AppHandle) -> Result<(), Strin
     let track = blocking(move || {
         let lib = app_clone.state::<LibraryState>();
         let lib = lib.0.lock().map_err(|e| e.to_string())?;
-        match lib.get_tracks_by_paths(&[lookup_a.clone()]) {
+        match lib.get_tracks_by_paths(std::slice::from_ref(&lookup_a)) {
             Ok(results) if results.first().is_some_and(Option::is_some) => {
                 Ok::<_, String>(results.into_iter().next().flatten().unwrap())
             }
@@ -1613,7 +1612,7 @@ pub async fn play_track_from_playlist(index: usize, app: tauri::AppHandle) -> Re
 
     let tracks: Vec<Track> = raw_tracks
         .into_iter()
-        .zip(materialized_paths.into_iter())
+        .zip(materialized_paths)
         .map(|(mut t, p)| {
             t.path = p;
             t
@@ -1909,7 +1908,7 @@ pub async fn add_track_to_playlist_by_id(
         let existing = {
             let library = app.state::<LibraryState>();
             let lib = library.0.lock().map_err(|e| e.to_string())?;
-            lib.get_tracks_by_paths(&[resolved.clone()])?
+            lib.get_tracks_by_paths(std::slice::from_ref(&resolved))?
                 .into_iter()
                 .next()
                 .flatten()
@@ -1925,7 +1924,7 @@ pub async fn add_track_to_playlist_by_id(
         let track = crate::metadata::extract_track(Some(&app), &resolved)?;
         let library = app.state::<LibraryState>();
         let lib = library.0.lock().map_err(|e| e.to_string())?;
-        let (_, _) = lib.apply_playlist_sync(&id, &[], &[track.clone()], &[])?;
+        let (_, _) = lib.apply_playlist_sync(&id, &[], std::slice::from_ref(&track), &[])?;
         // Re-read so callers get the upserted id / cover paths.
         Ok(lib
             .get_tracks_by_paths(&[resolved])?
@@ -3351,7 +3350,6 @@ fn fetch_source_artwork(app: &tauri::AppHandle, source: &SourceTrack) -> Option<
         app,
         crate::cover_art::ExtractedCoverArt {
             data: bytes.to_vec(),
-            mime: "image/jpeg".to_string(),
         },
     )
     .ok()?;
