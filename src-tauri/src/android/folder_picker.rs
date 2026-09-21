@@ -137,7 +137,7 @@ pub fn pick_folder(_app: &AppHandle) -> Result<FolderPickerResult, String> {
 
     let activity_obj = unsafe { JObject::from_raw(activity as *mut _) };
 
-    // Load via the Activity ClassLoader — system FindClass often misses app classes.
+    // Load via the Activity ClassLoader. System FindClass often misses app classes.
     let picker_class = {
         let loader_v = call_checked(
             &mut env,
@@ -178,13 +178,13 @@ pub fn pick_folder(_app: &AppHandle) -> Result<FolderPickerResult, String> {
             .map_err(|e| format!("Folder picker: bad Class object: {e}"))?;
         if class_obj.is_null() {
             return Err(
-                "Folder picker: FolderPickerCallback class missing from APK — rebuild with Android CI (Configure Android project step)".into(),
+                "Folder picker: FolderPickerCallback class missing from APK. Rebuild with Android CI (Configure Android project step)".into(),
             );
         }
         jni::objects::JClass::from(class_obj)
     };
 
-    // JNI-friendly API: String[] pickForJni(Activity) — avoids CompletableFuture
+    // JNI-friendly API: String[] pickForJni(Activity). Avoids CompletableFuture
     // method descriptors that R8/desugar often break for GetStaticMethodID.
     let result_value = call_checked(
         &mut env,

@@ -18,18 +18,17 @@ pub const MAX_GAIN: f32 = 4.0;
 pub const MIN_GAIN: f32 = 0.25;
 /// How many recently analyzed tracks feed the session median.
 const SESSION_RMS_LIMIT: usize = 50;
-/// Ceiling on simultaneous background level scans (each opens a decoder — a
-/// MediaCodec instance on Android, a decode thread on desktop). Bounds
-/// resource use when the user skips through tracks faster than analysis
-/// finishes; a request over the cap is simply skipped rather than queued —
-/// it just stays un-normalized until it's requested again.
+/// Ceiling on simultaneous background level scans. Each opens a decoder: a
+/// MediaCodec instance on Android, a decode thread on desktop. Bounds resource
+/// use when the user skips faster than analysis finishes. A request over the
+/// cap is skipped rather than queued, so the track stays un-normalized until
+/// it is requested again.
 const MAX_CONCURRENT_ANALYSIS: usize = 3;
 
 /// Sample peak and RMS (root-mean-square) amplitude for one file, both in
-/// 0.0–1.0. Peak alone doesn't track perceived loudness — a sparse mix with
-/// one loud transient can have a high peak while sounding quiet throughout —
-/// so gain is driven by RMS; peak is kept only as a clip-safety guard on
-/// boosts.
+/// 0.0–1.0. Peak alone doesn't track perceived loudness: a sparse mix with one
+/// loud transient can have a high peak while sounding quiet throughout. Gain is
+/// driven by RMS; peak is kept only as a clip-safety guard on boosts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AudioLevels {
     pub peak: f32,
@@ -45,9 +44,9 @@ pub struct VolumeNormalizer {
     /// Paths that have actually contributed a sample to `session_rms`.
     /// Kept separate from `levels_cache`: a track can get cached levels from
     /// a non-counting peek (crossfade/gapless prefetch of a track that
-    /// hasn't played yet) without that peek counting toward the median —
-    /// this set is what makes `register_levels` idempotent per-path
-    /// regardless of whether a peek already populated the cache first.
+    /// hasn't played yet) without that peek counting toward the median. This
+    /// set is what makes `register_levels` idempotent per-path, whether or not
+    /// a peek already populated the cache first.
     contributed: HashSet<String>,
     in_flight_analysis: usize,
 }
@@ -70,9 +69,9 @@ impl VolumeNormalizer {
     }
 
     /// Reserve a background-analysis slot. Returns `false` (reserving
-    /// nothing) when [`MAX_CONCURRENT_ANALYSIS`] scans are already running —
-    /// the caller should skip spawning and leave the track at neutral gain
-    /// for now. Pair every `true` result with [`Self::end_analysis`].
+    /// nothing) when [`MAX_CONCURRENT_ANALYSIS`] scans are already running. The
+    /// caller should skip spawning and leave the track at neutral gain for now.
+    /// Pair every `true` result with [`Self::end_analysis`].
     pub fn try_begin_analysis(&mut self) -> bool {
         if self.in_flight_analysis >= MAX_CONCURRENT_ANALYSIS {
             return false;
@@ -124,8 +123,8 @@ impl VolumeNormalizer {
     ///
     /// Driven by RMS, not peak: quiet tracks are boosted and loud tracks are
     /// attenuated toward the median, clamped to [`MIN_GAIN`]–[`MAX_GAIN`].
-    /// The track's peak still caps any boost so `peak * gain <= 1.0` — it
-    /// only guards against clipping, it never drives the gain itself.
+    /// The track's peak still caps any boost so `peak * gain <= 1.0`. It only
+    /// guards against clipping; it never drives the gain itself.
     pub fn compute_gain(track_rms: f32, median_rms: f32, track_peak: f32) -> f32 {
         let rms = track_rms.clamp(MIN_LEVEL, 1.0);
         let target = median_rms.clamp(MIN_LEVEL, 1.0);
@@ -226,7 +225,7 @@ mod tests {
     #[test]
     fn boost_is_capped_to_prevent_clipping() {
         // Peak is much higher than RMS (a track with a sharp transient), so
-        // the raw RMS-matching boost would push the peak past 1.0 — the clip
+        // the raw RMS-matching boost would push the peak past 1.0, so the clip
         // guard must cap it below the requested boost.
         let gain = VolumeNormalizer::compute_gain(0.05, 0.9, 0.9);
         assert!(gain < MAX_GAIN);

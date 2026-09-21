@@ -36,7 +36,7 @@ pub struct LibraryState(pub Mutex<Library>);
 pub struct MediaBridgeState(pub crate::media_controls::MediaBridgeState);
 pub struct ListenState(pub Mutex<ListenTracker>);
 /// Guards against overlapping artist-enrichment background jobs (e.g. from
-/// rapid Home page refreshes) — only one runs at a time.
+/// rapid Home page refreshes). Only one runs at a time.
 pub struct EnrichmentState(pub std::sync::atomic::AtomicBool);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -268,7 +268,7 @@ pub(crate) fn tick_listen_progress(app: &tauri::AppHandle) {
     match tracker.current_path() {
         None => {
             if playing || position > 0.5 {
-                // Cold start (restore / external play) — use engine path for both.
+                // Cold start (restore / external play), so use engine path for both.
                 tracker.start(path.clone(), path.clone(), duration, None);
                 drop(tracker);
                 touch_recently_played(app, &path);
@@ -276,7 +276,7 @@ pub(crate) fn tick_listen_progress(app: &tauri::AppHandle) {
         }
         Some(_) => {
             // Right after listen_switch_track the engine may still report the
-            // previous file for a tick or two — don't treat that as a new song.
+            // previous file for a tick or two, so don't treat that as a new song.
             if tracker.peek_seconds().unwrap_or(0.0) < 1.0 {
                 return;
             }
@@ -347,7 +347,7 @@ pub(crate) fn listen_switch_track(
 
     // Only credit the outgoing track with this scrubber position when the
     // engine is still reporting that same track. After play_next()/play(),
-    // get_current_path is usually already the *new* file at ~0s — applying
+    // get_current_path is usually already the *new* file at ~0s, so applying
     // that to the old session (or worse, seeding the new session with the
     // old track's high position) mis-attributes listens.
     let engine_still_on_outgoing = tracker.matches_player_path(&player_path)
@@ -467,7 +467,7 @@ pub(crate) fn restore_saved_playback(app: &tauri::AppHandle) {
     }
 
     // ExoPlayer holds the paused track for instant UI resume. Do not publish
-    // to the OS media session here — that starts the foreground service and
+    // to the OS media session here. That starts the foreground service and
     // leaves a stale notification after the app is closed.
 }
 
@@ -517,7 +517,7 @@ fn sync_queue_from_tracks(player: &mut AudioPlayer, tracks: &[Track], index: usi
 /// that was deleted or moved after being added to the queue).
 /// Metadata for previews cached during this session, keyed by file path.
 ///
-/// Previews are not library content, so they get no `tracks` row — that is what
+/// Previews are not library content, so they get no `tracks` row. That is what
 /// keeps a 30-second clip out of browse, search, counts, listening stats, and
 /// recently-played. But the queue and the player bar still need a title and an
 /// artist to show, and every one of those surfaces already falls back to
@@ -659,10 +659,10 @@ fn resolve_os_cover_url(app: &tauri::AppHandle, track: &Track) -> Option<String>
 
 /// GUI-side auto-advance (matches the playback daemon tick).
 /// Call periodically from a background thread so Android/desktop keep playing
-/// the queue when a track ends — without relying on frontend polling alone.
+/// the queue when a track ends, without relying on frontend polling alone.
 pub(crate) fn tick_auto_advance(app: &tauri::AppHandle) {
-    // Crossfade handoff can happen while the sink is still playing — check
-    // independently of should_auto_advance so UI/queue/media stay in sync.
+    // Crossfade handoff can happen while the sink is still playing, so check
+    // independently of should_auto_advance to keep UI/queue/media in sync.
     let handoff = {
         let state = app.state::<PlayerState>();
         let mut slot = match state.0.lock() {
@@ -711,7 +711,7 @@ pub(crate) fn tick_auto_advance(app: &tauri::AppHandle) {
             return;
         }
 
-        // Skip past unreadable files instead of stopping — a single bad track
+        // Skip past unreadable files instead of stopping. A single bad track
         // must not halt background queue playback on Android.
         let mut result = None;
         for _ in 0..8 {
@@ -977,7 +977,7 @@ pub async fn import_audio_sources(
 pub async fn pick_media_folder(
     app: tauri::AppHandle,
 ) -> Result<crate::android::folder_picker::FolderPickerResult, String> {
-    // Block off the async runtime — the JNI side waits on the system picker.
+    // Block off the async runtime; the JNI side waits on the system picker.
     blocking(move || crate::android::folder_picker::pick_folder(&app)).await
 }
 
@@ -1406,7 +1406,7 @@ pub async fn set_volume_normalization_enabled(
 /// Detection is by content, so this handles plain text, LRC, Enhanced LRC, and
 /// TTML without the caller needing to know which it has. Parsing lives in Rust
 /// rather than the UI so it is covered by the test suite and so any future
-/// consumer — a mobile notification, a fullscreen view — shares one
+/// consumer (a mobile notification, a fullscreen view) shares one
 /// implementation.
 #[tauri::command]
 pub async fn parse_lyrics_sheet(text: String) -> Result<crate::lyrics::LyricsSheet, String> {
@@ -2507,7 +2507,7 @@ pub async fn set_output_device(
 /// Pushes rich metadata (title, artist, album, duration, cover art URL) to the
 /// OS media interface so it shows up in the system media overlay / Control Center.
 ///
-/// When the frontend omits `cover_url` (intentional — so the 96px list thumb
+/// When the frontend omits `cover_url` (intentional, so the 96px list thumb
 /// never overwrites OS art), we resolve the current track's 512px media-session
 /// art here so macOS/Windows keep showing high-quality artwork.
 #[tauri::command]
@@ -3161,7 +3161,7 @@ fn maybe_spawn_artist_enrichment(app: &tauri::AppHandle) {
 
 /// Refreshes cached genre tags / similar artists for whichever top artists
 /// are missing or stale. Every network call lives here, off the command
-/// path — the library lock is only ever held for the brief local reads and
+/// path. The library lock is only ever held for the brief local reads and
 /// writes around each call, never across a network request, so playback,
 /// scanning, and metadata lookups are never blocked by this.
 fn run_artist_enrichment_job(app: &tauri::AppHandle) {
@@ -3221,7 +3221,7 @@ fn run_artist_enrichment_job(app: &tauri::AppHandle) {
 // ── Remote song sourcing ──────────────────────────────────────────────────────
 //
 // The third search tier. Every command here does blocking network work, so each
-// runs on `spawn_blocking` — never on the async command path. Failures degrade:
+// runs on `spawn_blocking`, never on the async command path. Failures degrade:
 // a provider that is down yields an errored section, not a failed search.
 
 use crate::sources::{self, cache as source_cache, download as source_download, SourceTrack};
@@ -3358,7 +3358,7 @@ fn fetch_source_artwork(app: &tauri::AppHandle, source: &SourceTrack) -> Option<
 
 /// Trim the stream cache back under its configured cap.
 ///
-/// `protected` is the currently playing track plus the live queue — deleting
+/// `protected` is the currently playing track plus the live queue. Deleting
 /// one of those would pull a file out from under an open decoder.
 fn evict_source_cache(app: &tauri::AppHandle, library: &Library, protected: Vec<String>) {
     let cap_mb = app
@@ -3481,7 +3481,7 @@ pub async fn stream_source_track(
 /// Keep a remote track: copy it into the download destination and promote its
 /// row into the library proper.
 ///
-/// Copies rather than moves — see `sources::download` for why moving would
+/// Copies rather than moves; see `sources::download` for why moving would
 /// break a track that is playing from the cache on Windows.
 #[tauri::command]
 pub async fn download_source_track(
@@ -3493,7 +3493,7 @@ pub async fn download_source_track(
 ) -> Result<Track, String> {
     if !track.downloadable {
         return Err(format!(
-            "{} does not allow saving this track — it can only be streamed",
+            "{} does not allow saving this track; it can only be streamed",
             track.provider
         ));
     }

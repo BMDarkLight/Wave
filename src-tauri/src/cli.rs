@@ -20,7 +20,7 @@ use crate::playback_daemon::{
 // ── Top-level CLI ────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "wave", version, about = "Lightweight Music Player — CLI")]
+#[command(name = "wave", version, about = "Lightweight Music Player CLI")]
 pub struct Cli {
     /// Show CLI help (runs in CLI mode without a command)
     #[arg(long, global = true)]
@@ -545,7 +545,7 @@ pub fn run() {
         Some(Commands::Dsp(cmd)) => run_dsp(cmd),
         Some(Commands::Stats(cmd)) => run_stats(cmd),
         None => {
-            // No subcommand — shouldn't reach here since main.rs checks args > 1.
+            // No subcommand; shouldn't reach here since main.rs checks args > 1.
         }
     }
 }

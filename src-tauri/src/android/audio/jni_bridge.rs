@@ -24,7 +24,7 @@ static EXO_READY: AtomicBool = AtomicBool::new(false);
 static EXO_PLAYER: Mutex<Option<ExoHandle>> = Mutex::new(None);
 
 struct ExoHandle {
-    /// Process JVM — must not Drop (that would call DestroyJavaVM).
+    /// Process JVM. Must not Drop, that would call DestroyJavaVM.
     vm: ManuallyDrop<JavaVM>,
     instance: GlobalRef,
 }
@@ -335,7 +335,7 @@ pub fn exo_play_media_items(uris: &[String], start_index: usize) -> Result<(), S
                 env.set_object_array_element(&array, i as i32, &j_uri)
                     .map_err(|e| format!("set_object_array_element: {e}"))?;
                 // This thread stays permanently JNI-attached, so nothing else
-                // frees these per-track local refs — without this, playing a
+                // frees these per-track local refs. Without this, playing a
                 // large queue/playlist gapless risks a local reference table
                 // overflow crash.
                 let _ = env.delete_local_ref(j_uri);
@@ -469,7 +469,7 @@ pub fn sync_media_session(position_sec: f64, playing: bool) {
         return;
     };
     let _ = handle.with_env(|env| {
-        // Worker threads must use the app ClassLoader — FindClass often fails
+        // Worker threads must use the app ClassLoader. FindClass often fails
         // and a pending exception can abort the process on the next JNI call.
         let ctx = match std::panic::catch_unwind(ndk_context::android_context) {
             Ok(ctx) => ctx,

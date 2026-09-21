@@ -21,6 +21,7 @@ catalogs — in a single portable app built on Rust + Tauri + React.
 
 ## Table of contents
 
+- [Installation](#installation)
 - [Highlights](#highlights)
 - [Features](#features)
   - [Home & discovery](#home--discovery)
@@ -40,6 +41,28 @@ catalogs — in a single portable app built on Rust + Tauri + React.
 - [Getting started](#getting-started)
 - [Design goals](#design-goals)
 - [License](#license)
+
+---
+
+## Installation
+
+Wave installs as a normal desktop app and puts a `wave` command on your `PATH`.
+
+| Platform    | Install                                                         |
+| ----------- | --------------------------------------------------------------- |
+| Debian/Ubuntu | `sudo apt install ./Wave_0.5.0_amd64.deb`                      |
+| Fedora/RHEL | `sudo dnf install ./Wave-0.5.0-1.x86_64.rpm`                     |
+| Arch        | `yay -S wave-music-player-bin`                                   |
+| Flatpak     | `flatpak install app.bmdarklight.wave`                           |
+| AppImage    | download, `chmod +x`, run                                        |
+| macOS       | `brew install --cask wave`, or the `.dmg`                        |
+| Windows     | `winget install BMDarkLight.Wave`, `choco install wave`, or the installer |
+
+Grab the packages from the [latest release](https://github.com/BMDarkLight/Wave/releases).
+
+See **[docs/INSTALL.md](docs/INSTALL.md)** for per-platform details, how the
+`wave` command gets onto `PATH` on each system, and where the packaging sources
+live.
 
 ---
 
@@ -327,7 +350,12 @@ URL in a browser will not work — the UI needs the Tauri backend behind it.
 npm run tauri build
 ```
 
-Portable binaries are produced for your platform.
+This produces the installers for your platform — `.deb`, `.rpm` and AppImage on
+Linux, an NSIS installer on Windows, `.app` and `.dmg` on macOS — under
+`src-tauri/target/release/bundle/`.
+
+Packaging inputs (desktop entry, installer hooks, distro manifests) live in
+[`packaging/`](packaging); see [docs/INSTALL.md](docs/INSTALL.md).
 
 ### Android
 

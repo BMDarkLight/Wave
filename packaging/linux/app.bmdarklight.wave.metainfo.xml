@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Wave — Copyright (C) 2025 BMDarkLight
+  Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0),
+  with additional terms under AGPLv3 section 7. See the LICENSE file.
+-->
+<component type="desktop-application">
+  <id>app.bmdarklight.wave</id>
+
+  <name>Wave</name>
+  <summary>Lightweight offline-first music player</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+
+  <developer id="app.bmdarklight">
+    <name>BMDarkLight</name>
+  </developer>
+
+  <description>
+    <p>
+      Wave is a lightweight, cross-platform, offline-first music player. It keeps
+      your local library fast to browse, runs real audio DSP, and shows synced
+      lyrics — in a single portable app built on Rust, Tauri and React.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Local library with fast search across tracks, albums and artists</li>
+      <li>Gapless playback, crossfade and a real parametric equalizer</li>
+      <li>Time-synced and TTML karaoke lyrics</li>
+      <li>Listening statistics for tracks, artists, albums and genres</li>
+      <li>Playlists, favorites and M3U import/export</li>
+      <li>An optional tier of free online catalogs, off by default</li>
+      <li>A full command-line interface via the <code>wave</code> command</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">Wave.desktop</launchable>
+
+  <provides>
+    <binary>wave</binary>
+  </provides>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Player</category>
+    <category>Music</category>
+  </categories>
+
+  <keywords>
+    <keyword>music</keyword>
+    <keyword>audio</keyword>
+    <keyword>player</keyword>
+    <keyword>playlist</keyword>
+    <keyword>lyrics</keyword>
+    <keyword>equalizer</keyword>
+  </keywords>
+
+  <url type="homepage">https://github.com/BMDarkLight/Wave</url>
+  <url type="bugtracker">https://github.com/BMDarkLight/Wave/issues</url>
+  <url type="vcs-browser">https://github.com/BMDarkLight/Wave</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>The Wave home screen</caption>
+      <image>https://raw.githubusercontent.com/BMDarkLight/Wave/main/docs/screenshots/desktop-home.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Browsing the library</caption>
+      <image>https://raw.githubusercontent.com/BMDarkLight/Wave/main/docs/screenshots/desktop-library.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Time-synced lyrics</caption>
+      <image>https://raw.githubusercontent.com/BMDarkLight/Wave/main/docs/screenshots/desktop-lyrics.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The parametric equalizer</caption>
+      <image>https://raw.githubusercontent.com/BMDarkLight/Wave/main/docs/screenshots/desktop-equalizer.png</image>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.5.0" date="2026-09-08" />
+  </releases>
+</component>

@@ -451,7 +451,7 @@ mod id3_tests {
         // A diagnostic, not a gate: skip quietly when run as part of the whole
         // ignored suite rather than failing it.
         let Ok(path) = std::env::var("WAVE_PROBE_FILE") else {
-            println!("skipped — set WAVE_PROBE_FILE to probe a file");
+            println!("skipped: set WAVE_PROBE_FILE to probe a file");
             return;
         };
         let mut header = [0u8; 10];

@@ -1,0 +1,37 @@
+# Maintainer: BMDarkLight <https://github.com/BMDarkLight>
+#
+# Repackages the official Wave .deb release for Arch. Building from source
+# instead takes considerably longer; see PKGBUILD (wave-music-player).
+
+pkgname=wave-music-player-bin
+pkgver=0.5.0
+pkgrel=1
+pkgdesc="Lightweight, offline-first music player with a full CLI (binary release)"
+arch=('x86_64')
+url="https://github.com/BMDarkLight/Wave"
+license=('AGPL-3.0-or-later')
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'alsa-lib'
+  'libxdo'
+  'hicolor-icon-theme'
+)
+optdepends=('libappindicator-gtk3: system tray icon support')
+provides=('wave' 'wave-music-player')
+conflicts=('wave-music-player')
+source_x86_64=("$pkgname-$pkgver.deb::$url/releases/download/v$pkgver/Wave_${pkgver}_amd64.deb")
+# Replace with the release checksum before publishing to the AUR:
+#   updpkgsums
+sha256sums_x86_64=('SKIP')
+
+package() {
+  # The .deb already lays files out under the same prefix Arch uses, so the
+  # payload can be unpacked straight into $pkgdir.
+  tar -xf data.tar.gz -C "$pkgdir"
+
+  # Debian ships the licence as the package copyright file; Arch expects it
+  # under /usr/share/licenses/$pkgname.
+  install -Dm644 "$pkgdir/usr/share/doc/Wave/copyright" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
+}

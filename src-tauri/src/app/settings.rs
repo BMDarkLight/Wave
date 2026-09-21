@@ -25,7 +25,7 @@ pub struct AppSettings {
     pub close_action: CloseAction,
     pub volume: f32,
     pub equalizer: EqConfig,
-    // Playback state — saved on close, restored on launch.
+    // Playback state. Saved on close, restored on launch.
     pub last_track_path: Option<String>,
     pub last_position_seconds: f64,
     pub last_queue: Vec<String>,
@@ -46,19 +46,17 @@ pub struct AppSettings {
     #[serde(default)]
     pub volume_normalization_enabled: bool,
     /// Master switch for the remote-source search tier. When off, no provider
-    /// is queried and the escalation button never appears — nothing in the app
-    /// reaches the network for music discovery.
+    /// is queried and the escalation button never appears, so nothing in the
+    /// app reaches the network for music discovery.
     ///
-    /// Off by default: Wave is offline-first, so reaching the internet is a
-    /// thing the user opts into rather than something they discover it already
-    /// did. Existing installs keep whatever they had — serde only applies this
-    /// when the field is absent.
+    /// Off by default because Wave is offline-first. Existing installs keep
+    /// whatever they had; serde only applies this when the field is absent.
     #[serde(default = "default_outside_sourcing_enabled")]
     pub outside_sourcing_enabled: bool,
     /// Spotify application client id, used for OAuth PKCE.
     ///
     /// Spotify serves no audio through its API, so this powers catalogue search
-    /// and playlist import only — never streaming or caching.
+    /// and playlist import only, never streaming or caching.
     #[serde(default)]
     pub spotify_client_id: Option<String>,
     /// Free Jamendo API client id. Empty means the Jamendo source reports

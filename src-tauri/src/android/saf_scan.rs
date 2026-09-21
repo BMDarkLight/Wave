@@ -30,7 +30,7 @@ pub fn list_audio_files(_app: &AppHandle, tree_uri: &str) -> Result<Vec<String>,
 
     // Frees the local ref for `obj` before returning. The calling loop runs
     // on a permanently-attached JNI thread (see `jni::ensure_jni_thread_attached`),
-    // so there's no per-call frame to reclaim these automatically — scanning a
+    // so there's no per-call frame to reclaim these automatically. Scanning a
     // folder with hundreds of files would otherwise fill the local reference
     // table and crash with a JNI "local reference table overflow".
     fn jstring_to_owned(env: &mut jni::JNIEnv<'_>, obj: JObject<'_>) -> Option<String> {
@@ -184,7 +184,7 @@ pub fn list_audio_files(_app: &AppHandle, tree_uri: &str) -> Result<Vec<String>,
             .map_err(|e| format!("SAF scan: bad Class object: {e}"))?;
         if class_obj.is_null() {
             return Err(
-                "SAF scan: SafMediaScanner class missing from APK — rebuild Android CI".into(),
+                "SAF scan: SafMediaScanner class missing from APK. Rebuild Android CI".into(),
             );
         }
         jni::objects::JClass::from(class_obj)

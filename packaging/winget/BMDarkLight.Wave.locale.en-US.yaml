@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: BMDarkLight.Wave
+PackageVersion: 0.5.0
+PackageLocale: en-US
+Publisher: BMDarkLight
+PublisherUrl: https://github.com/BMDarkLight
+PublisherSupportUrl: https://github.com/BMDarkLight/Wave/issues
+PackageName: Wave
+PackageUrl: https://github.com/BMDarkLight/Wave
+License: AGPL-3.0-or-later
+LicenseUrl: https://github.com/BMDarkLight/Wave/blob/main/LICENSE
+Copyright: Copyright (C) 2025 BMDarkLight
+ShortDescription: Lightweight offline-first music player
+Description: |-
+  Wave is a lightweight, cross-platform, offline-first music player. It keeps
+  your local library fast to browse, runs real audio DSP, and shows synced
+  lyrics, with an optional tier of free online catalogs that is off by default.
+
+  The installer also puts a `wave` command on PATH, giving you the full
+  command-line interface for managing the library, playback, queue, metadata
+  and listening stats from a terminal.
+Moniker: wave
+Tags:
+- audio
+- equalizer
+- flac
+- lyrics
+- mp3
+- music
+- music-player
+- offline
+- player
+- playlist
+ReleaseNotesUrl: https://github.com/BMDarkLight/Wave/releases/tag/v0.5.0
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

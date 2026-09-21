@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Wave — Chocolatey package
+  Copyright (C) 2025 BMDarkLight — AGPL-3.0-or-later
+
+  Build and push:
+    choco pack packaging/chocolatey/wave.nuspec
+    choco push wave.0.5.0.nupkg -s https://push.chocolatey.org/
+-->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>wave</id>
+    <version>0.5.0</version>
+    <packageSourceUrl>https://github.com/BMDarkLight/Wave/tree/main/packaging/chocolatey</packageSourceUrl>
+    <owners>BMDarkLight</owners>
+
+    <title>Wave</title>
+    <authors>BMDarkLight</authors>
+    <projectUrl>https://github.com/BMDarkLight/Wave</projectUrl>
+    <iconUrl>https://raw.githubusercontent.com/BMDarkLight/Wave/main/src-tauri/icons/128x128.png</iconUrl>
+    <copyright>Copyright (C) 2025 BMDarkLight</copyright>
+    <licenseUrl>https://github.com/BMDarkLight/Wave/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/BMDarkLight/Wave</projectSourceUrl>
+    <bugTrackerUrl>https://github.com/BMDarkLight/Wave/issues</bugTrackerUrl>
+    <tags>wave music player audio mp3 flac lyrics equalizer offline cli</tags>
+    <summary>Lightweight offline-first music player</summary>
+    <description><![CDATA[
+Wave is a lightweight, cross-platform, offline-first music player. It keeps your
+local library fast to browse, runs real audio DSP, and shows synced lyrics, with
+an optional tier of free online catalogs that is off by default.
+
+Installing also puts a `wave` command on PATH, giving you the full command-line
+interface for managing the library, playback, queue, metadata and listening
+stats from a terminal.
+
+Open a new terminal after installing so it picks up the updated PATH.
+    ]]></description>
+    <releaseNotes>https://github.com/BMDarkLight/Wave/releases/tag/v0.5.0</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

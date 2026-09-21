@@ -11,7 +11,7 @@
 //! On Android, cpal/oboe require:
 //! 1. The calling thread to be attached to the JVM.
 //! 2. `ndk_context` to hold both a `JavaVM` and a real Android `Context`
-//!    jobject (Activity or Application) — oboe uses it for `AudioManager`.
+//!    jobject (Activity or Application); oboe uses it for `AudioManager`.
 //!
 //! Tao 0.35+ no longer calls `ndk_context::initialize_android_context` (it
 //! keeps its own multi-window context map). We copy the main activity's VM +
@@ -68,7 +68,7 @@ fn try_seed_ndk_context() -> bool {
     }
 
     let Some(ctx) = tauri::tao::platform::android::prelude::main_android_context() else {
-        tracing::warn!("tao main_android_context not ready — cannot seed ndk_context yet");
+        tracing::warn!("tao main_android_context not ready, cannot seed ndk_context yet");
         return false;
     };
 

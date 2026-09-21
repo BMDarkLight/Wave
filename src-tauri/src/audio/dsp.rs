@@ -268,7 +268,7 @@ pub struct Equalizer<S> {
     sr: f32,
     /// Cached enabled flag so we avoid locking on every sample when EQ is off.
     enabled: bool,
-    /// Monotonically increasing version — bumped on every config write so the
+    /// Monotonically increasing version, bumped on every config write so the
     /// audio thread can cheaply detect changes.
     version: Arc<Mutex<u64>>,
     last_version: u64,
@@ -375,7 +375,7 @@ pub struct Crossfade {
     /// When set, the fade window starts here instead of at
     /// `duration - crossfade_duration`. Used after a seek that lands inside
     /// the configured fade region so the next track begins at 0 over the
-    /// remaining time — not mid-song at the "would-have-been" fade offset.
+    /// remaining time, not mid-song at the "would-have-been" fade offset.
     fade_from: Option<Duration>,
     /// After fade starts, shared state / UI follow the incoming track.
     ui_on_next: bool,
@@ -478,7 +478,7 @@ impl Crossfade {
         };
         let now_in = self.position >= fade_start;
         if now_in && !self.in_crossfade {
-            // Just entered the fade window — hand UI/queue to the next track.
+            // Just entered the fade window, so hand UI/queue to the next track.
             self.signal_fade_start();
         }
         self.in_crossfade = now_in;
@@ -586,13 +586,13 @@ impl Iterator for Crossfade {
                     Some(cur * fade_out + nxt * fade_in)
                 }
                 (Some(cur), None) => {
-                    // Next ended early — finish the outgoing track alone.
+                    // Next ended early, so finish the outgoing track alone.
                     self.position += dt;
                     self.sync_shared_state();
                     Some(cur)
                 }
                 (None, Some(nxt)) => {
-                    // Outgoing finished mid-fade — promote and keep the sample.
+                    // Outgoing finished mid-fade, so promote and keep the sample.
                     // `next_position` already includes this sample's period.
                     let _ = self.promote_next();
                     self.sync_shared_state();
@@ -641,7 +641,7 @@ impl Source for Crossfade {
     }
 
     fn total_duration(&self) -> Option<Duration> {
-        // Report the logical current track only — the player clock tracks one
+        // Report the logical current track only. The player clock tracks one
         // track at a time and updates on promote.
         self.current_duration
     }
@@ -650,7 +650,7 @@ impl Source for Crossfade {
         // UI / AudioPlayer hand off to the incoming track at *fade start*
         // (`signal_fade_start`), while `self.current` is still the outgoing
         // source until `promote_next`. Seeking must follow the logical track
-        // the UI already shows — otherwise the scrubber jumps the previous song.
+        // the UI already shows, otherwise the scrubber jumps the previous song.
         if self.ui_on_next && self.next.is_some() {
             let _ = self.promote_next();
         }
@@ -666,7 +666,7 @@ impl Source for Crossfade {
         // keep reporting it. Only clear the flag when seeking the outgoing track
         // before fade-start handoff.
         if !self.ui_on_next {
-            // Seeking the outgoing track — rewind any attached next source and
+            // Seeking the outgoing track. Rewind any attached next source and
             // optionally start a shortened fade if we landed in the fade window.
             if let Some(ref mut n) = self.next {
                 n.try_seek(Duration::ZERO)?;
@@ -681,8 +681,8 @@ impl Source for Crossfade {
                 }
             }
         } else {
-            // Logical current is the (promoted) incoming track — no outgoing
-            // partner left to fade with from this seek.
+            // Logical current is the (promoted) incoming track, so there is no
+            // outgoing partner left to fade with from this seek.
             self.next = None;
             self.next_path = None;
             self.next_duration = None;
@@ -699,11 +699,10 @@ impl Source for Crossfade {
 ///
 /// Peak analysis can take a while (a full-file decode), so playback starts
 /// at neutral gain (1.0) and a background analysis thread swaps in the real
-/// value once it's ready — this cell is how it reaches the audio thread
+/// value once it's ready. This cell is how it reaches the audio thread
 /// without touching the player-wide lock. Each track load gets its own cell,
-/// so a slow analysis that finishes after the track has already changed just
-/// writes into an orphaned cell nobody reads anymore instead of needing
-/// explicit cancellation.
+/// so a slow analysis that finishes after the track changed just writes into
+/// an orphaned cell nobody reads anymore. No cancellation needed.
 pub type SharedGain = Arc<std::sync::atomic::AtomicU32>;
 
 pub fn shared_gain(initial: f32) -> SharedGain {
@@ -771,7 +770,7 @@ impl<S: Source<Item = f32>> Iterator for VolumeGain<S> {
     }
 }
 
-/// Soft transport fade — tiny gain ramp for play / pause / seek / stop.
+/// Soft transport fade. Tiny gain ramp for play / pause / seek / stop.
 ///
 /// Multiplies samples by a locally smoothed gain that tracks a shared
 /// [`SoftFadeState::target`]. New instances always start at gain `0` so every
@@ -864,12 +863,11 @@ impl Source for SoftFade {
     }
 }
 
-// Note: `Crossfade::configured_fade_secs` and `Crossfade::fade_window` are not
-// covered here — `Crossfade` holds `Box<dyn Source<Item = f32> + Send>` fields
-// per its struct definition, so constructing a real instance in a unit test
-// would require a full `rodio::Source` implementation for a fake source. That's
-// more scaffolding than is justified for two pure-math helper methods; the
-// `EqConfig`/`Biquad` tests below are the clear wins for this file.
+// `Crossfade::configured_fade_secs` and `Crossfade::fade_window` are not
+// covered here. `Crossfade` holds `Box<dyn Source<Item = f32> + Send>` fields,
+// so constructing a real instance in a unit test needs a full `rodio::Source`
+// impl for a fake source. Not worth the scaffolding for two pure-math helpers;
+// the `EqConfig`/`Biquad` tests below cover what matters in this file.
 
 #[cfg(test)]
 mod tests {

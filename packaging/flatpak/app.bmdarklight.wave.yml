@@ -1,0 +1,91 @@
+# Wave — Flatpak manifest
+# Copyright (C) 2025 BMDarkLight — AGPL-3.0-or-later
+#
+# Flatpak builds run offline, so npm and cargo cannot fetch anything while the
+# build is in progress. Both dependency trees have to be pinned to on-disk
+# sources first:
+#
+#     ./packaging/flatpak/generate-sources.sh
+#
+# That writes cargo-sources.json and node-sources.json next to this file, which
+# the modules below pull in. Re-run it whenever Cargo.lock or package-lock.json
+# changes. Then:
+#
+#     flatpak-builder --user --install --force-clean build packaging/flatpak/app.bmdarklight.wave.yml
+#     flatpak run app.bmdarklight.wave
+
+id: app.bmdarklight.wave
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node20
+command: wave
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node20/bin
+  env:
+    CARGO_HOME: /run/build/wave/cargo
+
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  # Audio output.
+  - --socket=pulseaudio
+  # MusicBrainz, LRCLIB, Cover Art Archive and the opt-in online catalogs.
+  - --share=network
+  # Read-only access to the user's music. Wave imports files by path and never
+  # writes to the library folder.
+  - --filesystem=xdg-music:ro
+  # MPRIS media-key integration.
+  - --talk-name=org.mpris.MediaPlayer2.wave
+  - --own-name=org.mpris.MediaPlayer2.wave
+
+modules:
+  - name: wave
+    buildsystem: simple
+
+    sources:
+      - type: git
+        url: https://github.com/BMDarkLight/Wave.git
+        tag: v0.5.0
+
+      # Written by generate-sources.sh; not checked in, because they are large
+      # and derived entirely from the two lockfiles.
+      - cargo-sources.json
+      - node-sources.json
+
+    build-options:
+      env:
+        # Point both package managers at the vendored trees rather than the network.
+        CARGO_NET_OFFLINE: '1'
+        NPM_CONFIG_OFFLINE: 'true'
+        NPM_CONFIG_AUDIT: 'false'
+        NPM_CONFIG_FUND: 'false'
+
+    build-commands:
+      - npm ci --offline
+
+      # --no-bundle stops after the executable: Flatpak installs the binary,
+      # desktop entry, icons and metainfo itself below.
+      - npx tauri build --no-bundle --
+
+      - install -Dm755 src-tauri/target/release/wave /app/bin/wave
+
+      - install -Dm644 packaging/linux/app.bmdarklight.wave.metainfo.xml
+          /app/share/metainfo/app.bmdarklight.wave.metainfo.xml
+
+      # Flathub requires the desktop entry and the icon to be named after the
+      # app id, so this is written here rather than reusing the deb/rpm entry.
+      - install -Dm644 packaging/flatpak/app.bmdarklight.wave.desktop
+          /app/share/applications/app.bmdarklight.wave.desktop
+
+      - install -Dm644 src-tauri/icons/32x32.png
+          /app/share/icons/hicolor/32x32/apps/app.bmdarklight.wave.png
+      - install -Dm644 src-tauri/icons/128x128.png
+          /app/share/icons/hicolor/128x128/apps/app.bmdarklight.wave.png
+      - install -Dm644 src-tauri/icons/128x128@2x.png
+          /app/share/icons/hicolor/256x256/apps/app.bmdarklight.wave.png

@@ -11,6 +11,13 @@
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
+    // Release builds are GUI-subsystem on Windows and therefore start with no
+    // stdio at all. Anything with arguments is a terminal invocation, so borrow
+    // the parent's console before a single line is printed. No-op elsewhere.
+    if args.len() > 1 {
+        wave_lib::win_console::attach_parent_terminal();
+    }
+
     if args.iter().any(|a| a == "--playback-daemon") {
         let _instance =
             wave_lib::single_instance::try_acquire(wave_lib::single_instance::InstanceMode::Daemon)

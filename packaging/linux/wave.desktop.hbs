@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name={{name}}
+GenericName=Music Player
+{{#if comment}}Comment={{comment}}{{/if}}
+# No %U/%F: any argument puts the binary into CLI mode, so a launcher handing it
+# a file path would run a command instead of playing the file. Add these back
+# together with file associations and argument routing in the app.
+Exec={{exec}}
+Icon={{icon}}
+Categories={{categories}}
+Keywords=music;audio;player;mp3;flac;playlist;library;lyrics;equalizer;offline;
+Terminal=false
+# GTK derives WM_CLASS from the executable name, which this project pins to
+# `wave`. Keeping these in sync is what lets the shell match a running window to
+# this entry instead of drawing a generic icon in the taskbar.
+StartupWMClass=wave
+StartupNotify=true

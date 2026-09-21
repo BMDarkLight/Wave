@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+#
+# Wave — winget version manifest.
+# Submit all three files in this directory to microsoft/winget-pkgs under
+#   manifests/b/BMDarkLight/Wave/<version>/
+PackageIdentifier: BMDarkLight.Wave
+PackageVersion: 0.5.0
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

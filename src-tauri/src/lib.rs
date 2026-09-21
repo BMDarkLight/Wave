@@ -24,6 +24,7 @@ mod os_media;
 mod path_validation;
 pub mod playback_daemon;
 mod sources;
+pub mod win_console;
 
 pub use app::paths as app_paths;
 pub use app::settings as app_settings;

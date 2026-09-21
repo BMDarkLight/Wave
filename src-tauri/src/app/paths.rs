@@ -38,7 +38,7 @@ pub fn source_cache_dir() -> PathBuf {
 
 /// Where downloads land on desktop. Registered as a media folder on first use
 /// so a download is browsable immediately, even if no media folder was ever
-/// configured. Android downloads go to the primary media folder instead — see
+/// configured. Android downloads go to the primary media folder instead; see
 /// `sources::download`.
 pub fn downloads_dir() -> PathBuf {
     data_dir().join("Downloads")

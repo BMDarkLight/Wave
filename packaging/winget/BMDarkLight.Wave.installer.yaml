@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+#
+# InstallerSha256 is a placeholder. Fill it from the checksum the release
+# workflow prints for the .exe asset before submitting.
+PackageIdentifier: BMDarkLight.Wave
+PackageVersion: 0.5.0
+InstallerType: nullsoft
+InstallModes:
+- interactive
+- silent
+UpgradeBehavior: install
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/BMDarkLight/Wave/releases/download/v0.5.0/Wave_0.5.0_x64-setup.exe
+  InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+ManifestType: installer
+ManifestVersion: 1.6.0

@@ -7,6 +7,13 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# The bundled executable and the CLI command are both `wave` (lowercase), while
+# the user-facing product name stays "Wave". Without this, cargo would name the
+# binary after the package and ship `Wave`/`Wave.exe`.
+[[bin]]
+name = "wave"
+path = "src/main.rs"
+
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
@@ -64,6 +71,9 @@ objc2-foundation = "0.3"
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.60", features = [
     "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }

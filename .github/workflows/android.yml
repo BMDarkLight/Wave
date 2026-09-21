@@ -48,17 +48,31 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
-      - name: Install Android NDK
+      # `packages` must not include the obsolete `tools` package that this
+      # action still installs by default: it was removed from the Android SDK
+      # repository, so sdkmanager exits non-zero and fails the job.
+      #
+      # This step only prepares the SDK. The NDK and platform come from the
+      # runner image -- `api-level` and `ndk-version` are NOT inputs of
+      # setup-android@v3 and were being ignored with a warning, so they have
+      # been dropped rather than left in place implying a pin that never
+      # existed. To pin the NDK for real, add `ndk;27.2.12479018` (r27c) to
+      # `packages` and point ANDROID_NDK_ROOT at it in the step below.
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          api-level: 34
-          ndk-version: r27c
+          packages: platform-tools
           cmdline-tools-version: "11076708"
 
       - name: Set up NDK toolchain
         run: |
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
+
+          # The NDK is whatever the runner image ships; log it so a version
+          # bump is visible here rather than surfacing as a link error later.
+          echo "Using NDK at $ANDROID_NDK_ROOT"
+          cat "$ANDROID_NDK_ROOT/source.properties" 2>/dev/null || true
           
           # Set up toolchain for each architecture
           # Note: Rust target triples map to clang tools as follows:

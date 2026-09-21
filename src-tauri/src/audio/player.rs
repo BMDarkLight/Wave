@@ -454,7 +454,7 @@ pub struct AudioPlayer {
     /// Soft gain ramp for play/pause/seek/stop (shared with the active SoftFade).
     soft_fade: Arc<Mutex<SoftFadeState>>,
     /// Next queue path already appended to the sink so playback can continue
-    /// when the current source ends — critical on Android while backgrounded,
+    /// when the current source ends. Critical on Android while backgrounded,
     /// where a delayed tick alone can miss the transition.
     prefetched_next: Option<(String, Option<Duration>)>,
     /// Seamless queue transitions when crossfade is off.
@@ -530,7 +530,7 @@ impl AudioPlayer {
             crate::android::jni::ensure_jni_thread_attached();
             if !crate::android::jni::android_audio_ready() {
                 return Err(AudioError::StreamCreation(
-                    "Android audio context is not ready yet — try playing again in a moment"
+                    "Android audio context is not ready yet, try playing again in a moment"
                         .to_string(),
                 ));
             }
@@ -584,7 +584,7 @@ impl AudioPlayer {
             crate::android::jni::ensure_jni_thread_attached();
             if !crate::android::jni::android_audio_ready() {
                 return Err(AudioError::StreamCreation(
-                    "Android audio context is not ready yet — try again in a moment".to_string(),
+                    "Android audio context is not ready yet, try again in a moment".to_string(),
                 ));
             }
 
@@ -631,10 +631,10 @@ impl AudioPlayer {
     /// Gain cell for the desktop (rodio) playback path.
     ///
     /// A full-file peak scan can take a while, and unlike Android there's no
-    /// separate "set gain on the running player" call to defer to — gain is
+    /// separate "set gain on the running player" call to defer to; gain is
     /// baked into the source chain via [`VolumeGain`]. So instead of
     /// resolving a final `f32` synchronously (which used to block `play()`
-    /// under the player lock for the length of the decode — the same
+    /// under the player lock for the length of the decode, the same
     /// "backend freezes" symptom Android had), this returns a
     /// [`SharedGain`] cell seeded at neutral (1.0) and, on a cache miss,
     /// kicks off a background analysis thread that writes the real gain
@@ -668,7 +668,7 @@ impl AudioPlayer {
     /// actually become the playing track via [`Self::adopt_prefetched`].
     ///
     /// The prefetch's gain cell is already wired into the running source, so
-    /// this doesn't need to build or return a new one — it only needs the
+    /// this doesn't need to build or return a new one. It only needs the
     /// `register_levels` side effect (median contribution), which a peek
     /// never triggers on its own. If analysis hasn't finished caching levels
     /// yet, this is a no-op; the track just doesn't contribute this time.
@@ -684,7 +684,7 @@ impl AudioPlayer {
 
     /// Same as [`Self::normalization_gain_cell_for_path`] but for a
     /// peeked/upcoming track (crossfade or gapless prefetch) that may never
-    /// actually play — doesn't count toward the running session median.
+    /// actually play. Doesn't count toward the running session median.
     fn peek_normalization_gain_cell_for_path(&self, path: &str) -> SharedGain {
         if !self.volume_normalization_enabled {
             return shared_gain(1.0);
@@ -1063,7 +1063,7 @@ impl AudioPlayer {
         // this one ends, before `play_next()`'s repeat-one branch (which
         // replays the current track) ever gets a chance to run. Desktop's
         // `prefetch_next_into_sink` already refuses to prefetch under
-        // repeat-one for the same reason — this mirrors that.
+        // repeat-one for the same reason; this mirrors that.
         let use_gapless = self.gapless_enabled
             && self.crossfade_duration <= 0.0
             && self.repeat != RepeatMode::One;
@@ -1137,8 +1137,8 @@ impl AudioPlayer {
             .filter(|&ms| ms > 0)
             .map(|ms| Duration::from_millis(ms as u64));
         // ExoPlayer auto-advanced within a playlist built entirely up front
-        // (see `play_via_exo`), which only ever set gain for the first item —
-        // without this, every later track in a gapless run keeps whatever
+        // (see `play_via_exo`), which only ever set gain for the first item.
+        // Without this, every later track in a gapless run keeps whatever
         // gain the first track got, right through crossfade/skip handling.
         self.apply_android_normalization_for_path(&path);
         self.current_path = Some(new_path_buf);
@@ -1217,7 +1217,7 @@ impl AudioPlayer {
         if self.repeat == RepeatMode::One {
             return;
         }
-        // Skip sink prefetch when crossfade is enabled — the current source
+        // Skip sink prefetch when crossfade is enabled. The current source
         // already contains the next track internally for the transition.
         if self.crossfade_duration > 0.0 {
             return;
@@ -1249,14 +1249,14 @@ impl AudioPlayer {
         // This track was only ever gain-*peeked* during prefetch (its gain
         // cell is already live in the sink), which deliberately doesn't
         // count toward the session median. Now that it's actually the
-        // playing track, let it contribute — otherwise gapless playback
+        // playing track, let it contribute, otherwise gapless playback
         // (the common case with normalization + prefetch both on) never
         // advances the median past whatever `play()` was first called with.
         self.register_now_playing_for_normalization(path);
         self.current_path = Some(PathBuf::from(path));
         // If the prefetched source has already been audible for a bit (tick
-        // latency), keep the clock near zero — we can't know exact sink offset
-        // cheaply, and restarting would be worse.
+        // latency), keep the clock near zero. We can't know the exact sink
+        // offset cheaply, and restarting would be worse.
         self.clock = PlaybackClock {
             started_at: Some(Instant::now()),
             elapsed_before_start: Duration::ZERO,
@@ -1269,7 +1269,7 @@ impl AudioPlayer {
 
     /// Load a track at `position_secs` without starting playback (session restore).
     pub fn load_paused_at(&mut self, path: &str, position_secs: f64) -> Result<(), AudioError> {
-        // `position_secs` is deserialized from the persisted settings JSON —
+        // `position_secs` is deserialized from the persisted settings JSON, so
         // a hand-edited or corrupted file could contain a huge or infinite
         // value, which `Duration::from_secs_f64` below panics on outright.
         // Same cap as `seek()`.
@@ -1471,7 +1471,7 @@ impl AudioPlayer {
         // Infinity) from reaching `Duration::from_secs_f64` below, which
         // panics outright on non-finite or overflowing input.
         const MAX_SEEK_SECONDS: f64 = 1e9;
-        // Not `clamp`: see `load_paused_at` — `clamp` would propagate NaN.
+        // Not `clamp`: see `load_paused_at`, `clamp` would propagate NaN.
         #[allow(clippy::manual_clamp)]
         let seconds = seconds.max(0.0).min(MAX_SEEK_SECONDS);
         #[cfg(target_os = "android")]
@@ -1515,8 +1515,8 @@ impl AudioPlayer {
                 if !was_playing {
                     let _ = self.pause();
                 } else {
-                    // play() already faded in; SoftFade::try_seek reset gain to 0 —
-                    // nudge target so the post-seek ramp restarts.
+                    // play() already faded in; SoftFade::try_seek reset gain to 0,
+                    // so nudge target to restart the post-seek ramp.
                     self.set_soft_fade_target(1.0);
                 }
                 return Ok(());
@@ -1531,7 +1531,7 @@ impl AudioPlayer {
                     self.clock.started_at = was_playing.then(Instant::now);
                     self.prefetched_next = None;
                     // Crossfade may promote the incoming track inside try_seek when
-                    // the UI already handed off at fade-start — adopt that path so
+                    // the UI already handed off at fade-start. Adopt that path so
                     // transport and metadata stay on the song the scrubber controls.
                     self.adopt_crossfade_logical_track();
                     if was_playing {
@@ -1564,7 +1564,7 @@ impl AudioPlayer {
     pub fn is_playing(&self) -> bool {
         #[cfg(target_os = "android")]
         {
-            // Rust transport clock is authoritative — Exo JNI cache is only
+            // Rust transport clock is authoritative. The Exo JNI cache is only
             // refreshed on the main looper, so worker-thread polls lie.
             return self.current_path.is_some() && self.clock.started_at.is_some();
         }
@@ -1638,7 +1638,7 @@ impl AudioPlayer {
             // A crossfade source keeps playing the *next* track in the same sink after
             // the outgoing track ends. Wall-clock / pending_next alone are not enough:
             // once the mixer promotes, pending_next flips false while audio is still
-            // mid-song — and a premature play_next() restarts that track from 0.
+            // mid-song, and a premature play_next() restarts that track from 0.
             // Only advance when this sink is truly exhausted (then start the following track).
             if self.crossfade_state.is_some() && !self.sink_exhausted() {
                 return false;
@@ -1649,7 +1649,7 @@ impl AudioPlayer {
                 self.clock.raw_elapsed() >= duration.saturating_add(grace)
             });
 
-            // Prefetched next is already in the sink — only adopt once the current
+            // Prefetched next is already in the sink, so only adopt once the current
             // source has actually finished (sink has drained down to the follow-up).
             // Adopting earlier and calling play() on a path mismatch was restarting
             // the next track after a few milliseconds of audio.
@@ -1662,7 +1662,7 @@ impl AudioPlayer {
                 if at_duration_end && sink_len <= 1 {
                     return true;
                 }
-                // Still playing the outgoing source (len >= 2) — wait.
+                // Still playing the outgoing source (len >= 2), so wait.
                 return false;
             }
 
@@ -1769,7 +1769,7 @@ impl AudioPlayer {
     /// Align `current_path` / duration with the crossfade mixer after a seek.
     ///
     /// Unlike [`Self::check_crossfade_track_switch`], this does not require the
-    /// `track_switched` latch — seek may promote the incoming source without
+    /// `track_switched` latch; seek may promote the incoming source without
     /// re-signaling a switch.
     fn adopt_crossfade_logical_track(&mut self) {
         let Some(state) = self.crossfade_state.clone() else {
@@ -1949,7 +1949,7 @@ impl AudioPlayer {
 
         // Sink prefetch appends the next track *after* the current source.
         // Adopting it mid-song only updates current_path (UI) while the
-        // previous source keeps playing — so only adopt when that source
+        // previous source keeps playing, so only adopt when that source
         // has actually finished. Manual Next must tear down and restart.
         #[cfg(target_os = "android")]
         if self.try_android_gapless_skip_forward()? {
@@ -1972,7 +1972,7 @@ impl AudioPlayer {
                     self.adopt_prefetched(&prefetched, duration);
                     return Ok(Some(prefetched));
                 }
-                // Prefetch no longer matches the queue — fall through.
+                // Prefetch no longer matches the queue, so fall through.
             }
             // Mid-song skip (or stale buffer): rebuild from the real next track.
             // prefetched_next was cleared by take(); play() also clears the sink.

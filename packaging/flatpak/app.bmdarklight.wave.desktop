@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Wave
+GenericName=Music Player
+Comment=Lightweight offline-first music player
+Exec=wave
+Icon=app.bmdarklight.wave
+Categories=AudioVideo;Audio;Player;Music;
+Keywords=music;audio;player;mp3;flac;playlist;library;lyrics;equalizer;offline;
+Terminal=false
+StartupWMClass=app.bmdarklight.wave
+StartupNotify=true

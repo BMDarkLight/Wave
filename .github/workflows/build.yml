@@ -3,19 +3,45 @@ name: Build
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   build:
+    name: ${{ matrix.label }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          # deb, rpm and AppImage
+          - os: ubuntu-latest
+            label: linux-x86_64
+            target: ''
+            args: ''
+          # NSIS installer (.exe)
+          - os: windows-latest
+            label: windows-x86_64
+            target: ''
+            args: ''
+          # .app + .dmg, Apple silicon
+          - os: macos-latest
+            label: macos-aarch64
+            target: aarch64-apple-darwin
+            args: '--target aarch64-apple-darwin'
+          # .app + .dmg, Intel
+          - os: macos-latest
+            label: macos-x86_64
+            target: x86_64-apple-darwin
+            args: '--target x86_64-apple-darwin'
 
     runs-on: ${{ matrix.os }}
 
@@ -30,11 +56,14 @@ jobs:
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
 
     - name: Rust cache
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: ./src-tauri -> target
+        key: ${{ matrix.label }}
 
     - name: Install Linux dependencies
       if: matrix.os == 'ubuntu-latest'
@@ -49,7 +78,10 @@ jobs:
           xdg-utils \
           libxdo-dev \
           libxdo3 \
-          xdotool
+          xdotool \
+          rpm \
+          desktop-file-utils \
+          appstream
 
     - name: Configure Linux native library path
       if: matrix.os == 'ubuntu-latest'
@@ -65,17 +97,136 @@ jobs:
         echo "LIBRARY_PATH=$GITHUB_WORKSPACE/.ci-native-libs:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
         echo "RUSTFLAGS=-Lnative=$GITHUB_WORKSPACE/.ci-native-libs ${RUSTFLAGS:-}" >> "$GITHUB_ENV"
 
+    - name: Validate AppStream metainfo
+      if: matrix.os == 'ubuntu-latest'
+      run: appstreamcli validate --no-net packaging/linux/app.bmdarklight.wave.metainfo.xml
+
     - name: Install npm dependencies
       run: npm ci
 
-    - name: Build the app
+    # Builds every installer for the platform. On a v* tag it also uploads them
+    # to a draft GitHub Release; on branches and PRs tagName is empty, so the
+    # packages are built and checked but nothing is published.
+    - name: Build the app and its installers
       uses: tauri-apps/tauri-action@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        args: ${{ matrix.args }}
+        tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        releaseName: Wave ${{ github.ref_name }}
+        releaseDraft: true
+        prerelease: false
+
+    # Fails the build if the packaged app is not actually installable as one:
+    # the binary has to be `wave` on PATH, and the desktop entry has to be valid.
+    # Fails the build if the packaged app is not actually installable as one:
+    # the binary has to be reachable as `wave` on PATH, and the desktop entry
+    # has to be valid. Everything is printed before it is asserted, so a
+    # failure here says what the package actually contains.
+    - name: Verify the Linux packages
+      if: matrix.os == 'ubuntu-latest'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        DEB="$(find src-tauri/target -type f -name '*.deb' -print -quit)"
+        if [ -z "$DEB" ]; then
+          echo "::error::No .deb was produced"
+          find src-tauri/target -name 'bundle' -type d -exec find {} -maxdepth 2 \; || true
+          exit 1
+        fi
+        echo "Inspecting $DEB"
+
+        # Listed once into a file rather than piped into each check: `grep -q`
+        # closes the pipe on its first match, which can hand dpkg-deb a SIGPIPE
+        # and make the pipeline fail under `pipefail` even though it matched.
+        dpkg-deb -c "$DEB" > /tmp/deb-contents.txt
+
+        echo "::group::Full .deb contents"
+        cat /tmp/deb-contents.txt
+        echo "::endgroup::"
+
+        echo "== what the package puts on PATH =="
+        grep ' \./usr/bin/' /tmp/deb-contents.txt || true
+
+        # dpkg-deb appends " -> target" to symlink entries, so the name is not
+        # necessarily at end of line. Accept a regular file or a symlink.
+        if ! grep -qE ' \./usr/bin/wave( -> |$)' /tmp/deb-contents.txt; then
+          echo "::error::The package does not provide /usr/bin/wave, so the CLI would not be on PATH."
+          exit 1
+        fi
+        echo "OK: the package provides /usr/bin/wave"
+
+        echo "== declared dependencies =="
+        dpkg-deb -f "$DEB"
+
+        mkdir -p /tmp/deb && dpkg-deb -x "$DEB" /tmp/deb
+
+        echo "== desktop entry =="
+        # The bundler names this after the app, so discover it rather than
+        # assuming the exact filename.
+        DESKTOP="$(find /tmp/deb/usr/share/applications -name '*.desktop' -print -quit 2>/dev/null || true)"
+        if [ -z "$DESKTOP" ]; then
+          echo "::error::No .desktop file in the package; the app would not appear in the app menu."
+          exit 1
+        fi
+        echo "found: $DESKTOP"
+        cat "$DESKTOP"
+        desktop-file-validate "$DESKTOP"
+        echo "OK: desktop entry is valid"
+
+        # Exec= has to name the binary that is actually on PATH.
+        grep -qE '^Exec=wave( |$)' "$DESKTOP" || {
+          echo "::error::Exec= in the desktop entry does not launch 'wave'."
+          exit 1
+        }
+        echo "OK: desktop entry launches wave"
+
+        echo "== metainfo =="
+        test -f /tmp/deb/usr/share/metainfo/app.bmdarklight.wave.metainfo.xml
+        echo "OK: metainfo is installed"
+
+    - name: Verify the Windows installer
+      if: matrix.os == 'windows-latest'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "== the main binary must be lowercase wave.exe =="
+        test -f src-tauri/target/release/wave.exe
+        echo "== the PATH shim and its helper must be bundled =="
+        test -f packaging/windows/wave.cmd
+        test -f packaging/windows/wave-path.ps1
+        find src-tauri/target -name '*-setup.exe' -print
+
+    # Printed so the Homebrew cask, winget manifest and Chocolatey package can
+    # be updated with real checksums straight from the release job's log.
+    - name: Checksums
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "### ${{ matrix.label }} artifacts" >> "$GITHUB_STEP_SUMMARY"
+        # macOS runners ship `shasum`, not GNU coreutils' `sha256sum`.
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha() { sha256sum "$1"; }
+        else
+          sha() { shasum -a 256 "$1"; }
+        fi
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+        find src-tauri/target -type f \
+          \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
+             -o -name '*-setup.exe' -o -name '*.msi' -o -name '*.dmg' \) \
+          -print0 |
+          while IFS= read -r -d '' f; do
+            sha "$f" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: wave-${{ matrix.os }}
-        path: src-tauri/target/release/bundle/
+        name: wave-${{ matrix.label }}
+        path: |
+          src-tauri/target/release/bundle/
+          src-tauri/target/*/release/bundle/
         if-no-files-found: error
