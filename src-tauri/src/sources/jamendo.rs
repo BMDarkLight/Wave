@@ -6,7 +6,7 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
-//! Jamendo — full-length, legally downloadable Creative Commons audio.
+//! Jamendo: full-length, legally downloadable Creative Commons audio.
 //!
 //! This is one of the two providers where "stream it or download it" actually
 //! completes. Jamendo requires a free client id; without one the provider

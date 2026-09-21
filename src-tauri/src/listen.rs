@@ -20,7 +20,7 @@ pub enum ListenEndReason {
     Completed,
     /// User skipped to another track before the listen threshold.
     Skipped,
-    /// Pause-away / stop / new selection / app close — credit seconds only.
+    /// Pause-away / stop / new selection / app close. Credit seconds only.
     Partial,
 }
 
@@ -32,7 +32,7 @@ struct ActiveListen {
     record_path: String,
     /// Highest playback position observed this session (seconds).
     max_position: f64,
-    /// Last observed position — used to ignore backward seeks when accumulating.
+    /// Last observed position, used to ignore backward seeks when accumulating.
     last_position: f64,
     /// Accumulated forward playback progress this session.
     accumulated: f64,
@@ -64,7 +64,7 @@ impl ListenTracker {
 
     /// Begin (or replace) a listen session for `path`.
     ///
-    /// New sessions always start at position 0 — callers must not seed with the
+    /// New sessions always start at position 0; callers must not seed with the
     /// previous track's scrubber position (a common Android race).
     pub fn start(
         &mut self,
@@ -198,7 +198,7 @@ impl ListenTracker {
     /// Switch to a new track, returning the flush for the previous one.
     ///
     /// `new_path` is used only for tick matching; `record_path` is what gets
-    /// written to the DB. Position is always reset — never inherit the previous
+    /// written to the DB. Position is always reset; never inherit the previous
     /// track's scrubber value.
     pub fn switch_track(
         &mut self,

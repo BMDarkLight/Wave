@@ -45,8 +45,8 @@ pub(crate) const TRACK_FROM: &str = "tracks t LEFT JOIN album_art aa ON aa.id = 
 
 /// Browse/aggregate FROM clause. Reads the `library_tracks` view so
 /// stream-only rows stay out of album, artist, and count surfaces. Use
-/// [`TRACK_FROM`] instead whenever a row is being looked up by id or path —
-/// playback must still be able to resolve a cached track.
+/// [`TRACK_FROM`] for lookups by id or path; playback must still be able
+/// to resolve a cached track.
 pub(crate) const LIBRARY_TRACK_FROM: &str =
     "library_tracks t LEFT JOIN album_art aa ON aa.id = t.album_art_id";
 
@@ -55,13 +55,12 @@ pub(crate) const LIBRARY_TRACK_FROM: &str =
 const ARTIST_ENRICHMENT_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 
 /// Bump this whenever `save_artist_enrichment` starts capturing something a
-/// prior version didn't (e.g. cover art) — rows saved under an older version
-/// are treated as needing a refresh immediately, regardless of TTL, so a
-/// capability added here doesn't silently wait out a 30-day-old cache.
+/// prior version didn't (e.g. cover art). Rows saved under an older version
+/// always need a refresh, regardless of TTL.
 const ARTIST_ENRICHMENT_PROFILE_VERSION: i64 = 2;
 
 /// How many tracks by a single artist may appear in one Home suggestions
-/// response — the fix for "4 Metallica plays -> wall of Metallica".
+/// response. Stops 4 Metallica plays becoming a wall of Metallica.
 const MAX_TRACKS_PER_ARTIST_IN_SUGGESTIONS: usize = 3;
 
 /// How many of your top artists seed the similar-artist / genre lookups.
@@ -131,10 +130,10 @@ struct LyricsTrackExportJson {
     lyrics: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lyrics_source: Option<String>,
-    /// Legacy v1 field — accepted on import only.
+    /// Legacy v1 field. Accepted on import only.
     #[serde(default, skip_serializing)]
     path: Option<String>,
-    /// Legacy v1 field — accepted on import only.
+    /// Legacy v1 field. Accepted on import only.
     #[serde(default, skip_serializing)]
     id: Option<String>,
 }
@@ -381,7 +380,7 @@ impl Library {
         // `library_tracks` is the browse-visible subset: local files plus
         // downloads the user chose to keep. Rows that exist only because
         // something was streamed (`source_state = 'cached'`) are playable and
-        // queueable but must never surface in browse, counts, or search — see
+        // queueable but must never surface in browse, counts, or search. See
         // `LIBRARY_TRACK_FROM`.
         connection
             .execute_batch(
@@ -416,7 +415,7 @@ impl Library {
         // Previews stopped being library content: they are session-scoped clips
         // held in memory, never rows. Sweep up rows left by the earlier build
         // that treated them like cached tracks. Deezer is preview-only by
-        // definition — its API exposes nothing but 30-second clips.
+        // definition: its API exposes nothing but 30-second clips.
         if let Ok(removed) = connection.execute(
             "DELETE FROM tracks WHERE source_provider = 'deezer' AND source_state = 'cached'",
             [],
@@ -643,7 +642,7 @@ impl Library {
             None => extract_track(self.app_handle.as_ref(), &path)?,
         };
 
-        // "Library" is virtual — just ensure the track exists in the
+        // "Library" is virtual, so just ensure the track exists in the
         // tracks table. No playlist_tracks entry is needed.
         if is_default {
             let mut connection = self.lock_connection()?;
@@ -710,7 +709,7 @@ impl Library {
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
         if is_default {
-            // Library is virtual — remove the track entirely
+            // Library is virtual, so remove the track entirely
             return Self::delete_track_by_path_in_tx(&tx, path).and_then(|_| {
                 tx.commit()
                     .map_err(|e| format!("Failed to commit transaction: {e}"))
@@ -1563,7 +1562,7 @@ impl Library {
         Ok((added, removed))
     }
 
-    /// Paths only — avoids loading cover art / full rows during sync.
+    /// Paths only. Avoids loading cover art / full rows during sync.
     pub fn playlist_track_paths(&self, playlist_id: &str) -> Result<Vec<String>, String> {
         let connection = self.lock_connection()?;
         if self
@@ -1959,7 +1958,7 @@ impl Library {
     ///
     /// When `album_artist` is provided, tracks are matched on both `album` and
     /// the resolved album artist (`COALESCE(album_artist, artist)`). This keeps
-    /// same-named albums by different artists apart — pass the value from an
+    /// same-named albums by different artists apart. Pass the value from an
     /// [`AlbumSummaryDto`] (or a clicked `Track`'s `album_artist` falling back to
     /// `artist`) for a precise, Spotify-style "go to album" result.
     ///
@@ -2348,7 +2347,7 @@ impl Library {
             }
             match self.add_track_to_playlist(&playlist_id, line.to_string()) {
                 Ok(track) => tracks.push(track),
-                Err(error) => tracing::warn!("Skipped during M3U import — {line}: {error}"),
+                Err(error) => tracing::warn!("Skipped during M3U import ({line}): {error}"),
             }
         }
         Ok((playlist_id, tracks))
@@ -2417,7 +2416,7 @@ impl Library {
             match self.add_track_to_playlist(&playlist_id, track.path.clone()) {
                 Ok(t) => tracks.push(t),
                 Err(error) => {
-                    tracing::warn!("Skipped during JSON import — {}: {error}", track.path)
+                    tracing::warn!("Skipped during JSON import ({}): {error}", track.path)
                 }
             }
         }
@@ -2975,8 +2974,8 @@ impl Library {
             }
         }
 
-        // Same-genre enrichment: local vibe diversification (no network) —
-        // other artists you own who share your favorite track's genre tag.
+        // Same-genre enrichment: local diversification, no network. Other
+        // artists you own that share your favorite track's genre tag.
         if let Some(fav) = favorite_track.as_ref() {
             if let Some(genre) = fav
                 .genre
@@ -3012,9 +3011,9 @@ impl Library {
         // Similar-artist enrichment from cached enrichment data (see
         // `enrichment.rs`): owned tracks by artists similar to your top
         // artists become candidates; non-owned similar artists become
-        // "you might also like" discovery hints. Both are best-effort —
-        // this table is empty until a background job populates it, so a
-        // cold cache silently yields nothing here.
+        // "you might also like" discovery hints. Both are best-effort: the
+        // table is empty until a background job populates it, so a cold
+        // cache yields nothing here.
         let seed_artists = diversity_seed_artists_from(favorite_artist.as_ref(), &recent);
         // Discovery hints collected per seed artist, merged round-robin below
         // so one heavily-cached seed can't crowd out the others.
@@ -3152,7 +3151,7 @@ impl Library {
     }
 
     /// Artists whose taste should seed genre/similar-artist diversity right
-    /// now — same selection [`get_home_suggestions`] uses internally.
+    /// now. Same selection [`get_home_suggestions`] uses internally.
     /// Exposed so the background enrichment job can decide what to fetch
     /// without duplicating the query.
     pub fn diversity_seed_artists(&self) -> Result<Vec<String>, String> {
@@ -3167,10 +3166,10 @@ impl Library {
     /// Which of `artist_names` have no cached enrichment (see
     /// `artist_enrichment`), whose cache is older than
     /// [`ARTIST_ENRICHMENT_TTL_SECS`], or whose cache predates
-    /// [`ARTIST_ENRICHMENT_PROFILE_VERSION`] (so a newly added capability —
-    /// e.g. cover art — doesn't sit unused behind a month-old TTL). Used to
-    /// decide what a background enrichment pass should fetch next —
-    /// always DB-only, never touches the network itself.
+    /// [`ARTIST_ENRICHMENT_PROFILE_VERSION`], so a new field (e.g. cover art)
+    /// doesn't sit unused behind a month-old TTL. Used to decide what a
+    /// background enrichment pass should fetch next. DB-only; never touches
+    /// the network itself.
     pub fn artists_needing_enrichment(
         &self,
         artist_names: &[String],
@@ -3778,7 +3777,7 @@ fn upsert_track_deduped(conn: &impl Queryable, track: &Track) -> Result<String, 
 
     if let Some(existing_id) = find_existing_track_id(conn, &track)? {
         // Point the existing row at the canonical path (ignore unique conflict
-        // if another row already owns that path — then prefer that row).
+        // if another row already owns that path, then prefer that row).
         let path_owner: Option<String> = conn
             .query_opt(
                 "SELECT id FROM tracks WHERE path = ?1",
@@ -3952,8 +3951,8 @@ fn upsert_track(conn: &impl Queryable, track: &Track) -> Result<String, String> 
 
 impl Library {
     /// Look up the row for a provider's track, whether cached or downloaded.
-    /// Reads `tracks`, not `library_tracks` — a cached row must stay findable
-    /// so re-streaming reuses it instead of re-fetching.
+    /// Reads `tracks`, not `library_tracks`, so a cached row stays findable
+    /// and re-streaming reuses it instead of re-fetching.
     pub fn find_source_track(
         &self,
         provider: &str,
@@ -4333,7 +4332,7 @@ fn compact_playlist_positions(tx: &Transaction<'_>, playlist_id: &str) -> Result
 
 /// Escape SQL LIKE metacharacters (`%`, `_`, and the escape char itself) so a
 /// user's search term is matched literally. Pair with `LIKE ?N ESCAPE '\'` in
-/// the query — without the `ESCAPE` clause SQLite gives `\` no special
+/// the query. Without the `ESCAPE` clause SQLite gives `\` no special
 /// meaning and this escaping has no effect.
 /// LIKE pattern matching `s` anywhere in a column.
 fn contains_pattern(s: &str) -> String {
@@ -4510,7 +4509,7 @@ fn matched_fields_for(track: &Track, query: &str) -> Vec<String> {
         fields.push("lyrics".into());
     }
     if fields.is_empty() {
-        // FTS may stem/match differently — still mark title as a soft hit.
+        // FTS may stem/match differently, so still mark title as a soft hit.
         fields.push("title".into());
     }
     fields
@@ -4588,7 +4587,7 @@ fn lyrics_snippet(lyrics: &str, query: &str) -> Option<String> {
     if needle.is_empty() {
         return None;
     }
-    // `idx` is a byte offset into `lower`, not `lyrics` — case folding can
+    // `idx` is a byte offset into `lower`, not `lyrics`; case folding can
     // change a character's UTF-8 length (e.g. Turkish İ → "i̇"), so it isn't
     // guaranteed to land on a char boundary, or even the right spot, in the
     // original string. Snapping to a boundary can't recover exact alignment,
@@ -4798,7 +4797,7 @@ mod tests {
             )
             .unwrap();
 
-        // Tier 2 means "my library" — a preview is not that.
+        // Tier 2 means "my library", and a preview is not that.
         let hits = library.search_tracks_rich("Sunrise", Some(10)).unwrap();
         assert!(hits.is_empty());
 
@@ -4898,7 +4897,7 @@ mod tests {
             let connection = library.lock_connection().unwrap();
             upsert_track(&*connection, &sample_track("local", "/music/song.mp3")).unwrap();
         }
-        // Same artist/album/title as the local file — tag-based dedup would
+        // Same artist/album/title as the local file, so tag-based dedup would
         // otherwise delete one of them.
         library
             .upsert_cached_source_track(
@@ -5290,7 +5289,7 @@ mod tests {
 
         let albums = library.list_albums().expect("albums");
 
-        // 5 distinct (album, album_artist) groups — "Greatest Hits" appears twice
+        // 5 distinct (album, album_artist) groups; "Greatest Hits" appears twice
         // and The Beatles have two separate albums.
         assert_eq!(albums.len(), 5);
 
@@ -5753,7 +5752,7 @@ mod tests {
         second.artist = "Artist".to_string();
         second.album = "Album".to_string();
 
-        // Same file, new path string — must update the existing row, not insert.
+        // Same file, new path string. Must update the existing row, not insert.
         library
             .apply_playlist_sync(
                 &favorites_id,
@@ -6256,7 +6255,7 @@ mod tests {
         {
             let connection = library.lock_connection().expect("connection");
             // Fresh by TTL, but saved under an older profile version (e.g.
-            // before cover-art support existed) — must still be refreshed.
+            // before cover-art support existed), so it must still be refreshed.
             connection
                 .execute(
                     "INSERT INTO artist_enrichment (artist_key, artist_name, mbid, tags, status, fetched_at, profile_version)

@@ -461,7 +461,7 @@ fn request_shutdown(state: &Arc<Mutex<DaemonState>>) {
 // ── IPC server ────────────────────────────────────────────────────────────────
 
 /// Longest request line the daemon will read. Every `DaemonRequest` variant
-/// serialises to well under a kilobyte, so this is generous — its job is to
+/// serialises to well under a kilobyte, so this is generous. Its job is to
 /// stop a client that never sends a newline from growing the buffer forever.
 const MAX_REQUEST_BYTES: u64 = 64 * 1024;
 

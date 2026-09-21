@@ -38,7 +38,7 @@ mod cover_art {
 
         pub fn resolve_path(&mut self, cover_url: Option<&str>) -> Option<PathBuf> {
             let url = cover_url?;
-            // Prefer shared album thumb file paths — no temp rewrite.
+            // Prefer shared album thumb file paths, no temp rewrite.
             if let Some(path) = url.strip_prefix("file://") {
                 let p = PathBuf::from(path);
                 if p.is_file() {
@@ -513,7 +513,7 @@ impl MediaBridgeState {
             }
             match rx.recv_timeout(Duration::from_secs(5)) {
                 Ok(result) => self.store_bridge(result),
-                Err(_) => tracing::warn!("OS media controls init timed out — will retry"),
+                Err(_) => tracing::warn!("OS media controls init timed out, will retry"),
             }
         }
 
@@ -533,7 +533,7 @@ impl MediaBridgeState {
     {
         self.ensure_initialized();
         if !self.is_initialized() {
-            tracing::warn!("OS media controls not initialized — skipping update");
+            tracing::warn!("OS media controls not initialized, skipping update");
             return;
         }
 

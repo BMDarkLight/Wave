@@ -265,7 +265,7 @@ mod inner {
             return;
         }
 
-        // Stopped — resume the last loaded track if we still have one.
+        // Stopped, so resume the last loaded track if we still have one.
         if let Some(path) = player
             .get_current_path()
             .and_then(|p| p.to_str().map(str::to_string))

@@ -6,13 +6,13 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
-//! Deezer — discovery and metadata.
+//! Deezer: discovery and metadata.
 //!
 //! Deezer's public search API is free and unauthenticated, and its metadata
 //! and artwork are the best of the three providers. Its audio is *not*:
 //! `preview` is a 30-second MP3, and that is deliberately all this provider
 //! ever returns. Full-length Deezer audio is encrypted and requires account
-//! token decryption, which is out of scope permanently — hence
+//! token decryption, which is out of scope permanently. Hence
 //! `is_full_length: false` and `downloadable: false` on every result, which is
 //! what makes the UI show a "30s preview" badge and hide the download button.
 

@@ -108,7 +108,7 @@ pub fn run() {
                 app_handle.clone(),
             )));
 
-            // SMTC requires a valid HWND — initialize on the UI thread once the window exists.
+            // SMTC requires a valid HWND, so initialize on the UI thread once the window exists.
             if let Some(window) = app.get_webview_window("main") {
                 let init_handle = app_handle.clone();
                 window.on_window_event(move |event| {
@@ -132,7 +132,7 @@ pub fn run() {
                     }
                 });
             } else {
-                tracing::warn!("Main window not found — OS media controls will init on first use");
+                tracing::warn!("Main window not found; OS media controls will init on first use");
             }
 
             if let Err(e) = gui_tray::setup(app) {
@@ -140,7 +140,7 @@ pub fn run() {
             }
 
             // Auto-advance when the current track ends. The playback daemon
-            // does this for headless mode; the GUI needs its own tick —
+            // does this for headless mode; the GUI needs its own tick,
             // especially on Android, where sink-empty detection via frontend
             // polling alone is unreliable.
             #[cfg(target_os = "android")]

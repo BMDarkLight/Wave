@@ -8,7 +8,7 @@
 
 //! Lyrics parsing: plain text, LRC, Enhanced LRC, and TTML.
 //!
-//! The point of this module is one distinction — a *line* timing versus a
+//! The point of this module is one distinction: a *line* timing versus a
 //! *word* timing. Line timings are what LRCLIB serves and what Wave has always
 //! rendered: highlight the current line. Word timings are what makes karaoke
 //! possible: wipe through a line syllable by syllable as it is sung.
@@ -16,10 +16,10 @@
 //! Three input shapes are recognised, and the parser reports which one it
 //! found so the UI can pick a rendering rather than guess:
 //!
-//! - **Plain** — no timings at all. Rendered as a block of text.
-//! - **LRC** — `[mm:ss.xx]` at the start of a line.
-//! - **Enhanced LRC** — the same, plus `<mm:ss.xx>` before individual words.
-//! - **TTML** — the format Apple-style syllable lyrics use, which additionally
+//! - **Plain**: no timings at all. Rendered as a block of text.
+//! - **LRC**: `[mm:ss.xx]` at the start of a line.
+//! - **Enhanced LRC**: the same, plus `<mm:ss.xx>` before individual words.
+//! - **TTML**: the format Apple-style syllable lyrics use, which additionally
 //!   carries voice attribution (duets) and background vocals.
 //!
 //! Every parser degrades rather than fails: unparseable input comes back as
@@ -34,11 +34,11 @@ const DEFAULT_WORD_SECONDS: f64 = 0.4;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LyricsKind {
-    /// No timings — render as text.
+    /// No timings. Render as text.
     Plain,
-    /// Line timings only — highlight the active line.
+    /// Line timings only. Highlight the active line.
     Line,
-    /// Word timings present — karaoke rendering is possible.
+    /// Word timings present. Karaoke rendering is possible.
     Word,
 }
 
@@ -54,7 +54,7 @@ pub struct LyricsLine {
     pub time: f64,
     /// End of the line when known. `None` means "until the next line".
     pub end: Option<f64>,
-    /// The whole line as text, always populated — the UI needs it for the
+    /// The whole line as text, always populated. The UI needs it for the
     /// line-level rendering path and for copying.
     pub text: String,
     /// Empty for line-level sources.
@@ -86,7 +86,7 @@ impl LyricsSheet {
 /// Parse any supported lyrics text into a sheet.
 ///
 /// Detection is by content, not by file extension or provider name, because
-/// lyrics reach Wave from tags, sidecar files, and network providers alike —
+/// lyrics reach Wave from tags, sidecar files, and network providers alike,
 /// and any of them may hold any of these formats.
 pub fn parse_sheet(raw: &str) -> LyricsSheet {
     if raw.trim().is_empty() {
@@ -264,7 +264,7 @@ fn parse_lrc_words(body: &str) -> (String, Vec<LyricsWord>) {
                 pending = Some((time, String::new()));
             }
             None => {
-                // Not a timestamp — keep the angle brackets as text.
+                // Not a timestamp, so keep the angle brackets as text.
                 let literal = &rest[open..=close];
                 text.push_str(literal);
                 if let Some((_, chunk)) = pending.as_mut() {
@@ -357,7 +357,7 @@ fn parse_ttml_time(raw: &str) -> Option<f64> {
 /// Pretty-printed TTML puts newlines and indentation between `<span>`
 /// elements, and those arrive as genuine text nodes. Without this, a line
 /// renders with the source file's indentation embedded in it. Word text is
-/// deliberately left untouched — a word's own trailing space is what separates
+/// deliberately left untouched; a word's own trailing space is what separates
 /// it from the next one during the karaoke wipe.
 fn normalize_ws(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());

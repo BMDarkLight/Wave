@@ -53,7 +53,7 @@ pub struct PlaybackModeDto {
     pub shuffle: bool,
 }
 
-/// Result of importing a playlist — the new playlist id and its tracks.
+/// Result of importing a playlist: the new playlist id and its tracks.
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportResultDto {
     pub playlist_id: String,
@@ -71,8 +71,8 @@ pub struct LyricsImportResultDto {
 
 /// Summary of a distinct album in the library, used for browse/grid views.
 ///
-/// Albums are grouped by `(album, album_artist)` — falling back to the track
-/// `artist` when `album_artist` is missing — so that unrelated albums which
+/// Albums are grouped by `(album, album_artist)`, falling back to the track
+/// `artist` when `album_artist` is missing, so that unrelated albums which
 /// happen to share a name (e.g. several "Greatest Hits") are kept separate.
 #[derive(Debug, Clone, Serialize)]
 pub struct AlbumSummaryDto {
@@ -136,8 +136,8 @@ pub struct HomeSuggestionsDto {
     pub favorite_artist: Option<ArtistSummaryDto>,
     /// True when listen history influenced the picks.
     pub curated: bool,
-    /// Artists similar to what you listen to but not in your library yet —
-    /// informational only, nothing here is playable.
+    /// Artists similar to what you listen to but not in your library yet.
+    /// Informational only; nothing here is playable.
     pub discovery: Vec<DiscoveryArtistDto>,
 }
 
@@ -149,7 +149,7 @@ pub struct DiscoveryArtistDto {
     /// Display name of the owned artist this suggestion was derived from.
     pub similar_to: String,
     /// Cover Art Archive URL for a representative album, when one was
-    /// resolved. Not every release is archived, so this is often absent —
+    /// resolved. Not every release is archived, so this is often absent and
     /// the frontend falls back to a generic icon.
     pub cover_url: Option<String>,
 }

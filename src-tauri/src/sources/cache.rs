@@ -135,7 +135,7 @@ pub fn fetch_to(client: &Client, url: &str, dest: &Path) -> Result<u64, SourceEr
     let written = {
         let mut file = fs::File::create(&temp)
             .map_err(|e| SourceError::Network(format!("Cannot open cache file: {e}")))?;
-        // Cap while streaming too — a server can omit or lie about content-length.
+        // Cap while streaming too: a server can omit or lie about content-length.
         let mut limited = (&mut response).take(MAX_FETCH_BYTES);
         std::io::copy(&mut limited, &mut file)
             .map_err(|e| SourceError::Network(format!("Download failed: {e}")))?
@@ -161,7 +161,7 @@ fn describe_http_failure(status: u16) -> String {
     match status {
         401 | 403 => "This recording isn't available for download".to_string(),
         404 => "This recording is no longer available at the source".to_string(),
-        429 => "The source is rate limiting — try again in a moment".to_string(),
+        429 => "The source is rate limiting, try again in a moment".to_string(),
         500..=599 => format!("The source is having problems (HTTP {status})"),
         other => format!("The source refused the download (HTTP {other})"),
     }
@@ -177,7 +177,7 @@ pub struct EvictionCandidate {
 
 /// Choose which cached tracks to drop so the cache fits under `cap_bytes`.
 ///
-/// `protected` holds paths that must survive regardless of age — the currently
+/// `protected` holds paths that must survive regardless of age: the currently
 /// playing track and everything in the live queue. Evicting one of those would
 /// delete a file out from under an open decoder.
 ///
@@ -198,7 +198,7 @@ pub fn plan_eviction(
         .iter()
         .filter(|c| !protected.iter().any(|p| p == &c.path))
         .collect();
-    // Oldest fetch first — least recently useful.
+    // Oldest fetch first, least recently useful.
     ordered.sort_by_key(|c| (c.fetched_at, c.track_id.clone()));
 
     let mut freed = 0u64;

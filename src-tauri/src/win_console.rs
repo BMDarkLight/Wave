@@ -26,8 +26,8 @@ pub fn attach_parent_terminal() {}
 ///
 /// Call once, before anything writes to stdout/stderr.
 ///
-/// Handles that the parent already supplied — a pipe from `wave … | more`, a
-/// file from `wave … > out.txt` — are left untouched. Overwriting those would
+/// Handles the parent already supplied (a pipe from `wave … | more`, a file
+/// from `wave … > out.txt`) are left untouched. Overwriting those would
 /// silently redirect the output back to the console and break redirection, so
 /// each handle is rebound only when it is genuinely missing.
 #[cfg(target_os = "windows")]
@@ -81,8 +81,8 @@ pub fn attach_parent_terminal() {
         return;
     }
 
-    // Fails when there is no parent console — a shortcut, a service, `start`ed
-    // detached — in which case there is nothing to print to and we leave the
+    // Fails when there is no parent console (a shortcut, a service, `start`ed
+    // detached), in which case there is nothing to print to and we leave the
     // handles as they are.
     if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) } == 0 {
         return;

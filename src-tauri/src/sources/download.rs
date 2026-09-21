@@ -17,7 +17,7 @@
 //!   sit with the rest of the user's music. The folder picker asks for write
 //!   access but deliberately falls back to read-only when the system refuses
 //!   (see `FolderPickerCallback.java`), so a read-only grant is a *normal*
-//!   outcome here, not an error — we fall back to app-private storage and tell
+//!   outcome here, not an error. We fall back to app-private storage and tell
 //!   the user where the file went.
 //!
 //! Downloads **copy** rather than move. Promoting a cached file while that
@@ -103,7 +103,7 @@ pub fn dedupe_filename(desired: &Path, exists: &dyn Fn(&Path) -> bool) -> PathBu
 ///
 /// `media_folders` is the user's configured list; on Android the first usable
 /// local one wins. `is_writable` decides whether a candidate root can actually
-/// be written to — injected so the policy is testable without a device.
+/// be written to, injected so the policy is testable without a device.
 pub fn choose_destination(
     track: &SourceTrack,
     media_folders: &[String],

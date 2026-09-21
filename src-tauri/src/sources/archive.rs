@@ -6,7 +6,7 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
-//! Internet Archive — full-length public-domain and CC audio.
+//! Internet Archive: full-length public-domain and CC audio.
 //!
 //! Archive's search API is *item*-level, and an item is often a whole concert
 //! or album rather than a single track. Rather than firing a metadata request
@@ -116,7 +116,7 @@ fn parse_item(item: &serde_json::Value) -> Option<SourceTrack> {
         // from the decoded stream.
         duration_seconds: None,
         artwork_url: None,
-        // Resolved lazily — see the module docs.
+        // Resolved lazily; see the module docs.
         audio_url: None,
         is_full_length: true,
         downloadable: true,

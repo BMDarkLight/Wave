@@ -90,7 +90,7 @@ pub struct SourceTrack {
     /// Licence line to display alongside the result (CC sources).
     pub attribution: Option<String>,
     /// Path of the local track this result duplicates, filled in by the command
-    /// layer — providers always leave it `None`. Lets the UI mark a result as
+    /// layer; providers always leave it `None`. Lets the UI mark a result as
     /// already owned and play the local copy instead of re-fetching.
     #[serde(default)]
     pub already_in_library: Option<String>,
@@ -98,7 +98,7 @@ pub struct SourceTrack {
 
 impl SourceTrack {
     /// Filename extension for the cached/downloaded file, guessed from the
-    /// audio URL and defaulted to mp3 — every provider here serves MP3.
+    /// audio URL and defaulted to mp3; every provider here serves MP3.
     pub fn extension(&self) -> String {
         self.audio_url
             .as_deref()
@@ -111,7 +111,7 @@ impl SourceTrack {
 }
 
 /// One provider's slice of a search. `error` being `Some` while `tracks` is
-/// empty is the normal degraded case — the UI renders the section as
+/// empty is the normal degraded case. The UI renders the section as
 /// unavailable and the other sections still show results.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProviderResults {
@@ -371,7 +371,7 @@ mod live_tests {
             "preview suspiciously small: {written} bytes"
         );
         let header = std::fs::read(&dest).expect("cached file unreadable");
-        // ID3 tag or a raw MPEG frame sync — either way, decodable audio.
+        // ID3 tag or a raw MPEG frame sync; either way, decodable audio.
         let is_audio =
             header.starts_with(b"ID3") || (header[0] == 0xFF && header[1] & 0xE0 == 0xE0);
         assert!(is_audio, "cached bytes are not MP3: {:?}", &header[..4]);
@@ -421,10 +421,10 @@ mod live_tests {
             .expect("no Archive item resolved to audio");
         assert!(resolved.starts_with("https://archive.org/download/"));
 
-        // Asserting the URL's shape is not enough — that is exactly how a 401
+        // Asserting the URL's shape is not enough: that is exactly how a 401
         // on an access-restricted item reached the user. Fetch it and decode.
         // Derive the extension from the resolved URL exactly as
-        // `stream_source_track` does — Archive tracks carry no audio_url until
+        // `stream_source_track` does. Archive tracks carry no audio_url until
         // resolve, so a cache path built before that would have no extension
         // and `validate_audio_path` would reject it.
         let mut resolved_track = track.clone();

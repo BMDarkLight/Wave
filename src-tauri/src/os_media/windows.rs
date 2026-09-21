@@ -267,7 +267,7 @@ impl SmtcSession {
 
 // ── Taskbar thumbnail icons (system Segoe MDL2 glyphs, white on transparent) ──
 
-// Segoe MDL2 Assets — same code points Windows uses for media transport UI.
+// Segoe MDL2 Assets: same code points Windows uses for media transport UI.
 const GLYPH_PREVIOUS: u16 = 0xE100;
 const GLYPH_PLAY: u16 = 0xE102;
 const GLYPH_PAUSE: u16 = 0xE103;

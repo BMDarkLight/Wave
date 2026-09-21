@@ -6,7 +6,7 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
-//! Shared album-art thumbs — one small JPEG on disk per unique image.
+//! Shared album-art thumbs. One small JPEG on disk per unique image.
 //!
 //! Full-resolution covers are never persisted; call
 //! [`extract_full_cover_data_url`] when the lyrics panel needs a large image.
@@ -160,7 +160,7 @@ pub fn resolve_thumb_abs(app: &AppHandle, relative_or_id: &str) -> Option<PathBu
     let cover_root = app_dir.join(COVER_ART_DIR);
 
     // Already a relative path, or a bare filename with a known image
-    // extension — either way it is resolved straight under the cover root.
+    // extension. Either way it is resolved straight under the cover root.
     let candidate = if relative_or_id.contains('/')
         || relative_or_id.contains('\\')
         || relative_or_id.ends_with(".jpg")
@@ -345,7 +345,7 @@ pub fn migrate_data_url_to_thumb(
 /// Encode arbitrary bytes as a data URL for one-shot full-cover responses.
 pub fn full_cover_data_url(data: Vec<u8>, mime: &str) -> String {
     let mime = normalize_mime(mime);
-    // Cap absurd payloads for IPC — downscale if > 1.5 MiB.
+    // Cap absurd payloads for IPC: downscale if > 1.5 MiB.
     const MAX_FULL: usize = 1536 * 1024;
     if data.len() <= MAX_FULL {
         return to_data_url(&mime, &data);

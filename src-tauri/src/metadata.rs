@@ -132,7 +132,7 @@ pub fn is_supported_audio_file(path: &Path) -> bool {
 }
 
 /// Extract tags + embedded cover thumb. Online Cover Art Archive lookup is
-/// skipped here so sync stays fast — call [`enrich_cover_art_online`] later.
+/// skipped here so sync stays fast; call [`enrich_cover_art_online`] later.
 pub fn extract_track(app: Option<&tauri::AppHandle>, path: &str) -> Result<Track, String> {
     extract_track_with_options(app, path, false, true)
 }
@@ -545,7 +545,7 @@ pub fn extract_full_cover_data_url(
 /// per-syllable timing plus duet and background-vocal attribution, and `.elrc`
 /// is the conventional extension for Enhanced LRC, whose `<mm:ss.xx>` word
 /// tags also produce a karaoke wipe. Plain `.lrc` gives line timings, and
-/// `.txt` gives none — so a track with both a `.ttml` and a `.txt` beside it
+/// `.txt` gives none, so a track with both a `.ttml` and a `.txt` beside it
 /// should get the richer one.
 ///
 /// This preference is the main way word timings reach Wave at all: no free

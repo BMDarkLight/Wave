@@ -11,7 +11,7 @@
 //!
 //! Every network call here is blocking and MUST run on a dedicated
 //! background thread, never on a command's response path or while holding
-//! the library lock — see `commands::run_artist_enrichment_job`. Every
+//! the library lock; see `commands::run_artist_enrichment_job`. Every
 //! failure (network, parse, rate limit, unknown artist) degrades to "no
 //! data" rather than an error: Home suggestions must keep working exactly
 //! as before if this is offline, slow, or blocked.
@@ -23,12 +23,12 @@ use std::time::Duration;
 const REQUEST_TIMEOUT_SECONDS: u64 = 6;
 const USER_AGENT: &str = "Wave/0.1.0 (local artist enrichment)";
 
-/// Spacing between MusicBrainz calls — their usage policy asks for ~1 req/sec
+/// Spacing between MusicBrainz calls. Their usage policy asks for ~1 req/sec
 /// from unauthenticated clients.
 pub const RATE_LIMIT_DELAY: Duration = Duration::from_millis(1100);
 
 /// A broad ListenBrainz Labs similar-artists model (5-year listening
-/// window). Picked for coverage over precision — the app already ranks
+/// window). Picked for coverage over precision; the app already ranks
 /// results locally by score and filters to what fits the request.
 const LISTENBRAINZ_ALGORITHM: &str =
     "session_based_days_1825_session_300_contribution_3_threshold_10_limit_100_filter_True_skip_30";
@@ -45,13 +45,13 @@ pub fn enrichment_client() -> &'static Client {
 }
 
 /// How many similar artists we keep per seed artist (ListenBrainz can return
-/// up to 100 — Home suggestions only ever reads the top 8, so anything past
+/// up to 100, but Home suggestions only reads the top 8, so anything past
 /// this is pure DB bloat).
 const MAX_SIMILAR_ARTISTS_STORED: usize = 20;
 
 /// How many of the (already score-sorted) similar artists get an album-cover
 /// lookup. Bounded separately from the above because each lookup is its own
-/// MusicBrainz call — this matches the 8 Home suggestions can ever display
+/// MusicBrainz call. This matches the 8 Home suggestions can ever display
 /// per seed, so no lookup is wasted on an artist that won't be shown.
 const MAX_COVER_LOOKUPS_PER_SEED: usize = 8;
 
@@ -78,7 +78,7 @@ pub struct ArtistProfile {
 
 /// Resolve genre tags + similar artists (each with a best-effort album cover)
 /// for `artist_name`. Sleeps between each network call to respect
-/// MusicBrainz's rate-limit policy — callers must invoke this from a
+/// MusicBrainz's rate-limit policy, so callers must invoke this from a
 /// background thread, never inline on a command.
 pub fn fetch_artist_profile(client: &Client, artist_name: &str) -> ArtistProfile {
     let mut profile = ArtistProfile::default();
@@ -106,7 +106,7 @@ pub fn fetch_artist_profile(client: &Client, artist_name: &str) -> ArtistProfile
 }
 
 /// Cover Art Archive URL for a release-group's front cover, sized for a Home
-/// page card. Missing coverage (common — not every release is archived) is
+/// page card. Missing coverage (common, not every release is archived) is
 /// left to the caller's `<img onerror>` fallback.
 pub fn cover_art_url(release_group_mbid: &str) -> String {
     format!("https://coverartarchive.org/release-group/{release_group_mbid}/front-250")
@@ -186,7 +186,7 @@ fn fetch_representative_release_group(client: &Client, artist_mbid: &str) -> Opt
     parse_mb_release_group_search(&body)
 }
 
-// ── Response parsing (pure — unit tested against real fixture payloads) ────
+// ── Response parsing (pure, unit tested against real fixture payloads) ─────
 
 #[derive(Debug, Deserialize)]
 struct MbArtistSearchResponse {
