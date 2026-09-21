@@ -124,6 +124,14 @@ jobs:
     # the binary has to be reachable as `wave` on PATH, and the desktop entry
     # has to be valid. Everything is printed before it is asserted, so a
     # failure here says what the package actually contains.
+    # Fails the build if the packaged app is not actually installable as one:
+    # the binary has to be reachable as `wave` on PATH, and the desktop entry
+    # has to be valid.
+    #
+    # Checks run against real archive member names taken from the payload tar,
+    # not against the formatted columns of `dpkg-deb -c`. Those columns vary:
+    # the leading "./" is only present if the producer wrote it (Tauri builds
+    # this tar itself), and symlink rows carry a trailing " -> target".
     - name: Verify the Linux packages
       if: matrix.os == 'ubuntu-latest'
       shell: bash
@@ -133,27 +141,21 @@ jobs:
         DEB="$(find src-tauri/target -type f -name '*.deb' -print -quit)"
         if [ -z "$DEB" ]; then
           echo "::error::No .deb was produced"
-          find src-tauri/target -name 'bundle' -type d -exec find {} -maxdepth 2 \; || true
           exit 1
         fi
         echo "Inspecting $DEB"
 
-        # Listed once into a file rather than piped into each check: `grep -q`
-        # closes the pipe on its first match, which can hand dpkg-deb a SIGPIPE
-        # and make the pipeline fail under `pipefail` even though it matched.
-        dpkg-deb -c "$DEB" > /tmp/deb-contents.txt
+        # Normalise to bare paths: "./usr/bin/wave" and "usr/bin/wave" both
+        # become "usr/bin/wave". Directories keep their trailing slash.
+        dpkg-deb --fsys-tarfile "$DEB" | tar -tf - | sed 's#^\./##'           | sed '/^$/d' | sort -u > /tmp/deb-paths.txt
 
-        echo "::group::Full .deb contents"
-        cat /tmp/deb-contents.txt
-        echo "::endgroup::"
+        echo "== every path the package installs ($(wc -l < /tmp/deb-paths.txt) entries) =="
+        cat /tmp/deb-paths.txt
 
-        echo "== what the package puts on PATH =="
-        grep ' \./usr/bin/' /tmp/deb-contents.txt || true
-
-        # dpkg-deb appends " -> target" to symlink entries, so the name is not
-        # necessarily at end of line. Accept a regular file or a symlink.
-        if ! grep -qE ' \./usr/bin/wave( -> |$)' /tmp/deb-contents.txt; then
-          echo "::error::The package does not provide /usr/bin/wave, so the CLI would not be on PATH."
+        if ! grep -qx 'usr/bin/wave' /tmp/deb-paths.txt; then
+          echo "::error::The package does not provide usr/bin/wave, so the CLI would not be on PATH."
+          echo "Paths mentioning 'wave' (any case):"
+          grep -i 'wave' /tmp/deb-paths.txt || echo "  (none)"
           exit 1
         fi
         echo "OK: the package provides /usr/bin/wave"
@@ -164,8 +166,7 @@ jobs:
         mkdir -p /tmp/deb && dpkg-deb -x "$DEB" /tmp/deb
 
         echo "== desktop entry =="
-        # The bundler names this after the app, so discover it rather than
-        # assuming the exact filename.
+        # Discovered rather than assumed: the bundler chooses the filename.
         DESKTOP="$(find /tmp/deb/usr/share/applications -name '*.desktop' -print -quit 2>/dev/null || true)"
         if [ -z "$DESKTOP" ]; then
           echo "::error::No .desktop file in the package; the app would not appear in the app menu."
@@ -177,14 +178,17 @@ jobs:
         echo "OK: desktop entry is valid"
 
         # Exec= has to name the binary that is actually on PATH.
-        grep -qE '^Exec=wave( |$)' "$DESKTOP" || {
+        if ! grep -qE '^Exec=wave( |$)' "$DESKTOP"; then
           echo "::error::Exec= in the desktop entry does not launch 'wave'."
           exit 1
-        }
+        fi
         echo "OK: desktop entry launches wave"
 
         echo "== metainfo =="
-        test -f /tmp/deb/usr/share/metainfo/app.bmdarklight.wave.metainfo.xml
+        if ! grep -qx 'usr/share/metainfo/app.bmdarklight.wave.metainfo.xml' /tmp/deb-paths.txt; then
+          echo "::error::metainfo is missing from the package."
+          exit 1
+        fi
         echo "OK: metainfo is installed"
 
     - name: Verify the Windows installer
