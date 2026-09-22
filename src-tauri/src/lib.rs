@@ -24,6 +24,7 @@ mod os_media;
 mod path_validation;
 pub mod playback_daemon;
 mod sources;
+mod tag_edit;
 pub mod win_console;
 
 pub use app::paths as app_paths;
@@ -266,6 +267,8 @@ pub fn run() {
             commands::get_artist_albums,
             commands::get_track_details,
             commands::get_track_full_cover,
+            commands::update_track_metadata,
+            commands::read_cover_preview,
             commands::add_to_queue,
             commands::queue_insert_next,
             commands::remove_from_queue,

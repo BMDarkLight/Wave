@@ -59,7 +59,7 @@ export function usePlaybackController({
   favoritePaths,
   setFavoritePaths,
   setError,
-  setMenuTrackPath,
+  closeTrackMenu,
   setAddToPlaylistTrack,
   onNoTrackFallback,
 }: {
@@ -77,7 +77,7 @@ export function usePlaybackController({
     updater: Set<string> | ((prev: Set<string>) => Set<string>),
   ) => void;
   setError: (message: string | null) => void;
-  setMenuTrackPath: (path: string | null) => void;
+  closeTrackMenu: () => void;
   setAddToPlaylistTrack: (path: string | null) => void;
   onNoTrackFallback: () => void;
 }) {
@@ -403,7 +403,7 @@ export function usePlaybackController({
     try {
       setError(null);
       await queueInsertNext(path);
-      setMenuTrackPath(null);
+      closeTrackMenu();
       if (!playbackState.current_path && !playbackState.is_paused) {
         const data = await getQueueTracks();
         const idx = data.tracks.findIndex((track) => track.path === path);
@@ -422,7 +422,7 @@ export function usePlaybackController({
     try {
       setError(null);
       await addToQueue(path);
-      setMenuTrackPath(null);
+      closeTrackMenu();
       await loadQueueTracks();
     } catch (err) {
       setError(formatInvokeError(err, "Failed to add track to queue"));
@@ -458,7 +458,7 @@ export function usePlaybackController({
   };
 
   const openQueueContextMenu = (index: number, anchor: ContextMenuAnchor) => {
-    setMenuTrackPath(null);
+    closeTrackMenu();
     setAddToPlaylistTrack(null);
     setQueueMenuIndex(index);
     setQueueMenuAnchor(anchor);

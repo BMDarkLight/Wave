@@ -29,6 +29,10 @@ const THUMB_JPEG_QUALITY: u8 = 70;
 const MEDIA_MAX_EDGE: u32 = 512;
 const MEDIA_MAX_BYTES: usize = 180 * 1024;
 const MEDIA_JPEG_QUALITY: u8 = 85;
+/// Artwork written back into the audio file itself.
+const EMBED_MAX_EDGE: u32 = 1000;
+const EMBED_MAX_BYTES: usize = 500 * 1024;
+const EMBED_JPEG_QUALITY: u8 = 88;
 
 /// Cover art extracted from an audio file or downloaded from the network.
 pub struct ExtractedCoverArt {
@@ -52,22 +56,18 @@ pub fn save_album_art_thumb(
     app: &AppHandle,
     cover_art: ExtractedCoverArt,
 ) -> Result<SavedAlbumArt, String> {
-    let thumb = make_sized_jpeg(
-        &cover_art.data,
-        THUMB_MAX_EDGE,
-        THUMB_MAX_BYTES,
-        THUMB_JPEG_QUALITY,
-    )?;
-    let media = make_sized_jpeg(
-        &cover_art.data,
-        MEDIA_MAX_EDGE,
-        MEDIA_MAX_BYTES,
-        MEDIA_JPEG_QUALITY,
-    )?;
+    save_album_art_thumb_in(&cover_root(app)?, &cover_art.data)
+}
+
+/// Same, for callers that already know the cover root and have no app handle:
+/// the CLI and the playback daemon both open the library that way.
+pub fn save_album_art_thumb_in(cover_root: &Path, data: &[u8]) -> Result<SavedAlbumArt, String> {
+    let thumb = make_sized_jpeg(data, THUMB_MAX_EDGE, THUMB_MAX_BYTES, THUMB_JPEG_QUALITY)?;
+    let media = make_sized_jpeg(data, MEDIA_MAX_EDGE, MEDIA_MAX_BYTES, MEDIA_JPEG_QUALITY)?;
     let id = hex_sha256(&thumb);
     let relative = format!("{THUMBS_DIR}/{id}.jpg");
-    let abs = thumb_abs_path(app, &id)?;
-    let media_abs = media_abs_path(app, &id)?;
+    let abs = cover_root.join(THUMBS_DIR).join(format!("{id}.jpg"));
+    let media_abs = cover_root.join(MEDIA_DIR).join(format!("{id}.jpg"));
 
     if !abs.is_file() {
         if let Some(parent) = abs.parent() {
@@ -92,6 +92,20 @@ pub fn save_album_art_thumb(
         mime: "image/jpeg".into(),
         byte_size: thumb.len() as i64,
     })
+}
+
+/// Re-encode picked artwork for embedding in an audio file by the metadata
+/// editor. Bounded so the same image can go into every track of an album
+/// without adding tens of megabytes to the batch.
+pub fn make_embeddable_jpeg(data: &[u8]) -> Result<Vec<u8>, String> {
+    make_sized_jpeg(data, EMBED_MAX_EDGE, EMBED_MAX_BYTES, EMBED_JPEG_QUALITY)
+}
+
+/// Show the user the image they just picked, before anything is written. Sized
+/// for a dialog rather than for fidelity, so the data URL stays small.
+pub fn preview_cover_data_url(data: &[u8]) -> Result<String, String> {
+    let jpeg = make_sized_jpeg(data, MEDIA_MAX_EDGE, MEDIA_MAX_BYTES, MEDIA_JPEG_QUALITY)?;
+    Ok(to_data_url("image/jpeg", &jpeg))
 }
 
 /// CLI / no-app path: encode a tiny thumb as a data URL (not persisted).
@@ -246,24 +260,22 @@ pub fn cleanup_legacy_track_covers(app: &AppHandle) {
     }
 }
 
-fn thumb_abs_path(app: &AppHandle, art_id: &str) -> Result<PathBuf, String> {
+fn cover_root(app: &AppHandle) -> Result<PathBuf, String> {
     let app_dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
-    Ok(app_dir
-        .join(COVER_ART_DIR)
+    Ok(app_dir.join(COVER_ART_DIR))
+}
+
+fn thumb_abs_path(app: &AppHandle, art_id: &str) -> Result<PathBuf, String> {
+    Ok(cover_root(app)?
         .join(THUMBS_DIR)
         .join(format!("{art_id}.jpg")))
 }
 
 fn media_abs_path(app: &AppHandle, art_id: &str) -> Result<PathBuf, String> {
-    let app_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
-    Ok(app_dir
-        .join(COVER_ART_DIR)
+    Ok(cover_root(app)?
         .join(MEDIA_DIR)
         .join(format!("{art_id}.jpg")))
 }
@@ -315,31 +327,7 @@ pub fn migrate_data_url_to_thumb(
     data_url: &str,
 ) -> Result<SavedAlbumArt, String> {
     let (bytes, _mime) = decode_data_url(data_url)?;
-    let thumb = make_sized_jpeg(&bytes, THUMB_MAX_EDGE, THUMB_MAX_BYTES, THUMB_JPEG_QUALITY)?;
-    let media = make_sized_jpeg(&bytes, MEDIA_MAX_EDGE, MEDIA_MAX_BYTES, MEDIA_JPEG_QUALITY)?;
-    let id = hex_sha256(&thumb);
-    let relative = format!("{THUMBS_DIR}/{id}.jpg");
-    let abs = cover_root.join(THUMBS_DIR).join(format!("{id}.jpg"));
-    let media_abs = cover_root.join(MEDIA_DIR).join(format!("{id}.jpg"));
-    if !abs.is_file() {
-        if let Some(parent) = abs.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("Failed to create thumbs dir: {e}"))?;
-        }
-        fs::write(&abs, &thumb).map_err(|e| format!("Failed to write thumb: {e}"))?;
-    }
-    if !media_abs.is_file() {
-        if let Some(parent) = media_abs.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("Failed to create media dir: {e}"))?;
-        }
-        let _ = fs::write(&media_abs, &media);
-    }
-    Ok(SavedAlbumArt {
-        id,
-        thumb_abs_path: abs,
-        relative_path: relative,
-        mime: "image/jpeg".into(),
-        byte_size: thumb.len() as i64,
-    })
+    save_album_art_thumb_in(cover_root, &bytes)
 }
 
 /// Encode arbitrary bytes as a data URL for one-shot full-cover responses.

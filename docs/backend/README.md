@@ -110,6 +110,17 @@ The **Favorites** playlist is a special seeded playlist (like "All Local Files")
 | `toggle_favorite` | Toggle favorite state; returns new state |
 | `clear_favorites` | Remove all tracks from Favorites |
 
+### Metadata editing
+
+Write tag changes into the audio files and bring the library rows in line
+afterwards, one track or a whole album at a time. See [Commands → Metadata
+editing](./commands.md#metadata-editing).
+
+| Command | Description |
+|---------|-------------|
+| `update_track_metadata` | Apply one set of tag changes to one or many tracks |
+| `read_cover_preview` | Data URL for a picked image, to show before saving |
+
 ### Queue & playback modes
 
 | Command | Description |

@@ -242,6 +242,93 @@ mp3, mp4, oga, ogg, opus, wav, wave, weba
 
 ---
 
+## Metadata editing
+
+Tags are written into the audio files themselves and the library rows are
+brought in line afterwards, so an edit survives a re-scan and is visible to
+other players.
+
+### `update_track_metadata`
+
+Apply one set of tag changes to one track or to many.
+
+Only the fields present in `edit` are written; everything else in the file is
+left as it was. An empty string clears a tag, which is how the editor wipes a
+genre or a year. Numbers arrive as text so that setting and clearing work the
+same way.
+
+The whole edit is validated before the first file is opened, so a malformed
+year fails the call rather than half an album. Individual files can still fail
+after that (read-only, moved, in use), and those come back in `failed` while
+the rest go through.
+
+Not every track can be retagged: previews (`source_state: "cached"`) are not
+library files, and `content://` URIs from Android's folder picker are not
+regular files. Both are rejected per track.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `paths` | `string[]` | yes | Absolute paths of the tracks to edit |
+| `edit` | [`TagEdit`](./types.md#tagedit) | yes | Fields to write |
+
+**Returns:** [`MetadataEditResult`](./types.md#metadataeditresult)
+
+**Example**
+
+```typescript
+// Set the year and album artist across a whole album, leaving titles alone.
+const result = await invoke<MetadataEditResult>("update_track_metadata", {
+  paths: albumTracks.map((track) => track.path),
+  edit: { year: "1969", album_artist: "The Beatles" },
+});
+// result => { updated: 17, failed: [] }
+```
+
+```typescript
+// Clear a genre and replace the artwork on a single track.
+await invoke("update_track_metadata", {
+  paths: [track.path],
+  edit: { genre: "", cover: { action: "replace", path: "D:\art\cover.jpg" } },
+});
+```
+
+Artwork passed to `cover` is re-encoded to a JPEG of at most 1000px before it
+goes into the file, so putting one image on a long album does not add tens of
+megabytes.
+
+**Errors:** `"No tracks to edit"`, `"Title cannot be empty"`,
+`"Year must be a whole number"`, `"Track number must be between 1 and 9999"`,
+`"Image file not found: {path}"`. These reject the whole call; per-file
+problems are reported in `failed` instead.
+
+**A note on WAV and AIFF.** Tags are written correctly, and Wave's own library
+keeps them, but its decoder stops reading a RIFF file at the audio data and so
+never sees a tag chunk appended after it. Remove such a track and import it
+again and it comes back with the values from before the edit. Every other
+supported format stores tags ahead of the audio and reads back as expected.
+
+---
+
+### `read_cover_preview`
+
+Render an image file as a data URL so the editor can show the artwork the user
+picked before the edit is saved. The asset protocol is scoped to Wave's own
+data directories, which is why picked files come back this way instead.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `path` | `string` | yes | Absolute path to an image file |
+
+**Returns:** `string` — a `data:image/jpeg;base64,...` URL, at most 512px
+
+**Errors:** `"Failed to read image file: {e}"`, decode failures.
+
+---
+
 ## Search & sources
 
 Search escalates through three tiers: the current scope (filtered client-side),

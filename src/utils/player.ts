@@ -704,6 +704,72 @@ export const getTrackDetails = (path: string): Promise<Track | null> => {
   );
 };
 
+/**
+ * A change to one or more tracks' tags.
+ *
+ * Only the fields present here are written; everything else keeps whatever the
+ * file already had. An empty string clears a tag, which is how the dialog wipes
+ * a genre or a year. Numbers travel as text so that clearing and setting work
+ * the same way.
+ */
+export interface TagEdit {
+  title?: string;
+  artist?: string;
+  album?: string;
+  album_artist?: string;
+  genre?: string;
+  year?: string;
+  track_number?: string;
+  disc_number?: string;
+  cover?: { action: "replace"; path: string } | { action: "remove" };
+}
+
+export interface MetadataEditFailure {
+  path: string;
+  reason: string;
+}
+
+export interface MetadataEditResult {
+  updated: number;
+  failed: MetadataEditFailure[];
+}
+
+/** Write tag changes to the files and to the library. */
+export const updateTrackMetadata = (
+  paths: string[],
+  edit: TagEdit,
+): Promise<MetadataEditResult> => {
+  return safeInvoke<MetadataEditResult>("update_track_metadata", {
+    paths,
+    edit,
+  });
+};
+
+/** Data URL for a picked image, for the editor to show before saving. */
+export const readCoverPreview = (path: string): Promise<string | null> => {
+  return safeInvoke<string>("read_cover_preview", { path }).catch(() => null);
+};
+
+export const selectCoverImage = async (): Promise<string | null> => {
+  await tauriInitialized;
+  if (!openFn) {
+    throw new Error(TAURI_UNAVAILABLE);
+  }
+  const selected = await openFn({
+    multiple: false,
+    filters: [
+      {
+        name: "Images",
+        extensions: ["jpg", "jpeg", "png", "webp", "gif", "bmp"],
+      },
+    ],
+    title: "Choose Cover Art",
+  });
+  if (selected === null) return null;
+  if (typeof selected === "string") return selected;
+  return Array.isArray(selected) ? (selected[0] ?? null) : null;
+};
+
 /** Full embedded cover as a one-shot data URL (not stored). */
 export const getTrackFullCover = (path: string): Promise<string | null> => {
   return safeInvoke<string | null>("get_track_full_cover", { path }).catch(

@@ -17,6 +17,8 @@ import {
   resolveCoverSrc,
 } from "../utils/player";
 import type { PlaybackState, Track } from "../utils/player";
+import type { ContextMenuAnchor } from "./ContextMenu";
+import TrackMenuButton from "./TrackMenuButton";
 import VirtualizedList from "./VirtualizedList";
 
 const formatTime = (seconds?: number | null) => {
@@ -78,12 +80,18 @@ export type PlayedTracksMode = "recently_played" | "most_played";
 interface PlayedTracksPageProps {
   mode: PlayedTracksMode;
   onPlayTrack: (path: string, tracks: Track[]) => void;
+  onOpenTrackMenu: (track: Track, anchor: ContextMenuAnchor) => void;
+  onCloseTrackMenu: () => void;
+  menuTrackPath: string | null;
   playbackState: PlaybackState;
 }
 
 export default function PlayedTracksPage({
   mode,
   onPlayTrack,
+  onOpenTrackMenu,
+  onCloseTrackMenu,
+  menuTrackPath,
   playbackState,
 }: PlayedTracksPageProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -163,7 +171,7 @@ export default function PlayedTracksPage({
             className="track-list track-list-compact"
             style={
               {
-                "--track-grid": "36px minmax(0, 1fr) 78px",
+                "--track-grid": "36px minmax(0, 1fr) 78px 40px",
               } as React.CSSProperties
             }
           >
@@ -190,6 +198,15 @@ export default function PlayedTracksPage({
                     key={track.path}
                     className={`track-item${isCurrent ? " active" : ""}`}
                     onClick={() => onPlayTrack(track.path, tracks)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onOpenTrackMenu(track, {
+                        top: event.clientY,
+                        left: event.clientX,
+                        flipAbove: event.clientY,
+                      });
+                    }}
                   >
                     <div className="track-col-index track-col-number">
                       {isCurrent && playbackState.is_playing ? (
@@ -215,6 +232,12 @@ export default function PlayedTracksPage({
                     <div className="track-duration">
                       {formatTime(track.duration_seconds)}
                     </div>
+                    <TrackMenuButton
+                      track={track}
+                      isOpen={menuTrackPath === track.path}
+                      onOpen={onOpenTrackMenu}
+                      onClose={onCloseTrackMenu}
+                    />
                   </div>
                 );
               }}

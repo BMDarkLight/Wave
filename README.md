@@ -26,6 +26,7 @@ catalogs — in a single portable app built on Rust + Tauri + React.
 - [Features](#features)
   - [Home & discovery](#home--discovery)
   - [Library, albums & artists](#library-albums--artists)
+  - [Metadata editor](#metadata-editor)
   - [Three-tier search](#three-tier-search)
   - [Queue & playback](#queue--playback)
   - [Lyrics](#lyrics)
@@ -96,7 +97,8 @@ album shelves, and suggested artists similar to the ones you actually listen to.
 Point Wave at a folder and it scans, extracts tags, embeds cover art, and indexes
 everything into SQLite. The library view is virtualized, sortable, and resizable,
 with inline favorite toggles and a right-click menu for **Play Next**, **Add to
-Queue**, **Add to Playlist**, **Go to Album**, and **Go to Artist**.
+Queue**, **Add to Playlist**, **Edit Metadata**, **Go to Album**, and **Go to
+Artist**.
 
 Supported formats: `aac`, `aiff`, `alac`, `caf`, `flac`, `m4a`, `m4b`, `m4p`,
 `mka`, `mkv`, `mp1`, `mp2`, `mp3`, `mp4`, `oga`, `ogg`, `opus`, `wav`, `wave`,
@@ -108,6 +110,33 @@ Album and artist pages are generated from your tags — full-resolution cover,
 tracklist, and a per-artist discography you can jump into from any track.
 
 <img src="docs/screenshots/desktop-album.png" alt="Album page" width="100%">
+
+### Metadata editor
+
+Right-click any track, or use the **…** button on its row, and pick **Edit
+Metadata** to fix title, artist, album, album artist, genre, year, track and
+disc number, or to replace the cover art from an image file. Changes are
+written into the audio file itself, not just into Wave's database, so they
+survive a re-scan and other players see them too.
+
+The track menu sits on every list Wave shows: the library, album and artist
+pages, search results, and the played-tracks views. On narrow windows and on
+touch the **…** button stays visible, since there is no right mouse button to
+fall back on.
+
+Albums get the same editor for every track at once, from **Edit metadata** on
+the album page. Fields the tracks disagree on start blank and are left alone
+unless you fill them in, so setting a year across an album never flattens
+eleven different titles into one. Cover art picked there is re-encoded to a
+bounded JPEG before it goes into each file.
+
+An empty field clears the tag. Title, artist and album are the exceptions:
+Wave falls back to the filename for those, so they always keep a value.
+
+Tracks reached through Android's folder picker and 30-second previews aren't
+files Wave can rewrite, so the option doesn't appear for them. WAV and AIFF are
+written correctly but Wave's own decoder stops reading a RIFF file at the audio
+data, so a WAV re-imported from scratch comes back with its old tags.
 
 ### Three-tier search
 
@@ -198,6 +227,8 @@ wave playlists list                 # list playlists with their IDs
 wave playlists export <id> m3u out.m3u
 wave playback start <playlist-id>   # play through the daemon
 wave playback status
+wave metadata set <id|path> --genre "Post-Punk" --year 1979
+wave metadata cover-set <id|path> cover.jpg
 wave stats artists --limit 10       # top artists by listen time
 ```
 
@@ -250,6 +281,7 @@ Details: [`docs/backend/android.md`](docs/backend/android.md).
 ### Backend / audio engine
 - **Rust**
 - **Rodio** + **Symphonia** + **CPAL** — desktop playback
+- **Lofty** — writing edited tags back to files
 - **Media3 ExoPlayer** (JNI) — Android playback (`content://` / SAF-friendly)
 
 ### Storage
@@ -294,6 +326,7 @@ Wave/
 │       ├── metadata.rs         # Track metadata extraction
 │       ├── path_validation.rs  # Safe path validation helpers
 │       ├── playback_daemon.rs  # Background playback daemon and IPC
+│       ├── tag_edit.rs         # Writing edited tags back to audio files
 │       ├── lib.rs              # Tauri backend composition root
 │       └── main.rs             # Native process entry point
 ├── docs/

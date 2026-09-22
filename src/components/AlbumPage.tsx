@@ -9,13 +9,16 @@
  */
 
 import { useEffect, useState } from "react";
-import { BiArrowBack } from "react-icons/bi";
+import { BiArrowBack, BiEditAlt } from "react-icons/bi";
 import {
   getAlbumTracks,
   getTrackFullCover,
   resolveCoverSrc,
 } from "../utils/player";
 import type { Track, PlaybackState } from "../utils/player";
+import { canEditMetadata } from "../utils/track";
+import type { ContextMenuAnchor } from "./ContextMenu";
+import TrackMenuButton from "./TrackMenuButton";
 import VirtualizedList from "./VirtualizedList";
 
 const formatTime = (seconds?: number | null) => {
@@ -91,6 +94,12 @@ interface AlbumPageProps {
   onBack: () => void;
   onPlayTrack: (path: string, tracks: Track[]) => void;
   onArtistClick: (artist: string) => void;
+  onEditMetadata: (tracks: Track[]) => void;
+  onOpenTrackMenu: (track: Track, anchor: ContextMenuAnchor) => void;
+  onCloseTrackMenu: () => void;
+  menuTrackPath: string | null;
+  /** Bumped after a metadata edit so the page re-reads the library. */
+  refreshKey: number;
   playbackState: PlaybackState;
 }
 
@@ -100,6 +109,11 @@ export default function AlbumPage({
   onBack,
   onPlayTrack,
   onArtistClick,
+  onEditMetadata,
+  onOpenTrackMenu,
+  onCloseTrackMenu,
+  menuTrackPath,
+  refreshKey,
   playbackState,
 }: AlbumPageProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -111,8 +125,9 @@ export default function AlbumPage({
       .then(setTracks)
       .catch(() => setTracks([]))
       .finally(() => setLoading(false));
-  }, [album, albumArtist]);
+  }, [album, albumArtist, refreshKey]);
 
+  const editableTracks = tracks.filter(canEditMetadata);
   const displayArtist = albumArtist || tracks[0]?.artist || "Unknown Artist";
   const year = tracks[0]?.year;
   const coverTrack = tracks[0];
@@ -147,6 +162,17 @@ export default function AlbumPage({
       <button className="page-back-btn" onClick={onBack} type="button">
         <BiArrowBack />
       </button>
+      {editableTracks.length > 0 && (
+        <button
+          className="page-float-action"
+          onClick={() => onEditMetadata(editableTracks)}
+          type="button"
+          title="Edit metadata"
+          aria-label="Edit metadata"
+        >
+          <BiEditAlt />
+        </button>
+      )}
       <div className="album-hero">
         <Artwork
           track={coverTrack}
@@ -170,6 +196,17 @@ export default function AlbumPage({
               · {tracks.length} songs, about {totalMin} min
             </span>
           </div>
+          {editableTracks.length > 0 && (
+            <div className="album-hero-actions">
+              <button
+                className="btn-ghost btn-sm"
+                onClick={() => onEditMetadata(editableTracks)}
+                type="button"
+              >
+                <BiEditAlt /> Edit metadata
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -183,7 +220,7 @@ export default function AlbumPage({
             className="track-list track-list-compact album-track-list"
             style={
               {
-                "--track-grid": "36px minmax(0, 1fr) 78px",
+                "--track-grid": "36px minmax(0, 1fr) 78px 40px",
               } as React.CSSProperties
             }
           >
@@ -212,6 +249,15 @@ export default function AlbumPage({
                   <div
                     className={`track-item ${isCurrentTrack(track) ? "active" : ""}`}
                     onClick={() => onPlayTrack(track.path, tracks)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onOpenTrackMenu(track, {
+                        top: event.clientY,
+                        left: event.clientX,
+                        flipAbove: event.clientY,
+                      });
+                    }}
                   >
                     <div className="track-col-index track-col-number">
                       {isCurrentTrack(track) && playbackState.is_playing ? (
@@ -242,6 +288,12 @@ export default function AlbumPage({
                     <div className="track-duration">
                       {formatTime(track.duration_seconds)}
                     </div>
+                    <TrackMenuButton
+                      track={track}
+                      isOpen={menuTrackPath === track.path}
+                      onOpen={onOpenTrackMenu}
+                      onClose={onCloseTrackMenu}
+                    />
                   </div>
                 );
               }}

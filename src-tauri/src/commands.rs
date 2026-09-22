@@ -25,7 +25,10 @@ use crate::media_controls::TrackMetadata;
 use crate::metadata::{
     enrich_lyrics_online, is_supported_audio_file, supported_audio_extensions, Track,
 };
-use crate::path_validation::{validate_audio_path, validate_safe_output_path};
+use crate::path_validation::{
+    is_android_content_uri, validate_audio_path, validate_safe_output_path,
+};
+use crate::tag_edit::{Change, ResolvedEdit, TagEdit};
 use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
 
@@ -2046,6 +2049,95 @@ pub async fn get_track_details(
 ) -> Result<Option<Track>, String> {
     validate_audio_path(&path)?;
     lock_library(&library)?.get_track_details(&path)
+}
+
+/// Outcome of a metadata edit. Files are reported one by one: a single
+/// read-only track should not abandon the rest of an album.
+#[derive(Debug, serde::Serialize)]
+pub struct MetadataEditResultDto {
+    pub updated: usize,
+    pub failed: Vec<MetadataEditFailureDto>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct MetadataEditFailureDto {
+    pub path: String,
+    pub reason: String,
+}
+
+/// Write tag changes into the given files, then bring their library rows in
+/// line with what was written.
+#[tauri::command]
+pub async fn update_track_metadata(
+    paths: Vec<String>,
+    edit: TagEdit,
+    app: tauri::AppHandle,
+) -> Result<MetadataEditResultDto, String> {
+    if paths.is_empty() {
+        return Err("No tracks to edit".into());
+    }
+
+    // Validate before touching anything, so a bad year fails the whole edit
+    // instead of half an album.
+    let edit = edit.resolve()?;
+    if edit.is_empty() {
+        return Ok(MetadataEditResultDto {
+            updated: 0,
+            failed: Vec::new(),
+        });
+    }
+
+    blocking(move || {
+        let state = app.state::<LibraryState>();
+        let library = state.0.lock().map_err(lock_poisoned)?;
+
+        let mut updated = 0;
+        let mut failed = Vec::new();
+        for path in paths {
+            match write_track_metadata(&library, &path, &edit) {
+                Ok(()) => updated += 1,
+                Err(reason) => failed.push(MetadataEditFailureDto { path, reason }),
+            }
+        }
+        Ok(MetadataEditResultDto { updated, failed })
+    })
+    .await
+}
+
+fn write_track_metadata(library: &Library, path: &str, edit: &ResolvedEdit) -> Result<(), String> {
+    if is_android_content_uri(path) {
+        return Err("Files picked through Android's folder picker cannot be retagged".into());
+    }
+    let file = validate_audio_path(path)?;
+
+    let track = library
+        .get_track_details(path)?
+        .ok_or_else(|| "Track is not in the library".to_string())?;
+    if track.source_state.as_deref() == Some("cached") {
+        return Err("Previews are not library files and cannot be edited".into());
+    }
+
+    crate::tag_edit::write_to_file(&file, edit)?;
+    library.update_track_tags(path, edit)?;
+
+    match &edit.cover {
+        Some(Change::Set(jpeg)) => library.set_track_cover(&track.id, jpeg)?,
+        Some(Change::Clear) => library.clear_track_cover(&track.id)?,
+        None => {}
+    }
+    Ok(())
+}
+
+/// Render an image file the user picked as a data URL, so the metadata editor
+/// can show it before the edit is saved. The asset protocol is scoped to
+/// Wave's own data directories, which is why this does not go through it.
+#[tauri::command]
+pub async fn read_cover_preview(path: String) -> Result<String, String> {
+    blocking(move || {
+        let data = crate::tag_edit::read_image_file(&path)?;
+        crate::cover_art::preview_cover_data_url(&data)
+    })
+    .await
 }
 
 /// Extract full embedded cover art as a one-shot data URL (not persisted).

@@ -124,7 +124,7 @@ export default function LibraryTrackList({
   onPlayTrack: (index: number) => void;
   onOpenArtist: (artist: string) => void;
   onOpenAlbum: (album: string, albumArtist: string | null) => void;
-  onOpenTrackContextMenu: (path: string, anchor: ContextMenuAnchor) => void;
+  onOpenTrackContextMenu: (track: Track, anchor: ContextMenuAnchor) => void;
   onCloseTrackMenu: () => void;
   onRemoveFromPlaylist: (path: string) => void;
   onRemoveFromLibrary: (path: string) => void;
@@ -400,7 +400,7 @@ export default function LibraryTrackList({
                     onContextMenu={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
-                      onOpenTrackContextMenu(track.path, {
+                      onOpenTrackContextMenu(track, {
                         top: event.clientY,
                         left: event.clientX,
                         flipAbove: event.clientY,
@@ -500,7 +500,7 @@ export default function LibraryTrackList({
                             } else {
                               const rect =
                                 event.currentTarget.getBoundingClientRect();
-                              onOpenTrackContextMenu(track.path, {
+                              onOpenTrackContextMenu(track, {
                                 top: rect.bottom + 4,
                                 flipAbove: rect.top - 4,
                                 right: window.innerWidth - rect.right,

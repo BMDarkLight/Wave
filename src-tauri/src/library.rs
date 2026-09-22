@@ -11,7 +11,9 @@ use crate::dto::{
     ListeningStatsDto, SearchHitDto,
 };
 use crate::metadata::{extract_track, is_supported_audio_file, Track};
+use crate::tag_edit::{Change, ResolvedEdit};
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -2167,15 +2169,9 @@ impl Library {
 
     /// Update a track's cover art from raw image bytes (stored as shared thumb).
     pub fn set_track_cover(&self, track_id: &str, image_data: &[u8]) -> Result<(), String> {
-        let Some(app) = &self.app_handle else {
-            return Err("Cover update requires app handle".into());
-        };
-        let saved = crate::cover_art::save_album_art_thumb(
-            app,
-            crate::cover_art::ExtractedCoverArt {
-                data: image_data.to_vec(),
-            },
-        )?;
+        // Written through `cover_root` rather than an app handle, so this also
+        // works from the CLI and the playback daemon.
+        let saved = crate::cover_art::save_album_art_thumb_in(&self.cover_root, image_data)?;
         let connection = self.write_connection();
         let now = now_timestamp();
         connection
@@ -2200,6 +2196,102 @@ impl Library {
             )
             .map_err(|e| format!("Failed to update track cover: {e}"))?;
         Ok(())
+    }
+
+    /// Forget a track's artwork. The shared thumb files stay where they are;
+    /// other tracks may still point at them.
+    pub fn clear_track_cover(&self, track_id: &str) -> Result<(), String> {
+        let connection = self.write_connection();
+        connection
+            .execute(
+                "UPDATE tracks SET album_art_id = NULL, cover_art_mime = NULL,
+                        cover_art_source = NULL, cover_art_data_url = NULL
+                 WHERE id = ?1",
+                params![track_id],
+            )
+            .map_err(|e| format!("Failed to clear track cover: {e}"))?;
+        Ok(())
+    }
+
+    /// Bring a track's row in line with tags that were just written to its
+    /// file, then refresh the search index.
+    ///
+    /// Only the columns the edit names are touched, so lyrics, listen stats
+    /// and artwork all survive a change of title.
+    pub fn update_track_tags(&self, path: &str, edit: &ResolvedEdit) -> Result<Track, String> {
+        let mut assignments: Vec<String> = Vec::new();
+        let mut values: Vec<Value> = Vec::new();
+
+        {
+            let mut set = |column: &str, value: Value| {
+                values.push(value);
+                assignments.push(format!("{column} = ?{}", values.len()));
+            };
+
+            if let Some(title) = &edit.title {
+                set("title", Value::Text(title.clone()));
+            }
+            if let Some(artist) = &edit.artist {
+                set("artist", Value::Text(artist.clone()));
+            }
+            if let Some(album) = &edit.album {
+                set("album", Value::Text(album.clone()));
+            }
+            if let Some(change) = &edit.album_artist {
+                set("album_artist", text_value(change));
+            }
+            if let Some(change) = &edit.genre {
+                set("genre", text_value(change));
+            }
+            if let Some(change) = &edit.year {
+                set("year", number_value(change));
+            }
+            if let Some(change) = &edit.track_number {
+                set("track_number", number_value(change));
+            }
+            if let Some(change) = &edit.disc_number {
+                set("disc_number", number_value(change));
+            }
+
+            // Writing tags changes the file's size and timestamp. Record them
+            // now so a later folder sync doesn't read the edit as someone
+            // rewriting the file behind Wave's back.
+            if let Ok(file) = std::fs::metadata(path) {
+                set("file_size", Value::Integer(file.len() as i64));
+                let modified = file
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                    .map(|since| since.as_secs() as i64)
+                    .unwrap_or_else(now_timestamp);
+                set("modified_at", Value::Integer(modified));
+            }
+        }
+
+        let connection = self.write_connection();
+        if !assignments.is_empty() {
+            values.push(Value::Text(path.to_string()));
+            let sql = format!(
+                "UPDATE tracks SET {} WHERE path = ?{}",
+                assignments.join(", "),
+                values.len()
+            );
+            connection
+                .execute(&sql, rusqlite::params_from_iter(values.iter()))
+                .map_err(|e| format!("Failed to update track tags: {e}"))?;
+        }
+
+        let track = connection
+            .query_row(
+                &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM} WHERE t.path = ?1"),
+                params![path],
+                |row| row_to_track(row, &self.cover_root),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to reload edited track: {e}"))?
+            .ok_or_else(|| format!("Track is not in the library: {path}"))?;
+        let _ = sync_track_fts(&connection, &track);
+        Ok(track)
     }
 
     /// Persist album_art_id / mime after deferred online enrich (no full re-upsert).
@@ -4380,6 +4472,20 @@ fn normalize_path_key(path: &str) -> String {
         .unwrap_or_else(|_| trimmed.to_string())
 }
 
+fn text_value(change: &Change<String>) -> Value {
+    match change {
+        Change::Set(value) => Value::Text(value.clone()),
+        Change::Clear => Value::Null,
+    }
+}
+
+fn number_value(change: &Change<i32>) -> Value {
+    match change {
+        Change::Set(value) => Value::Integer(i64::from(*value)),
+        Change::Clear => Value::Null,
+    }
+}
+
 fn now_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5017,6 +5123,55 @@ mod tests {
         let second = sample_track("new-random-id", "/music/song.mp3");
         let second_id = upsert_track(&*connection, &second).expect("second upsert");
         assert_eq!(second_id, "stable-id");
+    }
+
+    #[test]
+    fn tag_edit_touches_only_the_fields_it_names() {
+        let library = open_test_library().expect("library");
+        let path = "/music/retag.mp3";
+        {
+            let connection = library.lock_connection().expect("connection");
+            let mut track = sample_track("retag-id", path);
+            track.genre = Some("Pop".into());
+            track.lyrics = Some("la la la".into());
+            upsert_track(&*connection, &track).expect("upsert");
+        }
+
+        let edit = ResolvedEdit {
+            title: Some("Renamed".into()),
+            genre: Some(Change::Clear),
+            year: Some(Change::Set(1994)),
+            ..Default::default()
+        };
+        let updated = library.update_track_tags(path, &edit).expect("update");
+
+        assert_eq!(updated.title, "Renamed");
+        assert_eq!(updated.genre, None);
+        assert_eq!(updated.year, Some(1994));
+        // Fields the edit said nothing about are left alone.
+        assert_eq!(updated.artist, "Artist");
+        assert_eq!(updated.album, "Album");
+        assert_eq!(updated.lyrics.as_deref(), Some("la la la"));
+    }
+
+    #[test]
+    fn tag_edit_reindexes_the_track_for_search() {
+        let library = open_test_library().expect("library");
+        let path = "/music/searchable.mp3";
+        {
+            let connection = library.lock_connection().expect("connection");
+            upsert_track(&*connection, &sample_track("search-id", path)).expect("upsert");
+        }
+
+        let edit = ResolvedEdit {
+            title: Some("Paranoid Android".into()),
+            ..Default::default()
+        };
+        library.update_track_tags(path, &edit).expect("update");
+
+        let hits = library.search_tracks("paranoid").expect("search");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "Paranoid Android");
     }
 
     #[test]

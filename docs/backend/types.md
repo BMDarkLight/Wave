@@ -175,6 +175,62 @@ interface ArtistSummary {
 
 ---
 
+## `TagEdit`
+
+Argument to `update_track_metadata`. Every field is optional and every one is
+text, numbers included.
+
+```typescript
+interface TagEdit {
+  title?: string;
+  artist?: string;
+  album?: string;
+  album_artist?: string;
+  genre?: string;
+  year?: string;
+  track_number?: string;
+  disc_number?: string;
+  cover?: { action: "replace"; path: string } | { action: "remove" };
+}
+```
+
+| Field state | Effect |
+|-------------|--------|
+| Absent | The tag keeps whatever the file already had |
+| A value | The tag is set to it, trimmed |
+| `""` | The tag is removed from the file |
+
+`title`, `artist` and `album` cannot be cleared; Wave falls back to the
+filename for those, so an empty tag would just look like a bug later. Year,
+track number and disc number must land between 1 and 9999.
+
+Leaving a field out is what makes batch editing safe: send only what the user
+changed and twenty tracks keep their twenty different titles.
+
+`cover.path` points at a JPEG, PNG, WebP, GIF or BMP on disk. Replacing the
+artwork drops every picture the file carried and writes one front cover in
+their place; `{ action: "remove" }` drops them without a replacement.
+
+---
+
+## `MetadataEditResult`
+
+Returned by `update_track_metadata`.
+
+```typescript
+interface MetadataEditResult {
+  updated: number;
+  failed: { path: string; reason: string }[];
+}
+```
+
+One unwritable file does not abandon the rest of a batch, so check `failed`
+even when `updated` is non-zero. Typical reasons are a read-only or missing
+file, a preview rather than a library track, or a `content://` URI from
+Android's folder picker.
+
+---
+
 ## `MediaMetadata`
 
 Argument to `update_media_metadata`. All fields are optional.
@@ -241,6 +297,8 @@ import type {
   PlaylistInfo,
   AlbumSummary,
   ArtistSummary,
+  TagEdit,
+  MetadataEditResult,
   MediaMetadata,
   CloseAction,
 } from "../utils/player";

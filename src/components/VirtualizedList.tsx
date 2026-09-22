@@ -47,29 +47,45 @@ export default function VirtualizedList({
   children,
 }: VirtualizedListProps) {
   const listRef = useRef<HTMLDivElement>(null);
-  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
+  const scrollRef = useRef<HTMLElement | null>(null);
   const [scrollMargin, setScrollMargin] = useState(0);
 
-  useLayoutEffect(() => {
-    const list = listRef.current;
-    if (!list) return;
-    const scroll = list.closest(scrollSelector) as HTMLElement | null;
-    setScrollElement(scroll);
+  const getScrollElement = useCallback(() => {
+    if (!scrollRef.current) {
+      scrollRef.current = listRef.current?.closest(
+        scrollSelector,
+      ) as HTMLElement | null;
+    }
+    return scrollRef.current;
   }, [scrollSelector]);
+
+  /**
+   * The scroll parent can only be found once this list is in the document, so
+   * the virtualizer stays off for the first render. Running it before then
+   * makes it record a starting offset of zero and write that back to the page
+   * as soon as it attaches, which threw the reader to the top whenever a list
+   * mounted into an already-scrolled page.
+   */
+  const [attached, setAttached] = useState(false);
+
+  useLayoutEffect(() => {
+    scrollRef.current = null;
+    setAttached(!!getScrollElement());
+  }, [scrollSelector, getScrollElement]);
 
   const measureMargin = useCallback(() => {
     const list = listRef.current;
-    const scroll = scrollElement;
+    const scroll = getScrollElement();
     if (!list || !scroll) return;
     const listTop = list.getBoundingClientRect().top;
     const scrollTop = scroll.getBoundingClientRect().top;
     setScrollMargin(listTop - scrollTop + scroll.scrollTop);
-  }, [scrollElement]);
+  }, [getScrollElement]);
 
   useLayoutEffect(() => {
     measureMargin();
     const list = listRef.current;
-    const scroll = scrollElement;
+    const scroll = getScrollElement();
     if (!list || !scroll) return;
 
     const ro = new ResizeObserver(() => measureMargin());
@@ -83,11 +99,13 @@ export default function VirtualizedList({
       ro.disconnect();
       window.removeEventListener("resize", measureMargin);
     };
-  }, [scrollElement, measureMargin, count]);
+  }, [getScrollElement, measureMargin, count]);
 
   const virtualizer = useVirtualizer({
     count,
-    getScrollElement: () => scrollElement,
+    enabled: attached,
+    getScrollElement,
+    initialOffset: () => getScrollElement()?.scrollTop ?? 0,
     estimateSize: () => estimateSize,
     overscan,
     scrollMargin,

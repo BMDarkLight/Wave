@@ -17,6 +17,8 @@ import {
   resolveCoverSrc,
 } from "../utils/player";
 import type { Track, PlaybackState, AlbumSummary } from "../utils/player";
+import type { ContextMenuAnchor } from "./ContextMenu";
+import TrackMenuButton from "./TrackMenuButton";
 import VirtualizedList from "./VirtualizedList";
 
 const formatTime = (seconds?: number | null) => {
@@ -118,6 +120,11 @@ interface ArtistPageProps {
   onBack: () => void;
   onPlayTrack: (path: string, tracks: Track[]) => void;
   onAlbumClick: (album: string, albumArtist: string | null) => void;
+  onOpenTrackMenu: (track: Track, anchor: ContextMenuAnchor) => void;
+  onCloseTrackMenu: () => void;
+  menuTrackPath: string | null;
+  /** Bumped after a metadata edit so the page re-reads the library. */
+  refreshKey: number;
   playbackState: PlaybackState;
 }
 
@@ -126,6 +133,10 @@ export default function ArtistPage({
   onBack,
   onPlayTrack,
   onAlbumClick,
+  onOpenTrackMenu,
+  onCloseTrackMenu,
+  menuTrackPath,
+  refreshKey,
   playbackState,
 }: ArtistPageProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -145,7 +156,7 @@ export default function ArtistPage({
         setAlbums([]);
       })
       .finally(() => setLoading(false));
-  }, [artist]);
+  }, [artist, refreshKey]);
 
   const isCurrentTrack = (track: Track) =>
     playbackState.current_path === track.path;
@@ -220,41 +231,9 @@ export default function ArtistPage({
         </section>
       )}
 
-      {/* Discography */}
-      {albums.length > 0 && (
-        <section className="artist-section">
-          <h2 className="artist-section-title">Discography</h2>
-          <div className="artist-discography-list">
-            {albums.map((album) => (
-              <button
-                key={`disc-${album.name}-${album.album_artist}`}
-                className="artist-discography-item"
-                onClick={() => onAlbumClick(album.name, album.album_artist)}
-                type="button"
-              >
-                <AlbumArt
-                  album={album}
-                  className="artist-discography-item-cover"
-                />
-                <div className="artist-discography-item-info">
-                  <div className="artist-discography-item-name">
-                    {album.name}
-                  </div>
-                  <div className="artist-discography-item-meta">
-                    {album.year && <span>{album.year} · </span>}
-                    {album.track_count} song
-                    {album.track_count !== 1 ? "s" : ""}
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-
       {/* Songs (collapsible) */}
       {tracks.length > 0 && (
-        <section className="artist-section">
+        <section className="artist-section artist-songs-section">
           <button
             className="artist-section-title artist-collapsible-header"
             onClick={() => setSongsOpen((v) => !v)}
@@ -265,10 +244,10 @@ export default function ArtistPage({
           </button>
           {songsOpen && (
             <div
-              className="track-list track-list-compact"
+              className="track-list track-list-compact artist-songs-list"
               style={
                 {
-                  "--track-grid": "48px minmax(80px, 1fr) 60px",
+                  "--track-grid": "48px minmax(80px, 1fr) 60px 40px",
                 } as React.CSSProperties
               }
             >
@@ -291,6 +270,15 @@ export default function ArtistPage({
                     <div
                       className={`track-item ${isCurrentTrack(track) ? "active" : ""}`}
                       onClick={() => onPlayTrack(track.path, tracks)}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onOpenTrackMenu(track, {
+                          top: event.clientY,
+                          left: event.clientX,
+                          flipAbove: event.clientY,
+                        });
+                      }}
                     >
                       <div className="track-col-index">
                         {isCurrentTrack(track) && playbackState.is_playing ? (
@@ -321,6 +309,12 @@ export default function ArtistPage({
                       <div className="track-duration">
                         {formatTime(track.duration_seconds)}
                       </div>
+                      <TrackMenuButton
+                        track={track}
+                        isOpen={menuTrackPath === track.path}
+                        onOpen={onOpenTrackMenu}
+                        onClose={onCloseTrackMenu}
+                      />
                     </div>
                   );
                 }}

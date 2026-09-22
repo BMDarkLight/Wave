@@ -62,7 +62,10 @@ import {
   listenToSyncProgress,
   getRecentlyPlayed,
   getMostPlayed,
+  getFileName,
+  updateTrackMetadata,
   type PlaylistInfo,
+  type TagEdit,
   type Track,
 } from "./utils/player";
 import { isAndroid } from "./utils/platform";
@@ -102,6 +105,7 @@ import DeletePlaylistDialog from "./components/dialogs/DeletePlaylistDialog";
 import AddToPlaylistDialog from "./components/dialogs/AddToPlaylistDialog";
 import AddFromLibraryDialog from "./components/dialogs/AddFromLibraryDialog";
 import CreatePlaylistDialog from "./components/dialogs/CreatePlaylistDialog";
+import EditMetadataDialog from "./components/dialogs/EditMetadataDialog";
 import TrackContextMenu from "./components/TrackContextMenu";
 import QueueContextMenu from "./components/QueueContextMenu";
 import AddTrackMenu from "./components/AddTrackMenu";
@@ -338,8 +342,10 @@ function App() {
     return () => window.clearTimeout(id);
   }, [mainSearchOpen]);
 
-  // Track context menu
-  const [menuTrackPath, setMenuTrackPath] = useState<string | null>(null);
+  // Track context menu. The track itself is kept, not just its path: album
+  // and artist pages show tracks that are not in the open playlist.
+  const [menuTrack, setMenuTrack] = useState<Track | null>(null);
+  const menuTrackPath = menuTrack?.path ?? null;
   const [menuAnchor, setMenuAnchor] = useState<{
     top: number;
     right?: number;
@@ -349,6 +355,12 @@ function App() {
   const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<string | null>(
     null,
   );
+  // Tracks currently open in the metadata editor. One from the track menu, a
+  // whole album from the album page.
+  const [editingMetadata, setEditingMetadata] = useState<Track[] | null>(null);
+  // Album and artist pages read the library themselves, so they need a nudge
+  // once an edit lands.
+  const [browseRefresh, setBrowseRefresh] = useState(0);
 
   // Sort state — cycles asc → desc → off on repeated header clicks
   const [sortColumn, setSortColumn] = useState<"index" | "title" | "album">(
@@ -453,7 +465,7 @@ function App() {
     favoritePaths,
     setFavoritePaths,
     setError,
-    setMenuTrackPath,
+    closeTrackMenu: () => setMenuTrack(null),
     setAddToPlaylistTrack,
     onNoTrackFallback: () => {
       void handleAddTrack(false);
@@ -1230,7 +1242,7 @@ function App() {
       selectedPlaylistIdRef.current === id && mainView === "playlist";
     clearBrowse();
     closeMainSearch();
-    setMenuTrackPath(null);
+    setMenuTrack(null);
     setMobileNavOpen(false);
     setMainView("playlist");
 
@@ -1267,7 +1279,7 @@ function App() {
   const goHome = () => {
     clearBrowse();
     closeMainSearch();
-    setMenuTrackPath(null);
+    setMenuTrack(null);
     setMobileNavOpen(false);
     setMainView("home");
   };
@@ -1275,7 +1287,7 @@ function App() {
   const goRecentlyPlayed = () => {
     clearBrowse();
     closeMainSearch();
-    setMenuTrackPath(null);
+    setMenuTrack(null);
     setMobileNavOpen(false);
     setMainView("recently_played");
   };
@@ -1283,7 +1295,7 @@ function App() {
   const goMostPlayed = () => {
     clearBrowse();
     closeMainSearch();
-    setMenuTrackPath(null);
+    setMenuTrack(null);
     setMobileNavOpen(false);
     setMainView("most_played");
   };
@@ -1298,7 +1310,7 @@ function App() {
       setError(null);
       await addTrackToPlaylistById(targetPlaylistId, path);
       setAddToPlaylistTrack(null);
-      setMenuTrackPath(null);
+      setMenuTrack(null);
       await loadPlaylists();
       if (targetPlaylistId === selectedPlaylistId) {
         await loadPlaylistTracks(targetPlaylistId);
@@ -1308,19 +1320,72 @@ function App() {
     }
   };
 
+  // ── Metadata editing ───────────────────────────────────────────────────────
+
+  const handleSaveMetadata = async (edit: TagEdit) => {
+    const paths = (editingMetadata ?? []).map((track) => track.path);
+    const result = await updateTrackMetadata(paths, edit);
+
+    setEditingMetadata(null);
+    if (selectedPlaylistId) {
+      await loadPlaylistTracks(selectedPlaylistId);
+    }
+    await loadPlaylists();
+    await loadQueueTracks();
+
+    // The OS media flyout is keyed off the playing path, which an edit never
+    // changes, so push the new title and artist to it by hand.
+    const playing = playbackState.current_path;
+    if (playing && paths.includes(playing)) {
+      const details = await getTrackDetails(playing);
+      if (details) {
+        await updateMediaMetadata({
+          title: details.title || details.name || "Unknown",
+          artist: details.artist,
+          album: details.album,
+          duration_seconds: details.duration_seconds,
+        }).catch(() => {});
+      }
+    }
+
+    // Renaming an album or an artist moves the page you are standing on, so
+    // follow it rather than leaving an empty one behind.
+    if (viewingAlbum && (edit.album || edit.album_artist !== undefined)) {
+      openAlbumPage(
+        edit.album || viewingAlbum.name,
+        edit.album_artist === undefined
+          ? viewingAlbum.albumArtist
+          : edit.album_artist || null,
+      );
+    } else if (viewingArtist && edit.artist) {
+      openArtistPage(edit.artist);
+    } else {
+      setBrowseRefresh((count) => count + 1);
+    }
+
+    if (result.failed.length > 0) {
+      const [first] = result.failed;
+      setError(
+        result.failed.length === 1
+          ? `Could not update ${getFileName(first.path)}: ${first.reason}`
+          : `Updated ${result.updated} of ${paths.length} tracks. ${getFileName(first.path)}: ${first.reason}`,
+      );
+    }
+  };
+
   const openTrackContextMenu = (
-    path: string,
+    track: Track,
     anchor: { top: number; right?: number; left?: number; flipAbove?: number },
   ) => {
     setQueueMenuIndex(null);
     setQueueMenuAnchor(null);
-    setMenuTrackPath(path);
+    setMenuTrack(track);
     setMenuAnchor(anchor);
     setAddToPlaylistTrack(null);
   };
 
   const closeTrackContextMenu = () => {
-    setMenuTrackPath(null);
+    setMenuTrack(null);
     setMenuAnchor(null);
   };
 
@@ -1669,7 +1734,7 @@ function App() {
                   onContextMenu={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    openTrackContextMenu(track.path, {
+                    openTrackContextMenu(track, {
                       top: event.clientY,
                       left: event.clientX,
                       flipAbove: event.clientY,
@@ -1939,6 +2004,11 @@ function App() {
           onArtistClick={(name) => {
             openArtistPage(name);
           }}
+          onEditMetadata={setEditingMetadata}
+          onOpenTrackMenu={openTrackContextMenu}
+          onCloseTrackMenu={closeTrackContextMenu}
+          menuTrackPath={menuTrackPath}
+          refreshKey={browseRefresh}
           playbackState={playbackState}
         />
       ) : viewingArtist ? (
@@ -1962,6 +2032,10 @@ function App() {
             // Keep artist underneath so hardware/UI back returns to it.
             pushAlbumPage(name, albumArtist);
           }}
+          onOpenTrackMenu={openTrackContextMenu}
+          onCloseTrackMenu={closeTrackContextMenu}
+          menuTrackPath={menuTrackPath}
+          refreshKey={browseRefresh}
           playbackState={playbackState}
         />
       ) : mainView === "home" && !mainSearchQuery.trim() ? (
@@ -1995,6 +2069,9 @@ function App() {
         <PlayedTracksPage
           mode={mainView}
           playbackState={playbackState}
+          onOpenTrackMenu={openTrackContextMenu}
+          onCloseTrackMenu={closeTrackContextMenu}
+          menuTrackPath={menuTrackPath}
           onPlayTrack={(path, tracks) => {
             const index = Math.max(
               0,
@@ -2181,14 +2258,15 @@ function App() {
         />
       )}
 
-      {menuTrackPath &&
+      {menuTrack &&
         menuAnchor &&
         (() => {
-          const menuTrack = playlist.find((t) => t.path === menuTrackPath);
-          if (!menuTrack) return null;
           const addToPlaylistOptions = playlists.filter(
             (p) => p.id !== selectedPlaylistId && p.name !== "Favorites",
           );
+          // Album and artist pages are not a playlist you can take a track out
+          // of, so that entry only belongs to the playlist view.
+          const browsing = !!viewingAlbum || !!viewingArtist;
           return (
             <TrackContextMenu
               track={menuTrack}
@@ -2196,17 +2274,22 @@ function App() {
               onClose={closeTrackContextMenu}
               canAddToPlaylist={addToPlaylistOptions.length > 0}
               canRemoveFromPlaylist={
-                !isLibraryPlaylistName(selectedPlaylist?.name)
+                !browsing && !isLibraryPlaylistName(selectedPlaylist?.name)
               }
               onPlayNext={handlePlayNext}
               onAddToQueue={handleAddToQueue}
               onAddToPlaylist={setAddToPlaylistTrack}
+              onEditMetadata={(track) => setEditingMetadata([track])}
               onGoToAlbum={openAlbumPage}
               onGoToArtist={openArtistPage}
               onRemoveFromPlaylist={(path) =>
                 void handleRemoveFromPlaylist(path)
               }
-              onRemoveFromLibrary={(path) => void handleRemoveFromLibrary(path)}
+              onRemoveFromLibrary={(path) => {
+                void handleRemoveFromLibrary(path).then(() =>
+                  setBrowseRefresh((count) => count + 1),
+                );
+              }}
             />
           );
         })()}
@@ -2265,6 +2348,14 @@ function App() {
           name={deletePlaylistConfirm.name}
           onCancel={() => setDeletePlaylistConfirm(null)}
           onConfirm={confirmDeletePlaylist}
+        />
+      )}
+
+      {editingMetadata && (
+        <EditMetadataDialog
+          tracks={editingMetadata}
+          onClose={() => setEditingMetadata(null)}
+          onSave={handleSaveMetadata}
         />
       )}
 

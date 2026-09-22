@@ -16,6 +16,7 @@ use crate::metadata::{extract_track, Track};
 use crate::playback_daemon::{
     daemon_request, daemon_request_if_running, DaemonRequest, DspStatus, PlaybackStatus,
 };
+use crate::tag_edit::{Change, CoverEdit, TagEdit};
 
 // ── Top-level CLI ────────────────────────────────────────────────────────────
 
@@ -404,6 +405,60 @@ pub enum MetadataCmd {
         /// Image file path (e.g. cover.jpg)
         image: String,
     },
+    /// Write tag values back to a track's file
+    ///
+    /// Only the fields you pass are touched. Pass an empty string to clear
+    /// one, for example --genre "".
+    Set {
+        /// Track ID (UUID) or file path
+        track_id: String,
+        #[command(flatten)]
+        fields: TagFields,
+    },
+}
+
+#[derive(clap::Args)]
+pub struct TagFields {
+    /// Track title
+    #[arg(long)]
+    title: Option<String>,
+    /// Track artist
+    #[arg(long)]
+    artist: Option<String>,
+    /// Album name
+    #[arg(long)]
+    album: Option<String>,
+    /// Album artist
+    #[arg(long)]
+    album_artist: Option<String>,
+    /// Genre
+    #[arg(long)]
+    genre: Option<String>,
+    /// Release year (1-9999)
+    #[arg(long)]
+    year: Option<String>,
+    /// Track number (1-9999)
+    #[arg(long)]
+    track_number: Option<String>,
+    /// Disc number (1-9999)
+    #[arg(long)]
+    disc_number: Option<String>,
+}
+
+impl From<TagFields> for TagEdit {
+    fn from(fields: TagFields) -> Self {
+        Self {
+            title: fields.title,
+            artist: fields.artist,
+            album: fields.album,
+            album_artist: fields.album_artist,
+            genre: fields.genre,
+            year: fields.year,
+            track_number: fields.track_number,
+            disc_number: fields.disc_number,
+            cover: None,
+        }
+    }
 }
 
 // ── Library path resolution ─────────────────────────────────────────────────
@@ -427,12 +482,27 @@ fn resolve_track_path(library: &Library, id_or_path: &str) -> Result<String, Str
     // Treat as a file path; verify it exists
     let path = Path::new(id_or_path);
     if path.exists() {
-        Ok(id_or_path.to_string())
+        Ok(library_path_spelling(id_or_path))
     } else {
         Err(format!(
             "Track not found: {id_or_path} (not a valid UUID or existing file path)"
         ))
     }
+}
+
+/// The library stores whichever spelling a track was imported with. Canonicalize
+/// what the user typed so an equivalent path written differently (forward
+/// slashes, a relative segment, another case) still lands on the same row.
+fn library_path_spelling(path: &str) -> String {
+    let Ok(canonical) = std::fs::canonicalize(path) else {
+        return path.to_string();
+    };
+    let text = canonical.to_string_lossy();
+    // Windows canonicalization returns an extended-length path; nothing else
+    // in Wave writes that prefix, so drop it again.
+    text.strip_prefix("\\\\?\\")
+        .unwrap_or(text.as_ref())
+        .to_string()
 }
 
 /// Pretty-print a track in a human-readable one-line format.
@@ -1368,6 +1438,47 @@ fn run_metadata(cmd: MetadataCmd) {
             cmd_metadata_cover_export(track_id, output)
         }
         MetadataCmd::CoverSet { track_id, image } => cmd_metadata_cover_set(track_id, image),
+        MetadataCmd::Set { track_id, fields } => cmd_metadata_set(track_id, fields.into()),
+    }
+}
+
+fn cmd_metadata_set(track_id: String, edit: TagEdit) {
+    let library = open_library();
+    let path = match resolve_track_path(&library, &track_id) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    let edit = edit.resolve().unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+    if edit.is_empty() {
+        eprintln!("Nothing to change. Pass at least one field, such as --title.");
+        std::process::exit(1);
+    }
+
+    let indexed = matches!(library.get_track_details(&path), Ok(Some(_)));
+    if let Err(e) = crate::tag_edit::write_to_file(Path::new(&path), &edit) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+
+    if !indexed {
+        println!(
+            "Tags written to {path}. The file is not in the library, so nothing was re-indexed."
+        );
+        return;
+    }
+    match library.update_track_tags(&path, &edit) {
+        Ok(track) => print_full_metadata(&track),
+        Err(e) => {
+            eprintln!("Tags were written, but the library entry could not be updated: {e}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -1456,25 +1567,27 @@ fn cmd_metadata_cover_set(track_id: String, image: String) {
         }
     };
 
-    // Read the image file
-    let image_data = std::fs::read(&image).unwrap_or_else(|e| {
-        eprintln!("Failed to read image file {image}: {e}");
+    // Read and re-encode through the same path the metadata editor uses, so a
+    // cover set here goes into the file as well as the library.
+    let edit = TagEdit {
+        cover: Some(CoverEdit::Replace {
+            path: image.clone(),
+        }),
+        ..Default::default()
+    }
+    .resolve()
+    .unwrap_or_else(|e| {
+        eprintln!("{e}");
         std::process::exit(1);
     });
+    let Some(Change::Set(jpeg)) = edit.cover.clone() else {
+        eprintln!("Failed to read image file {image}");
+        std::process::exit(1);
+    };
 
-    // Reject formats the decoder cannot read. The stored thumb is always
-    // re-encoded to JPEG, so the source MIME itself is not retained.
-    match Path::new(&image)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .as_deref()
-    {
-        Some("jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp") => {}
-        other => {
-            eprintln!("Unsupported image format: {other:?} (use jpg, png, webp, gif, or bmp)");
-            std::process::exit(1);
-        }
+    if let Err(e) = crate::tag_edit::write_to_file(Path::new(&path), &edit) {
+        eprintln!("{e}");
+        std::process::exit(1);
     }
 
     // Look up the track ID in the database
@@ -1494,7 +1607,7 @@ fn cmd_metadata_cover_set(track_id: String, image: String) {
         });
 
     library
-        .set_track_cover(&track_id_uuid, &image_data)
+        .set_track_cover(&track_id_uuid, &jpeg)
         .unwrap_or_else(|e| {
             eprintln!("Failed to set cover art: {e}");
             std::process::exit(1);

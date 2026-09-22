@@ -2081,6 +2081,24 @@ input[type="search"]::-webkit-search-decoration {
   opacity: 0;
 }
 
+/* Album / artist / history rows keep the row menu in its own column at every
+   width, so the duration stays put instead of being swapped out on hover. */
+.track-list-compact .track-actions-cell {
+  position: static;
+}
+
+.track-list-compact .track-actions-hover {
+  position: static;
+  right: auto;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.track-list-compact .track-item:hover .track-duration,
+.track-list-compact .track-item:focus-within .track-duration {
+  opacity: 1;
+}
+
 .track-list-header {
   position: sticky;
   top: 0;
@@ -2609,6 +2627,83 @@ img.queue-thumb {
   border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg, #121212) 80%, transparent);
+}
+
+.metadata-dialog {
+  width: min(520px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  /* The dialog's own top and bottom padding lives in the two pinned rows
+     below, so each one sits flush with the scrollport edge it sticks to. */
+  padding: 0 22px;
+}
+
+/* Title and the Save/Cancel row stay put while the fields scroll, so a long
+   form never hides the button you are reaching for. */
+.metadata-dialog .modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0 -22px 12px;
+  padding: 22px 22px 12px;
+  border-radius: 12px 12px 0 0;
+  background: #282828;
+}
+
+.metadata-dialog .modal-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 8px -22px 0;
+  padding: 14px 22px 22px;
+  border-radius: 0 0 12px 12px;
+  background: #282828;
+}
+
+.metadata-cover {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.metadata-cover img,
+.metadata-cover-empty {
+  width: 96px;
+  height: 96px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--panel-raised);
+}
+
+.metadata-cover-empty {
+  display: grid;
+  place-items: center;
+  color: var(--quiet);
+  font-size: 28px;
+}
+
+.metadata-cover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.metadata-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 14px;
+}
+
+.metadata-field-wide {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 560px) {
+  .metadata-fields {
+    grid-template-columns: 1fr;
+  }
 }
 
 .library-picker-empty {
@@ -3740,9 +3835,10 @@ img.queue-thumb {
     /* Title keeps a larger floor; album collapses first. */
     --track-grid: 44px minmax(160px, 2fr) minmax(0, 1fr) 64px 40px !important;
   }
-  /* Compact lists (album / artist / recently & most played) stay 3 columns. */
+  /* Compact lists (album / artist / recently & most played) drop the album
+     column, keeping index, title, duration and the row menu. */
   .track-list.track-list-compact {
-    --track-grid: 36px minmax(0, 1fr) 78px !important;
+    --track-grid: 36px minmax(0, 1fr) 78px 40px !important;
   }
   .track-list-header,
   .track-item {
@@ -3760,7 +3856,8 @@ img.queue-thumb {
   padding: 16px 24px 0;
 }
 
-.page-back-btn {
+.page-back-btn,
+.page-float-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3774,7 +3871,15 @@ img.queue-thumb {
   transition: background 0.15s;
 }
 
-.page-with-float-back > .page-back-btn {
+/* Pen shortcut beside the back arrow. The hero keeps its labelled button on
+   desktop, so this only comes out on the narrow layout. */
+.page-float-action {
+  display: none;
+  font-size: 18px;
+}
+
+.page-with-float-back > .page-back-btn,
+.page-with-float-back > .page-float-action {
   position: absolute;
   top: 12px;
   left: 12px;
@@ -3789,7 +3894,8 @@ img.queue-thumb {
   background: rgba(255, 255, 255, 0.15);
 }
 
-.page-with-float-back > .page-back-btn:hover {
+.page-with-float-back > .page-back-btn:hover,
+.page-with-float-back > .page-float-action:hover {
   background: rgba(12, 12, 12, 0.75);
 }
 
@@ -3843,6 +3949,20 @@ img.queue-thumb {
   gap: 6px;
   font-size: 14px;
   color: var(--muted);
+}
+
+.album-hero-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.album-hero-actions .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-raised);
+  color: var(--text);
 }
 
 .album-hero-artist-btn {
@@ -3911,6 +4031,14 @@ img.queue-thumb {
   color: var(--muted);
 }
 
+/* The Songs list is full-bleed inside its section: rows carry their own
+   padding, so the section's gutters would inset them twice. */
+.artist-songs-list {
+  width: auto;
+  margin-left: -24px;
+  margin-right: -24px;
+}
+
 .artist-album-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -3953,57 +4081,6 @@ img.queue-thumb {
 }
 
 .artist-album-card-meta {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.artist-discography-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.artist-discography-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  border: none;
-  background: none;
-  cursor: pointer;
-  border-radius: 6px;
-  text-align: left;
-  color: inherit;
-  transition: background 0.15s;
-}
-
-.artist-discography-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.artist-discography-item-cover {
-  width: 48px;
-  height: 48px;
-  border-radius: 4px;
-  object-fit: cover;
-  background: var(--panel-raised);
-  color: transparent;
-  flex-shrink: 0;
-}
-
-.artist-discography-item-info {
-  min-width: 0;
-}
-
-.artist-discography-item-name {
-  font-size: 14px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.artist-discography-item-meta {
   font-size: 12px;
   color: var(--muted);
 }
@@ -4417,7 +4494,8 @@ img.queue-thumb {
     transition: padding-top 0.28s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
-  .page-with-float-back > .page-back-btn {
+  .page-with-float-back > .page-back-btn,
+  .page-with-float-back > .page-float-action {
     top: calc(
       var(--mobile-topbar-height) + var(--mobile-search-panel, 0px) +
         env(safe-area-inset-top, 0px) + 8px
@@ -4425,6 +4503,16 @@ img.queue-thumb {
     left: 10px;
     z-index: 40;
     transition: top 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .page-with-float-back > .page-float-action {
+    display: inline-flex;
+    /* Clear of the back arrow. */
+    left: 54px;
+  }
+
+  .album-hero-actions {
+    display: none;
   }
 
   .main-content > .hero-copy,
@@ -4461,7 +4549,7 @@ img.queue-thumb {
 
   .album-track-list,
   .track-list.track-list-compact {
-    --track-grid: 32px minmax(0, 1fr) 78px !important;
+    --track-grid: 32px minmax(0, 1fr) 78px 40px !important;
   }
 
   .album-track-list .track-list-header .track-duration-header,
@@ -4805,6 +4893,35 @@ img.queue-thumb {
     justify-self: center;
   }
 
+  /* The editor has far more in it than the other dialogs, so it takes the
+     width it can get and sizes its controls for thumbs. */
+  .metadata-dialog {
+    width: min(520px, calc(100dvw - 32px));
+    max-height: calc(100dvh - 32px);
+  }
+
+  .metadata-dialog .modal-close-btn {
+    width: 40px;
+    height: 40px;
+    font-size: 22px;
+  }
+
+  .metadata-dialog .modal-input {
+    padding: 14px;
+    font-size: 16px;
+  }
+
+  .metadata-dialog .modal-actions .btn-ghost,
+  .metadata-dialog .modal-actions .btn-primary,
+  .metadata-dialog .metadata-cover-actions .btn-sm {
+    min-height: 44px;
+  }
+
+  .metadata-dialog .modal-actions .btn-ghost,
+  .metadata-dialog .modal-actions .btn-primary {
+    flex: 1;
+  }
+
   .modal-backdrop {
     top: 0;
     left: 0;
@@ -4851,6 +4968,11 @@ img.queue-thumb {
     padding: 0 16px 20px;
   }
 
+  .artist-songs-list {
+    margin-left: -16px;
+    margin-right: -16px;
+  }
+
   .artist-album-grid {
     grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
     gap: 14px;
@@ -4889,7 +5011,7 @@ img.queue-thumb {
 
   .album-track-list,
   .track-list.track-list-compact {
-    --track-grid: 28px minmax(0, 1fr) 78px !important;
+    --track-grid: 28px minmax(0, 1fr) 52px 40px !important;
   }
 
   .album-track-list .track-list-header .track-duration-header,

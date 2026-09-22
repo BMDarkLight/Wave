@@ -10,6 +10,7 @@
 
 import {
   BiAlbum,
+  BiEditAlt,
   BiListPlus,
   BiListUl,
   BiMinus,
@@ -18,6 +19,7 @@ import {
   BiUser,
 } from "react-icons/bi";
 import ContextMenu, { type ContextMenuAnchor } from "./ContextMenu";
+import { canEditMetadata } from "../utils/track";
 import type { Track } from "../utils/player";
 
 export default function TrackContextMenu({
@@ -29,6 +31,7 @@ export default function TrackContextMenu({
   onPlayNext,
   onAddToQueue,
   onAddToPlaylist,
+  onEditMetadata,
   onGoToAlbum,
   onGoToArtist,
   onRemoveFromPlaylist,
@@ -42,6 +45,7 @@ export default function TrackContextMenu({
   onPlayNext: (path: string) => void;
   onAddToQueue: (path: string) => void;
   onAddToPlaylist: (path: string) => void;
+  onEditMetadata: (track: Track) => void;
   onGoToAlbum: (album: string, albumArtist: string | null) => void;
   onGoToArtist: (artist: string) => void;
   onRemoveFromPlaylist: (path: string) => void;
@@ -79,6 +83,18 @@ export default function TrackContextMenu({
           }}
         >
           <BiListUl /> Add to Playlist...
+        </button>
+      )}
+      {canEditMetadata(track) && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onClose();
+            onEditMetadata(track);
+          }}
+        >
+          <BiEditAlt /> Edit Metadata...
         </button>
       )}
       {track.album && (
