@@ -83,7 +83,8 @@ fn cmd_playback_shutdown() {
 pub(crate) enum PlaylistMatch {
     /// Exactly one playlist, by full id, exact name, or id prefix.
     One(String),
-    /// More than one playlist fits; the names, for the error.
+    /// More than one playlist fits; how to tell them apart, for the error
+    /// (names for a shared id prefix, short ids for a shared name).
     Many(Vec<String>),
     None,
 }
@@ -98,8 +99,18 @@ pub(crate) fn match_playlist(
         .iter()
         .filter(|p| p.name.eq_ignore_ascii_case(query))
         .collect();
-    if let [only] = by_name.as_slice() {
-        return PlaylistMatch::One(only.id.clone());
+    match by_name.as_slice() {
+        [] => {}
+        [only] => return PlaylistMatch::One(only.id.clone()),
+        // Names are unique per profile and case-sensitive, so the same name
+        // can recur. Falling through would report a missing track instead.
+        many => {
+            return PlaylistMatch::Many(
+                many.iter()
+                    .map(|p| p.id.chars().take(8).collect())
+                    .collect(),
+            )
+        }
     }
     const MIN_PREFIX: usize = 4;
     if query.len() < MIN_PREFIX {
@@ -126,7 +137,7 @@ pub fn play(id: String) {
         PlaylistMatch::One(playlist_id) => return cmd_playback_start(playlist_id),
         PlaylistMatch::Many(names) => ui::fail(
             format!("\"{id}\" matches more than one playlist."),
-            Some(&format!("narrow it, or use a name: {}", names.join(", "))),
+            Some(&format!("narrow it down with one of: {}", names.join(", "))),
             ui::EXIT_NOT_FOUND,
         ),
         PlaylistMatch::None => {}
@@ -190,6 +201,19 @@ mod tests {
         assert_eq!(
             match_playlist(&sample(), "dc66"),
             PlaylistMatch::Many(vec!["Library".into(), "Road Trip".into()])
+        );
+    }
+
+    #[test]
+    fn a_shared_name_is_ambiguous() {
+        let mut playlists = sample();
+        playlists.push(playlist(
+            "7f3a1c20-0000-0000-0000-000000000000",
+            "road trip",
+        ));
+        assert_eq!(
+            match_playlist(&playlists, "Road Trip"),
+            PlaylistMatch::Many(vec!["dc6600aa".into(), "7f3a1c20".into()])
         );
     }
 
