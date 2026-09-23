@@ -8,7 +8,7 @@
 
 //! Listening history rollups.
 
-use crate::cli::{open_library, render, ui, StatsCmd};
+use crate::cli::{json, open_library, render, ui, StatsCmd};
 
 pub fn run(cmd: StatsCmd) {
     let library = open_library();
@@ -21,6 +21,7 @@ pub fn run(cmd: StatsCmd) {
                     ui::EXIT_GENERAL,
                 );
             });
+            json::maybe_emit(&stats);
             print!("{}", render::listening_overview(ui::current(), &stats));
         }
         StatsCmd::Recent { limit } => {
@@ -31,6 +32,7 @@ pub fn run(cmd: StatsCmd) {
                     ui::EXIT_GENERAL,
                 );
             });
+            json::maybe_emit(&tracks);
             if tracks.is_empty() {
                 println!("No recently played tracks yet.");
                 return;
@@ -48,6 +50,7 @@ pub fn run(cmd: StatsCmd) {
                     ui::EXIT_GENERAL,
                 );
             });
+            json::maybe_emit(&tracks);
             if tracks.is_empty() {
                 println!("No listen history yet.");
                 return;
@@ -65,6 +68,7 @@ pub fn run(cmd: StatsCmd) {
                     ui::EXIT_GENERAL,
                 );
             });
+            json::maybe_emit(&stats.top_artists);
             if stats.top_artists.is_empty() {
                 println!("No artist listen history yet.");
                 return;
@@ -82,6 +86,7 @@ pub fn run(cmd: StatsCmd) {
                     ui::EXIT_GENERAL,
                 );
             });
+            json::maybe_emit(&stats.top_albums);
             if stats.top_albums.is_empty() {
                 println!("No album listen history yet.");
                 return;
@@ -99,6 +104,7 @@ pub fn run(cmd: StatsCmd) {
                     ui::EXIT_GENERAL,
                 );
             });
+            json::maybe_emit(&stats.top_genres);
             if stats.top_genres.is_empty() {
                 println!("No genre listen history yet.");
                 return;

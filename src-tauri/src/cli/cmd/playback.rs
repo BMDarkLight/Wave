@@ -8,7 +8,9 @@
 
 //! Transport control for the background playback daemon.
 
-use crate::cli::{daemon_cmd, render, ui, PlaybackCmd};
+use serde_json::json;
+
+use crate::cli::{daemon_cmd, json, render, ui, PlaybackCmd};
 use crate::playback_daemon::{daemon_request, daemon_request_if_running, DaemonRequest};
 
 pub fn run(cmd: PlaybackCmd) {
@@ -28,10 +30,14 @@ pub fn run(cmd: PlaybackCmd) {
 fn cmd_playback_start(id: String) {
     match daemon_request(DaemonRequest::Start { id }) {
         Ok(resp) if resp.ok => {
-            if let Some(msg) = resp.message {
-                println!("{msg}");
-            }
-            println!("Playback running in background. Use `wave playback` subcommands to control.");
+            let msg = resp
+                .message
+                .unwrap_or_else(|| "Playback started.".to_string());
+            ui::done(msg, json!({ "status": resp.status }));
+            println!(
+                "  {}",
+                ui::current().dim("playing in the background; watch it with: wave now")
+            );
         }
         Ok(resp) => {
             ui::fail(
@@ -50,9 +56,10 @@ fn cmd_playback_start(id: String) {
 fn cmd_playback_shutdown() {
     match daemon_request_if_running(DaemonRequest::Shutdown) {
         Ok(Some(resp)) if resp.ok => {
-            if let Some(msg) = resp.message {
-                println!("{msg}");
-            }
+            let msg = resp
+                .message
+                .unwrap_or_else(|| "Playback daemon stopped.".to_string());
+            ui::done(msg, json!({}));
         }
         Ok(Some(resp)) => {
             ui::fail(
@@ -62,7 +69,8 @@ fn cmd_playback_shutdown() {
                 ui::EXIT_GENERAL,
             );
         }
-        Ok(None) => println!("Playback daemon is not running."),
+        // Shutting down something that is already down is not a failure.
+        Ok(None) => ui::done("Playback daemon is not running.", json!({})),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
@@ -73,6 +81,7 @@ fn cmd_playback_status() {
     match daemon_request_if_running(DaemonRequest::Status) {
         Ok(Some(resp)) if resp.ok => {
             if let Some(status) = resp.status {
+                json::maybe_emit(&status);
                 print!("{}", render::playback_status(ui::current(), &status, None));
             }
         }

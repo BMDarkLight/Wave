@@ -322,6 +322,24 @@ pub fn fail(message: impl std::fmt::Display, hint: Option<&str>, code: i32) -> !
     std::process::exit(code)
 }
 
+/// Report a change that went through: a tick line for people, or an ok
+/// envelope carrying `extra` under `--json`, which also ends the process
+/// since that envelope is the command's whole output.
+pub fn done(message: impl std::fmt::Display, extra: serde_json::Value) {
+    let ui = current();
+    let message = message.to_string();
+    if ui.json {
+        let mut payload = extra;
+        if !payload.is_object() {
+            payload = serde_json::json!({ "result": payload });
+        }
+        payload["message"] = serde_json::Value::String(message);
+        crate::cli::json::emit_ok(payload);
+    }
+    let line = format!("{} {}", ui.glyphs.ok, message);
+    println!("{}", ui.paint(style::OK, &line));
+}
+
 pub fn no_daemon() -> ! {
     fail(
         "Playback daemon is not running.",

@@ -40,6 +40,18 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_banner: bool,
 
+    /// When to colour the output
+    #[arg(long, global = true, value_enum, default_value_t = ui::ColorChoice::Auto)]
+    pub color: ui::ColorChoice,
+
+    /// Print machine-readable JSON instead of formatted text
+    #[arg(long, global = true)]
+    pub json: bool,
+
+    /// Include per-item detail, such as why a file was skipped on import
+    #[arg(long, global = true)]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -616,9 +628,9 @@ pub fn run() {
     }
     let cli = Cli::from_arg_matches(&command.get_matches()).unwrap_or_else(|e| e.exit());
 
-    // Resolved from the environment for now; the --color, --json and
-    // --verbose flags feed into this once they exist.
-    ui::install(ui);
+    // Resolved again now that the flags are known; the Ui above only had the
+    // environment to go on.
+    ui::install(ui::Ui::resolve(cli.color, cli.json, cli.verbose));
 
     match cli.command {
         Some(Commands::Tracks(cmd)) => cmd::tracks::run(cmd),
@@ -632,6 +644,7 @@ pub fn run() {
         Some(Commands::Stats(cmd)) => cmd::stats::run(cmd),
         // --cli, --headless, or only global flags: the landing screen. The
         // mark is decoration, so it stays out of piped output.
+        None if cli.json => json::emit(&banner::LandingFacts::gather()),
         None if cli.no_banner || !std::io::stdout().is_terminal() => {
             print!("{}", banner::landing_body(ui::current()))
         }
@@ -642,9 +655,8 @@ pub fn run() {
 pub(crate) fn daemon_cmd(request: DaemonRequest) {
     match daemon_request_if_running(request) {
         Ok(Some(resp)) if resp.ok => {
-            if let Some(msg) = resp.message {
-                println!("{msg}");
-            }
+            let msg = resp.message.unwrap_or_else(|| "Done.".to_string());
+            ui::done(msg, serde_json::json!({ "status": resp.status }));
         }
         Ok(Some(resp)) => {
             ui::fail(

@@ -10,7 +10,9 @@
 
 use std::path::Path;
 
-use crate::cli::{open_library, render, track_path_or_exit, ui, PlaylistsCmd};
+use serde_json::json;
+
+use crate::cli::{json, open_library, render, track_path_or_exit, ui, PlaylistsCmd};
 
 pub fn run(cmd: PlaylistsCmd) {
     match cmd {
@@ -33,6 +35,7 @@ fn cmd_playlists_list() {
     let library = open_library();
     match library.list_playlists(None) {
         Ok(playlists) => {
+            json::maybe_emit(&playlists);
             if playlists.is_empty() {
                 println!("No playlists found.");
                 return;
@@ -78,10 +81,11 @@ fn cmd_playlists_import(file: String, name: Option<String>) {
                 .flatten()
                 .map(|info| info.name)
                 .unwrap_or_else(|| "Unknown".to_string());
-            println!(
-                "Imported playlist \"{name}\" (ID: {id}) with {} track(s).",
-                tracks.len()
+            ui::done(
+                format!("Imported playlist \"{name}\" with {} tracks.", tracks.len()),
+                json!({ "id": id, "name": name, "tracks": tracks.len() }),
             );
+            println!("  {}", ui::current().dim(&format!("id {id}")));
         }
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
@@ -113,7 +117,10 @@ fn cmd_playlists_export(id: String, format: String, output: String) {
     .unwrap_or_else(|e| {
         ui::fail(e, None, ui::EXIT_GENERAL);
     });
-    println!("Exported playlist {id} to {output}");
+    ui::done(
+        format!("Exported playlist to {output}"),
+        json!({ "id": id, "output": output }),
+    );
 }
 
 fn cmd_playlists_info(id: String) {
@@ -125,6 +132,7 @@ fn cmd_playlists_info(id: String) {
                 ui::report(format!("Error fetching tracks: {e}"), None);
                 Vec::new()
             });
+            json::maybe_emit(&json!({ "playlist": info, "tracks": tracks }));
             print!("{}", render::playlist_info(ui::current(), &info, &tracks));
         }
         Ok(None) => {
@@ -144,6 +152,7 @@ fn cmd_playlists_query(query: String) {
     let library = open_library();
     match library.search_playlists(&query) {
         Ok(playlists) => {
+            json::maybe_emit(&playlists);
             if playlists.is_empty() {
                 println!("No playlists matching \"{query}\".");
                 return;
@@ -168,7 +177,13 @@ fn cmd_playlists_query(query: String) {
 fn cmd_playlists_create(name: String) {
     let library = open_library();
     match library.create_playlist(&name, None) {
-        Ok(info) => println!("Created playlist \"{}\" (ID: {})", info.name, info.id),
+        Ok(info) => {
+            ui::done(
+                format!("Created playlist \"{}\"", info.name),
+                json!({ "playlist": info }),
+            );
+            println!("  {}", ui::current().dim(&format!("id {}", info.id)));
+        }
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
@@ -178,7 +193,7 @@ fn cmd_playlists_create(name: String) {
 fn cmd_playlists_delete(id: String) {
     let library = open_library();
     match library.delete_playlist(&id) {
-        Ok(()) => println!("Deleted playlist {id}."),
+        Ok(()) => ui::done(format!("Deleted playlist {id}."), json!({ "id": id })),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
@@ -188,7 +203,10 @@ fn cmd_playlists_delete(id: String) {
 fn cmd_playlists_rename(id: String, name: String) {
     let library = open_library();
     match library.rename_playlist(&id, &name) {
-        Ok(()) => println!("Renamed playlist {id} to \"{name}\"."),
+        Ok(()) => ui::done(
+            format!("Renamed playlist to \"{name}\"."),
+            json!({ "id": id, "name": name }),
+        ),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
@@ -198,7 +216,7 @@ fn cmd_playlists_rename(id: String, name: String) {
 fn cmd_playlists_clear(id: String) {
     let library = open_library();
     match library.clear_playlist(&id) {
-        Ok(()) => println!("Cleared all tracks from playlist {id}."),
+        Ok(()) => ui::done(format!("Cleared playlist {id}."), json!({ "id": id })),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
@@ -209,7 +227,10 @@ fn cmd_playlists_add_track(id: String, track_id: String) {
     let library = open_library();
     let path = track_path_or_exit(&library, &track_id);
     match library.add_track_to_playlist(&id, path) {
-        Ok(track) => println!("Added to playlist: {} — {}", track.artist, track.title),
+        Ok(track) => ui::done(
+            format!("Added {} by {} to the playlist.", track.title, track.artist),
+            json!({ "id": id, "track": track }),
+        ),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
@@ -220,7 +241,7 @@ fn cmd_playlists_remove_track(id: String, track_id: String) {
     let library = open_library();
     let path = track_path_or_exit(&library, &track_id);
     match library.remove_track_from_playlist_by_path(&id, &path) {
-        Ok(()) => println!("Removed track from playlist {id}."),
+        Ok(()) => ui::done("Removed the track from the playlist.", json!({ "id": id })),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
@@ -272,19 +293,30 @@ fn cmd_playlists_sync(id: String) {
         .filter_map(|e| e.path().to_str().map(str::to_string))
         .collect();
 
-    println!(
-        "Syncing \"{}\" with {} ({} audio file(s) found)…",
-        info.name,
-        folder,
-        paths.len()
-    );
+    if !ui::current().json {
+        println!(
+            "Syncing \"{}\" with {} ({} audio files found)",
+            info.name,
+            folder,
+            paths.len()
+        );
+    }
 
     match library.sync_playlist_to_paths(&id, &paths) {
         Ok((added, removed)) => {
-            println!("Done. Added {added}, removed {removed}.");
-            if let Ok(Some(updated)) = library.get_playlist_info(&id) {
-                println!("Playlist now has {} track(s).", updated.track_count);
+            let count = library
+                .get_playlist_info(&id)
+                .ok()
+                .flatten()
+                .map(|updated| updated.track_count);
+            let mut message = format!("Synced: {added} added, {removed} removed");
+            if let Some(count) = count {
+                message.push_str(&format!(", {count} tracks now"));
             }
+            ui::done(
+                format!("{message}."),
+                json!({ "id": id, "added": added, "removed": removed, "tracks": count }),
+            );
         }
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);

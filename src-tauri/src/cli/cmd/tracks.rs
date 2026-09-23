@@ -10,7 +10,9 @@
 
 use std::path::Path;
 
-use crate::cli::{open_library, render, track_path_or_exit, ui, TracksCmd};
+use serde_json::json;
+
+use crate::cli::{json, open_library, render, track_path_or_exit, ui, TracksCmd};
 use crate::metadata::{extract_track, Track};
 
 pub fn run(cmd: TracksCmd) {
@@ -59,13 +61,14 @@ fn cmd_tracks_list(playlist_id: Option<String>) {
     };
     match tracks {
         Ok(tracks) => {
+            json::maybe_emit(&tracks);
             if tracks.is_empty() {
                 println!("No tracks found.");
                 return;
             }
             let ui = ui::current();
             println!("{}\n", ui.heading(&format!("{} tracks", tracks.len())));
-            print!("{}", render::track_table(ui::current(), &tracks));
+            print!("{}", render::track_table(ui, &tracks));
         }
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
@@ -75,13 +78,16 @@ fn cmd_tracks_list(playlist_id: Option<String>) {
 
 fn cmd_tracks_import(paths: Vec<String>) {
     let library = open_library();
+    let quiet = ui::current().json;
     let mut total = 0;
     for path in &paths {
         let p = Path::new(path);
         if p.is_dir() {
             match library.index_directory(None, None, path.clone()) {
                 Ok(tracks) => {
-                    println!("Imported {} track(s) from {}", tracks.len(), path);
+                    if !quiet {
+                        println!("Imported {} tracks from {path}", tracks.len());
+                    }
                     total += tracks.len();
                 }
                 Err(e) => ui::report(format!("Error importing directory {path}: {e}"), None),
@@ -89,7 +95,9 @@ fn cmd_tracks_import(paths: Vec<String>) {
         } else if p.is_file() {
             match library.add_track_to_default_playlist(path.clone()) {
                 Ok(track) => {
-                    println!("Imported: {} — {}", track.artist, track.title);
+                    if !quiet {
+                        println!("Imported {} by {}", track.title, track.artist);
+                    }
                     total += 1;
                 }
                 Err(e) => ui::report(format!("Error importing {path}: {e}"), None),
@@ -98,9 +106,10 @@ fn cmd_tracks_import(paths: Vec<String>) {
             ui::report(format!("Path not found: {path}"), None);
         }
     }
-    if total > 0 {
-        println!("Successfully imported {total} track(s).");
-    }
+    ui::done(
+        format!("Imported {total} tracks."),
+        json!({ "imported": total }),
+    );
 }
 
 fn cmd_tracks_info(track_id: String) {
@@ -114,7 +123,10 @@ fn cmd_tracks_info(track_id: String) {
         .or_else(|| extract_track(None, &path).ok());
 
     match track {
-        Some(t) => print!("{}", render::metadata_block(ui::current(), &t)),
+        Some(t) => {
+            json::maybe_emit(&t);
+            print!("{}", render::metadata_block(ui::current(), &t))
+        }
         None => {
             ui::fail(
                 format!("Could not read track: {path}"),
@@ -129,6 +141,7 @@ fn cmd_tracks_query(query: String) {
     let library = open_library();
     match library.search_tracks(&query) {
         Ok(tracks) => {
+            json::maybe_emit(&tracks);
             if tracks.is_empty() {
                 println!("No tracks matching \"{query}\".");
                 return;
@@ -138,7 +151,7 @@ fn cmd_tracks_query(query: String) {
                 "{}\n",
                 ui.heading(&format!("{} tracks matching \"{query}\"", tracks.len()))
             );
-            print!("{}", render::track_table(ui::current(), &tracks));
+            print!("{}", render::track_table(ui, &tracks));
         }
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
@@ -155,7 +168,10 @@ fn cmd_tracks_add(track_id: String, playlist_id: Option<String>) {
         library.add_track_to_default_playlist(path)
     };
     match result {
-        Ok(track) => println!("Added: {} — {}", track.artist, track.title),
+        Ok(track) => ui::done(
+            format!("Added {} by {}", track.title, track.artist),
+            json!({ "track": track }),
+        ),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
@@ -175,7 +191,7 @@ fn cmd_tracks_remove(track_id: String, playlist_id: Option<String>) {
             .map(|_| "Track removed from library.")
     };
     match result {
-        Ok(msg) => println!("{msg}"),
+        Ok(msg) => ui::done(msg, json!({ "path": path })),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
@@ -197,10 +213,14 @@ fn cmd_tracks_reset(yes: bool) {
     let library = open_library();
     match library.reset_library() {
         Ok((tracks, playlists)) => {
-            println!(
-                "Library reset: removed {tracks} track(s) and deleted {playlists} playlist(s)."
+            ui::done(
+                format!("Library reset: removed {tracks} tracks and {playlists} playlists."),
+                json!({ "tracks_removed": tracks, "playlists_deleted": playlists }),
             );
-            println!("Library and Favorites were kept (empty).");
+            println!(
+                "  {}",
+                ui::current().dim("Library and Favorites were kept, empty.")
+            );
         }
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);

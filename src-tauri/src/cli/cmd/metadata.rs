@@ -10,7 +10,9 @@
 
 use std::path::Path;
 
-use crate::cli::{open_library, render, track_path_or_exit, ui, MetadataCmd};
+use serde_json::json;
+
+use crate::cli::{json, open_library, render, track_path_or_exit, ui, MetadataCmd};
 use crate::metadata::extract_track;
 use crate::tag_edit::{Change, CoverEdit, TagEdit};
 
@@ -46,13 +48,22 @@ fn cmd_metadata_set(track_id: String, edit: TagEdit) {
     }
 
     if !indexed {
+        ui::done(format!("Tags written to {path}"), json!({ "path": path }));
         println!(
-            "Tags written to {path}. The file is not in the library, so nothing was re-indexed."
+            "  {}",
+            ui::current().dim("the file is not in the library, so nothing was re-indexed")
         );
         return;
     }
     match library.update_track_tags(&path, &edit) {
-        Ok(track) => print!("{}", render::metadata_block(ui::current(), &track)),
+        Ok(track) => {
+            if ui::current().json {
+                json::emit_ok(json!({ "message": "Tags written.", "track": track }));
+            }
+            ui::done("Tags written.", json!({}));
+            println!();
+            print!("{}", render::metadata_block(ui::current(), &track));
+        }
         Err(e) => {
             ui::fail(
                 format!("Tags were written, but the library entry could not be updated: {e}"),
@@ -72,7 +83,10 @@ fn cmd_metadata_get(track_id: String) {
         .and_then(|v| v.into_iter().next().flatten())
         .or_else(|| extract_track(None, &path).ok());
     match track {
-        Some(t) => print!("{}", render::metadata_block(ui::current(), &t)),
+        Some(t) => {
+            json::maybe_emit(&t);
+            print!("{}", render::metadata_block(ui::current(), &t))
+        }
         None => {
             ui::fail(
                 format!("Could not read track: {path}"),
@@ -107,7 +121,10 @@ fn cmd_metadata_cover_export(track_id: String, output: String) {
                                     ui::EXIT_GENERAL,
                                 );
                             });
-                            println!("Cover art exported to {output}");
+                            ui::done(
+                                format!("Cover art exported to {output}"),
+                                json!({ "output": output }),
+                            );
                         }
                         Err(e) => {
                             ui::fail(
@@ -197,5 +214,11 @@ fn cmd_metadata_cover_set(track_id: String, image: String) {
             );
         });
 
-    println!("Cover art set for track {track_id_uuid}");
+    ui::done(
+        format!(
+            "Cover art set for track {}.",
+            render::short_id(&track_id_uuid)
+        ),
+        json!({ "id": track_id_uuid }),
+    );
 }

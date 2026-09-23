@@ -9,7 +9,7 @@
 //! Audio output devices and volume.
 
 use crate::audio::player::AudioPlayer;
-use crate::cli::{daemon_cmd, DevicesCmd};
+use crate::cli::{daemon_cmd, json, ui, DevicesCmd};
 use crate::playback_daemon::DaemonRequest;
 
 pub fn run(cmd: DevicesCmd) {
@@ -22,17 +22,30 @@ pub fn run(cmd: DevicesCmd) {
 
 fn cmd_devices_list() {
     let devices = AudioPlayer::list_output_devices();
+    let current = AudioPlayer::current_output_name();
+    json::maybe_emit(&serde_json::json!({ "devices": devices, "default": current }));
+
+    let ui = ui::current();
     if devices.is_empty() {
         println!("No audio output devices found.");
         return;
     }
-    let current = AudioPlayer::current_output_name();
-    println!("Available output devices:");
+    println!(
+        "{}\n",
+        ui.heading(&format!("{} output devices", devices.len()))
+    );
     for device in &devices {
-        let marker = if *device == current { "* " } else { "  " };
-        println!("  {marker}{device}");
+        if *device == current {
+            let line = format!("{} {device}", ui.glyphs.playing);
+            println!(
+                "  {}  {}",
+                ui.paint(ui::style::OK, &line),
+                ui.dim("default")
+            );
+        } else {
+            println!("    {device}");
+        }
     }
-    println!("  (* = default)");
 }
 
 fn cmd_devices_switch(name: String) {

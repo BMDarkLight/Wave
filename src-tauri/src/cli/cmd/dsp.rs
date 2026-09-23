@@ -8,7 +8,9 @@
 
 //! Equalizer, bass and treble, gapless playback and crossfade.
 
-use crate::cli::{render, ui, DspCmd};
+use serde_json::json;
+
+use crate::cli::{json, render, ui, DspCmd};
 use crate::playback_daemon::{daemon_request_if_running, DaemonRequest, DspStatus};
 
 pub fn run(cmd: DspCmd) {
@@ -16,13 +18,20 @@ pub fn run(cmd: DspCmd) {
 
     match cmd {
         DspCmd::Presets => {
-            println!("Available EQ presets:");
+            let presets: Vec<_> = EqConfig::list_presets()
+                .map(|(name, description)| json!({ "name": name, "description": description }))
+                .collect();
+            json::maybe_emit(&presets);
+            let ui = ui::current();
+            println!("{}\n", ui.heading(&format!("{} EQ presets", presets.len())));
             for (name, desc) in EqConfig::list_presets() {
-                println!("  {name:16}  {desc}");
+                println!("  {}  {}", ui::pad(name, 12, ui::Align::Left), ui.dim(desc));
             }
+            println!("\n  {}", ui.dim("apply one with: wave dsp preset <name>"));
         }
         DspCmd::EqShow => {
             let dsp = load_dsp_status();
+            json::maybe_emit(&dsp);
             print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::EqSet { bands } => {
@@ -36,27 +45,38 @@ pub fn run(cmd: DspCmd) {
             let mut arr = [0.0f32; 10];
             arr.copy_from_slice(&bands);
             let dsp = apply_dsp_request(DaemonRequest::SetEqBands { bands: arr });
-            println!("{}", dsp_message_or("EQ bands set and enabled."));
+            ui::done(
+                dsp_message_or("EQ bands set and enabled."),
+                json!({ "dsp": dsp }),
+            );
+            println!();
             print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::EqEnable => {
             let dsp = apply_dsp_request(DaemonRequest::SetEqEnabled { enabled: true });
-            println!("{}", dsp_message_or("Equalizer enabled."));
+            ui::done(dsp_message_or("Equalizer enabled."), json!({ "dsp": dsp }));
+            println!();
             print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::EqDisable => {
             let dsp = apply_dsp_request(DaemonRequest::SetEqEnabled { enabled: false });
-            println!("{}", dsp_message_or("Equalizer disabled."));
+            ui::done(dsp_message_or("Equalizer disabled."), json!({ "dsp": dsp }));
+            println!();
             print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::EqReset => {
             let dsp = apply_dsp_request(DaemonRequest::ResetEq);
-            println!("{}", dsp_message_or("Equalizer reset to flat and enabled."));
+            ui::done(
+                dsp_message_or("Equalizer reset to flat and enabled."),
+                json!({ "dsp": dsp }),
+            );
+            println!();
             print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::Preset { name } => {
             let dsp = apply_dsp_request(DaemonRequest::ApplyEqPreset { name: name.clone() });
-            println!("Applied EQ preset: {name}");
+            ui::done(format!("Applied EQ preset {name}."), json!({ "dsp": dsp }));
+            println!();
             print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::Export { output, name } => {
@@ -69,7 +89,10 @@ pub fn run(cmd: DspCmd) {
             crate::audio::dsp::EqPresetFile::save_to(&output, &eq, name).unwrap_or_else(|e| {
                 ui::fail(format!("Failed to export EQ: {e}"), None, ui::EXIT_GENERAL);
             });
-            println!("EQ settings exported to {output}");
+            ui::done(
+                format!("EQ settings exported to {output}"),
+                json!({ "output": output }),
+            );
         }
         DspCmd::Import { input } => {
             let eq = crate::audio::dsp::EqPresetFile::load_from(&input).unwrap_or_else(|e| {
@@ -85,34 +108,36 @@ pub fn run(cmd: DspCmd) {
                     seconds: eq.crossfade_duration,
                 });
             }
-            println!("EQ settings imported from {input} and applied.");
+            ui::done(
+                format!("EQ settings imported from {input}"),
+                json!({ "dsp": dsp }),
+            );
+            println!();
             print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::Gapless { state } => match state {
             None => {
                 let dsp = load_dsp_status();
+                json::maybe_emit(&json!({ "gapless": dsp.gapless_enabled }));
                 println!(
-                    "Gapless playback: {}",
-                    if dsp.gapless_enabled { "ON" } else { "OFF" }
+                    "{}",
+                    ui::current().kv("Gapless", on_off(dsp.gapless_enabled), 10)
                 );
             }
             Some(raw) => {
                 let enabled = parse_on_off(&raw, "gapless");
                 let dsp = apply_dsp_request(DaemonRequest::SetGapless { enabled });
-                println!(
-                    "Gapless playback: {}",
-                    if dsp.gapless_enabled { "ON" } else { "OFF" }
+                ui::done(
+                    format!("Gapless playback {}.", on_off(dsp.gapless_enabled)),
+                    json!({ "gapless": dsp.gapless_enabled }),
                 );
             }
         },
         DspCmd::Crossfade { seconds } => match seconds {
             None => {
                 let dsp = load_dsp_status();
-                if dsp.crossfade_duration <= 0.0 {
-                    println!("Crossfade: OFF");
-                } else {
-                    println!("Crossfade: {:.1}s", dsp.crossfade_duration);
-                }
+                json::maybe_emit(&json!({ "crossfade_seconds": dsp.crossfade_duration }));
+                println!("{}", ui::current().kv("Crossfade", &crossfade(&dsp), 10));
             }
             Some(secs) => {
                 if !secs.is_finite() || !(0.0..=8.0).contains(&secs) {
@@ -123,17 +148,20 @@ pub fn run(cmd: DspCmd) {
                     );
                 }
                 let dsp = apply_dsp_request(DaemonRequest::SetCrossfade { seconds: secs });
-                if dsp.crossfade_duration <= 0.0 {
-                    println!("Crossfade: OFF");
-                } else {
-                    println!("Crossfade: {:.1}s", dsp.crossfade_duration);
-                }
+                ui::done(
+                    format!("Crossfade {}.", crossfade(&dsp)),
+                    json!({ "crossfade_seconds": dsp.crossfade_duration }),
+                );
             }
         },
         DspCmd::Bass { db } => match db {
             None => {
                 let dsp = load_dsp_status();
-                println!("Bass: {:+.1} dB", dsp.bass);
+                json::maybe_emit(&json!({ "bass_db": dsp.bass }));
+                println!(
+                    "{}",
+                    ui::current().kv("Bass", &format!("{:+.1} dB", dsp.bass), 10)
+                );
             }
             Some(value) => {
                 if !value.is_finite() || !(-12.0..=12.0).contains(&value) {
@@ -144,14 +172,21 @@ pub fn run(cmd: DspCmd) {
                     );
                 }
                 let dsp = apply_dsp_request(DaemonRequest::SetBass { db: value });
-                println!("Bass: {:+.1} dB  (treble {:+.1} dB)", dsp.bass, dsp.treble);
-                println!("{}", render::eq_bands_brief(ui::current(), &dsp));
+                ui::done(
+                    format!("Bass {:+.1} dB, treble {:+.1} dB.", dsp.bass, dsp.treble),
+                    json!({ "dsp": dsp }),
+                );
+                println!("  {}", render::eq_bands_brief(ui::current(), &dsp));
             }
         },
         DspCmd::Treble { db } => match db {
             None => {
                 let dsp = load_dsp_status();
-                println!("Treble: {:+.1} dB", dsp.treble);
+                json::maybe_emit(&json!({ "treble_db": dsp.treble }));
+                println!(
+                    "{}",
+                    ui::current().kv("Treble", &format!("{:+.1} dB", dsp.treble), 10)
+                );
             }
             Some(value) => {
                 if !value.is_finite() || !(-12.0..=12.0).contains(&value) {
@@ -162,10 +197,29 @@ pub fn run(cmd: DspCmd) {
                     );
                 }
                 let dsp = apply_dsp_request(DaemonRequest::SetTreble { db: value });
-                println!("Treble: {:+.1} dB  (bass {:+.1} dB)", dsp.treble, dsp.bass);
-                println!("{}", render::eq_bands_brief(ui::current(), &dsp));
+                ui::done(
+                    format!("Treble {:+.1} dB, bass {:+.1} dB.", dsp.treble, dsp.bass),
+                    json!({ "dsp": dsp }),
+                );
+                println!("  {}", render::eq_bands_brief(ui::current(), &dsp));
             }
         },
+    }
+}
+
+fn on_off(enabled: bool) -> &'static str {
+    if enabled {
+        "on"
+    } else {
+        "off"
+    }
+}
+
+fn crossfade(dsp: &DspStatus) -> String {
+    if dsp.crossfade_duration <= 0.0 {
+        "off".to_string()
+    } else {
+        format!("{:.1}s", dsp.crossfade_duration)
     }
 }
 

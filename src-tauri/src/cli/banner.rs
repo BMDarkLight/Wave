@@ -113,6 +113,7 @@ pub fn mark(ui: &Ui) -> String {
 /// What the landing screen knows about the machine it is running on. Each
 /// piece is optional, because the library may be unreadable and the daemon
 /// is usually not running.
+#[derive(serde::Serialize)]
 pub struct LandingFacts {
     pub tracks: Option<i64>,
     pub playlists: Option<usize>,

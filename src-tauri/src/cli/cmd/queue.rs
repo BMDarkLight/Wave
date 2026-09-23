@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use crate::cli::{daemon_cmd, ui, QueueCmd};
+use crate::cli::{daemon_cmd, json, ui, QueueCmd};
 use crate::playback_daemon::{daemon_request_if_running, DaemonRequest};
 
 pub fn run(cmd: QueueCmd) {
@@ -25,18 +25,28 @@ pub fn run(cmd: QueueCmd) {
                         None
                     }
                 });
+                json::maybe_emit(&serde_json::json!({ "queue": tracks, "current": current }));
+                let ui = ui::current();
                 if tracks.is_empty() {
                     println!("Queue is empty.");
                     return;
                 }
-                println!("Queue ({} track(s)):", tracks.len());
+                println!("{}\n", ui.heading(&format!("{} in queue", tracks.len())));
+                // The index shown is the one `wave queue remove` takes.
+                let digits = (tracks.len() - 1).to_string().len();
                 for (i, path) in tracks.iter().enumerate() {
-                    let marker = if Some(i) == current { ">" } else { " " };
                     let name = Path::new(path)
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or(path);
-                    println!("  {marker} {:4}. {name}", i);
+                    let room = ui.width.saturating_sub(digits + 7);
+                    let name = ui::truncate(name, room, ui.glyphs.ellipsis);
+                    if Some(i) == current {
+                        let line = format!("{} {i:>digits$}  {name}", ui.glyphs.playing);
+                        println!("  {}", ui.paint(ui::style::OK, &line));
+                    } else {
+                        println!("    {}  {name}", ui.dim(&format!("{i:>digits$}")));
+                    }
                 }
             }
             Ok(Some(resp)) => {
