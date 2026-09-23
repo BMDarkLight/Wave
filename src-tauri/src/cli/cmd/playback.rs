@@ -10,7 +10,7 @@
 
 use serde_json::json;
 
-use crate::cli::{daemon_cmd, json, render, ui, PlaybackCmd};
+use crate::cli::{daemon_cmd, ui, PlaybackCmd};
 use crate::playback_daemon::{daemon_request, daemon_request_if_running, DaemonRequest};
 
 pub fn run(cmd: PlaybackCmd) {
@@ -22,7 +22,8 @@ pub fn run(cmd: PlaybackCmd) {
         PlaybackCmd::Next => daemon_cmd(DaemonRequest::Next),
         PlaybackCmd::Previous => daemon_cmd(DaemonRequest::Previous),
         PlaybackCmd::Seek { seconds } => daemon_cmd(DaemonRequest::Seek { seconds }),
-        PlaybackCmd::Status => cmd_playback_status(),
+        // One renderer for both, so the two views cannot drift apart.
+        PlaybackCmd::Status => crate::cli::now::run(true, 0.5),
         PlaybackCmd::Shutdown => cmd_playback_shutdown(),
     }
 }
@@ -71,28 +72,6 @@ fn cmd_playback_shutdown() {
         }
         // Shutting down something that is already down is not a failure.
         Ok(None) => ui::done("Playback daemon is not running.", json!({})),
-        Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
-        }
-    }
-}
-
-fn cmd_playback_status() {
-    match daemon_request_if_running(DaemonRequest::Status) {
-        Ok(Some(resp)) if resp.ok => {
-            if let Some(status) = resp.status {
-                json::maybe_emit(&status);
-                print!("{}", render::playback_status(ui::current(), &status, None));
-            }
-        }
-        Ok(Some(resp)) => {
-            ui::fail(
-                resp.error.unwrap_or_else(|| "Daemon error".to_string()),
-                None,
-                ui::EXIT_GENERAL,
-            );
-        }
-        Ok(None) => ui::no_daemon(),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }

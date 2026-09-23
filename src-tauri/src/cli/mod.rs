@@ -10,6 +10,7 @@ pub mod banner;
 pub mod bar;
 pub mod cmd;
 pub mod json;
+pub mod now;
 pub mod render;
 pub mod table;
 pub mod ui;
@@ -82,6 +83,15 @@ pub enum Commands {
     /// DSP / equalizer, gapless, and crossfade controls
     #[command(subcommand)]
     Dsp(DspCmd),
+    /// Live now-playing dashboard
+    Now {
+        /// Print one frame and exit instead of redrawing
+        #[arg(long)]
+        once: bool,
+        /// Seconds between redraws (0.1 to 10)
+        #[arg(long, default_value_t = 0.5)]
+        interval: f64,
+    },
     /// Listening stats (play time, top tracks / artists / albums / genres)
     #[command(subcommand, visible_alias = "listen")]
     Stats(StatsCmd),
@@ -591,6 +601,7 @@ pub fn is_daemon_ipc_client(args: &[String]) -> bool {
     match cli.command {
         Some(Commands::Playback(_)) => true,
         Some(Commands::Queue(_)) => true,
+        Some(Commands::Now { .. }) => true,
         Some(Commands::Devices(DevicesCmd::Volume { .. } | DevicesCmd::Switch { .. })) => true,
         // Live DSP when the CLI playback daemon owns the audio engine.
         Some(Commands::Dsp(ref cmd)) => !matches!(cmd, DspCmd::Presets),
@@ -607,7 +618,10 @@ pub fn conflicts_with_gui(args: &[String]) -> bool {
 
     matches!(
         cli.command,
-        Some(Commands::Playback(_)) | Some(Commands::Queue(_)) | Some(Commands::Devices(_))
+        Some(Commands::Playback(_))
+            | Some(Commands::Queue(_))
+            | Some(Commands::Devices(_))
+            | Some(Commands::Now { .. })
     )
 }
 
@@ -642,6 +656,7 @@ pub fn run() {
         Some(Commands::Metadata(cmd)) => cmd::metadata::run(cmd),
         Some(Commands::Dsp(cmd)) => cmd::dsp::run(cmd),
         Some(Commands::Stats(cmd)) => cmd::stats::run(cmd),
+        Some(Commands::Now { once, interval }) => now::run(once, interval),
         // --cli, --headless, or only global flags: the landing screen. The
         // mark is decoration, so it stays out of piped output.
         None if cli.json => json::emit(&banner::LandingFacts::gather()),

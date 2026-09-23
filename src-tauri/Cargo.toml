@@ -55,6 +55,7 @@ anstyle = "1"
 anstream = "0.6"
 terminal_size = "0.4"
 unicode-width = "0.2"
+ctrlc = "3"
 png = "0.17"
 image = "0.25"
 fs4 = { version = "0.12", features = ["sync"] }
