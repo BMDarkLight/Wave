@@ -82,6 +82,7 @@ pub struct Glyphs {
     pub meter_on: &'static str,
     pub meter_off: &'static str,
     pub ellipsis: &'static str,
+    pub hint: &'static str,
 }
 
 pub const UNICODE: Glyphs = Glyphs {
@@ -98,6 +99,7 @@ pub const UNICODE: Glyphs = Glyphs {
     meter_on: "\u{25ae}",
     meter_off: "\u{25af}",
     ellipsis: "\u{2026}",
+    hint: "\u{2192}",
 };
 
 pub const ASCII: Glyphs = Glyphs {
@@ -114,6 +116,7 @@ pub const ASCII: Glyphs = Glyphs {
     meter_on: "#",
     meter_off: ".",
     ellipsis: "...",
+    hint: "->",
 };
 
 pub fn glyphs_for(ascii_override: bool, unicode_locale: bool) -> Glyphs {
@@ -268,6 +271,74 @@ pub fn terminal_width() -> usize {
         .unwrap_or(80)
 }
 
+pub const EXIT_GENERAL: i32 = 1;
+pub const EXIT_NOT_FOUND: i32 = 3;
+pub const EXIT_NO_DAEMON: i32 = 4;
+
+/// Render an error and its optional next step.
+///
+/// Kept apart from `fail` so the shape can be tested without exiting.
+pub fn format_error(ui: &Ui, message: &str, hint: Option<&str>) -> String {
+    let head = format!("{} {}", ui.glyphs.err, message);
+    let mut out = ui.paint(style::ERR, &head);
+    if let Some(hint) = hint {
+        let line = format!("  {} {}", ui.glyphs.hint, hint);
+        out.push('\n');
+        out.push_str(&ui.paint(style::HINT, &line));
+    }
+    out
+}
+
+/// Print an error to stderr without exiting, for commands that work through
+/// several items and should not stop at the first bad one.
+pub fn report(message: impl std::fmt::Display, hint: Option<&str>) {
+    let ui = current();
+    let message = message.to_string();
+    if ui.json {
+        eprintln!(
+            "{}",
+            crate::cli::json::error_payload(&message, EXIT_GENERAL)
+        );
+    } else {
+        eprintln!("{}", format_error(ui, &message, hint));
+    }
+}
+
+/// Print an error to stderr and exit.
+///
+/// Under `--json` the error goes out as a JSON envelope instead, so a script
+/// reading stderr gets the same shape either way.
+pub fn fail(message: impl std::fmt::Display, hint: Option<&str>, code: i32) -> ! {
+    let ui = current();
+    let message = message.to_string();
+    if ui.json {
+        crate::cli::json::emit_error(&message, code);
+    }
+    eprintln!("{}", format_error(ui, &message, hint));
+    std::process::exit(code)
+}
+
+pub fn no_daemon() -> ! {
+    fail(
+        "Playback daemon is not running.",
+        Some("start it with: wave playback start <id or path>"),
+        EXIT_NO_DAEMON,
+    )
+}
+
+static CURRENT: std::sync::OnceLock<Ui> = std::sync::OnceLock::new();
+
+/// Install the process-wide Ui. Called once from `cli::run`.
+pub fn install(ui: Ui) {
+    let _ = CURRENT.set(ui);
+}
+
+/// The process-wide Ui. Falls back to plain output when nothing installed
+/// one, which is what unit tests get.
+pub fn current() -> &'static Ui {
+    CURRENT.get_or_init(Ui::plain)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +428,38 @@ mod tests {
         assert!(painted.starts_with('\u{1b}'));
         assert!(painted.contains("Tracks"));
         assert!(painted.ends_with("\u{1b}[0m"));
+    }
+
+    #[test]
+    fn an_error_without_a_hint_is_one_line() {
+        let ui = Ui::plain();
+        let out = format_error(&ui, "Track not found: 3f2a91", None);
+        assert_eq!(out, "\u{2715} Track not found: 3f2a91");
+    }
+
+    #[test]
+    fn a_hint_goes_on_its_own_indented_line() {
+        let ui = Ui::plain();
+        let out = format_error(
+            &ui,
+            "Playback daemon is not running.",
+            Some("start it with: wave playback start <id>"),
+        );
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with('\u{2715}'));
+        assert!(lines[1].starts_with("  \u{2192} "));
+        assert!(lines[1].contains("wave playback start"));
+    }
+
+    #[test]
+    fn errors_use_the_ascii_glyph_when_unicode_is_off() {
+        let ui = Ui {
+            glyphs: ASCII,
+            ..Ui::plain()
+        };
+        let out = format_error(&ui, "boom", Some("try again"));
+        assert!(out.starts_with("x boom"));
+        assert!(out.contains("  -> try again"));
     }
 }

@@ -7,6 +7,7 @@
 // https://github.com/BMDarkLight/Wave
 
 pub mod bar;
+pub mod json;
 pub mod table;
 pub mod ui;
 
@@ -494,6 +495,19 @@ fn resolve_track_path(library: &Library, id_or_path: &str) -> Result<String, Str
     }
 }
 
+/// Resolve a track or exit with a hint pointing at `tracks query`.
+fn track_path_or_exit(library: &Library, id_or_path: &str) -> String {
+    resolve_track_path(library, id_or_path).unwrap_or_else(|e| {
+        ui::fail(
+            e,
+            Some(&format!(
+                "list candidates with: wave tracks query \"{id_or_path}\""
+            )),
+            ui::EXIT_NOT_FOUND,
+        )
+    })
+}
+
 /// The library stores whichever spelling a track was imported with. Canonicalize
 /// what the user typed so an equivalent path written differently (forward
 /// slashes, a relative segment, another case) still lands on the same row.
@@ -608,6 +622,9 @@ pub fn run() {
     }
 
     let cli = Cli::parse();
+    // Resolved from the environment for now; the --color, --json and
+    // --verbose flags feed into this once they exist.
+    ui::install(ui::Ui::resolve(ui::ColorChoice::Auto, false, false));
     match cli.command {
         Some(Commands::Tracks(cmd)) => run_tracks(cmd),
         Some(Commands::Playlists(cmd)) => run_playlists(cmd),
@@ -683,8 +700,7 @@ fn cmd_tracks_list(playlist_id: Option<String>) {
             }
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -700,7 +716,7 @@ fn cmd_tracks_import(paths: Vec<String>) {
                     println!("Imported {} track(s) from {}", tracks.len(), path);
                     total += tracks.len();
                 }
-                Err(e) => eprintln!("Error importing directory {path}: {e}"),
+                Err(e) => ui::report(format!("Error importing directory {path}: {e}"), None),
             }
         } else if p.is_file() {
             match library.add_track_to_default_playlist(path.clone()) {
@@ -708,10 +724,10 @@ fn cmd_tracks_import(paths: Vec<String>) {
                     println!("Imported: {} — {}", track.artist, track.title);
                     total += 1;
                 }
-                Err(e) => eprintln!("Error importing {path}: {e}"),
+                Err(e) => ui::report(format!("Error importing {path}: {e}"), None),
             }
         } else {
-            eprintln!("Path not found: {path}");
+            ui::report(format!("Path not found: {path}"), None);
         }
     }
     if total > 0 {
@@ -721,13 +737,7 @@ fn cmd_tracks_import(paths: Vec<String>) {
 
 fn cmd_tracks_info(track_id: String) {
     let library = open_library();
-    let path = match resolve_track_path(&library, &track_id) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
+    let path = track_path_or_exit(&library, &track_id);
     // Try library first, then extract directly
     let track = library
         .get_tracks_by_paths(std::slice::from_ref(&path))
@@ -738,8 +748,11 @@ fn cmd_tracks_info(track_id: String) {
     match track {
         Some(t) => print_full_metadata(&t),
         None => {
-            eprintln!("Could not read track: {path}");
-            std::process::exit(1);
+            ui::fail(
+                format!("Could not read track: {path}"),
+                None,
+                ui::EXIT_GENERAL,
+            );
         }
     }
 }
@@ -759,18 +772,14 @@ fn cmd_tracks_query(query: String) {
             }
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
 
 fn cmd_tracks_add(track_id: String, playlist_id: Option<String>) {
     let library = open_library();
-    let path = resolve_track_path(&library, &track_id).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let path = track_path_or_exit(&library, &track_id);
     let result = if let Some(pid) = playlist_id {
         library.add_track_to_playlist(&pid, path)
     } else {
@@ -779,18 +788,14 @@ fn cmd_tracks_add(track_id: String, playlist_id: Option<String>) {
     match result {
         Ok(track) => println!("Added: {} — {}", track.artist, track.title),
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
 
 fn cmd_tracks_remove(track_id: String, playlist_id: Option<String>) {
     let library = open_library();
-    let path = resolve_track_path(&library, &track_id).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let path = track_path_or_exit(&library, &track_id);
     let result = if let Some(pid) = playlist_id {
         library
             .remove_track_from_playlist_by_path(&pid, &path)
@@ -803,8 +808,7 @@ fn cmd_tracks_remove(track_id: String, playlist_id: Option<String>) {
     match result {
         Ok(msg) => println!("{msg}"),
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -817,8 +821,7 @@ fn cmd_tracks_reset(yes: bool) {
             "reset",
         );
         if !confirmed {
-            eprintln!("Aborted.");
-            std::process::exit(1);
+            ui::fail("Aborted.", None, ui::EXIT_GENERAL);
         }
     }
 
@@ -831,8 +834,7 @@ fn cmd_tracks_reset(yes: bool) {
             println!("Library and Favorites were kept (empty).");
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -888,8 +890,7 @@ fn cmd_playlists_list() {
             }
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -897,8 +898,7 @@ fn cmd_playlists_list() {
 fn cmd_playlists_import(file: String, name: Option<String>) {
     let library = open_library();
     if let Err(e) = crate::path_validation::validate_playlist_import_path(&file) {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
+        ui::fail(e, None, ui::EXIT_GENERAL);
     }
     let ext = Path::new(&file)
         .extension()
@@ -908,9 +908,11 @@ fn cmd_playlists_import(file: String, name: Option<String>) {
     let result = match ext.as_str() {
         "json" => library.import_playlist_json(&file, name.as_deref()),
         "m3u" | "m3u8" => library.import_playlist_m3u(&file, name.as_deref()),
-        _ => Err(format!(
-            "Unsupported playlist format: .{ext} (use .m3u, .m3u8, or .json)"
-        )),
+        _ => ui::fail(
+            format!("Unsupported playlist format: .{ext}"),
+            Some("use .m3u, .m3u8, or .json"),
+            ui::EXIT_GENERAL,
+        ),
     };
     match result {
         Ok((id, tracks)) => {
@@ -926,8 +928,7 @@ fn cmd_playlists_import(file: String, name: Option<String>) {
             );
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -938,13 +939,15 @@ fn cmd_playlists_export(id: String, format: String, output: String) {
         "m3u" => "m3u",
         "json" => "json",
         _ => {
-            eprintln!("Unknown export format: {format} (use m3u or json)");
-            std::process::exit(1);
+            ui::fail(
+                format!("Unknown export format: {format}"),
+                Some("use m3u or json"),
+                ui::EXIT_GENERAL,
+            );
         }
     };
     if let Err(e) = crate::path_validation::validate_safe_output_path(&output, expected_ext) {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
+        ui::fail(e, None, ui::EXIT_GENERAL);
     }
     match format.as_str() {
         "m3u" => library.export_playlist_m3u(&id, &output),
@@ -952,8 +955,7 @@ fn cmd_playlists_export(id: String, format: String, output: String) {
         _ => unreachable!(),
     }
     .unwrap_or_else(|e| {
-        eprintln!("Error: {e}");
-        std::process::exit(1);
+        ui::fail(e, None, ui::EXIT_GENERAL);
     });
     println!("Exported playlist {id} to {output}");
 }
@@ -982,16 +984,18 @@ fn cmd_playlists_info(id: String) {
                         );
                     }
                 }
-                Err(e) => eprintln!("Error fetching tracks: {e}"),
+                Err(e) => ui::report(format!("Error fetching tracks: {e}"), None),
             }
         }
         Ok(None) => {
-            eprintln!("Playlist not found: {id}");
-            std::process::exit(1);
+            ui::fail(
+                format!("Playlist not found: {id}"),
+                Some("see them all with: wave playlists list"),
+                ui::EXIT_NOT_FOUND,
+            );
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -1021,8 +1025,7 @@ fn cmd_playlists_query(query: String) {
             }
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -1032,8 +1035,7 @@ fn cmd_playlists_create(name: String) {
     match library.create_playlist(&name, None) {
         Ok(info) => println!("Created playlist \"{}\" (ID: {})", info.name, info.id),
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -1043,8 +1045,7 @@ fn cmd_playlists_delete(id: String) {
     match library.delete_playlist(&id) {
         Ok(()) => println!("Deleted playlist {id}."),
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -1054,8 +1055,7 @@ fn cmd_playlists_rename(id: String, name: String) {
     match library.rename_playlist(&id, &name) {
         Ok(()) => println!("Renamed playlist {id} to \"{name}\"."),
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -1065,38 +1065,29 @@ fn cmd_playlists_clear(id: String) {
     match library.clear_playlist(&id) {
         Ok(()) => println!("Cleared all tracks from playlist {id}."),
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
 
 fn cmd_playlists_add_track(id: String, track_id: String) {
     let library = open_library();
-    let path = resolve_track_path(&library, &track_id).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let path = track_path_or_exit(&library, &track_id);
     match library.add_track_to_playlist(&id, path) {
         Ok(track) => println!("Added to playlist: {} — {}", track.artist, track.title),
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
 
 fn cmd_playlists_remove_track(id: String, track_id: String) {
     let library = open_library();
-    let path = resolve_track_path(&library, &track_id).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let path = track_path_or_exit(&library, &track_id);
     match library.remove_track_from_playlist_by_path(&id, &path) {
         Ok(()) => println!("Removed track from playlist {id}."),
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -1109,28 +1100,32 @@ fn cmd_playlists_sync(id: String) {
     let info = match library.get_playlist_info(&id) {
         Ok(Some(info)) => info,
         Ok(None) => {
-            eprintln!("Error: Playlist not found: {id}");
-            std::process::exit(1);
+            ui::fail(
+                format!("Playlist not found: {id}"),
+                Some("see them all with: wave playlists list"),
+                ui::EXIT_NOT_FOUND,
+            );
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     };
 
     let Some(folder) = info.sync_folder.as_deref() else {
-        eprintln!(
-            "Error: Playlist \"{}\" is not linked to a sync folder.\n\
-             Link one in the app (Create playlist → Sync with folder, or Add folder as playlist).",
-            info.name
+        ui::fail(
+            format!("Playlist \"{}\" is not linked to a sync folder.", info.name),
+            Some("link one in the app: Create playlist, then Sync with folder"),
+            ui::EXIT_GENERAL,
         );
-        std::process::exit(1);
     };
 
     let dir_path = Path::new(folder);
     if !dir_path.is_dir() {
-        eprintln!("Error: Sync folder is missing or not a directory: {folder}");
-        std::process::exit(1);
+        ui::fail(
+            format!("Sync folder is missing or not a directory: {folder}"),
+            None,
+            ui::EXIT_GENERAL,
+        );
     }
 
     let paths: Vec<String> = WalkDir::new(dir_path)
@@ -1157,8 +1152,7 @@ fn cmd_playlists_sync(id: String) {
             }
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -1187,19 +1181,17 @@ fn daemon_cmd(request: DaemonRequest) {
             }
         }
         Ok(Some(resp)) => {
-            eprintln!(
-                "{}",
-                resp.error.unwrap_or_else(|| "Unknown error".to_string())
+            ui::fail(
+                resp.error.unwrap_or_else(|| "Unknown error".to_string()),
+                None,
+                ui::EXIT_GENERAL,
             );
-            std::process::exit(1);
         }
         Ok(None) => {
-            eprintln!("Playback daemon is not running. Use `wave playback start` first.");
-            std::process::exit(1);
+            ui::no_daemon();
         }
         Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -1213,16 +1205,15 @@ fn cmd_playback_start(id: String) {
             println!("Playback running in background. Use `wave playback` subcommands to control.");
         }
         Ok(resp) => {
-            eprintln!(
-                "{}",
+            ui::fail(
                 resp.error
-                    .unwrap_or_else(|| "Failed to start playback".to_string())
+                    .unwrap_or_else(|| "Failed to start playback".to_string()),
+                None,
+                ui::EXIT_GENERAL,
             );
-            std::process::exit(1);
         }
         Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -1235,17 +1226,16 @@ fn cmd_playback_shutdown() {
             }
         }
         Ok(Some(resp)) => {
-            eprintln!(
-                "{}",
+            ui::fail(
                 resp.error
-                    .unwrap_or_else(|| "Failed to shut down daemon".to_string())
+                    .unwrap_or_else(|| "Failed to shut down daemon".to_string()),
+                None,
+                ui::EXIT_GENERAL,
             );
-            std::process::exit(1);
         }
         Ok(None) => println!("Playback daemon is not running."),
         Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -1258,16 +1248,15 @@ fn cmd_playback_status() {
             }
         }
         Ok(Some(resp)) => {
-            eprintln!(
-                "{}",
-                resp.error.unwrap_or_else(|| "Daemon error".to_string())
+            ui::fail(
+                resp.error.unwrap_or_else(|| "Daemon error".to_string()),
+                None,
+                ui::EXIT_GENERAL,
             );
-            std::process::exit(1);
         }
-        Ok(None) => println!("Playback daemon is not running."),
+        Ok(None) => ui::no_daemon(),
         Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
@@ -1322,16 +1311,15 @@ fn run_queue(cmd: QueueCmd) {
                 }
             }
             Ok(Some(resp)) => {
-                eprintln!(
-                    "{}",
-                    resp.error.unwrap_or_else(|| "Daemon error".to_string())
+                ui::fail(
+                    resp.error.unwrap_or_else(|| "Daemon error".to_string()),
+                    None,
+                    ui::EXIT_GENERAL,
                 );
-                std::process::exit(1);
             }
-            Ok(None) => println!("Playback daemon is not running."),
+            Ok(None) => ui::no_daemon(),
             Err(e) => {
-                eprintln!("{e}");
-                std::process::exit(1);
+                ui::fail(e, None, ui::EXIT_GENERAL);
             }
         },
         QueueCmd::Add { track_id } => daemon_cmd(DaemonRequest::QueueAdd { track_id }),
@@ -1343,8 +1331,11 @@ fn run_queue(cmd: QueueCmd) {
                 Some("off") => Some(false),
                 None => None,
                 Some(other) => {
-                    eprintln!("Invalid shuffle value: {other} (use on, off, or omit to toggle)");
-                    std::process::exit(1);
+                    ui::fail(
+                        format!("Invalid shuffle value: {other}"),
+                        Some("use on, off, or omit to toggle"),
+                        ui::EXIT_GENERAL,
+                    );
                 }
             };
             daemon_cmd(DaemonRequest::QueueShuffle { enable });
@@ -1393,23 +1384,17 @@ fn run_favorite(cmd: FavoriteCmd) {
     let library = open_library();
     match cmd {
         FavoriteCmd::Add { track_id } => {
-            let path = resolve_track_path(&library, &track_id).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+            let path = track_path_or_exit(&library, &track_id);
             match library.add_track_to_favorites(path) {
                 Ok(track) => println!("Added to favorites: {} — {}", track.artist, track.title),
-                Err(e) => eprintln!("Error: {e}"),
+                Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
             }
         }
         FavoriteCmd::Remove { track_id } => {
-            let path = resolve_track_path(&library, &track_id).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            });
+            let path = track_path_or_exit(&library, &track_id);
             match library.remove_track_from_favorites(&path) {
                 Ok(()) => println!("Removed from favorites."),
-                Err(e) => eprintln!("Error: {e}"),
+                Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
             }
         }
         FavoriteCmd::List => match library.get_favorites() {
@@ -1424,11 +1409,11 @@ fn run_favorite(cmd: FavoriteCmd) {
                     print_track(track);
                 }
             }
-            Err(e) => eprintln!("Error: {e}"),
+            Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
         },
         FavoriteCmd::Clear => match library.clear_favorites() {
             Ok(()) => println!("Favorites cleared."),
-            Err(e) => eprintln!("Error: {e}"),
+            Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
         },
     }
 }
@@ -1448,27 +1433,22 @@ fn run_metadata(cmd: MetadataCmd) {
 
 fn cmd_metadata_set(track_id: String, edit: TagEdit) {
     let library = open_library();
-    let path = match resolve_track_path(&library, &track_id) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
+    let path = track_path_or_exit(&library, &track_id);
 
     let edit = edit.resolve().unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
+        ui::fail(e, None, ui::EXIT_GENERAL);
     });
     if edit.is_empty() {
-        eprintln!("Nothing to change. Pass at least one field, such as --title.");
-        std::process::exit(1);
+        ui::fail(
+            "Nothing to change. Pass at least one field, such as --title.",
+            None,
+            ui::EXIT_GENERAL,
+        );
     }
 
     let indexed = matches!(library.get_track_details(&path), Ok(Some(_)));
     if let Err(e) = crate::tag_edit::write_to_file(Path::new(&path), &edit) {
-        eprintln!("{e}");
-        std::process::exit(1);
+        ui::fail(e, None, ui::EXIT_GENERAL);
     }
 
     if !indexed {
@@ -1480,21 +1460,18 @@ fn cmd_metadata_set(track_id: String, edit: TagEdit) {
     match library.update_track_tags(&path, &edit) {
         Ok(track) => print_full_metadata(&track),
         Err(e) => {
-            eprintln!("Tags were written, but the library entry could not be updated: {e}");
-            std::process::exit(1);
+            ui::fail(
+                format!("Tags were written, but the library entry could not be updated: {e}"),
+                None,
+                ui::EXIT_GENERAL,
+            );
         }
     }
 }
 
 fn cmd_metadata_get(track_id: String) {
     let library = open_library();
-    let path = match resolve_track_path(&library, &track_id) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
+    let path = track_path_or_exit(&library, &track_id);
     let track = library
         .get_tracks_by_paths(std::slice::from_ref(&path))
         .ok()
@@ -1503,21 +1480,18 @@ fn cmd_metadata_get(track_id: String) {
     match track {
         Some(t) => print_full_metadata(&t),
         None => {
-            eprintln!("Could not read track: {path}");
-            std::process::exit(1);
+            ui::fail(
+                format!("Could not read track: {path}"),
+                None,
+                ui::EXIT_GENERAL,
+            );
         }
     }
 }
 
 fn cmd_metadata_cover_export(track_id: String, output: String) {
     let library = open_library();
-    let path = match resolve_track_path(&library, &track_id) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
+    let path = track_path_or_exit(&library, &track_id);
     let track = library
         .get_tracks_by_paths(std::slice::from_ref(&path))
         .ok()
@@ -1533,28 +1507,39 @@ fn cmd_metadata_cover_export(track_id: String, output: String) {
                     match base64::engine::general_purpose::STANDARD.decode(b64) {
                         Ok(bytes) => {
                             std::fs::write(&output, &bytes).unwrap_or_else(|e| {
-                                eprintln!("Failed to write cover art: {e}");
-                                std::process::exit(1);
+                                ui::fail(
+                                    format!("Failed to write cover art: {e}"),
+                                    None,
+                                    ui::EXIT_GENERAL,
+                                );
                             });
                             println!("Cover art exported to {output}");
                         }
                         Err(e) => {
-                            eprintln!("Failed to decode cover art: {e}");
-                            std::process::exit(1);
+                            ui::fail(
+                                format!("Failed to decode cover art: {e}"),
+                                None,
+                                ui::EXIT_GENERAL,
+                            );
                         }
                     }
                 } else {
-                    eprintln!("Invalid cover art data URL.");
-                    std::process::exit(1);
+                    ui::fail("Invalid cover art data URL.", None, ui::EXIT_GENERAL);
                 }
             } else {
-                eprintln!("No cover art available for this track.");
-                std::process::exit(1);
+                ui::fail(
+                    "No cover art available for this track.",
+                    None,
+                    ui::EXIT_GENERAL,
+                );
             }
         }
         None => {
-            eprintln!("Could not read track: {path}");
-            std::process::exit(1);
+            ui::fail(
+                format!("Could not read track: {path}"),
+                None,
+                ui::EXIT_GENERAL,
+            );
         }
     }
 }
@@ -1563,13 +1548,7 @@ fn cmd_metadata_cover_set(track_id: String, image: String) {
     let library = open_library();
 
     // Resolve track
-    let path = match resolve_track_path(&library, &track_id) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
+    let path = track_path_or_exit(&library, &track_id);
 
     // Read and re-encode through the same path the metadata editor uses, so a
     // cover set here goes into the file as well as the library.
@@ -1581,17 +1560,18 @@ fn cmd_metadata_cover_set(track_id: String, image: String) {
     }
     .resolve()
     .unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
+        ui::fail(e, None, ui::EXIT_GENERAL);
     });
     let Some(Change::Set(jpeg)) = edit.cover.clone() else {
-        eprintln!("Failed to read image file {image}");
-        std::process::exit(1);
+        ui::fail(
+            format!("Failed to read image file {image}"),
+            None,
+            ui::EXIT_GENERAL,
+        );
     };
 
     if let Err(e) = crate::tag_edit::write_to_file(Path::new(&path), &edit) {
-        eprintln!("{e}");
-        std::process::exit(1);
+        ui::fail(e, None, ui::EXIT_GENERAL);
     }
 
     // Look up the track ID in the database
@@ -1604,8 +1584,11 @@ fn cmd_metadata_cover_set(track_id: String, image: String) {
             library
                 .add_track_to_default_playlist(path.clone())
                 .unwrap_or_else(|e| {
-                    eprintln!("Failed to add track to library: {e}");
-                    std::process::exit(1);
+                    ui::fail(
+                        format!("Failed to add track to library: {e}"),
+                        None,
+                        ui::EXIT_GENERAL,
+                    );
                 })
                 .id
         });
@@ -1613,8 +1596,11 @@ fn cmd_metadata_cover_set(track_id: String, image: String) {
     library
         .set_track_cover(&track_id_uuid, &jpeg)
         .unwrap_or_else(|e| {
-            eprintln!("Failed to set cover art: {e}");
-            std::process::exit(1);
+            ui::fail(
+                format!("Failed to set cover art: {e}"),
+                None,
+                ui::EXIT_GENERAL,
+            );
         });
 
     println!("Cover art set for track {track_id_uuid}");
@@ -1638,11 +1624,11 @@ fn run_dsp(cmd: DspCmd) {
         }
         DspCmd::EqSet { bands } => {
             if bands.len() != 10 {
-                eprintln!(
-                    "Error: expected exactly 10 EQ band values, got {}",
-                    bands.len()
+                ui::fail(
+                    format!("Expected exactly 10 EQ band values, got {}.", bands.len()),
+                    Some("bands run 31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000 Hz"),
+                    ui::EXIT_GENERAL,
                 );
-                std::process::exit(1);
             }
             let mut arr = [0.0f32; 10];
             arr.copy_from_slice(&bands);
@@ -1678,15 +1664,13 @@ fn run_dsp(cmd: DspCmd) {
                 crossfade_duration: dsp.crossfade_duration,
             };
             crate::audio::dsp::EqPresetFile::save_to(&output, &eq, name).unwrap_or_else(|e| {
-                eprintln!("Failed to export EQ: {e}");
-                std::process::exit(1);
+                ui::fail(format!("Failed to export EQ: {e}"), None, ui::EXIT_GENERAL);
             });
             println!("EQ settings exported to {output}");
         }
         DspCmd::Import { input } => {
             let eq = crate::audio::dsp::EqPresetFile::load_from(&input).unwrap_or_else(|e| {
-                eprintln!("Failed to import EQ: {e}");
-                std::process::exit(1);
+                ui::fail(format!("Failed to import EQ: {e}"), None, ui::EXIT_GENERAL);
             });
             let mut dsp = apply_dsp_request(DaemonRequest::SetEqBands { bands: eq.bands });
             if !eq.enabled {
@@ -1729,8 +1713,11 @@ fn run_dsp(cmd: DspCmd) {
             }
             Some(secs) => {
                 if !secs.is_finite() || !(0.0..=8.0).contains(&secs) {
-                    eprintln!("Error: crossfade must be between 0 and 8 seconds");
-                    std::process::exit(1);
+                    ui::fail(
+                        "Crossfade must be between 0 and 8 seconds.",
+                        None,
+                        ui::EXIT_GENERAL,
+                    );
                 }
                 let dsp = apply_dsp_request(DaemonRequest::SetCrossfade { seconds: secs });
                 if dsp.crossfade_duration <= 0.0 {
@@ -1747,8 +1734,11 @@ fn run_dsp(cmd: DspCmd) {
             }
             Some(value) => {
                 if !value.is_finite() || !(-12.0..=12.0).contains(&value) {
-                    eprintln!("Error: bass must be between -12 and +12 dB");
-                    std::process::exit(1);
+                    ui::fail(
+                        "Bass must be between -12 and +12 dB.",
+                        None,
+                        ui::EXIT_GENERAL,
+                    );
                 }
                 let dsp = apply_dsp_request(DaemonRequest::SetBass { db: value });
                 println!("Bass: {:+.1} dB  (treble {:+.1} dB)", dsp.bass, dsp.treble);
@@ -1762,8 +1752,11 @@ fn run_dsp(cmd: DspCmd) {
             }
             Some(value) => {
                 if !value.is_finite() || !(-12.0..=12.0).contains(&value) {
-                    eprintln!("Error: treble must be between -12 and +12 dB");
-                    std::process::exit(1);
+                    ui::fail(
+                        "Treble must be between -12 and +12 dB.",
+                        None,
+                        ui::EXIT_GENERAL,
+                    );
                 }
                 let dsp = apply_dsp_request(DaemonRequest::SetTreble { db: value });
                 println!("Treble: {:+.1} dB  (bass {:+.1} dB)", dsp.treble, dsp.bass);
@@ -1794,13 +1787,11 @@ fn load_dsp_status() -> DspStatus {
         }
         Ok(Some(resp)) => {
             if let Some(err) = resp.error {
-                eprintln!("{err}");
-                std::process::exit(1);
+                ui::fail(err, None, ui::EXIT_GENERAL);
             }
         }
         Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
         _ => {}
     }
@@ -1820,11 +1811,11 @@ fn apply_dsp_request(request: DaemonRequest) -> DspStatus {
     match daemon_request_if_running(request.clone()) {
         Ok(Some(resp)) => {
             if !resp.ok {
-                eprintln!(
-                    "{}",
-                    resp.error.unwrap_or_else(|| "DSP request failed".into())
+                ui::fail(
+                    resp.error.unwrap_or_else(|| "DSP request failed".into()),
+                    None,
+                    ui::EXIT_GENERAL,
                 );
-                std::process::exit(1);
             }
             LAST_DSP_MESSAGE.with(|cell| {
                 *cell.borrow_mut() = resp.message.clone();
@@ -1835,8 +1826,7 @@ fn apply_dsp_request(request: DaemonRequest) -> DspStatus {
             return load_dsp_status();
         }
         Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
+            ui::fail(e, None, ui::EXIT_GENERAL);
         }
         Ok(None) => {}
     }
@@ -1860,11 +1850,11 @@ fn apply_dsp_request(request: DaemonRequest) -> DspStatus {
                 let names: Vec<&str> = crate::audio::dsp::EqConfig::list_presets()
                     .map(|(n, _)| n)
                     .collect();
-                eprintln!(
-                    "Unknown EQ preset \"{name}\". Available: {}",
-                    names.join(", ")
+                ui::fail(
+                    format!("Unknown EQ preset \"{name}\""),
+                    Some(&format!("available: {}", names.join(", "))),
+                    ui::EXIT_NOT_FOUND,
                 );
-                std::process::exit(1);
             }
         }
         DaemonRequest::SetCrossfade { seconds } => {
@@ -1884,8 +1874,11 @@ fn apply_dsp_request(request: DaemonRequest) -> DspStatus {
         _ => {}
     }
     settings.save_to_disk().unwrap_or_else(|e| {
-        eprintln!("Failed to save settings: {e}");
-        std::process::exit(1);
+        ui::fail(
+            format!("Failed to save settings: {e}"),
+            None,
+            ui::EXIT_GENERAL,
+        );
     });
 
     DspStatus {
@@ -1903,8 +1896,11 @@ fn parse_on_off(raw: &str, label: &str) -> bool {
         "on" | "true" | "1" | "enable" | "enabled" => true,
         "off" | "false" | "0" | "disable" | "disabled" => false,
         _ => {
-            eprintln!("Error: {label} expects on/off, got \"{raw}\"");
-            std::process::exit(1);
+            ui::fail(
+                format!("{label} expects on/off, got \"{raw}\""),
+                None,
+                ui::EXIT_GENERAL,
+            );
         }
     }
 }
@@ -1960,8 +1956,11 @@ fn run_stats(cmd: StatsCmd) {
     match cmd {
         StatsCmd::Summary { limit } => {
             let stats = library.get_listening_stats(limit).unwrap_or_else(|e| {
-                eprintln!("Failed to load listening stats: {e}");
-                std::process::exit(1);
+                ui::fail(
+                    format!("Failed to load listening stats: {e}"),
+                    None,
+                    ui::EXIT_GENERAL,
+                );
             });
             println!("Listening overview");
             println!(
@@ -1978,8 +1977,11 @@ fn run_stats(cmd: StatsCmd) {
         }
         StatsCmd::Recent { limit } => {
             let tracks = library.get_recently_played(limit).unwrap_or_else(|e| {
-                eprintln!("Failed to load recently played: {e}");
-                std::process::exit(1);
+                ui::fail(
+                    format!("Failed to load recently played: {e}"),
+                    None,
+                    ui::EXIT_GENERAL,
+                );
             });
             if tracks.is_empty() {
                 println!("No recently played tracks yet.");
@@ -1989,8 +1991,11 @@ fn run_stats(cmd: StatsCmd) {
         }
         StatsCmd::Most { limit } => {
             let tracks = library.get_most_played(limit).unwrap_or_else(|e| {
-                eprintln!("Failed to load most played: {e}");
-                std::process::exit(1);
+                ui::fail(
+                    format!("Failed to load most played: {e}"),
+                    None,
+                    ui::EXIT_GENERAL,
+                );
             });
             if tracks.is_empty() {
                 println!("No listen history yet.");
@@ -2000,8 +2005,11 @@ fn run_stats(cmd: StatsCmd) {
         }
         StatsCmd::Artists { limit } => {
             let stats = library.get_listening_stats(limit).unwrap_or_else(|e| {
-                eprintln!("Failed to load listening stats: {e}");
-                std::process::exit(1);
+                ui::fail(
+                    format!("Failed to load listening stats: {e}"),
+                    None,
+                    ui::EXIT_GENERAL,
+                );
             });
             if stats.top_artists.is_empty() {
                 println!("No artist listen history yet.");
@@ -2011,8 +2019,11 @@ fn run_stats(cmd: StatsCmd) {
         }
         StatsCmd::Albums { limit } => {
             let stats = library.get_listening_stats(limit).unwrap_or_else(|e| {
-                eprintln!("Failed to load listening stats: {e}");
-                std::process::exit(1);
+                ui::fail(
+                    format!("Failed to load listening stats: {e}"),
+                    None,
+                    ui::EXIT_GENERAL,
+                );
             });
             if stats.top_albums.is_empty() {
                 println!("No album listen history yet.");
@@ -2022,8 +2033,11 @@ fn run_stats(cmd: StatsCmd) {
         }
         StatsCmd::Genres { limit } => {
             let stats = library.get_listening_stats(limit).unwrap_or_else(|e| {
-                eprintln!("Failed to load listening stats: {e}");
-                std::process::exit(1);
+                ui::fail(
+                    format!("Failed to load listening stats: {e}"),
+                    None,
+                    ui::EXIT_GENERAL,
+                );
             });
             if stats.top_genres.is_empty() {
                 println!("No genre listen history yet.");
@@ -2089,8 +2103,11 @@ fn print_named_rank_list(title: &str, rows: &[crate::dto::ListenRankDto]) {
 fn open_library() -> Library {
     let db_path = default_db_path();
     Library::new_with_path(&db_path).unwrap_or_else(|e| {
-        eprintln!("Failed to open library at {}: {e}", db_path.display());
-        std::process::exit(1);
+        ui::fail(
+            format!("Failed to open library at {}: {e}", db_path.display()),
+            None,
+            ui::EXIT_GENERAL,
+        );
     })
 }
 
