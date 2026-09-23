@@ -2107,6 +2107,16 @@ impl Library {
             .map_err(|e| format!("Failed to query track by id: {e}"))
     }
 
+    /// How many tracks are in the library, for places where loading them all
+    /// just to count them would be waste. Stream-only cache rows are not
+    /// library tracks, so this reads the `library_tracks` view.
+    pub fn count_tracks(&self) -> Result<i64, String> {
+        let connection = self.lock_connection()?;
+        connection
+            .query_row("SELECT COUNT(*) FROM library_tracks", [], |row| row.get(0))
+            .map_err(|e| format!("Failed to count tracks: {e}"))
+    }
+
     /// Tracks whose id starts with `prefix`, capped so a short prefix cannot
     /// pull a whole library into memory on the error path.
     ///
@@ -6764,5 +6774,31 @@ mod tests {
         // An empty prefix matches every row, so the LIMIT is the only thing
         // stopping the error path from loading a large library.
         assert_eq!(library.find_tracks_by_id_prefix("").unwrap().len(), 10);
+    }
+
+    #[test]
+    fn count_tracks_counts_library_rows_only() {
+        let library = open_test_library().unwrap();
+        assert_eq!(library.count_tracks().unwrap(), 0);
+        {
+            let connection = library.lock_connection().unwrap();
+            for n in 0..2 {
+                upsert_track(
+                    &*connection,
+                    &sample_track(&Uuid::new_v4().to_string(), &format!("/music/{n}.mp3")),
+                )
+                .unwrap();
+            }
+        }
+        // A cached stream is playable but is not part of the library.
+        library
+            .upsert_cached_source_track(
+                &sample_track("ignored", "/cache/deezer/9.mp3"),
+                "deezer",
+                "9",
+                "https://example.com/9.mp3",
+            )
+            .unwrap();
+        assert_eq!(library.count_tracks().unwrap(), 2);
     }
 }

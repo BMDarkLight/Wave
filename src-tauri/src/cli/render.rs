@@ -19,8 +19,6 @@ use crate::library::PlaylistInfo;
 use crate::metadata::Track;
 use crate::playback_daemon::{DspStatus, PlaybackStatus};
 
-const DOT: &str = " \u{b7} ";
-
 /// Everything in the playback block hangs off this indent.
 const INDENT: &str = "     ";
 
@@ -160,7 +158,8 @@ pub fn playback_status(ui: &Ui, status: &PlaybackStatus, album: Option<&str>) ->
         .into_iter()
         .flatten()
         .collect();
-    out.push_str(&dim_line(ui, &byline.join(DOT)));
+    let dot = format!(" {} ", ui.glyphs.dot);
+    out.push_str(&dim_line(ui, &byline.join(&dot)));
     out.push('\n');
 
     // A stopped daemon reports a zero duration, so guard the division.
@@ -217,7 +216,7 @@ pub fn playback_status(ui: &Ui, status: &PlaybackStatus, album: Option<&str>) ->
     out.push_str(&dim_line(
         ui,
         &format!(
-            "Shuffle {}{DOT}Repeat {}{DOT}Track {} of {}",
+            "Shuffle {}{dot}Repeat {}{dot}Track {} of {}",
             if status.shuffle { "on" } else { "off" },
             status.repeat,
             status.queue_index,

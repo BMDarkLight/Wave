@@ -83,6 +83,8 @@ pub struct Glyphs {
     pub meter_off: &'static str,
     pub ellipsis: &'static str,
     pub hint: &'static str,
+    /// Separator between short facts on one line.
+    pub dot: &'static str,
 }
 
 pub const UNICODE: Glyphs = Glyphs {
@@ -100,6 +102,7 @@ pub const UNICODE: Glyphs = Glyphs {
     meter_off: "\u{25af}",
     ellipsis: "\u{2026}",
     hint: "\u{2192}",
+    dot: "\u{b7}",
 };
 
 pub const ASCII: Glyphs = Glyphs {
@@ -117,6 +120,7 @@ pub const ASCII: Glyphs = Glyphs {
     meter_off: ".",
     ellipsis: "...",
     hint: "->",
+    dot: "-",
 };
 
 pub fn glyphs_for(ascii_override: bool, unicode_locale: bool) -> Glyphs {

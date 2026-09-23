@@ -6,6 +6,7 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
+pub mod banner;
 pub mod bar;
 pub mod cmd;
 pub mod json;
@@ -13,9 +14,10 @@ pub mod render;
 pub mod table;
 pub mod ui;
 
+use std::io::IsTerminal;
 use std::path::Path;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use crate::library::Library;
 use crate::playback_daemon::{daemon_request_if_running, DaemonRequest};
@@ -26,13 +28,17 @@ use crate::tag_edit::TagEdit;
 #[derive(Parser)]
 #[command(name = "wave", version, about = "Lightweight Music Player CLI")]
 pub struct Cli {
-    /// Show CLI help (runs in CLI mode without a command)
+    /// Open the command line landing screen instead of the app
     #[arg(long, global = true)]
     pub cli: bool,
 
-    /// Run in headless mode (same as --cli)
+    /// Same as --cli
     #[arg(long, global = true)]
     pub headless: bool,
+
+    /// Skip the Wave mark on the landing screen
+    #[arg(long, global = true)]
+    pub no_banner: bool,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -594,21 +600,26 @@ pub fn conflicts_with_gui(args: &[String]) -> bool {
 }
 
 pub fn run() {
-    // Handle --cli/--headless flags: show CLI help then exit
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() == 2 {
-        let flag = args[1].as_str();
-        if flag == "--cli" || flag == "--headless" {
-            Cli::command().print_help().unwrap();
-            println!();
-            return;
-        }
-    }
+    let ui = ui::Ui::resolve(ui::ColorChoice::Auto, false, false);
 
-    let cli = Cli::parse();
+    // The mark heads the top-level help, but only on a terminal: help piped
+    // into a file or grep should stay plain reference text. It is drawn
+    // without colour because clap styles the rest of the page itself.
+    let mut command = Cli::command();
+    if std::io::stdout().is_terminal() {
+        let plain = ui::Ui {
+            color: false,
+            ..ui.clone()
+        };
+        // clap adds its own blank line after this, so drop the mark's.
+        command = command.before_help(banner::mark(&plain).trim_end().to_string());
+    }
+    let cli = Cli::from_arg_matches(&command.get_matches()).unwrap_or_else(|e| e.exit());
+
     // Resolved from the environment for now; the --color, --json and
     // --verbose flags feed into this once they exist.
-    ui::install(ui::Ui::resolve(ui::ColorChoice::Auto, false, false));
+    ui::install(ui);
+
     match cli.command {
         Some(Commands::Tracks(cmd)) => cmd::tracks::run(cmd),
         Some(Commands::Playlists(cmd)) => cmd::playlists::run(cmd),
@@ -619,9 +630,12 @@ pub fn run() {
         Some(Commands::Metadata(cmd)) => cmd::metadata::run(cmd),
         Some(Commands::Dsp(cmd)) => cmd::dsp::run(cmd),
         Some(Commands::Stats(cmd)) => cmd::stats::run(cmd),
-        None => {
-            // No subcommand; shouldn't reach here since main.rs checks args > 1.
+        // --cli, --headless, or only global flags: the landing screen. The
+        // mark is decoration, so it stays out of piped output.
+        None if cli.no_banner || !std::io::stdout().is_terminal() => {
+            print!("{}", banner::landing_body(ui::current()))
         }
+        None => print!("{}", banner::landing(ui::current())),
     }
 }
 
