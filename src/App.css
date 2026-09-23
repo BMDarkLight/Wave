@@ -2533,6 +2533,28 @@ img.queue-thumb {
   margin: 4px 0 10px;
 }
 
+/* Advisory row inside a dialog. Wave's palette is monochrome, so this leans on
+   a raised panel and a left rule rather than a warning colour that would be the
+   only hue on screen. */
+.modal-warning {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--muted);
+  border-radius: 4px;
+  background: var(--panel-raised);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.modal-warning button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .playlist-sync-field {
   margin-top: 4px;
   margin-bottom: 4px;

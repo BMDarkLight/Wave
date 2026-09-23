@@ -2079,7 +2079,8 @@ pub async fn update_track_metadata(
 
     // Validate before touching anything, so a bad year fails the whole edit
     // instead of half an album.
-    let edit = edit.resolve()?;
+    let cover_app = app.clone();
+    let edit = edit.resolve_with(&move |path: &str| read_picked_image(&cover_app, path))?;
     if edit.is_empty() {
         return Ok(MetadataEditResultDto {
             updated: 0,
@@ -2094,7 +2095,7 @@ pub async fn update_track_metadata(
         let mut updated = 0;
         let mut failed = Vec::new();
         for path in paths {
-            match write_track_metadata(&library, &path, &edit) {
+            match write_track_metadata(&app, &library, &path, &edit) {
                 Ok(()) => updated += 1,
                 Err(reason) => failed.push(MetadataEditFailureDto { path, reason }),
             }
@@ -2104,12 +2105,62 @@ pub async fn update_track_metadata(
     .await
 }
 
-fn write_track_metadata(library: &Library, path: &str, edit: &ResolvedEdit) -> Result<(), String> {
+/// Read a cover image the user picked, wherever the picker put it.
+///
+/// Android's dialog returns a `content://` URI, so the filesystem reader would
+/// only ever report the file as missing.
+fn read_picked_image(app: &tauri::AppHandle, path: &str) -> Result<Vec<u8>, String> {
     if is_android_content_uri(path) {
-        return Err("Files picked through Android's folder picker cannot be retagged".into());
+        crate::android::saf_io::read_uri_bytes(app, path, crate::tag_edit::MAX_COVER_BYTES)
+    } else {
+        crate::tag_edit::read_image_file(path)
     }
-    let file = validate_audio_path(path)?;
+}
 
+/// Retag a SAF document by copying it out, tagging the copy, then copying it
+/// back. lofty needs a real file and a document URI is not one.
+///
+/// The copy back is the only stretch where losing power can damage the track.
+/// Handing lofty the document descriptor directly would stretch that window
+/// across the whole rewrite, and replacing the document instead of overwriting
+/// it would mint a new URI, orphaning the library row and every playlist entry
+/// that points at the old one.
+fn write_tags_over_saf(
+    app: &tauri::AppHandle,
+    uri: &str,
+    edit: &ResolvedEdit,
+) -> Result<(), String> {
+    let staging = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("Failed to resolve cache dir: {e}"))?
+        .join("retag");
+    std::fs::create_dir_all(&staging).map_err(|e| format!("Failed to create retag dir: {e}"))?;
+
+    // lofty sniffs the container from the bytes, so the extension is only a
+    // hint. Carrying the real one over keeps it an accurate hint.
+    let temp = staging.join(format!(
+        "{}.{}",
+        uuid::Uuid::new_v4(),
+        crate::android::import::guess_extension(uri)
+    ));
+
+    let result = (|| {
+        crate::android::saf_io::copy_uri_to_file(app, uri, &temp)?;
+        crate::tag_edit::write_to_file(&temp, edit)?;
+        crate::android::saf_io::copy_file_to_uri(app, &temp, uri)
+    })();
+
+    let _ = std::fs::remove_file(&temp);
+    result
+}
+
+fn write_track_metadata(
+    app: &tauri::AppHandle,
+    library: &Library,
+    path: &str,
+    edit: &ResolvedEdit,
+) -> Result<(), String> {
     let track = library
         .get_track_details(path)?
         .ok_or_else(|| "Track is not in the library".to_string())?;
@@ -2117,7 +2168,13 @@ fn write_track_metadata(library: &Library, path: &str, edit: &ResolvedEdit) -> R
         return Err("Previews are not library files and cannot be edited".into());
     }
 
-    crate::tag_edit::write_to_file(&file, edit)?;
+    if is_android_content_uri(path) {
+        write_tags_over_saf(app, path, edit)?;
+    } else {
+        let file = validate_audio_path(path)?;
+        crate::tag_edit::write_to_file(&file, edit)?;
+    }
+
     library.update_track_tags(path, edit)?;
 
     match &edit.cover {
@@ -2132,10 +2189,30 @@ fn write_track_metadata(library: &Library, path: &str, edit: &ResolvedEdit) -> R
 /// can show it before the edit is saved. The asset protocol is scoped to
 /// Wave's own data directories, which is why this does not go through it.
 #[tauri::command]
-pub async fn read_cover_preview(path: String) -> Result<String, String> {
+pub async fn read_cover_preview(path: String, app: tauri::AppHandle) -> Result<String, String> {
     blocking(move || {
-        let data = crate::tag_edit::read_image_file(&path)?;
+        let data = read_picked_image(&app, &path)?;
         crate::cover_art::preview_cover_data_url(&data)
+    })
+    .await
+}
+
+/// Report whether these tracks can actually be retagged.
+///
+/// Only Android can answer anything but yes. Its folder picker falls back to a
+/// read-only grant when the system turns down read + write, and a library added
+/// that way cannot be written to no matter what the editor offers. Checking up
+/// front lets the dialog say so before the user fills it in.
+#[tauri::command]
+pub async fn check_metadata_write_access(
+    paths: Vec<String>,
+    app: tauri::AppHandle,
+) -> Result<bool, String> {
+    blocking(move || {
+        Ok(paths
+            .iter()
+            .filter(|path| is_android_content_uri(path))
+            .all(|uri| crate::android::saf_io::can_write_uri(&app, uri)))
     })
     .await
 }

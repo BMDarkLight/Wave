@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { BiImageAlt, BiX } from "react-icons/bi";
 import {
+  checkMetadataWriteAccess,
   readCoverPreview,
   resolveCoverSrc,
   selectCoverImage,
@@ -79,10 +80,13 @@ export default function EditMetadataDialog({
   tracks,
   onClose,
   onSave,
+  onGrantWriteAccess,
 }: {
   tracks: Track[];
   onClose: () => void;
   onSave: (edit: TagEdit) => Promise<void>;
+  /** Re-runs the folder picker so a read-only grant can be upgraded. */
+  onGrantWriteAccess?: () => void;
 }) {
   const shared = useMemo(() => sharedValues(tracks), [tracks]);
   const [values, setValues] = useState<Record<Field, string>>(() => {
@@ -94,6 +98,7 @@ export default function EditMetadataDialog({
   const [coverSrc, setCoverSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [writable, setWritable] = useState(true);
 
   const single = tracks.length === 1;
   const subject = single
@@ -117,6 +122,17 @@ export default function EditMetadataDialog({
       cancelled = true;
     };
   }, [cover, tracks]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const ok = await checkMetadataWriteAccess(tracks.map((t) => t.path));
+      if (!cancelled) setWritable(ok);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tracks]);
 
   const setField = (field: Field, value: string) => {
     setValues((current) => ({ ...current, [field]: value }));
@@ -192,6 +208,24 @@ export default function EditMetadataDialog({
           {!single &&
             " Fields left blank where the tracks disagree are not changed."}
         </p>
+
+        {!writable && (
+          <div className="modal-warning" role="status">
+            <span>
+              This folder was added without write access, so saving will
+              probably fail. Adding it again grants Wave permission to write.
+            </span>
+            {onGrantWriteAccess && (
+              <button
+                type="button"
+                className="btn-ghost btn-sm"
+                onClick={onGrantWriteAccess}
+              >
+                Add folder again
+              </button>
+            )}
+          </div>
+        )}
 
         <form
           onSubmit={(event) => {

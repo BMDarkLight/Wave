@@ -16,11 +16,15 @@ export const isLibraryPlaylistName = (name?: string | null) =>
   name === LIBRARY_PLAYLIST_NAME || name === "All Local Files";
 
 /**
- * Tags are written into the file itself, which rules out previews and the
- * `content://` URIs that Android's folder picker hands back.
+ * Tags are written into the file itself, so a preview has nothing to write to.
+ *
+ * Android `content://` tracks are editable: the backend copies the document
+ * out, tags the copy and copies it back. Whether the folder grant actually
+ * allows that is a separate question, and one only the backend can answer, so
+ * the dialog checks it on open rather than hiding the option here.
  */
 export const canEditMetadata = (track: Track) =>
-  !track.path.startsWith("content://") && track.source_state !== "cached";
+  track.source_state !== "cached";
 
 export const getTrackTitle = (
   track?: Track | null,

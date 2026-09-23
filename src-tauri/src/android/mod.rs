@@ -12,6 +12,7 @@ pub mod folder_picker;
 pub mod import;
 pub mod jni;
 pub mod metadata;
+pub mod saf_io;
 pub mod saf_scan;
 
 #[cfg(target_os = "android")]

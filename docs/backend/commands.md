@@ -262,15 +262,21 @@ year fails the call rather than half an album. Individual files can still fail
 after that (read-only, moved, in use), and those come back in `failed` while
 the rest go through.
 
-Not every track can be retagged: previews (`source_state: "cached"`) are not
-library files, and `content://` URIs from Android's folder picker are not
-regular files. Both are rejected per track.
+Previews (`source_state: "cached"`) are not library files and are rejected per
+track.
+
+Android tracks are editable. A `content://` document cannot be handed to the
+tag writer directly, so the command copies it into the app cache, tags the
+copy, and copies it back over the original. A folder added under the picker's
+read-only fallback cannot be written to at all; call
+[`check_metadata_write_access`](#check_metadata_write_access) first to find out
+before the user fills in a form that cannot be saved.
 
 **Arguments**
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `paths` | `string[]` | yes | Absolute paths of the tracks to edit |
+| `paths` | `string[]` | yes | Paths of the tracks to edit (`content://` URIs on Android) |
 | `edit` | [`TagEdit`](./types.md#tagedit) | yes | Fields to write |
 
 **Returns:** [`MetadataEditResult`](./types.md#metadataeditresult)
@@ -321,11 +327,38 @@ data directories, which is why picked files come back this way instead.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `path` | `string` | yes | Absolute path to an image file |
+| `path` | `string` | yes | Path to an image file, or a `content://` URI on Android |
 
 **Returns:** `string` — a `data:image/jpeg;base64,...` URL, at most 512px
 
 **Errors:** `"Failed to read image file: {e}"`, decode failures.
+
+---
+
+### `check_metadata_write_access`
+
+Report whether these tracks can actually be retagged, so the editor can warn
+before the user fills in a form that will not save.
+
+Only Android answers anything but `true`. Its folder picker asks for read and
+write permission but falls back to read-only when the system turns that down,
+and a library added that way cannot be written to. The check opens each
+document for reading and writing with truncation off, which leaves it exactly
+as it was, and closes it again.
+
+A folder can be upgraded by adding it a second time. Re-adding the same tree
+does not duplicate the library.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `paths` | `string[]` | yes | Tracks to check. Non-`content://` paths are assumed writable |
+
+**Returns:** `boolean` — `true` when every checked track can be written
+
+Treat a thrown error as writable. A provider may refuse the probe for its own
+reasons, and blocking an edit that would have worked is the worse failure.
 
 ---
 

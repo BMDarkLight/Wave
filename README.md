@@ -133,10 +133,16 @@ bounded JPEG before it goes into each file.
 An empty field clears the tag. Title, artist and album are the exceptions:
 Wave falls back to the filename for those, so they always keep a value.
 
-Tracks reached through Android's folder picker and 30-second previews aren't
-files Wave can rewrite, so the option doesn't appear for them. WAV and AIFF are
-written correctly but Wave's own decoder stops reading a RIFF file at the audio
-data, so a WAV re-imported from scratch comes back with its old tags.
+The editor works on Android too. Tracks there come from the folder picker as
+documents rather than plain files, so Wave copies one into its cache, writes
+the tags, and copies it back. If you granted the folder read-only access when
+you added it, the editor says so and offers to add it again, which is enough to
+upgrade the permission.
+
+30-second previews aren't files Wave can rewrite, so the option doesn't appear
+for them. WAV and AIFF are written correctly but Wave's own decoder stops
+reading a RIFF file at the audio data, so a WAV re-imported from scratch comes
+back with its old tags.
 
 ### Three-tier search
 

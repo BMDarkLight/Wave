@@ -750,6 +750,20 @@ export const readCoverPreview = (path: string): Promise<string | null> => {
   return safeInvoke<string>("read_cover_preview", { path }).catch(() => null);
 };
 
+/**
+ * Whether these tracks can be written back to.
+ *
+ * Only Android answers anything but true: a folder added under the picker's
+ * read-only fallback cannot be retagged. Treat a failed check as writable, so a
+ * provider that refuses the probe for its own reasons never blocks an edit that
+ * would have worked.
+ */
+export const checkMetadataWriteAccess = (paths: string[]): Promise<boolean> => {
+  return safeInvoke<boolean>("check_metadata_write_access", { paths })
+    .then((ok) => ok ?? true)
+    .catch(() => true);
+};
+
 export const selectCoverImage = async (): Promise<string | null> => {
   await tauriInitialized;
   if (!openFn) {

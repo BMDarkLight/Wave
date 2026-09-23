@@ -269,6 +269,7 @@ pub fn run() {
             commands::get_track_full_cover,
             commands::update_track_metadata,
             commands::read_cover_preview,
+            commands::check_metadata_write_access,
             commands::add_to_queue,
             commands::queue_insert_next,
             commands::remove_from_queue,

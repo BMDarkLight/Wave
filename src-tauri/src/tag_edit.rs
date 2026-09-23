@@ -89,10 +89,22 @@ impl ResolvedEdit {
     }
 }
 
+/// Reads the bytes of a cover image the user picked.
+///
+/// Desktop points this at the filesystem. Android picks covers as `content://`
+/// URIs, which no filesystem call can open, so it supplies its own reader
+/// instead of making this module care which platform it is on.
+pub type CoverReader<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, String>;
+
 impl TagEdit {
     /// Validate the edit once, up front, so a batch either starts clean or
     /// fails before the first file is touched.
     pub fn resolve(self) -> Result<ResolvedEdit, String> {
+        self.resolve_with(&read_image_file)
+    }
+
+    /// [`TagEdit::resolve`], but reading any cover image through `read_cover`.
+    pub fn resolve_with(self, read_cover: CoverReader<'_>) -> Result<ResolvedEdit, String> {
         Ok(ResolvedEdit {
             title: required_text("Title", self.title)?,
             artist: required_text("Artist", self.artist)?,
@@ -102,7 +114,10 @@ impl TagEdit {
             year: number("Year", self.year)?,
             track_number: number("Track number", self.track_number)?,
             disc_number: number("Disc number", self.disc_number)?,
-            cover: self.cover.map(resolve_cover).transpose()?,
+            cover: self
+                .cover
+                .map(|cover| resolve_cover(cover, read_cover))
+                .transpose()?,
         })
     }
 }
@@ -164,11 +179,11 @@ pub fn read_image_file(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(image_path).map_err(|e| format!("Failed to read image file: {e}"))
 }
 
-fn resolve_cover(cover: CoverEdit) -> Result<Change<Vec<u8>>, String> {
+fn resolve_cover(cover: CoverEdit, read_cover: CoverReader<'_>) -> Result<Change<Vec<u8>>, String> {
     let CoverEdit::Replace { path } = cover else {
         return Ok(Change::Clear);
     };
-    let data = read_image_file(&path)?;
+    let data = read_cover(&path)?;
     // Artwork is re-encoded to a bounded JPEG on the way in. A 10 MB PNG
     // dropped onto every track of an album would otherwise multiply across the
     // whole batch, and JPEG is the one picture format every tag container
@@ -626,5 +641,62 @@ mod tests {
 
         assert_eq!(std::fs::read(&wav).unwrap(), before);
         let _ = std::fs::remove_file(wav);
+    }
+
+    #[test]
+    fn a_supplied_cover_reader_is_used_instead_of_the_filesystem() {
+        // Stands in for an Android content:// URI: nothing on disk answers to
+        // this, so the edit can only resolve through the reader.
+        let png = temp_path("injected.png");
+        write_png(&png);
+        let bytes = std::fs::read(&png).unwrap();
+        let _ = std::fs::remove_file(&png);
+
+        let asked_for = std::cell::RefCell::new(String::new());
+        let reader = |path: &str| {
+            *asked_for.borrow_mut() = path.to_string();
+            Ok(bytes.clone())
+        };
+
+        let resolved = TagEdit {
+            cover: Some(CoverEdit::Replace {
+                path: "content://wave/doc/42".to_string(),
+            }),
+            ..Default::default()
+        }
+        .resolve_with(&reader)
+        .expect("injected reader should satisfy the cover edit");
+
+        assert_eq!(asked_for.into_inner(), "content://wave/doc/42");
+        assert!(matches!(resolved.cover, Some(Change::Set(_))));
+    }
+
+    #[test]
+    fn a_cover_reader_failure_fails_the_edit() {
+        let reader = |_: &str| Err("permission denied".to_string());
+
+        let result = TagEdit {
+            cover: Some(CoverEdit::Replace {
+                path: "content://wave/doc/42".to_string(),
+            }),
+            ..Default::default()
+        }
+        .resolve_with(&reader);
+
+        assert_eq!(result.unwrap_err(), "permission denied");
+    }
+
+    #[test]
+    fn removing_a_cover_never_calls_the_reader() {
+        let reader = |_: &str| panic!("reader must not run for a removal");
+
+        let resolved = TagEdit {
+            cover: Some(CoverEdit::Remove),
+            ..Default::default()
+        }
+        .resolve_with(&reader)
+        .unwrap();
+
+        assert!(matches!(resolved.cover, Some(Change::Clear)));
     }
 }

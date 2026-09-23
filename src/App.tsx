@@ -2356,6 +2356,10 @@ function App() {
           tracks={editingMetadata}
           onClose={() => setEditingMetadata(null)}
           onSave={handleSaveMetadata}
+          onGrantWriteAccess={() => {
+            setEditingMetadata(null);
+            void handleAddFolderAndroid();
+          }}
         />
       )}
 

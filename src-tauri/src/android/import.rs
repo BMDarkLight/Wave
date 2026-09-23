@@ -13,9 +13,7 @@
 //! the library and player stable local paths.
 
 use std::fs::{self, File};
-use std::io::{copy, Write};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use sha2::{Digest, Sha256};
 use symphonia::core::formats::FormatOptions;
@@ -23,7 +21,6 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_fs::{FilePath, FsExt, OpenOptions};
 use uuid::Uuid;
 
 use crate::metadata::is_supported_audio_file;
@@ -39,7 +36,7 @@ fn imports_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn guess_extension(path: &str) -> String {
+pub(crate) fn guess_extension(path: &str) -> String {
     let candidate = path
         .rsplit(['/', '\\', '?'])
         .next()
@@ -107,26 +104,6 @@ fn is_playable_audio_file(path: &Path) -> bool {
             &MetadataOptions::default(),
         )
         .is_ok()
-}
-
-fn copy_via_fs_plugin(app: &AppHandle, source: &str, dest: &Path) -> Result<(), String> {
-    let file_path = FilePath::from_str(source)
-        .map_err(|e| format!("Invalid audio source URI {source}: {e}"))?;
-    let mut opts = OpenOptions::new();
-    opts.read(true);
-    let mut reader = app
-        .fs()
-        .open(file_path, opts)
-        .map_err(|e| format!("Failed to open audio source {source}: {e}"))?;
-
-    let mut writer =
-        File::create(dest).map_err(|e| format!("Failed to create {}: {e}", dest.display()))?;
-    copy(&mut reader, &mut writer)
-        .map_err(|e| format!("Failed to copy audio source {source}: {e}"))?;
-    writer
-        .flush()
-        .map_err(|e| format!("Failed to flush {}: {e}", dest.display()))?;
-    Ok(())
 }
 
 fn content_hash(path: &Path) -> Result<String, String> {
@@ -208,7 +185,7 @@ pub fn materialize_audio_source(app: &AppHandle, source: &str) -> Result<PathBuf
     let imports = imports_dir(app)?;
     let mut ext = guess_extension(trimmed);
     let staging = imports.join(format!("staging-{}.{}", Uuid::new_v4(), ext));
-    copy_via_fs_plugin(app, trimmed, &staging)?;
+    crate::android::saf_io::copy_uri_to_file(app, trimmed, &staging)?;
 
     if !is_supported_audio_file(&staging) {
         let sniffed = sniff_extension(&staging);
