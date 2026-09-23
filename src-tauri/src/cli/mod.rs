@@ -8,6 +8,7 @@
 
 pub mod bar;
 pub mod json;
+pub mod render;
 pub mod table;
 pub mod ui;
 
@@ -18,9 +19,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use crate::audio::player::AudioPlayer;
 use crate::library::Library;
 use crate::metadata::{extract_track, Track};
-use crate::playback_daemon::{
-    daemon_request, daemon_request_if_running, DaemonRequest, DspStatus, PlaybackStatus,
-};
+use crate::playback_daemon::{daemon_request, daemon_request_if_running, DaemonRequest, DspStatus};
 use crate::tag_edit::{Change, CoverEdit, TagEdit};
 
 // ── Top-level CLI ────────────────────────────────────────────────────────────
@@ -506,7 +505,7 @@ fn resolve_track_path(library: &Library, id_or_path: &str) -> Result<String, Str
                 let candidates: Vec<String> = many
                     .iter()
                     .take(5)
-                    .map(|t| format!("{} {} - {}", render_short_id(&t.id), t.artist, t.title))
+                    .map(|t| format!("{} {} - {}", render::short_id(&t.id), t.artist, t.title))
                     .collect();
                 // The query is capped, so a full page means there may be more.
                 let count = if many.len() >= 10 {
@@ -529,11 +528,6 @@ fn resolve_track_path(library: &Library, id_or_path: &str) -> Result<String, Str
     Err(format!(
         "Track not found: {id_or_path} (not a track id, id prefix, or existing file path)"
     ))
-}
-
-/// The leading chunk of a UUID, which is what listings show.
-fn render_short_id(id: &str) -> &str {
-    &id[..id.len().min(8)]
 }
 
 /// Resolve a track or exit with a hint pointing at `tracks query`.
@@ -562,56 +556,6 @@ fn library_path_spelling(path: &str) -> String {
     text.strip_prefix("\\\\?\\")
         .unwrap_or(text.as_ref())
         .to_string()
-}
-
-/// Pretty-print a track in a human-readable one-line format.
-fn print_track(track: &Track) {
-    let duration = track
-        .duration_seconds
-        .map(|s| format_duration(s as u64))
-        .unwrap_or_else(|| "--:--".to_string());
-    println!(
-        "  {:36}  {:6}  {:4}  {:30}  {:30}  {:40}",
-        track.id,
-        track.format,
-        duration,
-        truncate(&track.artist, 28),
-        truncate(&track.album, 28),
-        truncate(&track.title, 38),
-    );
-}
-
-fn print_track_header() {
-    println!(
-        "  {:36}  {:6}  {:4}  {:30}  {:30}  {:40}",
-        "ID", "FORMAT", "DUR", "ARTIST", "ALBUM", "TITLE"
-    );
-    println!(
-        "  {}  {}  {}  {}  {}  {}",
-        "-".repeat(36),
-        "-".repeat(6),
-        "-".repeat(4),
-        "-".repeat(30),
-        "-".repeat(30),
-        "-".repeat(40),
-    );
-}
-
-fn format_duration(secs: u64) -> String {
-    let m = secs / 60;
-    let s = secs % 60;
-    format!("{m:02}:{s:02}")
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    let mut idx = 0;
-    for (count, c) in s.chars().enumerate() {
-        if count >= max.saturating_sub(1) {
-            return format!("{}…", &s[..idx]);
-        }
-        idx += c.len_utf8();
-    }
-    s.to_string()
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────
@@ -734,11 +678,9 @@ fn cmd_tracks_list(playlist_id: Option<String>) {
                 println!("No tracks found.");
                 return;
             }
-            println!("Found {} track(s):", tracks.len());
-            print_track_header();
-            for track in &tracks {
-                print_track(track);
-            }
+            let ui = ui::current();
+            println!("{}\n", ui.heading(&format!("{} tracks", tracks.len())));
+            print!("{}", render::track_table(ui::current(), &tracks));
         }
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
@@ -787,7 +729,7 @@ fn cmd_tracks_info(track_id: String) {
         .or_else(|| extract_track(None, &path).ok());
 
     match track {
-        Some(t) => print_full_metadata(&t),
+        Some(t) => print!("{}", render::metadata_block(ui::current(), &t)),
         None => {
             ui::fail(
                 format!("Could not read track: {path}"),
@@ -806,11 +748,12 @@ fn cmd_tracks_query(query: String) {
                 println!("No tracks matching \"{query}\".");
                 return;
             }
-            println!("Found {} track(s) matching \"{}\":", tracks.len(), query);
-            print_track_header();
-            for track in &tracks {
-                print_track(track);
-            }
+            let ui = ui::current();
+            println!(
+                "{}\n",
+                ui.heading(&format!("{} tracks matching \"{query}\"", tracks.len()))
+            );
+            print!("{}", render::track_table(ui::current(), &tracks));
         }
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
@@ -918,17 +861,13 @@ fn cmd_playlists_list() {
                 println!("No playlists found.");
                 return;
             }
-            println!("Found {} playlist(s):", playlists.len());
-            for pl in &playlists {
-                let sync_tag = match &pl.sync_folder {
-                    Some(folder) => format!("  [synced → {folder}]"),
-                    None => String::new(),
-                };
-                println!(
-                    "  {:36}  {:5} tracks  {}{}",
-                    pl.id, pl.track_count, pl.name, sync_tag
-                );
-            }
+            let ui = ui::current();
+            println!(
+                "{}
+",
+                ui.heading(&format!("{} playlists", playlists.len()))
+            );
+            print!("{}", render::playlist_table(ui, &playlists));
         }
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
@@ -1005,28 +944,12 @@ fn cmd_playlists_info(id: String) {
     let library = open_library();
     match library.get_playlist_info(&id) {
         Ok(Some(info)) => {
-            println!("Playlist: {} (ID: {})", info.name, info.id);
-            println!("  Track count: {}", info.track_count);
-            match &info.sync_folder {
-                Some(folder) => println!("  Synced folder: {folder}"),
-                None => println!("  Synced folder: (none)"),
-            }
-            println!();
-            match library.get_playlist_tracks(&id) {
-                Ok(tracks) => {
-                    for (i, track) in tracks.iter().enumerate() {
-                        println!(
-                            "  {:4}. {}  {:30}  {:30}  {:40}",
-                            i + 1,
-                            track.id,
-                            truncate(&track.artist, 28),
-                            truncate(&track.album, 28),
-                            truncate(&track.title, 38),
-                        );
-                    }
-                }
-                Err(e) => ui::report(format!("Error fetching tracks: {e}"), None),
-            }
+            // The details are still worth showing if the track list fails.
+            let tracks = library.get_playlist_tracks(&id).unwrap_or_else(|e| {
+                ui::report(format!("Error fetching tracks: {e}"), None);
+                Vec::new()
+            });
+            print!("{}", render::playlist_info(ui::current(), &info, &tracks));
         }
         Ok(None) => {
             ui::fail(
@@ -1049,21 +972,16 @@ fn cmd_playlists_query(query: String) {
                 println!("No playlists matching \"{query}\".");
                 return;
             }
+            let ui = ui::current();
             println!(
-                "Found {} playlist(s) matching \"{}\":",
-                playlists.len(),
-                query
+                "{}
+",
+                ui.heading(&format!(
+                    "{} playlists matching \"{query}\"",
+                    playlists.len()
+                ))
             );
-            for pl in &playlists {
-                let sync_tag = match &pl.sync_folder {
-                    Some(_) => "  [synced]",
-                    None => "",
-                };
-                println!(
-                    "  {:36}  {:5} tracks  {}{}",
-                    pl.id, pl.track_count, pl.name, sync_tag
-                );
-            }
+            print!("{}", render::playlist_table(ui, &playlists));
         }
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
@@ -1285,7 +1203,7 @@ fn cmd_playback_status() {
     match daemon_request_if_running(DaemonRequest::Status) {
         Ok(Some(resp)) if resp.ok => {
             if let Some(status) = resp.status {
-                print_playback_status(&status);
+                print!("{}", render::playback_status(ui::current(), &status, None));
             }
         }
         Ok(Some(resp)) => {
@@ -1300,27 +1218,6 @@ fn cmd_playback_status() {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
-}
-
-fn print_playback_status(status: &PlaybackStatus) {
-    println!("  State:      {}", status.state);
-    if let (Some(artist), Some(title)) = (&status.artist, &status.title) {
-        println!("  Track:      {artist} — {title}");
-    }
-    println!("  File:       {}", status.file);
-    println!(
-        "  Position:   {} / {}",
-        format_duration(status.position_seconds as u64),
-        format_duration(status.duration_seconds as u64)
-    );
-    println!("  Volume:     {:.0}%", status.volume * 100.0);
-    println!("  Device:     {}", status.device);
-    println!("  Repeat:     {}", status.repeat);
-    println!("  Shuffle:    {}", status.shuffle);
-    println!(
-        "  Queue:      track {} of {}",
-        status.queue_index, status.queue_total
-    );
 }
 
 // ── Queue commands ──────────────────────────────────────────────────────────
@@ -1444,11 +1341,9 @@ fn run_favorite(cmd: FavoriteCmd) {
                     println!("No favorites.");
                     return;
                 }
-                println!("Favorites ({} track(s)):", tracks.len());
-                print_track_header();
-                for track in &tracks {
-                    print_track(track);
-                }
+                let ui = ui::current();
+                println!("{}\n", ui.heading(&format!("{} favorites", tracks.len())));
+                print!("{}", render::track_table(ui::current(), &tracks));
             }
             Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
         },
@@ -1499,7 +1394,7 @@ fn cmd_metadata_set(track_id: String, edit: TagEdit) {
         return;
     }
     match library.update_track_tags(&path, &edit) {
-        Ok(track) => print_full_metadata(&track),
+        Ok(track) => print!("{}", render::metadata_block(ui::current(), &track)),
         Err(e) => {
             ui::fail(
                 format!("Tags were written, but the library entry could not be updated: {e}"),
@@ -1519,7 +1414,7 @@ fn cmd_metadata_get(track_id: String) {
         .and_then(|v| v.into_iter().next().flatten())
         .or_else(|| extract_track(None, &path).ok());
     match track {
-        Some(t) => print_full_metadata(&t),
+        Some(t) => print!("{}", render::metadata_block(ui::current(), &t)),
         None => {
             ui::fail(
                 format!("Could not read track: {path}"),
@@ -1661,7 +1556,7 @@ fn run_dsp(cmd: DspCmd) {
         }
         DspCmd::EqShow => {
             let dsp = load_dsp_status();
-            print_dsp_status(&dsp);
+            print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::EqSet { bands } => {
             if bands.len() != 10 {
@@ -1675,27 +1570,27 @@ fn run_dsp(cmd: DspCmd) {
             arr.copy_from_slice(&bands);
             let dsp = apply_dsp_request(DaemonRequest::SetEqBands { bands: arr });
             println!("{}", dsp_message_or("EQ bands set and enabled."));
-            print_dsp_status(&dsp);
+            print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::EqEnable => {
             let dsp = apply_dsp_request(DaemonRequest::SetEqEnabled { enabled: true });
             println!("{}", dsp_message_or("Equalizer enabled."));
-            print_dsp_status(&dsp);
+            print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::EqDisable => {
             let dsp = apply_dsp_request(DaemonRequest::SetEqEnabled { enabled: false });
             println!("{}", dsp_message_or("Equalizer disabled."));
-            print_dsp_status(&dsp);
+            print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::EqReset => {
             let dsp = apply_dsp_request(DaemonRequest::ResetEq);
             println!("{}", dsp_message_or("Equalizer reset to flat and enabled."));
-            print_dsp_status(&dsp);
+            print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::Preset { name } => {
             let dsp = apply_dsp_request(DaemonRequest::ApplyEqPreset { name: name.clone() });
             println!("Applied EQ preset: {name}");
-            print_dsp_status(&dsp);
+            print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::Export { output, name } => {
             let dsp = load_dsp_status();
@@ -1724,7 +1619,7 @@ fn run_dsp(cmd: DspCmd) {
                 });
             }
             println!("EQ settings imported from {input} and applied.");
-            print_dsp_status(&dsp);
+            print!("{}", render::dsp_status(ui::current(), &dsp));
         }
         DspCmd::Gapless { state } => match state {
             None => {
@@ -1783,7 +1678,7 @@ fn run_dsp(cmd: DspCmd) {
                 }
                 let dsp = apply_dsp_request(DaemonRequest::SetBass { db: value });
                 println!("Bass: {:+.1} dB  (treble {:+.1} dB)", dsp.bass, dsp.treble);
-                print_eq_bands_brief(&dsp);
+                println!("{}", render::eq_bands_brief(ui::current(), &dsp));
             }
         },
         DspCmd::Treble { db } => match db {
@@ -1801,7 +1696,7 @@ fn run_dsp(cmd: DspCmd) {
                 }
                 let dsp = apply_dsp_request(DaemonRequest::SetTreble { db: value });
                 println!("Treble: {:+.1} dB  (bass {:+.1} dB)", dsp.treble, dsp.bass);
-                print_eq_bands_brief(&dsp);
+                println!("{}", render::eq_bands_brief(ui::current(), &dsp));
             }
         },
     }
@@ -1946,50 +1841,6 @@ fn parse_on_off(raw: &str, label: &str) -> bool {
     }
 }
 
-fn print_dsp_status(dsp: &DspStatus) {
-    println!("Equalizer: {}", if dsp.eq_enabled { "ON" } else { "OFF" });
-    println!(
-        "Gapless:   {}",
-        if dsp.gapless_enabled { "ON" } else { "OFF" }
-    );
-    if dsp.crossfade_duration <= 0.0 {
-        println!("Crossfade: OFF");
-    } else {
-        println!("Crossfade: {:.1}s", dsp.crossfade_duration);
-    }
-    println!("Bass:      {:+.1} dB", dsp.bass);
-    println!("Treble:    {:+.1} dB", dsp.treble);
-    println!();
-    println!("  Band   Frequency      Gain (dB)");
-    println!("  ----   ---------      ---------");
-    for (i, (freq, gain)) in crate::audio::dsp::EQ_BANDS_HZ
-        .iter()
-        .zip(dsp.bands.iter())
-        .enumerate()
-    {
-        let bar = if dsp.eq_enabled {
-            let steps = (*gain as i32).clamp(-12, 12);
-            let ch = if steps >= 0 { '+' } else { '-' };
-            let bar_str: String = (0..steps.unsigned_abs()).map(|_| ch).collect();
-            format!(" {:>12}", bar_str)
-        } else {
-            String::new()
-        };
-        println!("  {i:>4}   {:>9} Hz    {:>+6.1} dB{bar}", freq, gain);
-    }
-}
-
-fn print_eq_bands_brief(dsp: &DspStatus) {
-    print!("Bands: ");
-    for (i, gain) in dsp.bands.iter().enumerate() {
-        if i > 0 {
-            print!(", ");
-        }
-        print!("{gain:+.1}");
-    }
-    println!();
-}
-
 // ── Listening stats ─────────────────────────────────────────────────────────
 
 fn run_stats(cmd: StatsCmd) {
@@ -2003,18 +1854,7 @@ fn run_stats(cmd: StatsCmd) {
                     ui::EXIT_GENERAL,
                 );
             });
-            println!("Listening overview");
-            println!(
-                "  Total listen time: {}",
-                format_listen_duration(stats.total_listen_seconds)
-            );
-            println!("  Total plays:       {}", stats.total_plays);
-            println!("  Tracks played:     {}", stats.tracks_played);
-            println!();
-            print_track_rank_list("Top tracks", &stats.top_tracks);
-            print_named_rank_list("Top artists", &stats.top_artists);
-            print_named_rank_list("Top albums", &stats.top_albums);
-            print_named_rank_list("Top genres", &stats.top_genres);
+            print!("{}", render::listening_overview(ui::current(), &stats));
         }
         StatsCmd::Recent { limit } => {
             let tracks = library.get_recently_played(limit).unwrap_or_else(|e| {
@@ -2028,7 +1868,10 @@ fn run_stats(cmd: StatsCmd) {
                 println!("No recently played tracks yet.");
                 return;
             }
-            print_track_rank_list("Recently played", &tracks);
+            print!(
+                "{}",
+                render::track_rank_list(ui::current(), "Recently played", &tracks)
+            );
         }
         StatsCmd::Most { limit } => {
             let tracks = library.get_most_played(limit).unwrap_or_else(|e| {
@@ -2042,7 +1885,10 @@ fn run_stats(cmd: StatsCmd) {
                 println!("No listen history yet.");
                 return;
             }
-            print_track_rank_list("Most played", &tracks);
+            print!(
+                "{}",
+                render::track_rank_list(ui::current(), "Most played", &tracks)
+            );
         }
         StatsCmd::Artists { limit } => {
             let stats = library.get_listening_stats(limit).unwrap_or_else(|e| {
@@ -2056,7 +1902,10 @@ fn run_stats(cmd: StatsCmd) {
                 println!("No artist listen history yet.");
                 return;
             }
-            print_named_rank_list("Top artists", &stats.top_artists);
+            print!(
+                "{}",
+                render::named_rank_list(ui::current(), "Top artists", &stats.top_artists)
+            );
         }
         StatsCmd::Albums { limit } => {
             let stats = library.get_listening_stats(limit).unwrap_or_else(|e| {
@@ -2070,7 +1919,10 @@ fn run_stats(cmd: StatsCmd) {
                 println!("No album listen history yet.");
                 return;
             }
-            print_named_rank_list("Top albums", &stats.top_albums);
+            print!(
+                "{}",
+                render::named_rank_list(ui::current(), "Top albums", &stats.top_albums)
+            );
         }
         StatsCmd::Genres { limit } => {
             let stats = library.get_listening_stats(limit).unwrap_or_else(|e| {
@@ -2084,59 +1936,12 @@ fn run_stats(cmd: StatsCmd) {
                 println!("No genre listen history yet.");
                 return;
             }
-            print_named_rank_list("Top genres", &stats.top_genres);
+            print!(
+                "{}",
+                render::named_rank_list(ui::current(), "Top genres", &stats.top_genres)
+            );
         }
     }
-}
-
-fn format_listen_duration(secs: f64) -> String {
-    let total = secs.max(0.0).round() as u64;
-    let hours = total / 3600;
-    let minutes = (total % 3600) / 60;
-    let seconds = total % 60;
-    if hours > 0 {
-        format!("{hours}h {minutes}m {seconds}s")
-    } else if minutes > 0 {
-        format!("{minutes}m {seconds}s")
-    } else {
-        format!("{seconds}s")
-    }
-}
-
-fn print_track_rank_list(title: &str, tracks: &[Track]) {
-    println!("{title}");
-    if tracks.is_empty() {
-        println!("  (none)");
-        return;
-    }
-    for (i, track) in tracks.iter().enumerate() {
-        println!(
-            "  {:>2}. {} — {}  [{}]",
-            i + 1,
-            truncate(&track.artist, 28),
-            truncate(&track.title, 40),
-            format_duration(track.duration_seconds.unwrap_or(0.0) as u64)
-        );
-    }
-    println!();
-}
-
-fn print_named_rank_list(title: &str, rows: &[crate::dto::ListenRankDto]) {
-    println!("{title}");
-    if rows.is_empty() {
-        println!("  (none)");
-        return;
-    }
-    for (i, row) in rows.iter().enumerate() {
-        println!(
-            "  {:>2}. {:<32}  {}  ({} plays)",
-            i + 1,
-            truncate(&row.name, 32),
-            format_listen_duration(row.listen_seconds),
-            row.play_count
-        );
-    }
-    println!();
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -2150,100 +1955,4 @@ fn open_library() -> Library {
             ui::EXIT_GENERAL,
         );
     })
-}
-
-fn print_full_metadata(track: &Track) {
-    println!("ID:              {}", track.id);
-    println!("Path:            {}", track.path);
-    println!("Name:            {}", track.name);
-    println!("Title:           {}", track.title);
-    println!("Artist:          {}", track.artist);
-    println!("Album:           {}", track.album);
-    println!(
-        "Album Artist:    {}",
-        track.album_artist.as_deref().unwrap_or("(none)")
-    );
-    println!(
-        "Genre:           {}",
-        track.genre.as_deref().unwrap_or("(none)")
-    );
-    println!(
-        "Year:            {}",
-        track
-            .year
-            .map(|y| y.to_string())
-            .unwrap_or_else(|| "(none)".to_string())
-    );
-    println!(
-        "Track Number:    {}",
-        track
-            .track_number
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "(none)".to_string())
-    );
-    println!(
-        "Disc Number:     {}",
-        track
-            .disc_number
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "(none)".to_string())
-    );
-    println!("Format:          {}", track.format);
-    println!(
-        "Duration:        {}",
-        track
-            .duration_seconds
-            .map(|s| format_duration(s as u64))
-            .unwrap_or_else(|| "Unknown".to_string())
-    );
-    println!(
-        "Sample Rate:     {}",
-        track
-            .sample_rate
-            .map(|r| format!("{} Hz", r))
-            .unwrap_or_else(|| "Unknown".to_string())
-    );
-    println!(
-        "Channels:        {}",
-        track
-            .channels
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "Unknown".to_string())
-    );
-    println!(
-        "Bit Depth:       {}",
-        track
-            .bit_depth
-            .map(|b| format!("{} bit", b))
-            .unwrap_or_else(|| "Unknown".to_string())
-    );
-    println!("File Size:       {} bytes", track.file_size);
-    println!("Modified:        {}", track.modified_at);
-    println!("Indexed:         {}", track.indexed_at);
-    println!(
-        "Lyrics Source:   {}",
-        track.lyrics_source.as_deref().unwrap_or("(none)")
-    );
-    println!(
-        "Cover Art MIME:  {}",
-        track.cover_art_mime.as_deref().unwrap_or("(none)")
-    );
-    println!(
-        "Cover Art Src:   {}",
-        track.cover_art_source.as_deref().unwrap_or("(none)")
-    );
-    println!(
-        "Fingerprint:     {}",
-        track.fingerprint_sha256.as_deref().unwrap_or("(none)")
-    );
-    println!(
-        "MusicBrainz ID:  {}",
-        track
-            .musicbrainz_recording_id
-            .as_deref()
-            .unwrap_or("(none)")
-    );
-    if let Some(lyrics) = &track.lyrics {
-        println!("\nLyrics:\n{}", lyrics);
-    }
 }
