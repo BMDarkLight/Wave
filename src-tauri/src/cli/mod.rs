@@ -83,6 +83,12 @@ pub enum Commands {
     /// DSP / equalizer, gapless, and crossfade controls
     #[command(subcommand)]
     Dsp(DspCmd),
+    /// Print a shell completion script
+    Completions {
+        /// Shell to generate for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
     /// Live now-playing dashboard
     Now {
         /// Print one frame and exit instead of redrawing
@@ -657,6 +663,9 @@ pub fn run() {
         Some(Commands::Dsp(cmd)) => cmd::dsp::run(cmd),
         Some(Commands::Stats(cmd)) => cmd::stats::run(cmd),
         Some(Commands::Now { once, interval }) => now::run(once, interval),
+        Some(Commands::Completions { shell }) => {
+            clap_complete::generate(shell, &mut Cli::command(), "wave", &mut std::io::stdout())
+        }
         // --cli, --headless, or only global flags: the landing screen. The
         // mark is decoration, so it stays out of piped output.
         None if cli.json => json::emit(&banner::LandingFacts::gather()),
