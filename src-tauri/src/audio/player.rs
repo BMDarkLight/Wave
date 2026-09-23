@@ -1994,8 +1994,8 @@ impl AudioPlayer {
             let grace = Duration::from_millis(350);
             self.clock.raw_elapsed() >= duration.saturating_add(grace)
         });
-        // len <= 1 ⇒ only the follow-up (or empty) remains in the sink.
-        (sink_len <= 1 && past_start) || (at_duration_end && sink_len <= 1) || self.sink_exhausted()
+        // len <= 1 means only the follow-up (or an empty sink) is left.
+        ((past_start || at_duration_end) && sink_len <= 1) || self.sink_exhausted()
     }
 
     pub fn play_previous(&mut self) -> Result<Option<String>, AudioError> {
