@@ -809,12 +809,25 @@ fn apply_treble_dial(player: &mut AudioPlayer, treble: f32) {
     player.set_eq_enabled(true);
 }
 
-fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
-    let is_playlist = uuid::Uuid::parse_str(id).is_ok()
-        && state.library.get_playlist_info(id).ok().flatten().is_some();
+fn artist_title(artist: &str, title: &str) -> String {
+    format!("{artist} - {title}")
+}
 
-    if is_playlist {
-        match state.library.get_playlist_tracks(id) {
+fn playlist_start_message(name: &str, count: usize, artist: &str, title: &str) -> String {
+    let noun = if count == 1 { "track" } else { "tracks" };
+    format!(
+        "Playing playlist \"{name}\", {count} {noun}, starting with: {}",
+        artist_title(artist, title)
+    )
+}
+
+fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
+    let playlist = uuid::Uuid::parse_str(id)
+        .ok()
+        .and_then(|_| state.library.get_playlist_info(id).ok().flatten());
+
+    if let Some(playlist) = playlist {
+        match state.library.get_playlist_tracks(&playlist.id) {
             Ok(tracks) if tracks.is_empty() => DaemonResponse::err("Playlist is empty."),
             Ok(tracks) => {
                 let paths: Vec<String> = tracks.iter().map(|t| t.path.clone()).collect();
@@ -827,12 +840,11 @@ fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
                     return DaemonResponse::err(e.to_string());
                 }
                 sync_media_for_track(state, &tracks[0]);
-                let msg = format!(
-                    "Playing playlist \"{}\" — {} track(s), starting with: {} — {}",
-                    tracks[0].album,
+                let msg = playlist_start_message(
+                    &playlist.name,
                     tracks.len(),
-                    tracks[0].artist,
-                    tracks[0].title
+                    &tracks[0].artist,
+                    &tracks[0].title,
                 );
                 DaemonResponse::ok_msg(msg)
             }
@@ -1235,7 +1247,7 @@ fn sync_media_playback_state(state: &mut DaemonState) {
 
 fn format_now_playing(library: &Library, path: &str) -> String {
     if let Some(t) = track_for_path(library, path) {
-        format!("Now playing: {} — {}", t.artist, t.title)
+        format!("Now playing: {}", artist_title(&t.artist, &t.title))
     } else {
         format!("Now playing: {path}")
     }
@@ -1296,7 +1308,7 @@ fn current_tooltip(player: &AudioPlayer, library: &Library) -> String {
             } else {
                 "Stopped"
             };
-            return format!("{state}: {} — {}", t.artist, t.title);
+            return format!("{state}: {}", artist_title(&t.artist, &t.title));
         }
     }
     "Wave".to_string()
@@ -1401,4 +1413,24 @@ fn spawn_daemon() -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(100));
     }
     Err("Playback daemon failed to start within 10 seconds.".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{artist_title, playlist_start_message};
+
+    #[test]
+    fn playlist_start_message_names_the_playlist() {
+        let one = playlist_start_message("Road", 1, "Ada", "Dawn");
+        assert_eq!(
+            one,
+            "Playing playlist \"Road\", 1 track, starting with: Ada - Dawn"
+        );
+        assert_eq!(
+            playlist_start_message("Road", 12, "Ada", "Dawn"),
+            "Playing playlist \"Road\", 12 tracks, starting with: Ada - Dawn"
+        );
+        assert!(!one.contains('\u{2014}'));
+        assert_eq!(artist_title("Ada", "Dawn"), "Ada - Dawn");
+    }
 }
