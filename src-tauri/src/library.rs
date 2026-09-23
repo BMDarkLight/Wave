@@ -949,6 +949,9 @@ impl Library {
     ) -> Result<(Vec<Track>, Vec<String>), String> {
         let profile_id_str = profile_id.unwrap_or_else(|| "default".to_string());
         let playlist_name_str = playlist_name.unwrap_or_else(|| LIBRARY_PLAYLIST_NAME.to_string());
+        // Library membership is the tracks table. Writing playlist_tracks for
+        // it made the first CLI import count files the GUI had already indexed.
+        let library_playlist = is_library_playlist_name(&playlist_name_str);
 
         // Resolve / create the profile and playlist outside the connection lock.
         let playlist_id = {
@@ -987,6 +990,20 @@ impl Library {
             progress(done + 1, audio_paths.len(), path);
             match extract_track(self.app_handle.as_ref(), path) {
                 Ok(mut track) => {
+                    let already_indexed = match tx
+                        .query_row(
+                            "SELECT 1 FROM tracks WHERE path = ?1",
+                            params![track.path],
+                            |_| Ok(()),
+                        )
+                        .optional()
+                    {
+                        Ok(row) => row.is_some(),
+                        Err(e) => {
+                            failed.push(format!("{path}: {e}"));
+                            continue;
+                        }
+                    };
                     let track_id = match upsert_track(&tx, &track) {
                         Ok(id) => id,
                         Err(e) => {
@@ -995,6 +1012,12 @@ impl Library {
                         }
                     };
                     track.id = track_id.clone();
+                    if library_playlist {
+                        if !already_indexed {
+                            tracks.push(track);
+                        }
+                        continue;
+                    }
                     let position = match next_playlist_position(&tx, &playlist_id) {
                         Ok(p) => p,
                         Err(e) => {
@@ -6863,6 +6886,128 @@ mod tests {
             .index_directory(None, None, dir.to_string_lossy().to_string())
             .expect("import ran");
         assert!(tracks.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A few silent PCM frames. Symphonia can probe this, so the import loop
+    /// reaches the "is this track new?" decision instead of the skip path.
+    fn write_silent_wav(path: &std::path::Path) {
+        let samples = vec![0u8; 8];
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36u32 + samples.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&samples);
+        std::fs::write(path, wav).unwrap();
+    }
+
+    fn import_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("wave-test-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::canonicalize(&dir).unwrap()
+    }
+
+    #[test]
+    fn library_reimport_does_not_count_tracks_already_in_the_table() {
+        let library = open_test_library().unwrap();
+        let dir = import_dir();
+        let already = dir.join("already.wav");
+        let fresh = dir.join("fresh.wav");
+        write_silent_wav(&already);
+        write_silent_wav(&fresh);
+
+        // The GUI indexes the Library playlist as the tracks table itself
+        // and never writes playlist_tracks for it. Seed that shape.
+        {
+            let connection = library.lock_connection().unwrap();
+            upsert_track(
+                &*connection,
+                &sample_track("seed", &already.to_string_lossy()),
+            )
+            .unwrap();
+        }
+
+        let (tracks, failed) = library
+            .index_directory_with_progress(
+                None,
+                None,
+                dir.to_string_lossy().to_string(),
+                &mut |_, _, _| {},
+            )
+            .expect("import ran");
+        assert!(failed.is_empty(), "{failed:?}");
+        let names: Vec<_> = tracks
+            .iter()
+            .filter_map(|t| std::path::Path::new(&t.path).file_name())
+            .filter_map(|n| n.to_str())
+            .collect();
+        assert_eq!(names, vec!["fresh.wav"]);
+
+        let playlist_id = library.default_playlist_id().unwrap();
+        let links: i64 = library
+            .lock_connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = ?1",
+                params![playlist_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(links, 0, "Library membership is not playlist_tracks");
+
+        let (again, failed) = library
+            .index_directory_with_progress(
+                None,
+                None,
+                dir.to_string_lossy().to_string(),
+                &mut |_, _, _| {},
+            )
+            .expect("second import ran");
+        assert!(failed.is_empty(), "{failed:?}");
+        assert!(again.is_empty(), "a second pass adds nothing");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn named_playlist_import_counts_a_track_new_to_that_playlist() {
+        let library = open_test_library().unwrap();
+        let dir = import_dir();
+        let path = dir.join("song.wav");
+        write_silent_wav(&path);
+        {
+            let connection = library.lock_connection().unwrap();
+            upsert_track(&*connection, &sample_track("seed", &path.to_string_lossy())).unwrap();
+        }
+
+        let (tracks, failed) = library
+            .index_directory_with_progress(
+                None,
+                Some("Mixtape".to_string()),
+                dir.to_string_lossy().to_string(),
+                &mut |_, _, _| {},
+            )
+            .expect("import ran");
+        assert!(failed.is_empty(), "{failed:?}");
+        assert_eq!(tracks.len(), 1, "the file is new to this playlist");
+
+        let (again, _) = library
+            .index_directory_with_progress(
+                None,
+                Some("Mixtape".to_string()),
+                dir.to_string_lossy().to_string(),
+                &mut |_, _, _| {},
+            )
+            .expect("second import ran");
+        assert!(again.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 }
