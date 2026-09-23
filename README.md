@@ -221,22 +221,33 @@ genres — computed locally from your own playback history.
 
 ### Command line
 
-The same binary runs headless. `wave --help` exposes subcommands for `tracks`,
-`playlists`, `playback`, `queue`, `devices`, `favorite`, `metadata`, `dsp`, and
-`stats`, backed by a background playback daemon with its own tray icon and a
+The same binary runs headless. `wave --cli` opens with the Wave mark, what is
+in the library, what is playing, and the commands worth knowing first; `wave
+--help` has the full reference. Subcommands cover `tracks`, `playlists`,
+`playback`, `queue`, `devices`, `favorite`, `metadata`, `dsp`, `stats` and
+`now`, backed by a background playback daemon with its own tray icon and a
 localhost control socket.
 
 ```bash
 wave tracks import ~/Music          # scan files or folders into the library
-wave tracks list                    # list every track
-wave playlists list                 # list playlists with their IDs
+wave tracks list                    # fits your terminal, short IDs
+wave tracks info 3f2a91c4           # any unambiguous ID prefix works
 wave playlists export <id> m3u out.m3u
 wave playback start <playlist-id>   # play through the daemon
-wave playback status
-wave metadata set <id|path> --genre "Post-Punk" --year 1979
-wave metadata cover-set <id|path> cover.jpg
+wave now                            # live now-playing dashboard
+wave metadata set <id> --genre "Post-Punk" --year 1979
 wave stats artists --limit 10       # top artists by listen time
+wave tracks list --json             # machine-readable output
+wave completions zsh > _wave        # shell completions
 ```
+
+Output adapts to the terminal: colour is dropped when stdout is not a TTY or
+when `NO_COLOR` is set (`--color` overrides both), the block characters fall
+back to ASCII when the console cannot render them or when `WAVE_ASCII` is set,
+and tables stack rather than wrap on narrow terminals. `--json` is the stable
+surface for scripts. Exit codes are 0 for success, 1 for a general failure, 2
+for a usage error, 3 when something is not found, and 4 when the playback
+daemon is not running.
 
 ---
 
@@ -321,7 +332,7 @@ Wave/
 │       ├── integrations/       # Tray and OS media-control integration
 │       ├── os_media/           # Windows-specific media integration
 │       ├── sources/            # Remote song sourcing: providers, cache, downloads
-│       ├── cli.rs              # Headless/CLI entry surface
+│       ├── cli/                # Headless CLI: parsing, rendering, one module per command group
 │       ├── commands.rs         # Tauri invoke command handlers
 │       ├── cover_art.rs        # Cover art extraction and caching
 │       ├── dto.rs              # Shared DTOs between backend and frontend
