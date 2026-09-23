@@ -2107,6 +2107,33 @@ impl Library {
             .map_err(|e| format!("Failed to query track by id: {e}"))
     }
 
+    /// Tracks whose id starts with `prefix`, capped so a short prefix cannot
+    /// pull a whole library into memory on the error path.
+    ///
+    /// `_` and `%` are LIKE wildcards, so they are escaped: a user typing
+    /// either should match nothing rather than everything.
+    pub fn find_tracks_by_id_prefix(&self, prefix: &str) -> Result<Vec<Track>, String> {
+        let connection = self.lock_connection()?;
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT {TRACK_SELECT_COLUMNS} FROM {TRACK_FROM} \
+                 WHERE t.id LIKE ?1 ESCAPE '\\' ORDER BY t.id LIMIT 10"
+            ))
+            .map_err(|e| format!("Failed to prepare id prefix query: {e}"))?;
+
+        let escaped = prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let rows = statement
+            .query_map(params![format!("{escaped}%")], |row| {
+                row_to_track(row, &self.cover_root)
+            })
+            .map_err(|e| format!("Failed to run id prefix query: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read id prefix results: {e}"))
+    }
+
     /// Search tracks by a query string matching title, artist, or album.
     pub fn search_tracks(&self, query: &str) -> Result<Vec<Track>, String> {
         self.search_tracks_limited(query, None)
@@ -6690,5 +6717,52 @@ mod tests {
             anthrax.cover_url.as_deref(),
             Some("https://coverartarchive.org/release-group/f1afec0b-26dd-3db5-9aa1-c91229a74a24/front-250")
         );
+    }
+
+    #[test]
+    fn id_prefix_matches_only_whole_prefixes() {
+        let library = open_test_library().unwrap();
+        // Real track ids are UUIDs, which is what makes a hex prefix useful.
+        let id = Uuid::new_v4().to_string();
+        {
+            let connection = library.lock_connection().unwrap();
+            upsert_track(&*connection, &sample_track(&id, "/music/song.mp3")).unwrap();
+        }
+
+        let hits = library
+            .find_tracks_by_id_prefix(&id[..8])
+            .expect("query ran");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, id);
+
+        assert!(library
+            .find_tracks_by_id_prefix("zzzzzzzz")
+            .unwrap()
+            .is_empty());
+        // Underscore and percent are LIKE wildcards. Typing either should
+        // match nothing rather than everything.
+        assert!(library.find_tracks_by_id_prefix("%").unwrap().is_empty());
+        assert!(library
+            .find_tracks_by_id_prefix("________")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn id_prefix_query_is_capped() {
+        let library = open_test_library().unwrap();
+        {
+            let connection = library.lock_connection().unwrap();
+            for n in 0..12 {
+                upsert_track(
+                    &*connection,
+                    &sample_track(&Uuid::new_v4().to_string(), &format!("/music/{n}.mp3")),
+                )
+                .unwrap();
+            }
+        }
+        // An empty prefix matches every row, so the LIMIT is the only thing
+        // stopping the error path from loading a large library.
+        assert_eq!(library.find_tracks_by_id_prefix("").unwrap().len(), 10);
     }
 }

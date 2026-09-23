@@ -475,24 +475,65 @@ fn default_db_path() -> std::path::PathBuf {
 
 // ── Track resolution helpers ────────────────────────────────────────────────
 
-/// Try to resolve a user-supplied track identifier to a file path.
-/// Accepts either a UUID stored in the database or a direct file path.
+/// Resolve what the user typed to a file path.
+///
+/// Accepts a full UUID, a file path, or an unambiguous id prefix. The prefix
+/// needs at least four characters, below which almost anything in a real
+/// library is ambiguous and the error is more useful than a guess.
 fn resolve_track_path(library: &Library, id_or_path: &str) -> Result<String, String> {
-    // Check if it's a UUID (track ID) in the database
+    const MIN_PREFIX: usize = 4;
+
     if uuid::Uuid::parse_str(id_or_path).is_ok() {
         if let Some(track) = library.get_track_by_id(id_or_path)? {
             return Ok(track.path);
         }
     }
-    // Treat as a file path; verify it exists
-    let path = Path::new(id_or_path);
-    if path.exists() {
-        Ok(library_path_spelling(id_or_path))
-    } else {
-        Err(format!(
-            "Track not found: {id_or_path} (not a valid UUID or existing file path)"
-        ))
+
+    if Path::new(id_or_path).exists() {
+        return Ok(library_path_spelling(id_or_path));
     }
+
+    let looks_like_id = id_or_path.len() >= MIN_PREFIX
+        && id_or_path
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == '-');
+    if looks_like_id {
+        let hits = library.find_tracks_by_id_prefix(id_or_path)?;
+        match hits.as_slice() {
+            [only] => return Ok(only.path.clone()),
+            [] => {}
+            many => {
+                let candidates: Vec<String> = many
+                    .iter()
+                    .take(5)
+                    .map(|t| format!("{} {} - {}", render_short_id(&t.id), t.artist, t.title))
+                    .collect();
+                // The query is capped, so a full page means there may be more.
+                let count = if many.len() >= 10 {
+                    "10 or more".to_string()
+                } else {
+                    many.len().to_string()
+                };
+                ui::fail(
+                    format!("Track id \"{id_or_path}\" is ambiguous."),
+                    Some(&format!(
+                        "{count} tracks match. Narrow it: {}",
+                        candidates.join("; ")
+                    )),
+                    ui::EXIT_NOT_FOUND,
+                );
+            }
+        }
+    }
+
+    Err(format!(
+        "Track not found: {id_or_path} (not a track id, id prefix, or existing file path)"
+    ))
+}
+
+/// The leading chunk of a UUID, which is what listings show.
+fn render_short_id(id: &str) -> &str {
+    &id[..id.len().min(8)]
 }
 
 /// Resolve a track or exit with a hint pointing at `tracks query`.
