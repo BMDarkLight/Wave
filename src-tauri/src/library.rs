@@ -925,12 +925,28 @@ impl Library {
         Ok(())
     }
 
+    /// Index a directory without reporting progress. The GUI calls this; the
+    /// CLI wants progress and the skipped files, so it uses the variant below.
     pub fn index_directory(
         &self,
         profile_id: Option<String>,
         playlist_name: Option<String>,
         directory: String,
     ) -> Result<Vec<Track>, String> {
+        self.index_directory_with_progress(profile_id, playlist_name, directory, &mut |_, _, _| {})
+            .map(|(tracks, _failed)| tracks)
+    }
+
+    /// Index a directory, calling `progress(done, total, path)` before each
+    /// file, and hand back the files that could not be indexed alongside the
+    /// ones that were, each failure as "path: reason".
+    pub fn index_directory_with_progress(
+        &self,
+        profile_id: Option<String>,
+        playlist_name: Option<String>,
+        directory: String,
+        progress: &mut dyn FnMut(usize, usize, &str),
+    ) -> Result<(Vec<Track>, Vec<String>), String> {
         let profile_id_str = profile_id.unwrap_or_else(|| "default".to_string());
         let playlist_name_str = playlist_name.unwrap_or_else(|| LIBRARY_PLAYLIST_NAME.to_string());
 
@@ -967,7 +983,8 @@ impl Library {
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
         let now = now_timestamp();
-        for path in &audio_paths {
+        for (done, path) in audio_paths.iter().enumerate() {
+            progress(done + 1, audio_paths.len(), path);
             match extract_track(self.app_handle.as_ref(), path) {
                 Ok(mut track) => {
                     let track_id = match upsert_track(&tx, &track) {
@@ -1013,7 +1030,7 @@ impl Library {
             );
         }
 
-        Ok(tracks)
+        Ok((tracks, failed))
     }
 
     pub fn list_playlists(&self, profile_id: Option<String>) -> Result<Vec<PlaylistInfo>, String> {
@@ -6800,5 +6817,52 @@ mod tests {
             )
             .unwrap();
         assert_eq!(library.count_tracks().unwrap(), 2);
+    }
+
+    /// A directory holding files that look like audio but are not. The repo
+    /// ships no audio fixtures and these tests need none: the point is that
+    /// the callback fires once per file and that failures come back.
+    fn unreadable_audio_dir(count: usize) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("wave-test-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in 0..count {
+            std::fs::write(dir.join(format!("{n}.mp3")), b"not audio").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn import_reports_progress_for_every_file() {
+        let library = open_test_library().unwrap();
+        let dir = unreadable_audio_dir(2);
+
+        let mut seen: Vec<(usize, usize)> = Vec::new();
+        let (tracks, failed) = library
+            .index_directory_with_progress(
+                None,
+                None,
+                dir.to_string_lossy().to_string(),
+                &mut |done, total, _path| seen.push((done, total)),
+            )
+            .expect("import ran");
+
+        assert!(tracks.is_empty());
+        assert_eq!(failed.len(), 2, "both unreadable files are reported back");
+        // The counter climbs and the total holds. WalkDir promises no order,
+        // but these pairs do not depend on one.
+        assert_eq!(seen, vec![(1, 2), (2, 2)]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn index_directory_still_returns_just_the_tracks() {
+        let library = open_test_library().unwrap();
+        let dir = unreadable_audio_dir(1);
+        // The wrapper keeps the signature the GUI calls, dropping failures.
+        let tracks = library
+            .index_directory(None, None, dir.to_string_lossy().to_string())
+            .expect("import ran");
+        assert!(tracks.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -8,7 +8,9 @@
 
 //! Library tracks: list, import, inspect, search, add, remove, reset.
 
+use std::io::{IsTerminal, Write};
 use std::path::Path;
+use std::time::Instant;
 
 use serde_json::json;
 
@@ -78,38 +80,86 @@ fn cmd_tracks_list(playlist_id: Option<String>) {
 
 fn cmd_tracks_import(paths: Vec<String>) {
     let library = open_library();
-    let quiet = ui::current().json;
+    let ui = ui::current();
+    // Progress goes to stderr, so `wave tracks import ~/Music > out.txt`
+    // leaves the file holding only the summary.
+    let live = !ui.json && std::io::stderr().is_terminal();
     let mut total = 0;
+    let mut skipped: Vec<String> = Vec::new();
+
     for path in &paths {
         let p = Path::new(path);
         if p.is_dir() {
-            match library.index_directory(None, None, path.clone()) {
-                Ok(tracks) => {
-                    if !quiet {
-                        println!("Imported {} tracks from {path}", tracks.len());
+            let mut last_drawn: Option<Instant> = None;
+            let mut frame = 0;
+            let result = library.index_directory_with_progress(
+                None,
+                None,
+                path.clone(),
+                &mut |done, of, file| {
+                    // Redrawing per file would spend more time on the terminal
+                    // than on the import, so hold it to ten frames a second.
+                    if !live || last_drawn.is_some_and(|t| t.elapsed().as_millis() < 100) {
+                        return;
+                    }
+                    last_drawn = Some(Instant::now());
+                    frame += 1;
+                    let spinner = ui.glyphs.spinner[frame % ui.glyphs.spinner.len()];
+                    let name = Path::new(file)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(file);
+                    let line = format!("  {spinner} Importing  {done} / {of}  {name}");
+                    let line = ui::truncate(&line, ui.width.saturating_sub(1), ui.glyphs.ellipsis);
+                    eprint!("\r\x1b[2K{line}");
+                    let _ = std::io::stderr().flush();
+                },
+            );
+            if live {
+                eprint!("\r\x1b[2K");
+            }
+            match result {
+                Ok((tracks, failed)) => {
+                    if !ui.json && paths.len() > 1 {
+                        println!("  {} new from {path}", tracks.len());
                     }
                     total += tracks.len();
+                    skipped.extend(failed);
                 }
-                Err(e) => ui::report(format!("Error importing directory {path}: {e}"), None),
+                Err(e) => ui::report(format!("Could not import {path}: {e}"), None),
             }
         } else if p.is_file() {
             match library.add_track_to_default_playlist(path.clone()) {
                 Ok(track) => {
-                    if !quiet {
-                        println!("Imported {} by {}", track.title, track.artist);
+                    if !ui.json {
+                        println!("  {} by {}", track.title, track.artist);
                     }
                     total += 1;
                 }
-                Err(e) => ui::report(format!("Error importing {path}: {e}"), None),
+                Err(e) => skipped.push(format!("{path}: {e}")),
             }
         } else {
             ui::report(format!("Path not found: {path}"), None);
         }
     }
+
+    let mut message = format!("Imported {total} new tracks");
+    if !skipped.is_empty() {
+        message.push_str(&format!(" {} {} skipped", ui.glyphs.dot, skipped.len()));
+    }
     ui::done(
-        format!("Imported {total} tracks."),
-        json!({ "imported": total }),
+        format!("{message}."),
+        json!({ "imported": total, "skipped": skipped }),
     );
+    if !skipped.is_empty() {
+        if ui.verbose {
+            for reason in &skipped {
+                println!("  {}", ui.dim(reason));
+            }
+        } else {
+            println!("  {}", ui.dim("re-run with --verbose to see why"));
+        }
+    }
 }
 
 fn cmd_tracks_info(track_id: String) {
