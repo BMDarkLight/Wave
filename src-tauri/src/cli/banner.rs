@@ -231,7 +231,7 @@ pub fn landing_text(ui: &Ui, facts: &LandingFacts) -> String {
             "scan a folder into the library",
         ),
         ("wave tracks list", "browse what you have"),
-        ("wave playback start <id>", "play a track or playlist"),
+        ("wave play <id or name>", "play a track or playlist"),
         ("wave now", "live now-playing dashboard"),
     ] {
         let room = ui.width.saturating_sub(command_indent);

@@ -59,6 +59,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Play a track or playlist: id, short id, file path, or playlist name
+    Play {
+        /// Track id or path, or playlist id or name
+        id: String,
+    },
     /// Manage tracks in the library
     #[command(subcommand)]
     Tracks(TracksCmd),
@@ -606,6 +611,7 @@ pub fn is_daemon_ipc_client(args: &[String]) -> bool {
 
     match cli.command {
         Some(Commands::Playback(_)) => true,
+        Some(Commands::Play { .. }) => true,
         Some(Commands::Queue(_)) => true,
         Some(Commands::Now { .. }) => true,
         Some(Commands::Devices(DevicesCmd::Volume { .. } | DevicesCmd::Switch { .. })) => true,
@@ -625,6 +631,7 @@ pub fn conflicts_with_gui(args: &[String]) -> bool {
     matches!(
         cli.command,
         Some(Commands::Playback(_))
+            | Some(Commands::Play { .. })
             | Some(Commands::Queue(_))
             | Some(Commands::Devices(_))
             | Some(Commands::Now { .. })
@@ -653,6 +660,7 @@ pub fn run() {
     ui::install(ui::Ui::resolve(cli.color, cli.json, cli.verbose));
 
     match cli.command {
+        Some(Commands::Play { id }) => cmd::playback::play(id),
         Some(Commands::Tracks(cmd)) => cmd::tracks::run(cmd),
         Some(Commands::Playlists(cmd)) => cmd::playlists::run(cmd),
         Some(Commands::Playback(cmd)) => cmd::playback::run(cmd),

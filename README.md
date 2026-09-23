@@ -233,7 +233,7 @@ wave tracks import ~/Music          # scan files or folders into the library
 wave tracks list                    # fits your terminal, short IDs
 wave tracks info 3f2a91c4           # any unambiguous ID prefix works
 wave playlists export <id> m3u out.m3u
-wave playback start <playlist-id>   # play through the daemon
+wave play Favorites                 # a playlist by name or id, or a track
 wave now                            # live now-playing dashboard
 wave metadata set <id> --genre "Post-Punk" --year 1979
 wave stats artists --limit 10       # top artists by listen time
