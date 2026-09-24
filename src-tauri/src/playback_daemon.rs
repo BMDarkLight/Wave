@@ -645,10 +645,16 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
                 return DaemonResponse::err(e);
             }
             state.player.enqueue(&path);
-            DaemonResponse::ok_msg(format!("Added to queue: {path}"))
+            DaemonResponse::ok_msg(format!(
+                "Added to queue: {}",
+                track_label(&state.library, &path)
+            ))
         }
         DaemonRequest::QueueRemove { index } => match state.player.remove_from_queue(index) {
-            Some(path) => DaemonResponse::ok_msg(format!("Removed from queue: {path}")),
+            Some(path) => DaemonResponse::ok_msg(format!(
+                "Removed from queue: {}",
+                track_label(&state.library, &path)
+            )),
             None => DaemonResponse::err(format!("Invalid queue index: {index}")),
         },
         DaemonRequest::QueueInsertNext { track_id } => {
@@ -660,7 +666,10 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
                 return DaemonResponse::err(e);
             }
             state.player.insert_next(&path);
-            DaemonResponse::ok_msg(format!("Will play next: {path}"))
+            DaemonResponse::ok_msg(format!(
+                "Will play next: {}",
+                track_label(&state.library, &path)
+            ))
         }
         DaemonRequest::QueueShuffle { enable } => {
             let on = match enable {
@@ -668,7 +677,7 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
                 None => !state.player.queue.is_shuffled(),
             };
             state.player.queue.set_shuffle(on);
-            DaemonResponse::ok_msg(format!("Shuffle: {}", if on { "ON" } else { "OFF" }))
+            DaemonResponse::ok_msg(format!("Shuffle {}.", if on { "on" } else { "off" }))
         }
         DaemonRequest::QueueRepeat { mode } => {
             let repeat = match mode.as_str() {
@@ -678,7 +687,7 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
                 _ => return DaemonResponse::err(format!("Invalid repeat mode: {mode}")),
             };
             state.player.repeat = repeat;
-            DaemonResponse::ok_msg(format!("Repeat: {mode}"))
+            DaemonResponse::ok_msg(format!("Repeat {mode}."))
         }
         DaemonRequest::QueueClear => {
             state.player.clear_upcoming();
@@ -823,6 +832,19 @@ fn apply_treble_dial(player: &mut AudioPlayer, treble: f32) {
 
 fn artist_title(artist: &str, title: &str) -> String {
     format!("{artist} - {title}")
+}
+
+/// How a queued file is named in replies: its tags when the library knows
+/// it, otherwise just the file name rather than the whole path.
+fn track_label(library: &Library, path: &str) -> String {
+    match track_for_path(library, path) {
+        Some(track) => artist_title(&track.artist, &track.title),
+        None => std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(path)
+            .to_string(),
+    }
 }
 
 fn playlist_start_message(name: &str, count: usize, artist: &str, title: &str) -> String {
