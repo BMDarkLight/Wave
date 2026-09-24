@@ -15,7 +15,7 @@ use crate::playback_daemon::{daemon_request, daemon_request_if_running, DaemonRe
 
 pub fn run(cmd: PlaybackCmd) {
     match cmd {
-        PlaybackCmd::Start { id } => cmd_playback_start(id),
+        PlaybackCmd::Start { id } => play(id),
         PlaybackCmd::Pause => daemon_cmd(DaemonRequest::Pause),
         PlaybackCmd::Resume => daemon_cmd(DaemonRequest::Resume),
         PlaybackCmd::Stop => daemon_cmd(DaemonRequest::Stop),
@@ -89,7 +89,8 @@ pub(crate) enum PlaylistMatch {
 }
 
 /// Find the playlist `query` names. An exact name wins outright (names are
-/// what people remember); otherwise the query is tried as an id prefix.
+/// what people remember); otherwise the query is tried as an id prefix, then
+/// as the start of a name.
 pub(crate) fn match_playlist(
     playlists: &[crate::library::PlaylistInfo],
     query: &str,
@@ -101,19 +102,34 @@ pub(crate) fn match_playlist(
     if let [only] = by_name.as_slice() {
         return PlaylistMatch::One(only.id.clone());
     }
-    const MIN_PREFIX: usize = 4;
-    if query.len() < MIN_PREFIX {
-        return PlaylistMatch::None;
-    }
-    let by_id: Vec<_> = playlists
-        .iter()
-        .filter(|p| p.id.starts_with(&query.to_ascii_lowercase()))
-        .collect();
-    match by_id.as_slice() {
+    const MIN_ID_PREFIX: usize = 4;
+    const MIN_NAME_PREFIX: usize = 2;
+    let lower = query.to_lowercase();
+    let pick = |hits: Vec<&crate::library::PlaylistInfo>| match hits.as_slice() {
         [] => PlaylistMatch::None,
         [only] => PlaylistMatch::One(only.id.clone()),
         many => PlaylistMatch::Many(many.iter().map(|p| p.name.clone()).collect()),
+    };
+    if query.len() >= MIN_ID_PREFIX {
+        let by_id = pick(
+            playlists
+                .iter()
+                .filter(|p| p.id.starts_with(&lower))
+                .collect(),
+        );
+        if by_id != PlaylistMatch::None {
+            return by_id;
+        }
     }
+    if query.chars().count() < MIN_NAME_PREFIX {
+        return PlaylistMatch::None;
+    }
+    pick(
+        playlists
+            .iter()
+            .filter(|p| p.name.to_lowercase().starts_with(&lower))
+            .collect(),
+    )
 }
 
 /// `wave play <id>`: a track (id, id prefix, or path) or a playlist (id, id
@@ -191,6 +207,29 @@ mod tests {
             match_playlist(&sample(), "dc66"),
             PlaylistMatch::Many(vec!["Library".into(), "Road Trip".into()])
         );
+    }
+
+    #[test]
+    fn the_start_of_a_name_is_enough_when_only_one_fits() {
+        assert_eq!(
+            match_playlist(&sample(), "road"),
+            PlaylistMatch::One("dc6600aa-0000-0000-0000-000000000000".into())
+        );
+        assert_eq!(
+            match_playlist(&sample(), "FAV"),
+            PlaylistMatch::One("e18e9105-35aa-48a0-b0c0-177d7487a374".into())
+        );
+        let mut more = sample();
+        more.push(playlist(
+            "aaaa0000-0000-0000-0000-000000000000",
+            "Road Songs",
+        ));
+        assert_eq!(
+            match_playlist(&more, "road"),
+            PlaylistMatch::Many(vec!["Road Trip".into(), "Road Songs".into()])
+        );
+        // A single letter says too little to pick a playlist over a track.
+        assert_eq!(match_playlist(&sample(), "r"), PlaylistMatch::None);
     }
 
     #[test]

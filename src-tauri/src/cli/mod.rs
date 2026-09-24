@@ -114,7 +114,7 @@ pub enum Commands {
 pub enum TracksCmd {
     /// List all tracks, or tracks in a playlist
     List {
-        /// Optional playlist ID to filter tracks
+        /// Only this playlist (name, ID, or ID prefix)
         playlist_id: Option<String>,
     },
     /// Import audio file(s) or a directory into the library
@@ -124,7 +124,7 @@ pub enum TracksCmd {
     },
     /// Show detailed metadata for a track
     Info {
-        /// Track ID (UUID) or file path
+        /// Track ID (or unique prefix) or file path
         track_id: String,
     },
     /// Search tracks by title, artist, or album
@@ -134,18 +134,19 @@ pub enum TracksCmd {
     },
     /// Add a track to a playlist (Library if --playlist-id is omitted)
     Add {
-        /// Track ID (UUID) or file path
+        /// Track ID (or unique prefix) or file path
         track_id: String,
-        /// Playlist ID (defaults to Library)
-        #[arg(long)]
+        /// Playlist name, ID, or ID prefix (defaults to Library)
+        #[arg(long, visible_alias = "playlist")]
         playlist_id: Option<String>,
     },
     /// Remove a track from a playlist, or from the Library if --playlist-id is omitted
     Remove {
-        /// Track ID (UUID) or file path
+        /// Track ID (or unique prefix) or file path
         track_id: String,
-        /// Playlist ID. Omit to remove the track from the Library entirely.
-        #[arg(long)]
+        /// Playlist name, ID, or ID prefix. Omit to remove the track from the
+        /// Library entirely.
+        #[arg(long, visible_alias = "playlist")]
         playlist_id: Option<String>,
     },
     /// Delete every track and all playlists except Library and Favorites
@@ -169,16 +170,16 @@ pub enum PlaylistsCmd {
     },
     /// Export a playlist to a file
     Export {
-        /// Playlist ID
+        /// Playlist name, ID, or ID prefix
         id: String,
-        /// Export format (m3u or json)
-        format: String,
-        /// Output file path
-        output: String,
+        /// Output file. The format follows its extension (.m3u, .m3u8, or
+        /// .json); the older `<FORMAT> <OUTPUT>` form still works
+        #[arg(value_name = "OUTPUT", num_args = 1..=2, required = true)]
+        target: Vec<String>,
     },
-    /// Show playlist info and its track IDs
+    /// Show a playlist and its tracks
     Info {
-        /// Playlist ID
+        /// Playlist name, ID, or ID prefix
         id: String,
     },
     /// Search playlists by name
@@ -193,38 +194,38 @@ pub enum PlaylistsCmd {
     },
     /// Delete a playlist
     Delete {
-        /// Playlist ID
+        /// Playlist name, ID, or ID prefix
         id: String,
     },
     /// Rename a playlist
     Rename {
-        /// Playlist ID
+        /// Playlist name, ID, or ID prefix
         id: String,
         /// New name
         name: String,
     },
     /// Remove all tracks from a playlist (blocked for synced playlists)
     Clear {
-        /// Playlist ID
+        /// Playlist name, ID, or ID prefix
         id: String,
     },
     /// Add a track to a playlist
     AddTrack {
-        /// Playlist ID
+        /// Playlist name, ID, or ID prefix
         id: String,
-        /// Track ID (UUID) or file path
+        /// Track ID (or unique prefix) or file path
         track_id: String,
     },
     /// Remove a track from a playlist (does not delete it from the Library)
     RemoveTrack {
-        /// Playlist ID
+        /// Playlist name, ID, or ID prefix
         id: String,
-        /// Track ID (UUID) or file path
+        /// Track ID (or unique prefix) or file path
         track_id: String,
     },
     /// Sync a folder-linked playlist with its folder on disk
     Sync {
-        /// Playlist ID (UUID)
+        /// Playlist name, ID, or ID prefix
         id: String,
     },
 }
@@ -233,7 +234,7 @@ pub enum PlaylistsCmd {
 pub enum PlaybackCmd {
     /// Start playing a track or playlist
     Start {
-        /// Track path/ID or playlist ID
+        /// Track ID, ID prefix, or path, or a playlist name or ID
         id: String,
     },
     /// Pause playback
@@ -463,19 +464,19 @@ pub enum StatsCmd {
 pub enum MetadataCmd {
     /// Show full metadata for a track
     Get {
-        /// Track ID (UUID) or file path
+        /// Track ID (or unique prefix) or file path
         track_id: String,
     },
     /// Export a track's album cover art to an image file
     CoverExport {
-        /// Track ID (UUID) or file path
+        /// Track ID (or unique prefix) or file path
         track_id: String,
         /// Output image file path (e.g. cover.jpg)
         output: String,
     },
     /// Set a track's album cover from an image file
     CoverSet {
-        /// Track ID (UUID) or file path
+        /// Track ID (or unique prefix) or file path
         track_id: String,
         /// Image file path (e.g. cover.jpg)
         image: String,
@@ -485,7 +486,7 @@ pub enum MetadataCmd {
     /// Only the fields you pass are touched. Pass an empty string to clear
     /// one, for example --genre "".
     Set {
-        /// Track ID (UUID) or file path
+        /// Track ID (or unique prefix) or file path
         track_id: String,
         #[command(flatten)]
         fields: TagFields,
@@ -541,6 +542,32 @@ impl From<TagFields> for TagEdit {
 /// Return the default database path for CLI mode.
 fn default_db_path() -> std::path::PathBuf {
     crate::app_paths::library_db_path()
+}
+
+/// The playlist `query` names, by full id, name, or unique id prefix, or leave
+/// through the not-found error.
+pub(crate) fn playlist_or_exit(library: &Library, query: &str) -> crate::library::PlaylistInfo {
+    use cmd::playback::{match_playlist, PlaylistMatch};
+
+    let playlists = library
+        .list_playlists(None)
+        .unwrap_or_else(|e| ui::fail(e, None, ui::EXIT_GENERAL));
+    match match_playlist(&playlists, query) {
+        PlaylistMatch::One(id) => playlists
+            .into_iter()
+            .find(|p| p.id == id)
+            .expect("match_playlist returns an id from the list it was given"),
+        PlaylistMatch::Many(names) => ui::fail(
+            format!("\"{query}\" matches more than one playlist."),
+            Some(&format!("narrow it, or use a name: {}", names.join(", "))),
+            ui::EXIT_NOT_FOUND,
+        ),
+        PlaylistMatch::None => ui::fail(
+            format!("Playlist not found: {query}"),
+            Some("see them all with: wave playlists list"),
+            ui::EXIT_NOT_FOUND,
+        ),
+    }
 }
 
 /// Library entries for queued paths, used only to label them. A library that

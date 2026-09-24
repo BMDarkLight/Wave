@@ -32,7 +32,7 @@ fn cmd_devices_list() {
     }
     println!(
         "{}\n",
-        ui.heading(&format!("{} output devices", devices.len()))
+        ui.heading(&ui::count(devices.len(), "output device", "output devices"))
     );
     for device in &devices {
         if *device == current {

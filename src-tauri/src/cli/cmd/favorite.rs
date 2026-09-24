@@ -40,7 +40,10 @@ pub fn run(cmd: FavoriteCmd) {
                     return;
                 }
                 let ui = ui::current();
-                println!("{}\n", ui.heading(&format!("{} favorites", tracks.len())));
+                println!(
+                    "{}\n",
+                    ui.heading(&ui::count(tracks.len(), "favorite", "favorites"))
+                );
                 print!("{}", render::track_table(ui, &tracks));
             }
             Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),

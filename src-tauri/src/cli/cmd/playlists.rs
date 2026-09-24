@@ -12,13 +12,15 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::cli::{json, open_library, render, track_path_or_exit, ui, PlaylistsCmd};
+use crate::cli::{
+    json, open_library, playlist_or_exit, render, track_path_or_exit, ui, PlaylistsCmd,
+};
 
 pub fn run(cmd: PlaylistsCmd) {
     match cmd {
         PlaylistsCmd::List => cmd_playlists_list(),
         PlaylistsCmd::Import { file, name } => cmd_playlists_import(file, name),
-        PlaylistsCmd::Export { id, format, output } => cmd_playlists_export(id, format, output),
+        PlaylistsCmd::Export { id, target } => cmd_playlists_export(id, target),
         PlaylistsCmd::Info { id } => cmd_playlists_info(id),
         PlaylistsCmd::Query { query } => cmd_playlists_query(query),
         PlaylistsCmd::Create { name } => cmd_playlists_create(name),
@@ -42,9 +44,8 @@ fn cmd_playlists_list() {
             }
             let ui = ui::current();
             println!(
-                "{}
-",
-                ui.heading(&format!("{} playlists", playlists.len()))
+                "{}\n",
+                ui.heading(&ui::count(playlists.len(), "playlist", "playlists"))
             );
             print!("{}", render::playlist_table(ui, &playlists));
         }
@@ -82,7 +83,10 @@ fn cmd_playlists_import(file: String, name: Option<String>) {
                 .map(|info| info.name)
                 .unwrap_or_else(|| "Unknown".to_string());
             ui::done(
-                format!("Imported playlist \"{name}\" with {} tracks.", tracks.len()),
+                format!(
+                    "Imported playlist \"{name}\" with {}.",
+                    ui::count(tracks.len(), "track", "tracks")
+                ),
                 json!({ "id": id, "name": name, "tracks": tracks.len() }),
             );
             println!("  {}", ui::current().dim(&format!("id {id}")));
@@ -93,59 +97,84 @@ fn cmd_playlists_import(file: String, name: Option<String>) {
     }
 }
 
-fn cmd_playlists_export(id: String, format: String, output: String) {
-    let library = open_library();
-    let expected_ext = match format.as_str() {
-        "m3u" => "m3u",
-        "json" => "json",
-        _ => {
-            ui::fail(
-                format!("Unknown export format: {format}"),
-                Some("use m3u or json"),
-                ui::EXIT_GENERAL,
-            );
-        }
+/// The export format and output file from `export`'s trailing arguments:
+/// either just the file, whose extension picks the format, or the older
+/// explicit format followed by the file.
+fn export_target(target: &[String]) -> Result<(&'static str, &str), String> {
+    let (format, output) = match target {
+        [output] => (None, output.as_str()),
+        [format, output] => (Some(format.to_ascii_lowercase()), output.as_str()),
+        _ => return Err("Give the output file, for example: mix.m3u".to_string()),
     };
-    if let Err(e) = crate::path_validation::validate_safe_output_path(&output, expected_ext) {
+    let ext = Path::new(output)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let format = match format.as_deref().unwrap_or(ext.as_str()) {
+        "m3u" | "m3u8" => "m3u",
+        "json" => "json",
+        "" => {
+            return Err(format!(
+                "Can't tell the format of {output} without an extension."
+            ))
+        }
+        other => return Err(format!("Unknown export format: {other}")),
+    };
+    Ok((format, output))
+}
+
+fn cmd_playlists_export(query: String, target: Vec<String>) {
+    let library = open_library();
+    let (format, output) = export_target(&target).unwrap_or_else(|e| {
+        ui::fail(
+            e,
+            Some("use a .m3u, .m3u8, or .json file"),
+            ui::EXIT_GENERAL,
+        )
+    });
+    let info = playlist_or_exit(&library, &query);
+    let ext = Path::new(output)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    // M3U8 is M3U in UTF-8, which is what the M3U writer produces anyway.
+    let expected_ext = if format == "m3u" && ext == "m3u8" {
+        "m3u8"
+    } else {
+        format
+    };
+    if let Err(e) = crate::path_validation::validate_safe_output_path(output, expected_ext) {
         ui::fail(e, None, ui::EXIT_GENERAL);
     }
-    match format.as_str() {
-        "m3u" => library.export_playlist_m3u(&id, &output),
-        "json" => library.export_playlist_json(&id, &output),
-        _ => unreachable!(),
+    match format {
+        "m3u" => library.export_playlist_m3u(&info.id, output),
+        _ => library.export_playlist_json(&info.id, output),
     }
     .unwrap_or_else(|e| {
         ui::fail(e, None, ui::EXIT_GENERAL);
     });
     ui::done(
-        format!("Exported playlist to {output}"),
-        json!({ "id": id, "output": output }),
+        format!(
+            "Exported \"{}\" ({}) to {output}",
+            info.name,
+            ui::count(info.track_count as usize, "track", "tracks")
+        ),
+        json!({ "id": info.id, "output": output, "format": format }),
     );
 }
 
-fn cmd_playlists_info(id: String) {
+fn cmd_playlists_info(query: String) {
     let library = open_library();
-    match library.get_playlist_info(&id) {
-        Ok(Some(info)) => {
-            // The details are still worth showing if the track list fails.
-            let tracks = library.get_playlist_tracks(&id).unwrap_or_else(|e| {
-                ui::report(format!("Error fetching tracks: {e}"), None);
-                Vec::new()
-            });
-            json::maybe_emit(&json!({ "playlist": info, "tracks": tracks }));
-            print!("{}", render::playlist_info(ui::current(), &info, &tracks));
-        }
-        Ok(None) => {
-            ui::fail(
-                format!("Playlist not found: {id}"),
-                Some("see them all with: wave playlists list"),
-                ui::EXIT_NOT_FOUND,
-            );
-        }
-        Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
-        }
-    }
+    let info = playlist_or_exit(&library, &query);
+    // The details are still worth showing if the track list fails.
+    let tracks = library.get_playlist_tracks(&info.id).unwrap_or_else(|e| {
+        ui::report(format!("Error fetching tracks: {e}"), None);
+        Vec::new()
+    });
+    json::maybe_emit(&json!({ "playlist": info, "tracks": tracks }));
+    print!("{}", render::playlist_info(ui::current(), &info, &tracks));
 }
 
 fn cmd_playlists_query(query: String) {
@@ -159,11 +188,10 @@ fn cmd_playlists_query(query: String) {
             }
             let ui = ui::current();
             println!(
-                "{}
-",
+                "{}\n",
                 ui.heading(&format!(
-                    "{} playlists matching \"{query}\"",
-                    playlists.len()
+                    "{} matching \"{query}\"",
+                    ui::count(playlists.len(), "playlist", "playlists")
                 ))
             );
             print!("{}", render::playlist_table(ui, &playlists));
@@ -190,22 +218,13 @@ fn cmd_playlists_create(name: String) {
     }
 }
 
-fn cmd_playlists_delete(id: String) {
+fn cmd_playlists_delete(query: String) {
     let library = open_library();
-    match library.delete_playlist(&id) {
-        Ok(()) => ui::done(format!("Deleted playlist {id}."), json!({ "id": id })),
-        Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
-        }
-    }
-}
-
-fn cmd_playlists_rename(id: String, name: String) {
-    let library = open_library();
-    match library.rename_playlist(&id, &name) {
+    let info = playlist_or_exit(&library, &query);
+    match library.delete_playlist(&info.id) {
         Ok(()) => ui::done(
-            format!("Renamed playlist to \"{name}\"."),
-            json!({ "id": id, "name": name }),
+            format!("Deleted playlist \"{}\".", info.name),
+            json!({ "id": info.id }),
         ),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
@@ -213,23 +232,49 @@ fn cmd_playlists_rename(id: String, name: String) {
     }
 }
 
-fn cmd_playlists_clear(id: String) {
+fn cmd_playlists_rename(query: String, name: String) {
     let library = open_library();
-    match library.clear_playlist(&id) {
-        Ok(()) => ui::done(format!("Cleared playlist {id}."), json!({ "id": id })),
+    let info = playlist_or_exit(&library, &query);
+    match library.rename_playlist(&info.id, &name) {
+        Ok(()) => ui::done(
+            format!("Renamed playlist \"{}\" to \"{name}\".", info.name),
+            json!({ "id": info.id, "name": name }),
+        ),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
 
-fn cmd_playlists_add_track(id: String, track_id: String) {
+fn cmd_playlists_clear(query: String) {
     let library = open_library();
+    let info = playlist_or_exit(&library, &query);
+    match library.clear_playlist(&info.id) {
+        Ok(()) => ui::done(
+            format!(
+                "Cleared playlist \"{}\" ({} removed).",
+                info.name,
+                ui::count(info.track_count as usize, "track", "tracks")
+            ),
+            json!({ "id": info.id }),
+        ),
+        Err(e) => {
+            ui::fail(e, None, ui::EXIT_GENERAL);
+        }
+    }
+}
+
+fn cmd_playlists_add_track(query: String, track_id: String) {
+    let library = open_library();
+    let info = playlist_or_exit(&library, &query);
     let path = track_path_or_exit(&library, &track_id);
-    match library.add_track_to_playlist(&id, path) {
+    match library.add_track_to_playlist(&info.id, path) {
         Ok(track) => ui::done(
-            format!("Added {} by {} to the playlist.", track.title, track.artist),
-            json!({ "id": id, "track": track }),
+            format!(
+                "Added {} by {} to \"{}\".",
+                track.title, track.artist, info.name
+            ),
+            json!({ "id": info.id, "track": track }),
         ),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
@@ -237,35 +282,28 @@ fn cmd_playlists_add_track(id: String, track_id: String) {
     }
 }
 
-fn cmd_playlists_remove_track(id: String, track_id: String) {
+fn cmd_playlists_remove_track(query: String, track_id: String) {
     let library = open_library();
+    let info = playlist_or_exit(&library, &query);
     let path = track_path_or_exit(&library, &track_id);
-    match library.remove_track_from_playlist_by_path(&id, &path) {
-        Ok(()) => ui::done("Removed the track from the playlist.", json!({ "id": id })),
+    match library.remove_track_from_playlist_by_path(&info.id, &path) {
+        Ok(()) => ui::done(
+            format!("Removed the track from \"{}\".", info.name),
+            json!({ "id": info.id }),
+        ),
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
 }
 
-fn cmd_playlists_sync(id: String) {
+fn cmd_playlists_sync(query: String) {
     use crate::metadata::is_supported_audio_file;
     use walkdir::WalkDir;
 
     let library = open_library();
-    let info = match library.get_playlist_info(&id) {
-        Ok(Some(info)) => info,
-        Ok(None) => {
-            ui::fail(
-                format!("Playlist not found: {id}"),
-                Some("see them all with: wave playlists list"),
-                ui::EXIT_NOT_FOUND,
-            );
-        }
-        Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
-        }
-    };
+    let info = playlist_or_exit(&library, &query);
+    let id = info.id.clone();
 
     let Some(folder) = info.sync_folder.as_deref() else {
         ui::fail(
@@ -311,7 +349,10 @@ fn cmd_playlists_sync(id: String) {
                 .map(|updated| updated.track_count);
             let mut message = format!("Synced: {added} added, {removed} removed");
             if let Some(count) = count {
-                message.push_str(&format!(", {count} tracks now"));
+                message.push_str(&format!(
+                    ", {} now",
+                    ui::count(count as usize, "track", "tracks")
+                ));
             }
             ui::done(
                 format!("{message}."),
@@ -321,5 +362,44 @@ fn cmd_playlists_sync(id: String) {
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_export_format_follows_the_file_extension() {
+        assert_eq!(export_target(&args(&["mix.m3u"])), Ok(("m3u", "mix.m3u")));
+        assert_eq!(export_target(&args(&["mix.M3U8"])), Ok(("m3u", "mix.M3U8")));
+        assert_eq!(
+            export_target(&args(&["mix.json"])),
+            Ok(("json", "mix.json"))
+        );
+    }
+
+    #[test]
+    fn the_older_explicit_format_form_still_works() {
+        assert_eq!(
+            export_target(&args(&["json", "out.json"])),
+            Ok(("json", "out.json"))
+        );
+        assert_eq!(
+            export_target(&args(&["M3U", "out.m3u"])),
+            Ok(("m3u", "out.m3u"))
+        );
+    }
+
+    #[test]
+    fn an_export_without_a_known_format_is_refused() {
+        assert!(export_target(&args(&["mix"])).is_err());
+        assert!(export_target(&args(&["mix.txt"])).is_err());
+        assert!(export_target(&args(&["xml", "mix.xml"])).is_err());
+        assert!(export_target(&args(&[])).is_err());
     }
 }

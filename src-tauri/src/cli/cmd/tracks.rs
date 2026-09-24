@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use serde_json::json;
 
-use crate::cli::{json, open_library, render, track_path_or_exit, ui, TracksCmd};
+use crate::cli::{json, open_library, playlist_or_exit, render, track_path_or_exit, ui, TracksCmd};
 use crate::metadata::{extract_track, Track};
 
 pub fn run(cmd: TracksCmd) {
@@ -37,29 +37,10 @@ pub fn run(cmd: TracksCmd) {
 
 fn cmd_tracks_list(playlist_id: Option<String>) {
     let library = open_library();
-    let tracks = if let Some(pid) = &playlist_id {
-        library.get_playlist_tracks(pid)
-    } else {
-        // Return all tracks from the library
-        let conn = library.lock_connection().unwrap();
-        let mut stmt = conn
-            .prepare(&format!(
-                "SELECT {} FROM {} ORDER BY t.artist, t.album, t.track_number",
-                crate::library::TRACK_SELECT_COLUMNS,
-                crate::library::TRACK_FROM
-            ))
-            .map_err(|e| format!("Failed to prepare query: {e}"))
-            .unwrap();
-        let cover_root = library.cover_root().to_path_buf();
-        let rows = stmt
-            .query_map([], |row| crate::library::row_to_track(row, &cover_root))
-            .map_err(|e| format!("Failed to query tracks: {e}"))
-            .unwrap();
-        let tracks: Vec<Track> = rows
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to read tracks: {e}"))
-            .unwrap();
-        Ok(tracks)
+    let playlist = playlist_id.map(|query| playlist_or_exit(&library, &query));
+    let tracks = match &playlist {
+        Some(info) => library.get_playlist_tracks(&info.id),
+        None => all_tracks(&library),
     };
     match tracks {
         Ok(tracks) => {
@@ -69,13 +50,35 @@ fn cmd_tracks_list(playlist_id: Option<String>) {
                 return;
             }
             let ui = ui::current();
-            println!("{}\n", ui.heading(&format!("{} tracks", tracks.len())));
+            let heading = ui::count(tracks.len(), "track", "tracks");
+            let heading = match &playlist {
+                Some(info) => format!("{heading} in \"{}\"", info.name),
+                None => heading,
+            };
+            println!("{}\n", ui.heading(&heading));
             print!("{}", render::track_table(ui, &tracks));
         }
         Err(e) => {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
+}
+
+fn all_tracks(library: &crate::library::Library) -> Result<Vec<Track>, String> {
+    let conn = library.lock_connection()?;
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {} FROM {} ORDER BY t.artist, t.album, t.track_number",
+            crate::library::TRACK_SELECT_COLUMNS,
+            crate::library::TRACK_FROM
+        ))
+        .map_err(|e| format!("Failed to prepare query: {e}"))?;
+    let cover_root = library.cover_root().to_path_buf();
+    let rows = stmt
+        .query_map([], |row| crate::library::row_to_track(row, &cover_root))
+        .map_err(|e| format!("Failed to query tracks: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to read tracks: {e}"))
 }
 
 fn cmd_tracks_import(paths: Vec<String>) {
@@ -143,7 +146,7 @@ fn cmd_tracks_import(paths: Vec<String>) {
         }
     }
 
-    let mut message = format!("Imported {total} new tracks");
+    let mut message = format!("Imported {}", ui::count(total, "new track", "new tracks"));
     if !skipped.is_empty() {
         message.push_str(&format!(" {} {} skipped", ui.glyphs.dot, skipped.len()));
     }
@@ -199,7 +202,10 @@ fn cmd_tracks_query(query: String) {
             let ui = ui::current();
             println!(
                 "{}\n",
-                ui.heading(&format!("{} tracks matching \"{query}\"", tracks.len()))
+                ui.heading(&format!(
+                    "{} matching \"{query}\"",
+                    ui::count(tracks.len(), "track", "tracks")
+                ))
             );
             print!("{}", render::track_table(ui, &tracks));
         }
@@ -212,14 +218,15 @@ fn cmd_tracks_query(query: String) {
 fn cmd_tracks_add(track_id: String, playlist_id: Option<String>) {
     let library = open_library();
     let path = track_path_or_exit(&library, &track_id);
-    let result = if let Some(pid) = playlist_id {
-        library.add_track_to_playlist(&pid, path)
-    } else {
-        library.add_track_to_default_playlist(path)
+    let playlist = playlist_id.map(|query| playlist_or_exit(&library, &query));
+    let result = match &playlist {
+        Some(info) => library.add_track_to_playlist(&info.id, path),
+        None => library.add_track_to_default_playlist(path),
     };
+    let target = playlist.map_or_else(|| "Library".to_string(), |info| info.name);
     match result {
         Ok(track) => ui::done(
-            format!("Added {} by {}", track.title, track.artist),
+            format!("Added {} by {} to \"{target}\".", track.title, track.artist),
             json!({ "track": track }),
         ),
         Err(e) => {
@@ -231,14 +238,14 @@ fn cmd_tracks_add(track_id: String, playlist_id: Option<String>) {
 fn cmd_tracks_remove(track_id: String, playlist_id: Option<String>) {
     let library = open_library();
     let path = track_path_or_exit(&library, &track_id);
-    let result = if let Some(pid) = playlist_id {
-        library
-            .remove_track_from_playlist_by_path(&pid, &path)
-            .map(|_| "Track removed from playlist.")
-    } else {
-        library
+    let playlist = playlist_id.map(|query| playlist_or_exit(&library, &query));
+    let result = match &playlist {
+        Some(info) => library
+            .remove_track_from_playlist_by_path(&info.id, &path)
+            .map(|_| format!("Track removed from \"{}\".", info.name)),
+        None => library
             .remove_track_from_library(&path)
-            .map(|_| "Track removed from library.")
+            .map(|_| "Track removed from the Library.".to_string()),
     };
     match result {
         Ok(msg) => ui::done(msg, json!({ "path": path })),
@@ -264,7 +271,11 @@ fn cmd_tracks_reset(yes: bool) {
     match library.reset_library() {
         Ok((tracks, playlists)) => {
             ui::done(
-                format!("Library reset: removed {tracks} tracks and {playlists} playlists."),
+                format!(
+                    "Library reset: removed {} and {}.",
+                    ui::count(tracks as usize, "track", "tracks"),
+                    ui::count(playlists as usize, "playlist", "playlists")
+                ),
                 json!({ "tracks_removed": tracks, "playlists_deleted": playlists }),
             );
             println!(

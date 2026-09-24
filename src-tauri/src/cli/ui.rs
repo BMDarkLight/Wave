@@ -219,6 +219,11 @@ impl Ui {
     }
 }
 
+/// A number with the noun that agrees with it: "1 track", "2 tracks".
+pub fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 pub fn display_width(s: &str) -> usize {
     UnicodeWidthStr::width(s)
 }
@@ -371,6 +376,13 @@ pub fn current() -> &'static Ui {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_agree_with_their_noun() {
+        assert_eq!(count(0, "track", "tracks"), "0 tracks");
+        assert_eq!(count(1, "track", "tracks"), "1 track");
+        assert_eq!(count(2, "playlist", "playlists"), "2 playlists");
+    }
 
     #[test]
     fn json_always_wins_over_color_flags() {
