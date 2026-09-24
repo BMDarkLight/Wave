@@ -4021,6 +4021,7 @@ img.queue-thumb {
   font-size: clamp(28px, 4.5vw, 56px);
   line-height: 1.1;
   letter-spacing: -0.04em;
+  overflow-wrap: anywhere;
 }
 
 .artist-hero-meta {
