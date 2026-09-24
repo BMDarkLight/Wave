@@ -17,6 +17,19 @@ pub fn run(cmd: FavoriteCmd) {
     match cmd {
         FavoriteCmd::Add { track_id } => {
             let path = track_path_or_exit(&library, &track_id);
+            // Asking twice gets the same result as asking once.
+            let existing = library
+                .get_favorites()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|t| t.path == path);
+            if let Some(track) = existing {
+                ui::done(
+                    format!("{} by {} is already a favorite.", track.title, track.artist),
+                    json!({ "track": track }),
+                );
+                return;
+            }
             match library.add_track_to_favorites(path) {
                 Ok(track) => ui::done(
                     format!("Added to favorites: {} by {}", track.title, track.artist),
