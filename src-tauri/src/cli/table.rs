@@ -182,7 +182,11 @@ impl Table {
             if n > 0 {
                 out.push('\n');
             }
+            // A label with nothing after it only adds a line to read past.
             for (cell, col) in row.iter().zip(&self.columns) {
+                if cell.is_empty() {
+                    continue;
+                }
                 out.push_str(&indent);
                 out.push_str(&ui.dim(&pad(col.header, label_width, Align::Left)));
                 out.push_str(&gutter);
@@ -291,6 +295,15 @@ mod tests {
         assert!(out.contains("Talking Heads"));
         assert!(out.contains("Once in a Lifetime"));
         assert!(!out.contains('\u{2026}'));
+    }
+
+    #[test]
+    fn a_stacked_record_leaves_out_empty_fields() {
+        let out = render_one(40, "", "Untitled");
+        assert!(!out.contains("ARTIST"), "{out}");
+        for line in out.lines() {
+            assert_eq!(line, line.trim_end(), "trailing space in {line:?}");
+        }
     }
 
     #[test]
