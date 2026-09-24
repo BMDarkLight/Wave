@@ -763,13 +763,14 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
 
 fn build_dsp_status(player: &AudioPlayer) -> DspStatus {
     let eq = player.eq_settings();
+    let (bass, treble) = eq.tone_dials();
     DspStatus {
         eq_enabled: eq.enabled,
         bands: eq.bands,
         crossfade_duration: player.crossfade_duration(),
         gapless_enabled: player.gapless_enabled(),
-        bass: eq.bass_gain(),
-        treble: eq.treble_gain(),
+        bass,
+        treble,
     }
 }
 
@@ -796,7 +797,7 @@ fn persist_player_settings(player: &AudioPlayer) {
 fn apply_bass_dial(player: &mut AudioPlayer, bass: f32) {
     let eq = player.eq_settings();
     let mut next = eq.clone();
-    next.apply_bass_treble(bass, eq.treble_gain());
+    next.apply_bass_treble(bass, eq.tone_dials().1);
     player.set_eq_bands(next.bands);
     player.set_eq_enabled(true);
 }
@@ -804,7 +805,7 @@ fn apply_bass_dial(player: &mut AudioPlayer, bass: f32) {
 fn apply_treble_dial(player: &mut AudioPlayer, treble: f32) {
     let eq = player.eq_settings();
     let mut next = eq.clone();
-    next.apply_bass_treble(eq.bass_gain(), treble);
+    next.apply_bass_treble(eq.tone_dials().0, treble);
     player.set_eq_bands(next.bands);
     player.set_eq_enabled(true);
 }

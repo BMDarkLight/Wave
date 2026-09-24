@@ -253,14 +253,18 @@ fn load_dsp_status() -> DspStatus {
         _ => {}
     }
 
-    let settings = crate::app_settings::AppSettings::load_from_disk();
+    settings_dsp_status(&crate::app_settings::AppSettings::load_from_disk())
+}
+
+fn settings_dsp_status(settings: &crate::app_settings::AppSettings) -> DspStatus {
+    let (bass, treble) = settings.equalizer.tone_dials();
     DspStatus {
         eq_enabled: settings.equalizer.enabled,
         bands: settings.equalizer.bands,
         crossfade_duration: settings.equalizer.crossfade_duration,
         gapless_enabled: settings.gapless_enabled,
-        bass: settings.equalizer.bass_gain(),
-        treble: settings.equalizer.treble_gain(),
+        bass,
+        treble,
     }
 }
 
@@ -321,11 +325,11 @@ fn apply_dsp_request(request: DaemonRequest) -> DspStatus {
             settings.gapless_enabled = enabled;
         }
         DaemonRequest::SetBass { db } => {
-            let treble = settings.equalizer.treble_gain();
+            let (_, treble) = settings.equalizer.tone_dials();
             settings.equalizer.apply_bass_treble(db, treble);
         }
         DaemonRequest::SetTreble { db } => {
-            let bass = settings.equalizer.bass_gain();
+            let (bass, _) = settings.equalizer.tone_dials();
             settings.equalizer.apply_bass_treble(bass, db);
         }
         _ => {}
@@ -338,14 +342,7 @@ fn apply_dsp_request(request: DaemonRequest) -> DspStatus {
         );
     });
 
-    DspStatus {
-        eq_enabled: settings.equalizer.enabled,
-        bands: settings.equalizer.bands,
-        crossfade_duration: settings.equalizer.crossfade_duration,
-        gapless_enabled: settings.gapless_enabled,
-        bass: settings.equalizer.bass_gain(),
-        treble: settings.equalizer.treble_gain(),
-    }
+    settings_dsp_status(&settings)
 }
 
 fn parse_on_off(raw: &str, label: &str) -> bool {

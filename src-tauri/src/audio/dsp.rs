@@ -178,6 +178,20 @@ impl EqConfig {
         self.bands[9].clamp(-12.0, 12.0)
     }
 
+    /// The bass and treble dial positions that produced the current curve.
+    ///
+    /// Each dial also reaches the far edge band, so the edge bands alone read
+    /// a little high. Setting one dial from those readings would nudge the
+    /// other on every change; solving for both keeps the untouched dial still.
+    pub fn tone_dials(&self) -> (f32, f32) {
+        let k = Self::TONE_WEIGHT_DECAY.powi(9);
+        let (low, high) = (self.bands[0], self.bands[9]);
+        let det = 1.0 - k * k;
+        let bass = (low - k * high) / det;
+        let treble = (high - k * low) / det;
+        (bass.clamp(-12.0, 12.0), treble.clamp(-12.0, 12.0))
+    }
+
     /// Rebuild the 10-band curve from bass + treble dials (GUI tone control).
     pub fn apply_bass_treble(&mut self, bass: f32, treble: f32) {
         let bass = bass.clamp(-12.0, 12.0);
@@ -931,6 +945,40 @@ mod tests {
         config.bands[9] = -100.0;
         assert_eq!(config.bass_gain(), 12.0);
         assert_eq!(config.treble_gain(), -12.0);
+    }
+
+    // ── EqConfig::tone_dials ─────────────────────────────────────────────────
+
+    #[test]
+    fn tone_dials_read_back_what_apply_bass_treble_set() {
+        let mut config = EqConfig::default();
+        config.apply_bass_treble(5.0, 2.0);
+        let (bass, treble) = config.tone_dials();
+        assert!((bass - 5.0).abs() < 1e-3, "bass {bass}");
+        assert!((treble - 2.0).abs() < 1e-3, "treble {treble}");
+    }
+
+    #[test]
+    fn turning_one_dial_leaves_the_other_where_it_was() {
+        let mut config = EqConfig::default();
+        config.apply_bass_treble(0.0, 2.0);
+        for bass in [5.0, -4.0, 9.0, 1.0] {
+            let (_, treble) = config.tone_dials();
+            config.apply_bass_treble(bass, treble);
+        }
+        let (bass, treble) = config.tone_dials();
+        assert!((bass - 1.0).abs() < 1e-3, "bass {bass}");
+        assert!((treble - 2.0).abs() < 1e-3, "treble {treble}");
+    }
+
+    #[test]
+    fn tone_dials_stay_in_range_for_any_curve() {
+        let mut config = EqConfig::default();
+        config.bands[0] = 12.0;
+        config.bands[9] = -12.0;
+        let (bass, treble) = config.tone_dials();
+        assert!((-12.0..=12.0).contains(&bass));
+        assert!((-12.0..=12.0).contains(&treble));
     }
 
     // ── EqConfig::apply_bass_treble ──────────────────────────────────────────
