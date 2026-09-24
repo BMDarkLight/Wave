@@ -22,6 +22,7 @@ use crate::app_paths::{daemon_state_path, library_db_path};
 use crate::app_settings::AppSettings;
 use crate::audio::player::{AudioPlayer, Queue, RepeatMode};
 use crate::library::Library;
+use crate::listen::{ListenEndReason, ListenFlush, ListenTracker};
 use crate::media_controls::TrackMetadata;
 use crate::metadata::Track;
 use crate::path_validation::validate_audio_path;
@@ -190,6 +191,10 @@ struct DaemonState {
     library: Library,
     media: DaemonMedia,
     shutdown: bool,
+    listen: ListenTracker,
+    /// Set when a request moved to another track, so the tick that sees the
+    /// change counts the old one as skipped rather than played through.
+    listen_skip: bool,
 }
 
 struct SharedState(Arc<Mutex<DaemonState>>);
@@ -411,6 +416,8 @@ pub fn run_daemon() {
         library,
         media: DaemonMedia::new(),
         shutdown: false,
+        listen: ListenTracker::new(),
+        listen_skip: false,
     }));
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| {
@@ -451,6 +458,7 @@ pub fn run_daemon() {
 
 fn request_shutdown(state: &Arc<Mutex<DaemonState>>) {
     if let Ok(mut guard) = state.lock() {
+        finish_listen(&mut guard);
         guard.shutdown = true;
         let _ = guard.player.stop();
     }
@@ -542,6 +550,7 @@ fn handle_ipc_connection(
 
     if should_shutdown {
         if let Ok(mut guard) = state.lock() {
+            finish_listen(&mut guard);
             guard.shutdown = true;
         }
         remove_daemon_state();
@@ -582,6 +591,7 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
         }
         DaemonRequest::Next => match state.player.play_next() {
             Ok(Some(path)) => {
+                state.listen_skip = true;
                 sync_media_for_path(state, &path);
                 let msg = format_now_playing(&state.library, &path);
                 DaemonResponse::ok_msg(msg)
@@ -591,6 +601,7 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
         },
         DaemonRequest::Previous => match state.player.play_previous() {
             Ok(Some(path)) => {
+                state.listen_skip = true;
                 sync_media_for_path(state, &path);
                 let msg = format_now_playing(&state.library, &path);
                 DaemonResponse::ok_msg(msg)
@@ -834,6 +845,7 @@ fn queue_play_now(queue: &mut Queue, path: &str) {
 }
 
 fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
+    state.listen_skip = true;
     let playlist = uuid::Uuid::parse_str(id)
         .ok()
         .and_then(|_| state.library.get_playlist_info(id).ok().flatten());
@@ -937,11 +949,71 @@ fn playback_tick_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>
             guard.media.clear();
         }
 
+        tick_listen(&mut guard);
         sync_media_playback_state(&mut guard);
 
         if let Ok(mut tip) = tooltip.lock() {
             *tip = current_tooltip(&guard.player, &guard.library);
         }
+    }
+}
+
+// ── Listen stats ──────────────────────────────────────────────────────────────
+
+fn record_listen_flush(library: &Library, flush: ListenFlush) {
+    if let Err(e) = library.record_listen(
+        &flush.path,
+        flush.seconds,
+        flush.completed,
+        flush.skipped,
+        flush.from_path.as_deref(),
+    ) {
+        tracing::warn!("Failed to record listen: {e}");
+    }
+}
+
+/// Follow the playing track so playback started from the command line counts
+/// toward listening stats the same way the app's playback does.
+fn tick_listen(state: &mut DaemonState) {
+    let path = state
+        .player
+        .get_current_path()
+        .map(|p| p.to_string_lossy().into_owned());
+    let Some(path) = path else {
+        finish_listen(state);
+        return;
+    };
+    if state.listen.matches_player_path(&path) {
+        state.listen_skip = false;
+    } else {
+        let reason = if std::mem::take(&mut state.listen_skip) {
+            ListenEndReason::Skipped
+        } else {
+            ListenEndReason::Completed
+        };
+        let duration = state.player.duration_seconds();
+        if let Some(flush) = state
+            .listen
+            .switch_track(path.clone(), path.clone(), duration, reason)
+        {
+            record_listen_flush(&state.library, flush);
+        }
+        if let Err(e) = state.library.touch_last_played(&path) {
+            tracing::warn!("Failed to touch last played: {e}");
+        }
+    }
+    if state.player.is_playing() {
+        state.listen.set_duration(state.player.duration_seconds());
+        state
+            .listen
+            .observe_position(state.player.position_seconds());
+    }
+}
+
+/// Credit whatever was playing before the daemon stops or the queue runs out.
+fn finish_listen(state: &mut DaemonState) {
+    if let Some(flush) = state.listen.end(ListenEndReason::Partial) {
+        record_listen_flush(&state.library, flush);
     }
 }
 
@@ -1081,6 +1153,7 @@ fn handle_menu_event(shared: &SharedState, id: &str) {
             guard.player.play_previous()
         };
         if let Ok(Some(path)) = result {
+            guard.listen_skip = true;
             sync_media_for_path(&mut guard, &path);
         }
         return;
