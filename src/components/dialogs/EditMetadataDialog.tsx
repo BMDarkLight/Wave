@@ -51,6 +51,9 @@ const WIDE: Field[] = ["title", "artist", "album"];
 /** Fields that Wave always needs a value for. */
 const REQUIRED: Field[] = ["title", "artist", "album"];
 
+/** Fields that only mean something for one track, so a batch edit hides them. */
+const PER_TRACK: Field[] = ["title", "track_number"];
+
 const valueOf = (track: Track, field: Field): string => {
   const value = track[field];
   if (value == null) return "";
@@ -101,6 +104,9 @@ export default function EditMetadataDialog({
   const [writable, setWritable] = useState(true);
 
   const single = tracks.length === 1;
+  const fields = single
+    ? FIELDS
+    : FIELDS.filter((field) => !PER_TRACK.includes(field));
   const subject = single
     ? tracks[0].title || tracks[0].name
     : `${tracks.length} tracks`;
@@ -149,7 +155,7 @@ export default function EditMetadataDialog({
 
   const submit = async () => {
     const edit: TagEdit = {};
-    for (const field of FIELDS) {
+    for (const field of fields) {
       const before = shared[field];
       // A field nobody touched stays out of the edit entirely. For mixed
       // values `before` is null, so an untouched blank box sends nothing.
@@ -269,7 +275,7 @@ export default function EditMetadataDialog({
           </div>
 
           <div className="metadata-fields">
-            {FIELDS.map((field) => (
+            {fields.map((field) => (
               <div
                 className={`metadata-field${WIDE.includes(field) ? " metadata-field-wide" : ""}`}
                 key={field}
