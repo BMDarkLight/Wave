@@ -263,31 +263,55 @@ pub enum QueueCmd {
     List,
     /// Add a track to the end of the queue
     Add {
-        /// Track file path
+        /// Track ID (or unique prefix) or file path
         track_id: String,
     },
     /// Remove a track from the queue by index
     Remove {
-        /// Queue index (0-based)
+        /// Queue index, as shown by `wave queue list`
         index: usize,
     },
     /// Insert a track to play next
     Next {
-        /// Track file path
+        /// Track ID (or unique prefix) or file path
         track_id: String,
     },
     /// Toggle or set shuffle mode
     Shuffle {
-        /// on, off, or omit to toggle
-        state: Option<String>,
+        /// Omit to toggle
+        state: Option<Switch>,
     },
-    /// Set repeat mode
+    /// Show or set repeat mode
     Repeat {
-        /// off, one, or all
-        mode: String,
+        /// Omit to show the current mode
+        mode: Option<RepeatArg>,
     },
     /// Clear the queue (keeps current track)
     Clear,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum Switch {
+    On,
+    Off,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum RepeatArg {
+    Off,
+    One,
+    All,
+}
+
+impl RepeatArg {
+    /// The spelling the daemon's repeat request expects.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RepeatArg::Off => "off",
+            RepeatArg::One => "one",
+            RepeatArg::All => "all",
+        }
+    }
 }
 
 #[derive(clap::Subcommand)]
@@ -517,6 +541,15 @@ impl From<TagFields> for TagEdit {
 /// Return the default database path for CLI mode.
 fn default_db_path() -> std::path::PathBuf {
     crate::app_paths::library_db_path()
+}
+
+/// Library entries for queued paths, used only to label them. A library that
+/// will not open costs the labels and nothing else, so it is not an error.
+pub(crate) fn library_tracks_for(paths: &[String]) -> Vec<Option<crate::metadata::Track>> {
+    Library::new_with_path(&default_db_path())
+        .ok()
+        .and_then(|library| library.get_tracks_by_paths(paths).ok())
+        .unwrap_or_else(|| paths.iter().map(|_| None).collect())
 }
 
 // ── Track resolution helpers ────────────────────────────────────────────────

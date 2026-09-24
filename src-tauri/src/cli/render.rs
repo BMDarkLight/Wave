@@ -124,6 +124,81 @@ pub fn playlist_info(ui: &Ui, info: &PlaylistInfo, tracks: &[Track]) -> String {
     out
 }
 
+/// "Artist - Title" for a queued file the library knows, else its file name.
+pub fn queue_label(track: Option<&Track>, path: &str) -> String {
+    match track {
+        Some(track) if !track.title.is_empty() => {
+            if track.artist.is_empty() {
+                track.title.clone()
+            } else {
+                format!("{} - {}", track.artist, track.title)
+            }
+        }
+        _ => std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(path)
+            .to_string(),
+    }
+}
+
+/// The daemon's queue, numbered the way `wave queue remove` counts.
+pub fn queue_list(
+    ui: &Ui,
+    labels: &[String],
+    durations: &[Option<f64>],
+    current: Option<usize>,
+    shuffle: bool,
+) -> String {
+    if labels.is_empty() {
+        return "Queue is empty.\n".to_string();
+    }
+    let noun = if labels.len() == 1 { "track" } else { "tracks" };
+    let mut out = format!(
+        "{}\n\n",
+        ui.heading(&format!("{} {noun} in queue", labels.len()))
+    );
+    let digits = (labels.len() - 1).to_string().len();
+    for (i, label) in labels.iter().enumerate() {
+        let duration = durations
+            .get(i)
+            .copied()
+            .flatten()
+            .map(|s| format_duration(s as u64))
+            .unwrap_or_default();
+        // Marker, index, two gaps, and the duration with its own gap.
+        let room = ui
+            .width
+            .saturating_sub(4 + digits + 2 + 2 + display_width(&duration));
+        let label = truncate(label, room, ui.glyphs.ellipsis);
+        let tail = if duration.is_empty() {
+            String::new()
+        } else {
+            let fill = " ".repeat(room.saturating_sub(display_width(&label)));
+            format!("{fill}  {}", ui.dim(&duration))
+        };
+        if Some(i) == current {
+            let line = format!("{} {i:>digits$}  {label}", ui.glyphs.playing);
+            out.push_str(&format!(
+                "  {}{tail}\n",
+                ui.paint(crate::cli::ui::style::OK, &line)
+            ));
+        } else {
+            out.push_str(&format!(
+                "    {}  {label}{tail}\n",
+                ui.dim(&format!("{i:>digits$}"))
+            ));
+        }
+    }
+    if shuffle {
+        out.push_str(&format!(
+            "\n  {}\n",
+            ui.dim("Shuffle is on, so tracks play in a different order than listed.")
+        ));
+    }
+    out
+}
+
 /// A line of dim text cut to what is left of the terminal after the indent.
 fn dim_line(ui: &Ui, text: &str) -> String {
     let room = ui.width.saturating_sub(display_width(INDENT));
@@ -287,7 +362,7 @@ pub fn dsp_status(ui: &Ui, dsp: &DspStatus) -> String {
         |band: &str, freq: &str, gain: &str| format!("  {band:>4}  {freq:>6}  {gain:>8}   ");
     out.push_str(&format!(
         "{}\n",
-        ui.dim(&format!("{}{}", prefix("Band", "Freq", "Gain"), eq_scale()).trim_end())
+        ui.dim(format!("{}{}", prefix("Band", "Freq", "Gain"), eq_scale()).trim_end())
     ));
     for (i, (freq, gain)) in crate::audio::dsp::EQ_BANDS_HZ
         .iter()
@@ -644,6 +719,86 @@ mod tests {
         let out = playback_status(&wide(80), &s, None);
         assert!(out.contains("Nothing playing"), "{out}");
         assert!(!out.contains("None"), "{out}");
+    }
+
+    fn tagged(artist: &str, title: &str) -> Track {
+        Track {
+            id: String::new(),
+            path: String::new(),
+            name: String::new(),
+            title: title.into(),
+            artist: artist.into(),
+            album: String::new(),
+            album_artist: None,
+            genre: None,
+            year: None,
+            track_number: None,
+            disc_number: None,
+            format: "FLAC".into(),
+            duration_seconds: None,
+            sample_rate: None,
+            channels: None,
+            bit_depth: None,
+            lyrics: None,
+            lyrics_source: None,
+            cover_art_data_url: None,
+            cover_art_mime: None,
+            cover_art_source: None,
+            album_art_id: None,
+            fingerprint_sha256: None,
+            acoustid_fingerprint: None,
+            musicbrainz_recording_id: None,
+            file_size: 0,
+            modified_at: 0,
+            indexed_at: 0,
+            source_provider: None,
+            source_state: None,
+            is_saf_uri: false,
+        }
+    }
+
+    #[test]
+    fn a_queued_track_is_named_by_its_tags_when_known() {
+        let track = tagged("Massive Attack", "Teardrop");
+        assert_eq!(
+            queue_label(Some(&track), "/m/c-teardrop.wav"),
+            "Massive Attack - Teardrop"
+        );
+        assert_eq!(queue_label(None, "/m/c-teardrop.wav"), "c-teardrop.wav");
+        assert_eq!(queue_label(Some(&tagged("", "Solo")), "/m/x.wav"), "Solo");
+        assert_eq!(queue_label(Some(&tagged("A", "")), "/m/x.wav"), "x.wav");
+    }
+
+    #[test]
+    fn queue_list_marks_the_current_track_and_fits_the_width() {
+        let ui = wide(40);
+        let labels = vec![
+            "Talking Heads - Once in a Lifetime".to_string(),
+            "A band with a very long name - and an even longer title".to_string(),
+        ];
+        let out = queue_list(&ui, &labels, &[Some(258.0), None], Some(1), false);
+        assert!(out.starts_with("2 tracks in queue"));
+        for line in out.lines() {
+            assert!(display_width(line) <= 40, "{line:?}");
+            assert_eq!(line, line.trim_end(), "trailing space in {line:?}");
+        }
+        let current = out.lines().find(|l| l.contains(ui.glyphs.playing)).unwrap();
+        assert!(current.contains(" 1  A band"), "{current:?}");
+        assert!(out.contains("04:18"));
+    }
+
+    #[test]
+    fn queue_list_warns_that_shuffle_reorders_it() {
+        let labels = vec!["a".to_string()];
+        let plain = queue_list(&wide(80), &labels, &[None], None, false);
+        let shuffled = queue_list(&wide(80), &labels, &[None], None, true);
+        assert!(plain.starts_with("1 track in queue"));
+        assert!(!plain.contains("Shuffle"));
+        assert!(shuffled.contains("Shuffle is on"));
+        assert_eq!(
+            queue_list(&wide(80), &[], &[], None, false),
+            "Queue is empty.\n"
+        );
     }
 
     #[test]
