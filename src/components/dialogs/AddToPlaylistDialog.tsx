@@ -8,6 +8,7 @@
  * https://github.com/BMDarkLight/Wave
  */
 
+import { BiX } from "react-icons/bi";
 import type { PlaylistInfo } from "../../utils/player";
 
 export default function AddToPlaylistDialog({
@@ -32,8 +33,13 @@ export default function AddToPlaylistDialog({
       >
         <div className="modal-header">
           <h2>Add to playlist</h2>
-          <button className="modal-close-btn" onClick={onClose} type="button">
-            ×
+          <button
+            className="modal-close-btn"
+            onClick={onClose}
+            type="button"
+            title="Close"
+          >
+            <BiX />
           </button>
         </div>
         <div className="playlist-picker-list">

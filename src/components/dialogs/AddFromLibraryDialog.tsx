@@ -8,6 +8,7 @@
  * https://github.com/BMDarkLight/Wave
  */
 
+import { BiX } from "react-icons/bi";
 import type { Track } from "../../utils/player";
 
 export default function AddFromLibraryDialog({
@@ -48,9 +49,9 @@ export default function AddFromLibraryDialog({
             className="modal-close-btn"
             onClick={onClose}
             type="button"
-            aria-label="Close"
+            title="Close"
           >
-            ×
+            <BiX />
           </button>
         </div>
         <label className="modal-label" htmlFor="library-search-input">
