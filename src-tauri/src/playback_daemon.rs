@@ -612,7 +612,8 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
         DaemonRequest::Seek { seconds } => match state.player.seek(seconds) {
             Ok(()) => {
                 sync_media_playback_state(state);
-                DaemonResponse::ok_msg(format!("Seeked to {seconds:.1}s."))
+                let whole = seconds.max(0.0) as u64;
+                DaemonResponse::ok_msg(format!("Seeked to {}:{:02}.", whole / 60, whole % 60))
             }
             Err(e) => DaemonResponse::err(e.to_string()),
         },

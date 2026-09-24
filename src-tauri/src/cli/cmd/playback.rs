@@ -21,7 +21,7 @@ pub fn run(cmd: PlaybackCmd) {
         PlaybackCmd::Stop => daemon_cmd(DaemonRequest::Stop),
         PlaybackCmd::Next => daemon_cmd(DaemonRequest::Next),
         PlaybackCmd::Previous => daemon_cmd(DaemonRequest::Previous),
-        PlaybackCmd::Seek { seconds } => daemon_cmd(DaemonRequest::Seek { seconds }),
+        PlaybackCmd::Seek { position } => cmd_playback_seek(&position),
         // One renderer for both, so the two views cannot drift apart.
         PlaybackCmd::Status => crate::cli::now::run(true, 0.5),
         PlaybackCmd::Shutdown => cmd_playback_shutdown(),
@@ -52,6 +52,60 @@ pub(crate) fn cmd_playback_start(id: String) {
             ui::fail(e, None, ui::EXIT_GENERAL);
         }
     }
+}
+
+/// Where a seek goes, before a step is added to the current position.
+#[derive(Debug, PartialEq)]
+enum SeekTo {
+    At(f64),
+    Step(f64),
+}
+
+/// Seconds ("90"), clock time ("1:30", "1:02:03"), or a signed step ("+10").
+fn parse_seek(raw: &str) -> Result<SeekTo, String> {
+    let bad = || format!("Can't read \"{raw}\" as a position; try 90, 1:30, or +10.");
+    let text = raw.trim();
+    let (sign, body) = match text.chars().next() {
+        Some('+') => (Some(1.0), &text[1..]),
+        Some('-') => (Some(-1.0), &text[1..]),
+        _ => (None, text),
+    };
+    let parts: Vec<&str> = body.split(':').collect();
+    if parts.len() > 3 || parts.iter().any(|p| p.trim().is_empty()) {
+        return Err(bad());
+    }
+    let mut seconds = 0.0;
+    for (i, part) in parts.iter().enumerate() {
+        let value: f64 = part.trim().parse().map_err(|_| bad())?;
+        // Minutes and seconds past the first field must stay under 60.
+        if !value.is_finite() || value < 0.0 || (i > 0 && value >= 60.0) {
+            return Err(bad());
+        }
+        seconds = seconds * 60.0 + value;
+    }
+    Ok(match sign {
+        Some(sign) => SeekTo::Step(sign * seconds),
+        None => SeekTo::At(seconds),
+    })
+}
+
+fn cmd_playback_seek(raw: &str) {
+    let seconds = match parse_seek(raw) {
+        Ok(SeekTo::At(seconds)) => seconds,
+        Ok(SeekTo::Step(step)) => match daemon_request_if_running(DaemonRequest::Status) {
+            Ok(Some(resp)) => {
+                let status = resp.status.unwrap_or_else(|| {
+                    ui::fail("The daemon returned no status.", None, ui::EXIT_GENERAL)
+                });
+                let end = status.duration_seconds.max(0.0);
+                (status.position_seconds + step).clamp(0.0, end)
+            }
+            Ok(None) => ui::no_daemon(),
+            Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
+        },
+        Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
+    };
+    daemon_cmd(DaemonRequest::Seek { seconds });
 }
 
 fn cmd_playback_shutdown() {
@@ -155,6 +209,27 @@ pub fn play(id: String) {
 mod tests {
     use super::*;
     use crate::library::PlaylistInfo;
+
+    #[test]
+    fn a_seek_reads_seconds_or_clock_time() {
+        assert_eq!(parse_seek("90"), Ok(SeekTo::At(90.0)));
+        assert_eq!(parse_seek("1:30"), Ok(SeekTo::At(90.0)));
+        assert_eq!(parse_seek("1:02:03"), Ok(SeekTo::At(3723.0)));
+        assert_eq!(parse_seek("12.5"), Ok(SeekTo::At(12.5)));
+    }
+
+    #[test]
+    fn a_signed_seek_is_a_step_from_here() {
+        assert_eq!(parse_seek("+10"), Ok(SeekTo::Step(10.0)));
+        assert_eq!(parse_seek("-1:00"), Ok(SeekTo::Step(-60.0)));
+    }
+
+    #[test]
+    fn a_malformed_seek_is_refused() {
+        for raw in ["", "abc", "1:", ":30", "1:75", "1:2:3:4", "+", "--5"] {
+            assert!(parse_seek(raw).is_err(), "{raw:?} was accepted");
+        }
+    }
 
     fn playlist(id: &str, name: &str) -> PlaylistInfo {
         PlaylistInfo {

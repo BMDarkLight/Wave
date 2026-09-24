@@ -30,27 +30,27 @@ use crate::tag_edit::TagEdit;
 #[command(name = "wave", version, about = "Lightweight Music Player CLI")]
 pub struct Cli {
     /// Open the command line landing screen instead of the app
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub cli: bool,
 
     /// Same as --cli
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub headless: bool,
 
     /// Skip the Wave mark on the landing screen
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub no_banner: bool,
 
     /// When to colour the output
-    #[arg(long, global = true, value_enum, default_value_t = ui::ColorChoice::Auto)]
+    #[arg(long, global = true, help_heading = "Global options", value_enum, default_value_t = ui::ColorChoice::Auto)]
     pub color: ui::ColorChoice,
 
     /// Print machine-readable JSON instead of formatted text
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub json: bool,
 
     /// Include per-item detail, such as why a file was skipped on import
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help_heading = "Global options")]
     pub verbose: bool,
 
     #[command(subcommand)]
@@ -249,8 +249,10 @@ pub enum PlaybackCmd {
     Previous,
     /// Seek to a position (in seconds)
     Seek {
-        /// Position in seconds
-        seconds: f64,
+        /// Where to go: seconds (90), minutes and seconds (1:30), or a step
+        /// from here (+10, -15)
+        #[arg(allow_hyphen_values = true)]
+        position: String,
     },
     /// Show current playback status
     Status,
@@ -326,8 +328,10 @@ pub enum DevicesCmd {
     },
     /// Set playback volume (0.0 to 1.0)
     Volume {
-        /// Volume level (0.0–1.0)
-        level: f32,
+        /// A percentage (50%, 50), a fraction (0.5), or a step from the
+        /// current level (+10, -10). Omit to show the current volume
+        #[arg(allow_hyphen_values = true)]
+        level: Option<String>,
     },
 }
 
