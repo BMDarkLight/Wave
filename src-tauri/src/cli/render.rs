@@ -137,12 +137,16 @@ pub fn playback_status(ui: &Ui, status: &PlaybackStatus, album: Option<&str>) ->
     let room = ui.width.saturating_sub(display_width(INDENT));
     let mut out = String::new();
 
-    let title = status.title.as_deref().unwrap_or_else(|| {
-        std::path::Path::new(&status.file)
+    // An idle daemon names its current file "None", which reads like a track.
+    let idle = status.queue_index == 0 && matches!(status.file.as_str(), "" | "None");
+    let title = match status.title.as_deref() {
+        Some(title) => title,
+        None if idle => "Nothing playing",
+        None => std::path::Path::new(&status.file)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(&status.file)
-    });
+            .unwrap_or(&status.file),
+    };
     let glyph = state_glyph(ui, &status.state);
     // The ASCII paused glyph is two columns, so measure rather than assume.
     let title_room = ui.width.saturating_sub(4 + display_width(glyph));
@@ -218,7 +222,7 @@ pub fn playback_status(ui: &Ui, status: &PlaybackStatus, album: Option<&str>) ->
         &format!(
             "Shuffle {}{dot}Repeat {}{dot}Track {} of {}",
             if status.shuffle { "on" } else { "off" },
-            status.repeat,
+            status.repeat.to_ascii_lowercase(),
             status.queue_index,
             status.queue_total
         ),
@@ -227,50 +231,83 @@ pub fn playback_status(ui: &Ui, status: &PlaybackStatus, album: Option<&str>) ->
     out
 }
 
+/// Cells either side of the EQ axis: one per dB of the dial range.
+const EQ_HALF: usize = 12;
+
+pub fn band_frequency(hz: f32) -> String {
+    if hz >= 1000.0 {
+        format!("{} kHz", (hz / 1000.0).round())
+    } else {
+        format!("{} Hz", hz.round())
+    }
+}
+
+/// Tick labels for a band bar, with each label's last digit over its tick so
+/// the numbers read straight down into the bars.
+fn eq_scale() -> String {
+    let width = EQ_HALF * 2 + 1;
+    let mut cells = vec![' '; width];
+    let ticks = [(-12, "-12"), (-6, "-6"), (0, "0"), (6, "+6"), (12, "+12")];
+    for (db, label) in ticks {
+        let tick = (EQ_HALF as i32 + db) as usize;
+        let start = if db == -12 { 0 } else { tick + 1 - label.len() };
+        for (offset, c) in label.chars().enumerate() {
+            cells[start + offset] = c;
+        }
+    }
+    cells.into_iter().collect()
+}
+
 pub fn dsp_status(ui: &Ui, dsp: &DspStatus) -> String {
-    let on_off = |b: bool| if b { "ON" } else { "OFF" };
+    let on_off = |b: bool| if b { "on" } else { "off" };
     let crossfade = if dsp.crossfade_duration <= 0.0 {
-        "OFF".to_string()
+        "off".to_string()
     } else {
         format!("{:.1}s", dsp.crossfade_duration)
+    };
+    let equalizer = if dsp.eq_enabled {
+        "on".to_string()
+    } else {
+        "off, bands kept but not applied".to_string()
     };
 
     let mut out = String::new();
     for (label, value) in [
-        ("Equalizer", on_off(dsp.eq_enabled).to_string()),
+        ("Equalizer", equalizer),
         ("Gapless", on_off(dsp.gapless_enabled).to_string()),
         ("Crossfade", crossfade),
         ("Bass", format!("{:+.1} dB", dsp.bass)),
         ("Treble", format!("{:+.1} dB", dsp.treble)),
     ] {
-        out.push_str(&ui.kv(label, &value, 10));
-        out.push('\n');
+        out.push_str(&format!("  {}\n", ui.kv(label, &value, 10)));
     }
     out.push('\n');
 
-    // The scale labels sit over the ends and the middle of the band bars.
-    let half = 11;
+    let prefix =
+        |band: &str, freq: &str, gain: &str| format!("  {band:>4}  {freq:>6}  {gain:>8}   ");
     out.push_str(&format!(
-        "  {}\n",
-        ui.dim(&format!(
-            "Band   Freq        Gain       {:<half$}0{:>half$}",
-            "-12", "+12"
-        ))
+        "{}\n",
+        ui.dim(&format!("{}{}", prefix("Band", "Freq", "Gain"), eq_scale()).trim_end())
     ));
     for (i, (freq, gain)) in crate::audio::dsp::EQ_BANDS_HZ
         .iter()
         .zip(dsp.bands.iter())
         .enumerate()
     {
-        let row = format!(
-            "  {:>4}   {:>6.0} Hz   {:>+6.1} dB   {}",
-            i + 1,
-            freq,
-            gain,
-            bar::eq_band(ui, *gain, half)
-        );
         // The empty half of a bar is spaces, which should not trail the line.
-        out.push_str(row.trim_end());
+        let band_bar = bar::eq_band(ui, *gain, EQ_HALF);
+        let band_bar = band_bar.trim_end();
+        let band_bar = if dsp.eq_enabled {
+            band_bar.to_string()
+        } else {
+            ui.dim(band_bar)
+        };
+        out.push_str(&prefix(
+            &(i + 1).to_string(),
+            &band_frequency(*freq),
+            &format!("{gain:+.1} dB"),
+        ));
+        out.push_str(&band_bar);
         out.push('\n');
     }
     out
@@ -506,7 +543,7 @@ mod tests {
             treble: 0.0,
         };
         let out = dsp_status(&ui, &dsp);
-        for hz in ["31", "62", "125", "250", "16000"] {
+        for hz in ["31 Hz", "62 Hz", "125 Hz", "250 Hz", "16 kHz"] {
             assert!(out.contains(hz), "missing band {hz}");
         }
         // The axis appears once per band row and nowhere else.
@@ -526,7 +563,95 @@ mod tests {
         };
         let out = dsp_status(&ui, &dsp);
         let eq_line = out.lines().find(|l| l.contains("Equalizer")).unwrap();
-        assert!(eq_line.contains("OFF"), "{eq_line}");
+        assert!(eq_line.contains("off"), "{eq_line}");
+        assert!(eq_line.contains("not applied"), "{eq_line}");
+    }
+
+    fn curve(bands: [f32; 10]) -> DspStatus {
+        DspStatus {
+            eq_enabled: true,
+            bands,
+            crossfade_duration: 0.0,
+            gapless_enabled: true,
+            bass: 0.0,
+            treble: 0.0,
+        }
+    }
+
+    /// Column of the first occurrence of `needle`, counted in terminal cells.
+    fn column_of(line: &str, needle: &str) -> usize {
+        display_width(&line[..line.find(needle).unwrap()])
+    }
+
+    #[test]
+    fn dsp_scale_marks_sit_over_the_axis_and_bar_ends() {
+        let ui = Ui::plain();
+        let out = dsp_status(
+            &ui,
+            &curve([12.0, -12.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        );
+        let scale = out.lines().find(|l| l.contains("+12")).unwrap();
+        let boost = out.lines().find(|l| l.contains("+12.0 dB")).unwrap();
+        let cut = out.lines().find(|l| l.contains("-12.0 dB")).unwrap();
+        let axis = column_of(boost, ui.glyphs.axis);
+        assert_eq!(column_of(cut, ui.glyphs.axis), axis);
+        assert_eq!(column_of(scale, " 0 ") + 1, axis, "{scale:?}");
+        // The last digit of each end label sits over the last cell of a full
+        // bar, so the eye can read the scale straight down.
+        assert_eq!(column_of(scale, "+12") + 2, display_width(boost) - 1);
+        assert_eq!(column_of(scale, "-12"), column_of(cut, ui.glyphs.bar_full));
+    }
+
+    #[test]
+    fn dsp_bars_fill_one_cell_per_decibel() {
+        let ui = Ui::plain();
+        let out = dsp_status(
+            &ui,
+            &curve([5.0, -3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        );
+        let row = |gain: &str| out.lines().find(|l| l.contains(gain)).unwrap().to_string();
+        assert_eq!(row("+5.0 dB").matches(ui.glyphs.bar_full).count(), 5);
+        assert_eq!(row("-3.0 dB").matches(ui.glyphs.bar_full).count(), 3);
+    }
+
+    #[test]
+    fn dsp_settings_line_up_with_the_band_table() {
+        let out = dsp_status(&Ui::plain(), &curve([0.0; 10]));
+        let gapless = out.lines().find(|l| l.contains("Gapless")).unwrap();
+        let header = out.lines().find(|l| l.contains("Band")).unwrap();
+        assert_eq!(column_of(gapless, "Gapless"), column_of(header, "Band"));
+    }
+
+    #[test]
+    fn dsp_frequencies_read_in_hz_and_khz() {
+        let out = dsp_status(&Ui::plain(), &curve([0.0; 10]));
+        assert!(out.contains("31 Hz"));
+        assert!(out.contains("500 Hz"));
+        assert!(out.contains("1 kHz"));
+        assert!(out.contains("16 kHz"));
+        assert!(!out.contains("16000"));
+    }
+
+    #[test]
+    fn an_idle_daemon_says_nothing_is_playing() {
+        let mut s = status();
+        s.state = "Stopped".into();
+        s.file = "None".into();
+        s.title = None;
+        s.artist = None;
+        s.queue_index = 0;
+        s.queue_total = 0;
+        let out = playback_status(&wide(80), &s, None);
+        assert!(out.contains("Nothing playing"), "{out}");
+        assert!(!out.contains("None"), "{out}");
+    }
+
+    #[test]
+    fn repeat_mode_reads_in_lowercase() {
+        let mut s = status();
+        s.repeat = "All".into();
+        let out = playback_status(&wide(80), &s, None);
+        assert!(out.contains("Repeat all"), "{out}");
     }
 
     #[test]
