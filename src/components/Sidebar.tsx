@@ -220,7 +220,7 @@ export default function Sidebar({
                       aria-label="Synced with a folder"
                     />
                   ) : null}
-                  {pl.name}
+                  <span className="playlist-item-label">{pl.name}</span>
                 </span>
                 <span className="playlist-item-count">{pl.track_count}</span>
                 <div className="playlist-item-actions">

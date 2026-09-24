@@ -411,9 +411,14 @@ input:disabled {
   display: flex;
   align-items: center;
   gap: 6px;
-  overflow: hidden;
+  min-width: 0;
   color: var(--text);
   font-weight: 700;
+}
+
+.playlist-item-label {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
