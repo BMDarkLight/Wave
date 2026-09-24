@@ -3967,6 +3967,7 @@ img.queue-thumb {
 
 .album-hero-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   font-size: 14px;
@@ -4973,9 +4974,22 @@ img.queue-thumb {
     height: 160px;
   }
 
+  /* A centered column sizes the info to its content, which lets a long
+     title run off the screen instead of wrapping. */
+  .album-hero-info {
+    width: 100%;
+  }
+
+  .album-hero-title {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .album-hero-meta {
     justify-content: center;
-    flex-wrap: wrap;
   }
 
   .page-header {
