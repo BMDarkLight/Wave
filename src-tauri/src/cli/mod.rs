@@ -335,6 +335,15 @@ pub enum DspCmd {
         #[arg(allow_hyphen_values = true)]
         bands: Vec<f32>,
     },
+    /// Set one EQ band and leave the others as they are
+    EqBand {
+        /// Band number 1-10, or its frequency (e.g. 125, 1k, 16kHz)
+        #[arg(value_hint = clap::ValueHint::Other)]
+        band: String,
+        /// Gain in dB (-12 to +12)
+        #[arg(allow_hyphen_values = true)]
+        db: f32,
+    },
     /// Enable the equalizer
     EqEnable,
     /// Disable the equalizer

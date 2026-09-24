@@ -38,7 +38,7 @@ pub fn run(cmd: DspCmd) {
             if bands.len() != 10 {
                 ui::fail(
                     format!("Expected exactly 10 EQ band values, got {}.", bands.len()),
-                    Some("bands run 31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000 Hz"),
+                    Some("to change a single band: wave dsp eq-band <band> <dB>"),
                     ui::EXIT_GENERAL,
                 );
             }
@@ -47,6 +47,36 @@ pub fn run(cmd: DspCmd) {
             let dsp = apply_dsp_request(DaemonRequest::SetEqBands { bands: arr });
             ui::done(
                 dsp_message_or("EQ bands set and enabled."),
+                json!({ "dsp": dsp }),
+            );
+            println!();
+            print!("{}", render::dsp_status(ui::current(), &dsp));
+        }
+        DspCmd::EqBand { band, db } => {
+            let Some(index) = parse_band(&band) else {
+                ui::fail(
+                    format!("No EQ band \"{band}\"."),
+                    Some("use 1 to 10, or one of 31, 62, 125, 250, 500, 1k, 2k, 4k, 8k, 16k"),
+                    ui::EXIT_GENERAL,
+                );
+            };
+            if !db.is_finite() || !(-12.0..=12.0).contains(&db) {
+                ui::fail(
+                    "Band gain must be between -12 and +12 dB.",
+                    None,
+                    ui::EXIT_GENERAL,
+                );
+            }
+            let mut bands = load_dsp_status().bands;
+            bands[index] = db;
+            let dsp = apply_dsp_request(DaemonRequest::SetEqBands { bands });
+            let freq = crate::audio::dsp::EQ_BANDS_HZ[index];
+            ui::done(
+                format!(
+                    "Band {} ({}) set to {db:+.1} dB.",
+                    index + 1,
+                    render::band_frequency(freq)
+                ),
                 json!({ "dsp": dsp }),
             );
             println!();
@@ -345,6 +375,25 @@ fn apply_dsp_request(request: DaemonRequest) -> DspStatus {
     settings_dsp_status(&settings)
 }
 
+/// A band given as its number (1 to 10) or its frequency ("125", "1k",
+/// "16khz"), returned as a 0-based index.
+fn parse_band(raw: &str) -> Option<usize> {
+    let raw = raw.trim().to_ascii_lowercase();
+    let raw = raw.strip_suffix("hz").unwrap_or(&raw).trim_end();
+    let (digits, scale) = match raw.strip_suffix('k') {
+        Some(digits) => (digits, 1000.0),
+        None => (raw, 1.0),
+    };
+    let value: f32 = digits.trim().parse().ok()?;
+    if scale == 1.0 && value.fract() == 0.0 && (1.0..=10.0).contains(&value) {
+        return Some(value as usize - 1);
+    }
+    let hz = value * scale;
+    crate::audio::dsp::EQ_BANDS_HZ
+        .iter()
+        .position(|&band| (band - hz).abs() < 1.0)
+}
+
 fn parse_on_off(raw: &str, label: &str) -> bool {
     match raw.trim().to_ascii_lowercase().as_str() {
         "on" | "true" | "1" | "enable" | "enabled" => true,
@@ -356,5 +405,31 @@ fn parse_on_off(raw: &str, label: &str) -> bool {
                 ui::EXIT_GENERAL,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_band_is_named_by_number_or_frequency() {
+        assert_eq!(parse_band("1"), Some(0));
+        assert_eq!(parse_band("10"), Some(9));
+        assert_eq!(parse_band("31"), Some(0));
+        assert_eq!(parse_band("125"), Some(2));
+        assert_eq!(parse_band("125Hz"), Some(2));
+        assert_eq!(parse_band("1k"), Some(5));
+        assert_eq!(parse_band("16kHz"), Some(9));
+        assert_eq!(parse_band("16000"), Some(9));
+    }
+
+    #[test]
+    fn an_unknown_band_is_rejected() {
+        assert_eq!(parse_band("0"), None);
+        assert_eq!(parse_band("11"), None);
+        assert_eq!(parse_band("440"), None);
+        assert_eq!(parse_band("bass"), None);
+        assert_eq!(parse_band(""), None);
     }
 }
