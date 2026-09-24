@@ -44,6 +44,7 @@ export default function AddToPlaylistDialog({
                 key={p.id}
                 className="playlist-picker-item"
                 type="button"
+                title={p.name}
                 onClick={() => onSelect(p.id)}
               >
                 {p.name}

@@ -2536,6 +2536,7 @@ img.queue-thumb {
   font-size: 12px;
   line-height: 1.4;
   margin: 4px 0 10px;
+  overflow-wrap: anywhere;
 }
 
 /* Advisory row inside a dialog. Wave's palette is monochrome, so this leans on
@@ -2862,6 +2863,7 @@ img.queue-thumb {
   margin-bottom: 8px;
   color: var(--muted);
   font-size: 14px;
+  overflow-wrap: anywhere;
 }
 
 .playlist-picker-list {
@@ -2884,6 +2886,9 @@ img.queue-thumb {
   padding: 10px 12px;
   border-radius: 8px;
   cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   transition: background 0.16s ease;
 }
 
