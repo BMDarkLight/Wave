@@ -46,6 +46,43 @@ pub fn format_listen_duration(secs: f64) -> String {
     }
 }
 
+/// Unix seconds as a UTC date. UTC because nothing in Wave knows the local
+/// zone, and a wrong local time is worse than a labelled UTC one.
+pub fn format_timestamp(secs: i64) -> String {
+    if secs < 0 {
+        return "unknown".to_string();
+    }
+    let (days, rem) = (secs / 86_400, secs % 86_400);
+    // Days to a civil date, after Howard Hinnant's days_from_civil inverse.
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+        rem / 3600,
+        (rem % 3600) / 60
+    )
+}
+
+/// Decimal units, the way file managers on macOS and most Linux desktops
+/// report sizes.
+pub fn format_size(bytes: i64) -> String {
+    match bytes {
+        b if b < 0 => "unknown".to_string(),
+        1 => "1 byte".to_string(),
+        b if b < 1000 => format!("{b} bytes"),
+        b if b < 1_000_000 => format!("{:.1} KB", b as f64 / 1e3),
+        b if b < 1_000_000_000 => format!("{:.1} MB", b as f64 / 1e6),
+        b => format!("{:.1} GB", b as f64 / 1e9),
+    }
+}
+
 fn track_duration(track: &Track) -> String {
     track
         .duration_seconds
@@ -92,16 +129,14 @@ pub fn track_table(ui: &Ui, tracks: &[Track]) -> String {
 
 pub fn playlist_table(ui: &Ui, playlists: &[PlaylistInfo]) -> String {
     let mut t = Table::new(vec![
-        // Full ids: playlist commands take the whole id, unlike tracks,
-        // which also resolve a prefix.
-        col("ID", 36, 0, Align::Left),
+        col("ID", 8, 0, Align::Left),
         col("TRACKS", 6, 0, Align::Right),
         col("NAME", 12, 2, Align::Left),
         col("SYNCED FOLDER", 13, 3, Align::Left),
     ]);
     for pl in playlists {
         t.push(vec![
-            pl.id.clone(),
+            short_id(&pl.id).to_string(),
             pl.track_count.to_string(),
             pl.name.clone(),
             pl.sync_folder.clone().unwrap_or_default(),
@@ -113,13 +148,15 @@ pub fn playlist_table(ui: &Ui, playlists: &[PlaylistInfo]) -> String {
 /// A playlist's details followed by its tracks.
 pub fn playlist_info(ui: &Ui, info: &PlaylistInfo, tracks: &[Track]) -> String {
     let mut out = format!("{}\n", ui.heading(&info.name));
-    out.push_str(&ui.kv("ID", &info.id, 14));
-    out.push('\n');
-    out.push_str(&ui.kv("Tracks", &info.track_count.to_string(), 14));
-    out.push('\n');
     let folder = info.sync_folder.as_deref().unwrap_or("(none)");
-    out.push_str(&ui.kv("Synced folder", folder, 14));
-    out.push_str("\n\n");
+    for (label, value) in [
+        ("ID", info.id.clone()),
+        ("Tracks", info.track_count.to_string()),
+        ("Synced folder", folder.to_string()),
+    ] {
+        out.push_str(&format!("  {}\n", ui.kv(label, &value, 14)));
+    }
+    out.push('\n');
     out.push_str(&track_table(ui, tracks));
     out
 }
@@ -433,9 +470,9 @@ pub fn metadata_block(ui: &Ui, track: &Track) -> String {
             "Bit Depth",
             or_unknown(track.bit_depth.map(|b| format!("{b} bit"))),
         ),
-        ("File Size", format!("{} bytes", track.file_size)),
-        ("Modified", track.modified_at.to_string()),
-        ("Indexed", track.indexed_at.to_string()),
+        ("File Size", format_size(track.file_size)),
+        ("Modified", format_timestamp(track.modified_at)),
+        ("Indexed", format_timestamp(track.indexed_at)),
         ("Lyrics Source", or_none(track.lyrics_source.as_deref())),
         ("Cover Art MIME", or_none(track.cover_art_mime.as_deref())),
         ("Cover Art Src", or_none(track.cover_art_source.as_deref())),
@@ -520,8 +557,7 @@ pub fn listening_overview(ui: &Ui, stats: &ListeningStatsDto) -> String {
         ("Plays", stats.total_plays.to_string()),
         ("Tracks played", stats.tracks_played.to_string()),
     ] {
-        out.push_str(&ui.kv(label, &value, 14));
-        out.push('\n');
+        out.push_str(&format!("  {}\n", ui.kv(label, &value, 14)));
     }
     for block in [
         track_rank_list(ui, "Top tracks", &stats.top_tracks),
@@ -579,6 +615,27 @@ mod tests {
         assert_eq!(format_duration(3599), "59:59");
         // Past an hour the minute field keeps counting rather than wrapping.
         assert_eq!(format_duration(3661), "61:01");
+    }
+
+    #[test]
+    fn timestamps_read_as_utc_dates() {
+        assert_eq!(format_timestamp(0), "1970-01-01 00:00 UTC");
+        assert_eq!(format_timestamp(1_790_276_164), "2026-09-24 18:56 UTC");
+        // Leap day, and the last minute of a century leap year.
+        assert_eq!(format_timestamp(951_782_400), "2000-02-29 00:00 UTC");
+        assert_eq!(format_timestamp(978_307_199), "2000-12-31 23:59 UTC");
+        assert_eq!(format_timestamp(-1), "unknown");
+    }
+
+    #[test]
+    fn file_sizes_use_the_largest_sensible_unit() {
+        assert_eq!(format_size(0), "0 bytes");
+        assert_eq!(format_size(1), "1 byte");
+        assert_eq!(format_size(999), "999 bytes");
+        assert_eq!(format_size(481_196), "481.2 KB");
+        assert_eq!(format_size(38_500_000), "38.5 MB");
+        assert_eq!(format_size(2_100_000_000), "2.1 GB");
+        assert_eq!(format_size(-5), "unknown");
     }
 
     #[test]
