@@ -2240,8 +2240,19 @@ impl Library {
         let rows = stmt
             .query_map(params![pattern], row_to_playlist)
             .map_err(|e| format!("Failed to execute playlist search: {e}"))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to read search results: {e}"))
+        let mut rows = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read search results: {e}"))?;
+        // Library has no playlist_tracks rows, so its count comes from the
+        // tracks table, the same way list_playlists reports it.
+        if let Some(default_id) = self.default_playlist_id_cache.get() {
+            if let Some(library) = rows.iter_mut().find(|p| &p.id == default_id) {
+                library.track_count = connection
+                    .query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))
+                    .unwrap_or(0);
+            }
+        }
+        Ok(rows)
     }
 
     /// Update a track's cover art from raw image bytes (stored as shared thumb).
@@ -6914,6 +6925,25 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wave-test-import-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::canonicalize(&dir).unwrap()
+    }
+
+    #[test]
+    fn searching_playlists_counts_the_library_like_listing_does() {
+        let library = open_test_library().unwrap();
+        let library_id = library.default_playlist_id().unwrap();
+        {
+            let connection = library.lock_connection().unwrap();
+            upsert_track(&*connection, &sample_track("one", "/music/one.flac")).unwrap();
+        }
+        let listed = library.list_playlists(None).unwrap();
+        let found = library.search_playlists("Lib").unwrap();
+        let count_in = |rows: &[PlaylistInfo]| {
+            rows.iter()
+                .find(|p| p.id == library_id)
+                .map(|p| p.track_count)
+        };
+        assert_eq!(count_in(&listed), Some(1));
+        assert_eq!(count_in(&found), Some(1));
     }
 
     #[test]
