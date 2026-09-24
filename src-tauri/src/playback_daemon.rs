@@ -20,7 +20,7 @@ use tray_icon::{TrayIconBuilder, TrayIconEvent};
 
 use crate::app_paths::{daemon_state_path, library_db_path};
 use crate::app_settings::AppSettings;
-use crate::audio::player::{AudioPlayer, RepeatMode};
+use crate::audio::player::{AudioPlayer, Queue, RepeatMode};
 use crate::library::Library;
 use crate::media_controls::TrackMetadata;
 use crate::metadata::Track;
@@ -821,6 +821,17 @@ fn playlist_start_message(name: &str, count: usize, artist: &str, title: &str) -
     )
 }
 
+/// Put `path` right after the current entry and make it current. Status, next
+/// and previous all read the queue's current entry, so it has to be the track
+/// that is actually playing.
+fn queue_play_now(queue: &mut Queue, path: &str) {
+    let index = queue
+        .current_index()
+        .map_or(queue.tracks().len(), |i| (i + 1).min(queue.tracks().len()));
+    queue.insert_next(path.to_string());
+    queue.jump(index);
+}
+
 fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
     let playlist = uuid::Uuid::parse_str(id)
         .ok()
@@ -858,8 +869,7 @@ fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
         if let Err(e) = validate_audio_path(&path) {
             return DaemonResponse::err(e);
         }
-        state.player.enqueue(&path);
-        state.player.queue.jump(0);
+        queue_play_now(&mut state.player.queue, &path);
         if let Err(e) = state.player.play(&path) {
             return DaemonResponse::err(e.to_string());
         }
@@ -1417,7 +1427,48 @@ fn spawn_daemon() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{artist_title, playlist_start_message};
+    use super::{artist_title, playlist_start_message, queue_play_now};
+    use crate::audio::player::{Queue, RepeatMode};
+
+    fn queue_of(paths: &[&str]) -> Queue {
+        let mut queue = Queue::default();
+        queue.set_tracks(paths.iter().map(|p| p.to_string()).collect());
+        queue
+    }
+
+    #[test]
+    fn a_started_track_becomes_the_current_queue_entry() {
+        let mut queue = queue_of(&["/a.flac", "/b.flac", "/c.flac"]);
+        queue.jump(0);
+        queue_play_now(&mut queue, "/new.flac");
+        let current = queue.current_index().unwrap();
+        assert_eq!(queue.tracks()[current], "/new.flac");
+        // What was up next before still follows it.
+        assert_eq!(queue.next(&RepeatMode::Off), Some("/b.flac"));
+    }
+
+    #[test]
+    fn a_started_track_on_an_empty_queue_is_the_only_entry() {
+        let mut queue = Queue::default();
+        queue_play_now(&mut queue, "/new.flac");
+        assert_eq!(queue.tracks(), ["/new.flac".to_string()]);
+        assert_eq!(queue.current_index(), Some(0));
+    }
+
+    #[test]
+    fn a_started_track_under_shuffle_is_current_and_order_stays_whole() {
+        let mut queue = queue_of(&["/a.flac", "/b.flac", "/c.flac"]);
+        queue.jump(1);
+        queue.set_shuffle(true);
+        queue_play_now(&mut queue, "/new.flac");
+        let current = queue.current_index().unwrap();
+        assert_eq!(queue.tracks()[current], "/new.flac");
+        let mut seen = vec![queue.tracks()[current].clone()];
+        while let Some(path) = queue.next(&RepeatMode::Off) {
+            seen.push(path.to_string());
+        }
+        assert!(seen.len() <= 4, "{seen:?}");
+    }
 
     #[test]
     fn playlist_start_message_names_the_playlist() {
