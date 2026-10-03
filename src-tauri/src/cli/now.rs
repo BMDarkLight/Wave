@@ -249,13 +249,7 @@ pub fn run(once: bool, interval: f64) {
             labels.album.as_deref(),
         );
         if live {
-            text.push_str(&format!(
-                "\n  {}\n",
-                ui.dim(&format!(
-                    "Ctrl-C to exit {} refreshing every {interval}s",
-                    ui.glyphs.dot
-                ))
-            ));
+            text.push_str(&format!("\n  {}\n", ui.dim("Ctrl-C to exit")));
         }
 
         let mut out = String::new();
