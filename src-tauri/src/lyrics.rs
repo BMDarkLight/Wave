@@ -121,7 +121,8 @@ fn parse_clock(body: &str) -> Option<f64> {
     let minutes: f64 = minutes.trim().parse().ok()?;
     // Seconds may carry a fraction in either centiseconds or milliseconds;
     // parsing as a decimal handles both without needing to know which.
-    let seconds: f64 = rest.trim().replace(',', ".").parse().ok()?;
+    // Some editors write `[mm:ss:xx]`, with a colon before the fraction.
+    let seconds: f64 = rest.trim().replacen([',', ':'], ".", 1).parse().ok()?;
     if !(0.0..60.0).contains(&seconds) {
         return None;
     }
@@ -555,6 +556,14 @@ mod tests {
         let sheet = parse_sheet("[00:01.5]a\n[00:02.25]b\n[00:03.125]c");
         let times: Vec<f64> = sheet.lines.iter().map(|l| l.time).collect();
         assert_eq!(times, vec![1.5, 2.25, 3.125]);
+    }
+
+    #[test]
+    fn a_colon_before_the_fraction_parses() {
+        let sheet = parse_sheet("[00:01:50]a\n[01:02:25]<01:02:25>b <01:03:00>c");
+        let times: Vec<f64> = sheet.lines.iter().map(|l| l.time).collect();
+        assert_eq!(times, vec![1.5, 62.25]);
+        assert_eq!(sheet.lines[1].words[1].time, 63.0);
     }
 
     #[test]
