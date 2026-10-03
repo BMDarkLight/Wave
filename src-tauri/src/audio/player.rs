@@ -93,12 +93,18 @@ impl Queue {
             return;
         }
         let mut order: Vec<usize> = (0..self.tracks.len()).collect();
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(42) as usize;
+        // splitmix64. Each swap needs its own random draw; deriving every j
+        // from one fixed seed reaches only a sliver of the possible orders.
+        let mut state = uuid::Uuid::new_v4().as_u64_pair().0;
+        let mut next_random = move || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
         for i in (1..order.len()).rev() {
-            let j = (seed.wrapping_mul(i + 1).wrapping_add(seed)) % (i + 1);
+            let j = (next_random() % (i as u64 + 1)) as usize;
             order.swap(i, j);
         }
         if let Some(idx) = self.current_index {
@@ -132,13 +138,22 @@ impl Queue {
         self.tracks.get(index).map(String::as_str)
     }
 
+    /// Shuffle slot that `next` moves to. Before anything has played, the
+    /// first slot is next rather than already used up.
+    fn next_shuffle_pos(&self) -> usize {
+        match self.current_index {
+            Some(_) => self.shuffle_pos + 1,
+            None => 0,
+        }
+    }
+
     /// Index that `next` would select, without mutating queue state.
     fn peek_next_index(&self, repeat: &RepeatMode) -> Option<usize> {
         if self.tracks.is_empty() {
             return None;
         }
         if let Some(ref order) = self.shuffle_order {
-            let next_pos = self.shuffle_pos + 1;
+            let next_pos = self.next_shuffle_pos();
             match repeat {
                 RepeatMode::All => Some(order[next_pos % order.len()]),
                 RepeatMode::Off | RepeatMode::One => {
@@ -181,7 +196,7 @@ impl Queue {
     pub fn next(&mut self, repeat: &RepeatMode) -> Option<&str> {
         let next_idx = self.peek_next_index(repeat)?;
         if let Some(ref order) = self.shuffle_order.clone() {
-            let next_pos = self.shuffle_pos + 1;
+            let next_pos = self.next_shuffle_pos();
             match repeat {
                 RepeatMode::All => self.shuffle_pos = next_pos % order.len(),
                 RepeatMode::Off | RepeatMode::One => self.shuffle_pos = next_pos,
@@ -250,8 +265,11 @@ impl Queue {
             }
         };
 
-        self.current_index = prev_idx;
-        prev_idx.and_then(|i| self.tracks.get(i).map(String::as_str))
+        // At the start of the queue there is nothing to go back to, and the
+        // current track keeps playing, so its index has to stay put.
+        let prev_idx = prev_idx?;
+        self.current_index = Some(prev_idx);
+        self.tracks.get(prev_idx).map(String::as_str)
     }
 
     pub fn set_shuffle(&mut self, enabled: bool) {
@@ -2133,12 +2151,36 @@ mod tests {
         let mut queue = queue_of(&["a", "b", "c"]);
         queue.jump(0);
         assert_eq!(queue.previous(&RepeatMode::Off), None);
-        // Unlike `next`, `previous` unconditionally writes
-        // `current_index = prev_idx` (no early-return `?`), so it becomes
-        // None here rather than staying at 0.
-        assert_eq!(queue.current_index(), None);
+        assert_eq!(queue.current_index(), Some(0));
         assert_eq!(queue.previous(&RepeatMode::One), None);
-        assert_eq!(queue.current_index(), None);
+        assert_eq!(queue.current_index(), Some(0));
+        // The track after the first is still next.
+        assert_eq!(queue.next(&RepeatMode::Off), Some("b"));
+    }
+
+    #[test]
+    fn a_fresh_shuffled_queue_starts_at_the_first_shuffled_track() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.set_shuffle(true);
+        let order = queue.shuffle_order.clone().unwrap();
+        let played: Vec<usize> = (0..3)
+            .map(|_| {
+                queue.next(&RepeatMode::Off);
+                queue.current_index().unwrap()
+            })
+            .collect();
+        assert_eq!(played, order);
+        assert_eq!(queue.next(&RepeatMode::Off), None);
+    }
+
+    #[test]
+    fn previous_at_the_start_of_a_shuffled_queue_keeps_the_current_track() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.set_shuffle(true);
+        let first = queue.shuffle_order.as_ref().unwrap()[0];
+        queue.jump(first);
+        assert_eq!(queue.previous(&RepeatMode::Off), None);
+        assert_eq!(queue.current_index(), Some(first));
     }
 
     #[test]
