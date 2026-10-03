@@ -859,7 +859,9 @@ fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
             return DaemonResponse::err(e);
         }
         state.player.enqueue(&path);
-        state.player.queue.jump(0);
+        // The queue may already hold other tracks; point it at the one added.
+        let index = state.player.queue.tracks().len() - 1;
+        state.player.queue.jump(index);
         if let Err(e) = state.player.play(&path) {
             return DaemonResponse::err(e.to_string());
         }
