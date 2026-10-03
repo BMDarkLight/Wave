@@ -92,13 +92,14 @@ impl Queue {
             self.shuffle_order = None;
             return;
         }
+        use std::hash::BuildHasher;
+
         let mut order: Vec<usize> = (0..self.tracks.len()).collect();
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(42) as usize;
+        // A freshly keyed SipHash is random enough for a shuffle and needs no
+        // extra dependency.
+        let hasher = std::collections::hash_map::RandomState::new();
         for i in (1..order.len()).rev() {
-            let j = (seed.wrapping_mul(i + 1).wrapping_add(seed)) % (i + 1);
+            let j = (hasher.hash_one(i) % (i as u64 + 1)) as usize;
             order.swap(i, j);
         }
         if let Some(idx) = self.current_index {
@@ -2179,6 +2180,19 @@ mod tests {
         assert_eq!(sorted, vec![0, 1, 2, 3, 4]);
         // Current track is pinned to the front of the shuffle order.
         assert_eq!(order[0], 2);
+    }
+
+    #[test]
+    fn set_shuffle_reaches_most_orders() {
+        // 5 tracks have 120 orders; a shuffle keyed on one small seed
+        // reaches at most half of them.
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..2000 {
+            let mut queue = queue_of(&["a", "b", "c", "d", "e"]);
+            queue.set_shuffle(true);
+            seen.insert(queue.shuffle_order.unwrap());
+        }
+        assert!(seen.len() > 100, "only {} distinct orders", seen.len());
     }
 
     #[test]
