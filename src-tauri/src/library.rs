@@ -1139,6 +1139,12 @@ impl Library {
             .filter(|s| !s.is_empty())
             .map(str::to_string);
 
+        // The legacy Library name still counts as Library everywhere, so a
+        // playlist given it could never be renamed or deleted again.
+        if is_library_playlist_name(name) && !allow_duplicate_suffix {
+            return Err(format!("\"{name}\" is reserved for the Library"));
+        }
+
         let connection = self.lock_connection()?;
         let profile_id = ensure_profile_with_connection(&connection, "default", "Default")?;
         let final_name = if allow_duplicate_suffix {
@@ -1212,7 +1218,9 @@ impl Library {
         profile_id: &str,
         base: &str,
     ) -> Result<String, String> {
-        if !self.playlist_name_exists(connection, profile_id, base)? {
+        if !is_library_playlist_name(base)
+            && !self.playlist_name_exists(connection, profile_id, base)?
+        {
             return Ok(base.to_string());
         }
 
@@ -1282,6 +1290,10 @@ impl Library {
 
         if current_name == "Favorites" {
             return Err("The \"Favorites\" playlist cannot be renamed".to_string());
+        }
+
+        if is_library_playlist_name(name) {
+            return Err(format!("\"{name}\" is reserved for the Library"));
         }
 
         if name != current_name && self.playlist_name_exists(&connection, &profile_id, name)? {
@@ -5933,6 +5945,26 @@ mod tests {
             .rename_playlist(&favorites_id, "My Songs")
             .expect_err("should not rename favorites");
         assert!(err.contains("cannot be renamed"));
+    }
+
+    #[test]
+    fn the_legacy_library_name_cannot_be_taken() {
+        let library = open_test_library().expect("library");
+        let err = library
+            .create_playlist("All Local Files", None)
+            .expect_err("reserved name");
+        assert!(err.contains("reserved"));
+
+        let mix = library.create_playlist("Mix", None).expect("create");
+        let err = library
+            .rename_playlist(&mix.id, "All Local Files")
+            .expect_err("reserved name");
+        assert!(err.contains("reserved"));
+
+        let imported = library
+            .create_playlist_for_import("All Local Files")
+            .expect("import");
+        assert_eq!(imported.name, "All Local Files (2)");
     }
 
     #[test]
