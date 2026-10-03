@@ -1328,7 +1328,9 @@ impl Library {
                 params![playlist_id],
                 |row| row.get::<_, Option<String>>(0),
             )
-            .map_err(|e| format!("Failed to look up playlist: {e}"))?;
+            .optional()
+            .map_err(|e| format!("Failed to look up playlist: {e}"))?
+            .ok_or_else(|| "Playlist not found".to_string())?;
         if sync_folder.as_deref().is_some_and(|s| !s.trim().is_empty()) {
             return Err(
                 "Synced playlists cannot be cleared. Unlink the sync folder first.".to_string(),
@@ -6068,6 +6070,15 @@ mod tests {
 
         let favorites = library.get_playlist_tracks(&favorites_id).expect("tracks");
         assert_eq!(favorites.len(), 1);
+    }
+
+    #[test]
+    fn clear_playlist_reports_an_unknown_id() {
+        let library = open_test_library().expect("library");
+        let err = library
+            .clear_playlist("00000000-0000-0000-0000-000000000000")
+            .expect_err("unknown playlist");
+        assert_eq!(err, "Playlist not found");
     }
 
     #[test]
