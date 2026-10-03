@@ -2632,6 +2632,9 @@ pub async fn set_output_device(
         .unwrap_or_else(|e| e.into_inner())
         .clone();
     let eq_version = *guard.eq_version.lock().unwrap_or_else(|e| e.into_inner());
+    let crossfade = guard.crossfade_duration();
+    let gapless = guard.gapless_enabled();
+    let normalization = guard.volume_normalization_enabled();
 
     // Build a new player on the requested device.
     let mut new_player = AudioPlayer::new_with_device(&device_name)?;
@@ -2646,6 +2649,9 @@ pub async fn set_output_device(
         .eq_version
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = eq_version;
+    new_player.set_crossfade_duration(crossfade);
+    new_player.set_gapless_enabled(gapless);
+    new_player.set_volume_normalization_enabled(normalization);
 
     // Resume playback best-effort: a failure here (e.g. the file that was
     // playing has since been deleted) shouldn't discard an otherwise-

@@ -928,6 +928,9 @@ fn rebuild_player_on_device(state: &mut DaemonState, name: &str) -> Result<(), S
         .player
         .set_crossfade_duration(old.crossfade_duration());
     state.player.set_gapless_enabled(old.gapless_enabled());
+    state
+        .player
+        .set_volume_normalization_enabled(old.volume_normalization_enabled());
     let vol = old.volume();
     state.player.set_volume(vol).map_err(|e| e.to_string())?;
     if let Some(path) = old.get_current_path() {
