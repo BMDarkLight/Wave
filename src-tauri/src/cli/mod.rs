@@ -726,7 +726,10 @@ pub fn run() {
         // clap adds its own blank line after this, so drop the mark's.
         command = command.before_help(banner::mark(&plain).trim_end().to_string());
     }
-    let cli = Cli::from_arg_matches(&command.get_matches()).unwrap_or_else(|e| e.exit());
+    let cli = command
+        .try_get_matches()
+        .and_then(|matches| Cli::from_arg_matches(&matches))
+        .unwrap_or_else(|e| usage_error(e));
 
     // Resolved again now that the flags are known; the Ui above only had the
     // environment to go on.
@@ -755,6 +758,33 @@ pub fn run() {
         }
         None => print!("{}", banner::landing(ui::current())),
     }
+}
+
+/// Leave over a bad command line. Under --json the error comes out in the
+/// same envelope as every other failure, so a script never has to parse
+/// clap's text. Help and version requests are not failures and print as usual.
+fn usage_error(error: clap::Error) -> ! {
+    use clap::error::ErrorKind;
+    let shown_on_request = matches!(
+        error.kind(),
+        ErrorKind::DisplayHelp
+            | ErrorKind::DisplayVersion
+            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    );
+    if shown_on_request || !std::env::args().any(|arg| arg == "--json") {
+        error.exit();
+    }
+    // The first paragraph is the error itself; clap puts the missing argument
+    // names or the allowed values on the lines under it.
+    let rendered = error.render().to_string();
+    let message = rendered
+        .lines()
+        .take_while(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let message = message.trim_start_matches("error: ");
+    json::emit_error(message, error.exit_code())
 }
 
 pub(crate) fn daemon_cmd(request: DaemonRequest) {
