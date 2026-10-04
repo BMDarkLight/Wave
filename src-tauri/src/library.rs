@@ -2521,39 +2521,60 @@ impl Library {
         Ok(())
     }
 
-    /// Import an M3U/M3U8 file, creating a new playlist and adding all
-    /// referenced files to it. Returns the new playlist id and imported tracks.
-    pub fn import_playlist_m3u(
+    /// Import a playlist file (M3U, M3U8 or Wave JSON) as a new playlist, in
+    /// one go. Returns the playlist id and how many tracks it ended up with.
+    ///
+    /// The app does the same steps itself so that reading tags, the slow
+    /// part, can run without holding the library: see `commands::import_playlist`.
+    pub fn import_playlist_file(
         &self,
-        m3u_path: &str,
+        path: &str,
         playlist_name: Option<&str>,
-    ) -> Result<(String, Vec<Track>), String> {
-        let content = std::fs::read_to_string(m3u_path)
-            .map_err(|error| format!("Failed to read M3U file: {error}"))?;
-        let name = playlist_name.unwrap_or_else(|| {
-            Path::new(m3u_path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("Imported Playlist")
-        });
+    ) -> Result<(String, usize), String> {
+        let file = read_playlist_file(path)?;
+        let playlist = self.create_playlist_for_import(playlist_name.unwrap_or(&file.name))?;
+        let known = self.track_ids_by_paths(&file.paths)?;
+        let entries = import_entries(self.app_handle.as_ref(), &file.paths, &known);
+        let added = self.append_import_entries(&playlist.id, &entries)?;
+        Ok((playlist.id, added))
+    }
 
-        let playlist_info = self.create_playlist_for_import(name)?;
-        let playlist_id = playlist_info.id;
-
-        let base = Path::new(m3u_path).parent();
-        let mut tracks = Vec::new();
-        for line in content.trim_start_matches('\u{feff}').lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let path = m3u_entry_path(base, line);
-            match self.add_track_to_playlist(&playlist_id, path) {
-                Ok(track) => tracks.push(track),
-                Err(error) => tracing::warn!("Skipped during M3U import ({line}): {error}"),
+    /// Append imported entries to a playlist in the order given, in one
+    /// transaction. New files are stored first, reusing a track the library
+    /// already holds under the same tags. Returns how many entries were added;
+    /// one the playlist already holds is not added twice.
+    pub fn append_import_entries(
+        &self,
+        playlist_id: &str,
+        entries: &[ImportEntry],
+    ) -> Result<usize, String> {
+        let now = now_timestamp();
+        let mut connection = self.lock_connection()?;
+        let tx = connection
+            .transaction()
+            .map_err(|e| format!("Failed to begin import transaction: {e}"))?;
+        let mut position = next_playlist_position(&tx, playlist_id)?;
+        let mut added = 0;
+        for entry in entries {
+            let track_id = match entry {
+                ImportEntry::Known(id) => id.clone(),
+                ImportEntry::New(track) => upsert_or_reuse_duplicate(&tx, track)?,
+            };
+            let inserted = tx
+                .execute(
+                    "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position, added_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![playlist_id, track_id, position, now],
+                )
+                .map_err(|e| format!("Failed to add imported track: {e}"))?;
+            if inserted > 0 {
+                added += 1;
+                position += 1;
             }
         }
-        Ok((playlist_id, tracks))
+        tx.commit()
+            .map_err(|e| format!("Failed to commit import transaction: {e}"))?;
+        Ok(added)
     }
 
     /// Export a playlist as a Wave JSON file (paths + metadata).
@@ -2585,45 +2606,6 @@ impl Library {
         std::fs::write(output_path, json)
             .map_err(|error| format!("Failed to write JSON file: {error}"))?;
         Ok(())
-    }
-
-    /// Import a Wave JSON playlist file, creating a new playlist.
-    pub fn import_playlist_json(
-        &self,
-        json_path: &str,
-        playlist_name: Option<&str>,
-    ) -> Result<(String, Vec<Track>), String> {
-        let content = std::fs::read_to_string(json_path)
-            .map_err(|error| format!("Failed to read JSON file: {error}"))?;
-        let export: PlaylistExportJson = serde_json::from_str(&content)
-            .map_err(|error| format!("Failed to parse playlist JSON: {error}"))?;
-        if export.format != "wave-playlist" {
-            return Err(format!(
-                "Unsupported playlist format: {} (expected wave-playlist)",
-                export.format
-            ));
-        }
-        if export.tracks.len() > 10_000 {
-            return Err(format!(
-                "Playlist has too many tracks ({}; max 10000)",
-                export.tracks.len()
-            ));
-        }
-
-        let name = playlist_name.unwrap_or(&export.name);
-        let playlist_info = self.create_playlist_for_import(name)?;
-        let playlist_id = playlist_info.id;
-
-        let mut tracks = Vec::new();
-        for track in &export.tracks {
-            match self.add_track_to_playlist(&playlist_id, track.path.clone()) {
-                Ok(t) => tracks.push(t),
-                Err(error) => {
-                    tracing::warn!("Skipped during JSON import ({}): {error}", track.path)
-                }
-            }
-        }
-        Ok((playlist_id, tracks))
     }
 
     /// Export all saved track lyrics as a Wave JSON backup.
@@ -4828,6 +4810,99 @@ fn sync_track_fts(conn: &impl Queryable, track: &Track) -> Result<(), String> {
     )
     .map_err(|e| format!("Failed to sync tracks_fts: {e}"))?;
     Ok(())
+}
+
+/// A playlist file read from disk: its own name and the tracks it lists.
+pub struct PlaylistFile {
+    pub name: String,
+    pub paths: Vec<String>,
+}
+
+/// One track of an import, either already in the library or read fresh.
+pub enum ImportEntry {
+    Known(String),
+    New(Box<Track>),
+}
+
+/// Read an M3U, M3U8 or Wave JSON playlist file. Touches no database, so it
+/// can run without the library lock.
+pub fn read_playlist_file(path: &str) -> Result<PlaylistFile, String> {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let stem = Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Imported Playlist")
+        .to_string();
+    match extension.as_str() {
+        "m3u" | "m3u8" => {
+            let content = std::fs::read_to_string(path)
+                .map_err(|error| format!("Failed to read M3U file: {error}"))?;
+            let base = Path::new(path).parent();
+            let paths = content
+                .trim_start_matches('\u{feff}')
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|line| m3u_entry_path(base, line))
+                .collect();
+            Ok(PlaylistFile { name: stem, paths })
+        }
+        "json" => {
+            let content = std::fs::read_to_string(path)
+                .map_err(|error| format!("Failed to read JSON file: {error}"))?;
+            let export: PlaylistExportJson = serde_json::from_str(&content)
+                .map_err(|error| format!("Failed to parse playlist JSON: {error}"))?;
+            if export.format != "wave-playlist" {
+                return Err(format!(
+                    "Unsupported playlist format: {} (expected wave-playlist)",
+                    export.format
+                ));
+            }
+            if export.tracks.len() > 10_000 {
+                return Err(format!(
+                    "Playlist has too many tracks ({}; max 10000)",
+                    export.tracks.len()
+                ));
+            }
+            Ok(PlaylistFile {
+                name: export.name,
+                paths: export.tracks.into_iter().map(|t| t.path).collect(),
+            })
+        }
+        other => Err(format!(
+            "Unsupported playlist file format: .{other} (use .m3u, .m3u8, or .json)"
+        )),
+    }
+}
+
+/// Turn listed paths into import entries, reading tags for the files the
+/// library does not know yet. `known` is `Library::track_ids_by_paths` for
+/// the same paths. Slow for a long list of new files, and needs no lock.
+/// A file that cannot be read is left out, with a warning.
+pub fn import_entries(
+    app: Option<&tauri::AppHandle>,
+    paths: &[String],
+    known: &std::collections::HashMap<String, String>,
+) -> Vec<ImportEntry> {
+    paths
+        .iter()
+        .filter_map(|path| {
+            if let Some(id) = known.get(&normalize_path_key(path)) {
+                return Some(ImportEntry::Known(id.clone()));
+            }
+            match extract_track(app, path) {
+                Ok(track) => Some(ImportEntry::New(Box::new(track))),
+                Err(error) => {
+                    tracing::warn!("Skipped during playlist import ({path}): {error}");
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 /// Where an M3U entry points. Other players usually write paths relative to
@@ -7340,6 +7415,39 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))
             .unwrap();
         assert_eq!(rows, 1, "what was counted is what is stored");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_playlist_import_keeps_the_file_order_and_reuses_known_tracks() {
+        let library = open_test_library().unwrap();
+        let dir = import_dir();
+        for name in ["a.wav", "b.wav", "c.wav"] {
+            write_silent_wav(&dir.join(name));
+        }
+        let known = dir.join("b.wav").to_string_lossy().into_owned();
+        library
+            .add_track_to_default_playlist(known.clone())
+            .unwrap();
+        let list = dir.join("list.m3u");
+        std::fs::write(&list, "#EXTM3U\nc.wav\nb.wav\nmissing.wav\na.wav\nc.wav\n").unwrap();
+
+        let (id, added) = library
+            .import_playlist_file(&list.to_string_lossy(), None)
+            .unwrap();
+        assert_eq!(added, 3, "the missing file and the repeat are not added");
+        let names: Vec<String> = library
+            .get_playlist_tracks(&id)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(names, vec!["c.wav", "b.wav", "a.wav"]);
+        let rows: i64 = library
+            .read_connection()
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 3, "b.wav was already known and is not stored twice");
         std::fs::remove_dir_all(&dir).ok();
     }
 

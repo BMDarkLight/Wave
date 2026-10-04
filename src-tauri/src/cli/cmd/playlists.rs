@@ -60,22 +60,9 @@ fn cmd_playlists_import(file: String, name: Option<String>) {
     if let Err(e) = crate::path_validation::validate_playlist_import_path(&file) {
         ui::fail(e, None, ui::EXIT_GENERAL);
     }
-    let ext = Path::new(&file)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
-    let result = match ext.as_str() {
-        "json" => library.import_playlist_json(&file, name.as_deref()),
-        "m3u" | "m3u8" => library.import_playlist_m3u(&file, name.as_deref()),
-        _ => ui::fail(
-            format!("Unsupported playlist format: .{ext}"),
-            Some("use .m3u, .m3u8, or .json"),
-            ui::EXIT_GENERAL,
-        ),
-    };
+    let result = library.import_playlist_file(&file, name.as_deref());
     match result {
-        Ok((id, tracks)) => {
+        Ok((id, track_count)) => {
             let name = library
                 .get_playlist_info(&id)
                 .ok()
@@ -85,9 +72,9 @@ fn cmd_playlists_import(file: String, name: Option<String>) {
             ui::done(
                 format!(
                     "Imported playlist \"{name}\" with {}.",
-                    ui::count(tracks.len(), "track", "tracks")
+                    ui::count(track_count, "track", "tracks")
                 ),
-                json!({ "id": id, "name": name, "tracks": tracks.len() }),
+                json!({ "id": id, "name": name, "tracks": track_count }),
             );
             println!("  {}", ui::current().dim(&format!("id {id}")));
         }

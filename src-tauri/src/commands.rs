@@ -2522,52 +2522,36 @@ pub async fn import_playlist(
     name: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<ImportResultDto, String> {
-    let app = app.clone();
     validate_playlist_import_path(&path)?;
-    let extension = Path::new(&path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .unwrap_or_default();
 
-    let (playlist_id, tracks) = match extension.as_str() {
-        "json" => {
-            blocking({
-                let app = app.clone();
-                move || {
-                    let library = app.state::<LibraryState>();
-                    let lib = library.0.lock().map_err(|e| e.to_string())?;
-                    lib.import_playlist_json(&path, name.as_deref())
-                }
-            })
-            .await?
-        }
-        "m3u" | "m3u8" => {
-            let app = app.clone();
-            blocking(move || {
-                let library = app.state::<LibraryState>();
-                let lib = library.0.lock().map_err(|e| e.to_string())?;
-                lib.import_playlist_m3u(&path, name.as_deref())
-            })
-            .await?
-        }
-        _ => return Err(format!("Unsupported playlist file format: .{extension}")),
-    };
-
-    let pid = playlist_id.clone();
-    let info = blocking(move || {
+    // Reading tags for every new file is the slow part, so it runs with the
+    // library unlocked; the lock is only taken for each short write. Holding
+    // it throughout froze every other library call until the import ended.
+    blocking(move || {
+        let file = crate::library::read_playlist_file(&path)?;
         let library = app.state::<LibraryState>();
-        let lib = library.0.lock().map_err(|e| e.to_string())?;
-        lib.get_playlist_info(&pid)?
-            .ok_or_else(|| "Imported playlist not found".to_string())
-    })
-    .await?;
+        let (playlist, known) = {
+            let lib = library.0.lock().map_err(|e| e.to_string())?;
+            let playlist = lib.create_playlist_for_import(name.as_deref().unwrap_or(&file.name))?;
+            let known = lib.track_ids_by_paths(&file.paths)?;
+            (playlist, known)
+        };
 
-    Ok(ImportResultDto {
-        playlist_id,
-        playlist_name: info.name,
-        track_count: tracks.len(),
+        const BATCH_SIZE: usize = 50;
+        let mut track_count = 0;
+        for chunk in file.paths.chunks(BATCH_SIZE) {
+            let entries = crate::library::import_entries(Some(&app), chunk, &known);
+            let lib = library.0.lock().map_err(|e| e.to_string())?;
+            track_count += lib.append_import_entries(&playlist.id, &entries)?;
+        }
+
+        Ok(ImportResultDto {
+            playlist_id: playlist.id,
+            playlist_name: playlist.name,
+            track_count,
+        })
     })
+    .await
 }
 
 #[tauri::command]
