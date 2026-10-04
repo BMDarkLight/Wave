@@ -969,6 +969,20 @@ fn playback_tick_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>
         if !guard.player.should_auto_advance() {
             // keep waiting
         } else if let Ok(Some(path)) = guard.player.play_next() {
+            // Repeat one restarts the same file, which tick_listen cannot
+            // tell apart from the track simply playing on, so close the
+            // finished play here.
+            if guard.listen.matches_player_path(&path) {
+                let duration = guard.player.duration_seconds();
+                if let Some(flush) = guard.listen.switch_track(
+                    path.clone(),
+                    path.clone(),
+                    duration,
+                    ListenEndReason::Completed,
+                ) {
+                    record_listen_flush(&guard.library, flush);
+                }
+            }
             sync_media_for_path(&mut guard, &path);
         } else {
             let _ = guard.player.stop();
