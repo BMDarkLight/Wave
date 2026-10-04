@@ -222,6 +222,9 @@ pub fn extract_track_with_options(
 
     let mut tags = Tags::default();
     let mut cover_art = None;
+    if keeps_tags_in_id3_chunk(&path_buf) {
+        cover_art = merge_lofty_tags(&mut tags, &path_buf);
+    }
     if let Some(metadata) = probed.metadata.get() {
         if let Some(revision) = metadata.current() {
             merge_tags(&mut tags, revision.tags());
@@ -446,6 +449,83 @@ fn merge_tags(target: &mut Tags, tags: &[Tag]) {
     }
 }
 
+/// WAV and AIFF files that Wave tags carry the tags in an ID3 chunk, which
+/// Symphonia's readers for those containers skip. Without this, a title set
+/// in Wave reads back as the file name on the next scan.
+fn keeps_tags_in_id3_chunk(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        matches!(
+            e.to_ascii_lowercase().as_str(),
+            "wav" | "wave" | "aiff" | "aif"
+        )
+    })
+}
+
+/// Fill `target` from every tag lofty finds in the file, and return its
+/// front cover if it has one.
+fn merge_lofty_tags(target: &mut Tags, path: &Path) -> Option<CoverArt> {
+    use lofty::file::TaggedFileExt;
+    use lofty::prelude::{Accessor, ItemKey};
+
+    let file = lofty::probe::Probe::open(path)
+        .ok()?
+        .guess_file_type()
+        .ok()?
+        .read()
+        .ok()?;
+    let mut cover = None;
+    for tag in file.tags() {
+        let text = |target: &mut Option<String>, value: Option<String>| {
+            if let Some(value) = value.filter(|v| !v.trim().is_empty()) {
+                set_once(target, value);
+            }
+        };
+        text(&mut target.title, tag.title().map(|v| v.into_owned()));
+        text(&mut target.artist, tag.artist().map(|v| v.into_owned()));
+        text(&mut target.album, tag.album().map(|v| v.into_owned()));
+        text(&mut target.genre, tag.genre().map(|v| v.into_owned()));
+        text(
+            &mut target.album_artist,
+            tag.get_string(ItemKey::AlbumArtist).map(str::to_string),
+        );
+        text(
+            &mut target.lyrics,
+            tag.get_string(ItemKey::Lyrics).map(str::to_string),
+        );
+        target.year = target.year.or_else(|| {
+            tag.get_string(ItemKey::RecordingDate)
+                .or_else(|| tag.get_string(ItemKey::Year))
+                .and_then(parse_year)
+        });
+        target.track_number = target
+            .track_number
+            .or_else(|| tag.track().map(|n| n as i32));
+        target.disc_number = target.disc_number.or_else(|| tag.disk().map(|n| n as i32));
+
+        if cover.is_none() {
+            let picture = tag
+                .pictures()
+                .iter()
+                .find(|p| p.pic_type() == lofty::picture::PictureType::CoverFront)
+                .or_else(|| tag.pictures().first());
+            if let Some(picture) = picture {
+                let data = picture.data();
+                if !data.is_empty() && data.len() <= MAX_EMBEDDED_ART_BYTES {
+                    cover = Some(CoverArt {
+                        data: data.to_vec(),
+                        mime: picture
+                            .mime_type()
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_else(|| "image/jpeg".to_string()),
+                        source: "embedded".to_string(),
+                    });
+                }
+            }
+        }
+    }
+    cover
+}
+
 struct CoverArt {
     data: Vec<u8>,
     mime: String,
@@ -499,6 +579,15 @@ pub fn extract_full_cover_data_url(
             .map(|bytes| crate::cover_art::full_cover_data_url(bytes, "image/jpeg")));
     }
 
+    Ok(embedded_cover(path)?.map(|art| crate::cover_art::full_cover_data_url(art.data, &art.mime)))
+}
+
+/// The cover embedded in a local file, at full size, with its MIME type.
+pub fn extract_embedded_cover(path: &str) -> Result<Option<(Vec<u8>, String)>, String> {
+    Ok(embedded_cover(path)?.map(|art| (art.data, art.mime)))
+}
+
+fn embedded_cover(path: &str) -> Result<Option<CoverArt>, String> {
     let path_buf = PathBuf::from(path);
     if !path_buf.is_file() {
         return Err("Audio file does not exist".to_string());
@@ -525,9 +614,14 @@ pub fn extract_full_cover_data_url(
         .map_err(|error| format!("Failed to inspect audio file: {error}"))?;
 
     let mut cover_art = None;
-    if let Some(metadata) = probed.metadata.get() {
-        if let Some(revision) = metadata.current() {
-            cover_art = extract_cover_art(revision.visuals());
+    if keeps_tags_in_id3_chunk(&path_buf) {
+        cover_art = merge_lofty_tags(&mut Tags::default(), &path_buf);
+    }
+    if cover_art.is_none() {
+        if let Some(metadata) = probed.metadata.get() {
+            if let Some(revision) = metadata.current() {
+                cover_art = extract_cover_art(revision.visuals());
+            }
         }
     }
     if cover_art.is_none() {
@@ -536,7 +630,7 @@ pub fn extract_full_cover_data_url(
         }
     }
 
-    Ok(cover_art.map(|art| crate::cover_art::full_cover_data_url(art.data, &art.mime)))
+    Ok(cover_art)
 }
 
 /// Sidecar lyric files sitting beside the audio, in preference order.

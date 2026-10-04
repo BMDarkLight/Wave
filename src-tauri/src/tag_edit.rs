@@ -200,8 +200,17 @@ pub fn write_to_file(path: &Path, edit: &ResolvedEdit) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut file = lofty::read_from_path(path)
-        .map_err(|e| format!("Failed to read tags from {}: {e}", path.display()))?;
+    // Sniff the container from the bytes rather than trusting the extension:
+    // a `.ogg` file is as often Opus as it is Vorbis, and reading it as the
+    // wrong one fails outright.
+    let read_error =
+        |e: &dyn std::fmt::Display| format!("Failed to read tags from {}: {e}", path.display());
+    let mut file = lofty::probe::Probe::open(path)
+        .map_err(|e| read_error(&e))?
+        .guess_file_type()
+        .map_err(|e| read_error(&e))?
+        .read()
+        .map_err(|e| read_error(&e))?;
 
     let tag_type = file.primary_tag_type();
     if file.primary_tag_mut().is_none() {
@@ -505,6 +514,40 @@ mod tests {
         assert_eq!(tag.track(), Some(3));
 
         let _ = std::fs::remove_file(wav);
+    }
+
+    #[test]
+    fn tags_written_to_a_wav_are_read_back_by_the_library_scanner() {
+        let wav = temp_path("scan.wav");
+        write_silent_wav(&wav);
+        let png = temp_path("scan-cover.png");
+        write_png(&png);
+        let edit = TagEdit {
+            title: Some("Once in a Lifetime".into()),
+            artist: Some("Talking Heads".into()),
+            year: Some("1980".into()),
+            track_number: Some("4".into()),
+            cover: Some(CoverEdit::Replace {
+                path: png.to_string_lossy().into_owned(),
+            }),
+            ..Default::default()
+        }
+        .resolve()
+        .unwrap();
+        write_to_file(&wav, &edit).unwrap();
+
+        let path = wav.to_string_lossy().into_owned();
+        let track = crate::metadata::extract_track(None, &path).unwrap();
+        assert_eq!(track.title, "Once in a Lifetime");
+        assert_eq!(track.artist, "Talking Heads");
+        assert_eq!(track.year, Some(1980));
+        assert_eq!(track.track_number, Some(4));
+        assert!(crate::metadata::extract_embedded_cover(&path)
+            .unwrap()
+            .is_some());
+
+        let _ = std::fs::remove_file(wav);
+        let _ = std::fs::remove_file(png);
     }
 
     #[test]

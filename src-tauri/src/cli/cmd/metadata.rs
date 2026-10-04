@@ -100,61 +100,53 @@ fn cmd_metadata_get(track_id: String) {
 fn cmd_metadata_cover_export(track_id: String, output: String) {
     let library = open_library();
     let path = track_path_or_exit(&library, &track_id);
-    let track = library
-        .get_tracks_by_paths(std::slice::from_ref(&path))
+
+    // The file's own cover comes first, at full size. The library only keeps
+    // a thumbnail, as a file path rather than a data URL, so it is the
+    // fallback for a cover that came from somewhere other than the file.
+    let cover = crate::metadata::extract_embedded_cover(&path)
         .ok()
-        .and_then(|v| v.into_iter().next().flatten())
-        .or_else(|| extract_track(None, &path).ok());
-    match track {
-        Some(t) => {
-            if let Some(data_url) = &t.cover_art_data_url {
-                // data:image/jpeg;base64,/9j...
-                if let Some(comma_pos) = data_url.find(',') {
-                    let b64 = &data_url[comma_pos + 1..];
-                    use base64::Engine;
-                    match base64::engine::general_purpose::STANDARD.decode(b64) {
-                        Ok(bytes) => {
-                            std::fs::write(&output, &bytes).unwrap_or_else(|e| {
-                                ui::fail(
-                                    format!("Failed to write cover art: {e}"),
-                                    None,
-                                    ui::EXIT_GENERAL,
-                                );
-                            });
-                            ui::done(
-                                format!("Cover art exported to {output}"),
-                                json!({ "output": output }),
-                            );
-                        }
-                        Err(e) => {
-                            ui::fail(
-                                format!("Failed to decode cover art: {e}"),
-                                None,
-                                ui::EXIT_GENERAL,
-                            );
-                        }
-                    }
-                } else {
-                    ui::fail("Invalid cover art data URL.", None, ui::EXIT_GENERAL);
-                }
-            } else {
-                ui::fail(
-                    "No cover art available for this track.",
-                    None,
-                    ui::EXIT_GENERAL,
-                );
-            }
-        }
-        None => {
-            ui::fail(
-                format!("Could not read track: {path}"),
-                None,
-                ui::EXIT_GENERAL,
-            );
-        }
-    }
+        .flatten()
+        .or_else(|| library_cover(&library, &path));
+    let Some((bytes, mime)) = cover else {
+        ui::fail(
+            "No cover art available for this track.",
+            None,
+            ui::EXIT_NOT_FOUND,
+        );
+    };
+    std::fs::write(&output, &bytes).unwrap_or_else(|e| {
+        ui::fail(
+            format!("Failed to write cover art: {e}"),
+            None,
+            ui::EXIT_GENERAL,
+        );
+    });
+    ui::done(
+        format!("Cover art exported to {output}"),
+        json!({ "output": output, "mime": mime, "bytes": bytes.len() }),
+    );
 }
 
+/// The cover the library holds for `path`: a data URL on older rows, a path
+/// to a stored thumbnail on current ones.
+fn library_cover(library: &crate::library::Library, path: &str) -> Option<(Vec<u8>, String)> {
+    let track = library
+        .get_tracks_by_paths(&[path.to_string()])
+        .ok()?
+        .into_iter()
+        .next()
+        .flatten()?;
+    let stored = track.cover_art_data_url?;
+    if stored.starts_with("data:") {
+        return crate::cover_art::decode_data_url(&stored).ok();
+    }
+    let bytes = std::fs::read(&stored).ok()?;
+    let mime = track
+        .cover_art_mime
+        .unwrap_or_else(|| "image/jpeg".to_string());
+    Some((bytes, mime))
+}
 fn cmd_metadata_cover_set(track_id: String, image: String) {
     let library = open_library();
 
