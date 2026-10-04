@@ -55,7 +55,13 @@ fn safe_component(raw: &str, fallback: &str) -> String {
     if cleaned.is_empty() {
         fallback.to_string()
     } else if cleaned.len() > 120 {
-        cleaned.chars().take(120).collect()
+        // Filesystems limit names in bytes, not characters, so cut on the
+        // last whole character that fits in 120 bytes.
+        let mut end = 120;
+        while !cleaned.is_char_boundary(end) {
+            end -= 1;
+        }
+        cleaned[..end].trim_end().to_string()
     } else {
         cleaned
     }
@@ -182,6 +188,16 @@ mod tests {
         t.title = "Who Made Who?".into();
         let path = relative_layout(&t);
         assert_eq!(path, PathBuf::from("AC_DC/Singles/Who Made Who_.mp3"));
+    }
+
+    #[test]
+    fn long_titles_stay_within_filename_byte_limits() {
+        let mut t = track();
+        t.title = "夜".repeat(200);
+        let path = relative_layout(&t);
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(name.len() <= 255, "{} bytes", name.len());
+        assert!(name.starts_with('夜') && name.ends_with(".mp3"));
     }
 
     #[test]

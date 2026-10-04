@@ -132,14 +132,27 @@ pub fn fetch_to(client: &Client, url: &str, dest: &Path) -> Result<u64, SourceEr
         "{}.part",
         dest.extension().and_then(|e| e.to_str()).unwrap_or("tmp")
     ));
-    let written = {
+    let copied = {
         let mut file = fs::File::create(&temp)
             .map_err(|e| SourceError::Network(format!("Cannot open cache file: {e}")))?;
         // Cap while streaming too: a server can omit or lie about content-length.
-        let mut limited = (&mut response).take(MAX_FETCH_BYTES);
+        // One byte past the cap is read so an oversized body is caught rather
+        // than cut short and kept as if it were the whole file.
+        let mut limited = (&mut response).take(MAX_FETCH_BYTES + 1);
         std::io::copy(&mut limited, &mut file)
-            .map_err(|e| SourceError::Network(format!("Download failed: {e}")))?
     };
+    // The file is closed by now, so the partial download can be removed.
+    let written = copied.map_err(|e| {
+        let _ = fs::remove_file(&temp);
+        SourceError::Network(format!("Download failed: {e}"))
+    })?;
+
+    if written > MAX_FETCH_BYTES {
+        let _ = fs::remove_file(&temp);
+        return Err(SourceError::Network(format!(
+            "Refusing to download more than {MAX_FETCH_BYTES} bytes"
+        )));
+    }
 
     if written == 0 {
         let _ = fs::remove_file(&temp);
