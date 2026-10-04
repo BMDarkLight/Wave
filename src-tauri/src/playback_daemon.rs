@@ -651,13 +651,23 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
                 track_label(&state.library, &path)
             ))
         }
-        DaemonRequest::QueueRemove { index } => match state.player.remove_from_queue(index) {
-            Some(path) => DaemonResponse::ok_msg(format!(
-                "Removed from queue: {}",
-                track_label(&state.library, &path)
-            )),
-            None => DaemonResponse::err(format!("Invalid queue index: {index}")),
-        },
+        DaemonRequest::QueueRemove { index } => {
+            let playing_before = state.player.get_current_path().cloned();
+            match state.player.remove_from_queue(index) {
+                Some(path) => {
+                    // Removing the playing track moves playback on.
+                    if state.player.get_current_path() != playing_before.as_ref() {
+                        state.listen_skip = true;
+                        sync_media_current_track(state);
+                    }
+                    DaemonResponse::ok_msg(format!(
+                        "Removed from queue: {}",
+                        track_label(&state.library, &path)
+                    ))
+                }
+                None => DaemonResponse::err(format!("Invalid queue index: {index}")),
+            }
+        }
         DaemonRequest::QueueInsertNext { track_id } => {
             let path = match resolve_track_path(&state.library, &track_id) {
                 Ok(p) => p,

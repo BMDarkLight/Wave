@@ -2041,8 +2041,23 @@ impl AudioPlayer {
         self.queue.insert_next(path.to_string());
     }
 
+    /// Remove a queue entry. Removing the track that is playing moves on to
+    /// the one after it, or stops at the end of the queue: otherwise the
+    /// removed track plays out and the queue then skips its successor.
     pub fn remove_from_queue(&mut self, index: usize) -> Option<String> {
-        self.queue.remove_at(index)
+        let was_current = self.queue.current_index() == Some(index);
+        let removed = self.queue.remove_at(index)?;
+        if was_current && self.current_path.is_some() {
+            let paused = self.is_paused();
+            if index < self.queue.tracks().len() {
+                if self.jump_to_queue_index(index).is_ok() && paused {
+                    let _ = self.pause();
+                }
+            } else {
+                let _ = self.stop();
+            }
+        }
+        Some(removed)
     }
 
     pub fn move_queue_track(&mut self, from: usize, to: usize) -> bool {
