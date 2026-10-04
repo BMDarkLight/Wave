@@ -281,11 +281,16 @@ export function usePlaylistManager({
   ) => {
     try {
       setError(null);
-      const path = await savePlaylistDialog(playlistName);
-      if (!path) return;
-      const exportFormat = path.toLowerCase().endsWith(".json")
+      const chosen = await savePlaylistDialog(playlistName);
+      if (!chosen) return;
+      const exportFormat = chosen.toLowerCase().endsWith(".json")
         ? "json"
         : "m3u";
+      // Not every platform's save dialog adds the extension, and the backend
+      // refuses a path without one.
+      const path = chosen.toLowerCase().endsWith(`.${exportFormat}`)
+        ? chosen
+        : `${chosen}.${exportFormat}`;
       await exportPlaylist(playlistId, path, exportFormat);
     } catch (err) {
       setError(formatInvokeError(err, `Failed to export "${playlistName}"`));

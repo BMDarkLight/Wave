@@ -26,7 +26,8 @@ use crate::metadata::{
     enrich_lyrics_online, is_supported_audio_file, supported_audio_extensions, Track,
 };
 use crate::path_validation::{
-    is_android_content_uri, validate_audio_path, validate_safe_output_path,
+    is_android_content_uri, validate_audio_path, validate_playlist_import_path,
+    validate_safe_output_path,
 };
 use crate::tag_edit::{Change, ResolvedEdit, TagEdit};
 use tauri::{Emitter, Manager};
@@ -2522,6 +2523,7 @@ pub async fn import_playlist(
     app: tauri::AppHandle,
 ) -> Result<ImportResultDto, String> {
     let app = app.clone();
+    validate_playlist_import_path(&path)?;
     let extension = Path::new(&path)
         .extension()
         .and_then(|e| e.to_str())

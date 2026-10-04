@@ -2519,13 +2519,15 @@ impl Library {
         let playlist_info = self.create_playlist_for_import(name)?;
         let playlist_id = playlist_info.id;
 
+        let base = Path::new(m3u_path).parent();
         let mut tracks = Vec::new();
-        for line in content.lines() {
+        for line in content.trim_start_matches('\u{feff}').lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            match self.add_track_to_playlist(&playlist_id, line.to_string()) {
+            let path = m3u_entry_path(base, line);
+            match self.add_track_to_playlist(&playlist_id, path) {
                 Ok(track) => tracks.push(track),
                 Err(error) => tracing::warn!("Skipped during M3U import ({line}): {error}"),
             }
@@ -4651,6 +4653,30 @@ fn sync_track_fts(conn: &impl Queryable, track: &Track) -> Result<(), String> {
     Ok(())
 }
 
+/// Where an M3U entry points. Other players usually write paths relative to
+/// the playlist file, and some write `file://` URLs; both are turned into the
+/// plain path the library stores. Other URLs, such as Android content URIs,
+/// pass through untouched.
+fn m3u_entry_path(base: Option<&Path>, entry: &str) -> String {
+    if entry.starts_with("file://") {
+        if let Some(path) = url::Url::parse(entry)
+            .ok()
+            .and_then(|url| url.to_file_path().ok())
+        {
+            return path.to_string_lossy().into_owned();
+        }
+        return entry.to_string();
+    }
+    if entry.contains("://") {
+        return entry.to_string();
+    }
+    let path = Path::new(entry);
+    match base {
+        Some(base) if path.is_relative() => base.join(path).to_string_lossy().into_owned(),
+        _ => entry.to_string(),
+    }
+}
+
 /// Build an FTS5 MATCH query: each token becomes a prefix term (`foo*`).
 fn build_fts_match_query(raw: &str) -> Option<String> {
     let tokens: Vec<String> = raw
@@ -5146,6 +5172,25 @@ mod tests {
             .find_local_match("Song", "Artist")
             .unwrap()
             .is_none());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn m3u_entries_resolve_against_the_playlist_folder() {
+        let base = Some(Path::new("/music/lists"));
+        assert_eq!(
+            m3u_entry_path(base, "Album/01 Song.mp3"),
+            "/music/lists/Album/01 Song.mp3"
+        );
+        assert_eq!(m3u_entry_path(base, "/abs/song.mp3"), "/abs/song.mp3");
+        assert_eq!(
+            m3u_entry_path(base, "file:///abs/My%20Song.mp3"),
+            "/abs/My Song.mp3"
+        );
+        assert_eq!(
+            m3u_entry_path(base, "content://media/audio/7"),
+            "content://media/audio/7"
+        );
     }
 
     fn sample_track(id: &str, path: &str) -> Track {
