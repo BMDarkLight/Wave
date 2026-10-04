@@ -3970,35 +3970,76 @@ fn ensure_library_tracks_view(connection: &Connection) -> rusqlite::Result<()> {
     }
 }
 
+/// What makes two local rows the same song for `deduplicate_tracks`: artist,
+/// album and title, compared the way SQLite's `lower()` does.
+///
+/// An album that is just the name of the folder the file sits in was most
+/// likely guessed from that folder because the file has no tags, so the
+/// folder itself joins the key. Otherwise untagged `01.mp3` files in two
+/// unrelated `CD1` folders would read as one song, and one of them would be
+/// deleted.
+type DedupeKey = (String, String, String, Option<String>);
+
+fn dedupe_key(path: &str, artist: &str, album: &str, title: &str) -> DedupeKey {
+    let path = path.replace('\\', "/");
+    let folder_scope = path.rsplit_once('/').and_then(|(dir, _)| {
+        let folder = dir.rsplit('/').next().unwrap_or(dir);
+        folder
+            .eq_ignore_ascii_case(album.trim())
+            .then(|| dir.to_ascii_lowercase())
+    });
+    (
+        artist.to_ascii_lowercase(),
+        album.to_ascii_lowercase(),
+        title.to_ascii_lowercase(),
+        folder_scope,
+    )
+}
+
 /// The local row `deduplicate_tracks` would keep in place of `track`, as its
-/// id and path. Mirrors that function's rules so an import agrees with what
-/// the library will hold after the next startup.
-fn tag_duplicate_of(
-    conn: &impl Queryable,
-    track: &Track,
-) -> Result<Option<(String, String)>, String> {
+/// id and path. Uses the same key so an import agrees with what the library
+/// will hold after the next startup.
+fn tag_duplicate_of(conn: &Connection, track: &Track) -> Result<Option<(String, String)>, String> {
     let title = track.title.trim();
     if title.is_empty() || title.eq_ignore_ascii_case("unknown") {
         return Ok(None);
     }
-    conn.query_opt(
-        "SELECT id, path FROM tracks
-         WHERE source_provider IS NULL
-           AND lower(artist) = lower(?1)
-           AND lower(album) = lower(?2)
-           AND lower(title) = lower(?3)
-         ORDER BY indexed_at ASC, id ASC
-         LIMIT 1",
-        params![track.artist, track.album, track.title],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )
-    .map_err(|e| format!("Failed to look up duplicate track: {e}"))
+    let key = dedupe_key(&track.path, &track.artist, &track.album, &track.title);
+    let mut statement = conn
+        .prepare(
+            "SELECT id, path, artist, album, title FROM tracks
+             WHERE source_provider IS NULL
+               AND lower(artist) = lower(?1)
+               AND lower(album) = lower(?2)
+               AND lower(title) = lower(?3)
+             ORDER BY indexed_at ASC, id ASC",
+        )
+        .map_err(|e| format!("Failed to look up duplicate track: {e}"))?;
+    let rows = statement
+        .query_map(params![track.artist, track.album, track.title], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|e| format!("Failed to look up duplicate track: {e}"))?;
+    for row in rows {
+        let (id, path, artist, album, title) =
+            row.map_err(|e| format!("Failed to read duplicate track: {e}"))?;
+        if dedupe_key(&path, &artist, &album, &title) == key {
+            return Ok(Some((id, path)));
+        }
+    }
+    Ok(None)
 }
 
 /// Store `track`, unless it is a new path that duplicates an existing row by
 /// tags. The startup dedupe would delete such a row, and its playlist entries
 /// with it, so the existing row is used in its place.
-fn upsert_or_reuse_duplicate(conn: &impl Queryable, track: &Track) -> Result<String, String> {
+fn upsert_or_reuse_duplicate(conn: &Connection, track: &Track) -> Result<String, String> {
     let known_path = conn
         .query_opt(
             "SELECT 1 FROM tracks WHERE path = ?1",
@@ -4016,7 +4057,7 @@ fn upsert_or_reuse_duplicate(conn: &impl Queryable, track: &Track) -> Result<Str
 }
 
 /// Find an existing library row for this file: path → fingerprint → tags.
-fn find_existing_track_id(conn: &impl Queryable, track: &Track) -> Result<Option<String>, String> {
+fn find_existing_track_id(conn: &Connection, track: &Track) -> Result<Option<String>, String> {
     if let Some(id) = resolve_track_id_by_path(conn, &track.path)? {
         return Ok(Some(id));
     }
@@ -4036,30 +4077,13 @@ fn find_existing_track_id(conn: &impl Queryable, track: &Track) -> Result<Option
         }
     }
 
-    // Tag match (same heuristic as startup dedupe).
-    if !track.title.is_empty() && track.title != "Unknown" {
-        if let Some(id) = conn
-            .query_opt(
-                "SELECT id FROM tracks
-                 WHERE lower(artist) = lower(?1)
-                   AND lower(album) = lower(?2)
-                   AND lower(title) = lower(?3)
-                 LIMIT 1",
-                params![track.artist, track.album, track.title],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("Failed to look up track by tags: {e}"))?
-        {
-            return Ok(Some(id));
-        }
-    }
-
-    Ok(None)
+    // Tag match, by the same rule as the startup dedupe.
+    Ok(tag_duplicate_of(conn, track)?.map(|(id, _)| id))
 }
 
 /// Upsert for sync: reuse fingerprint/tag matches and rewrite `path` to the
 /// canonical scanned location so later syncs stop seeing false "new" files.
-fn upsert_track_deduped(conn: &impl Queryable, track: &Track) -> Result<String, String> {
+fn upsert_track_deduped(conn: &Connection, track: &Track) -> Result<String, String> {
     let mut track = track.clone();
     track.path = normalize_path_key(&track.path);
 
@@ -4507,24 +4531,47 @@ fn deduplicate_tracks(connection: &Connection) -> Result<(), String> {
              dupe_id TEXT PRIMARY KEY,
              keep_id TEXT NOT NULL
          );
-         DELETE FROM _dedup_map;
-         -- Sourced rows are keyed by (provider, id), not by tags. A streamed
-         -- track legitimately shares artist/album/title with a local file,
-         -- so tag-based dedup must never see them.
-         INSERT INTO _dedup_map (dupe_id, keep_id)
-         SELECT id, keep_id FROM (
-             SELECT id,
-                    FIRST_VALUE(id) OVER (
-                        PARTITION BY lower(artist), lower(album), lower(title)
-                        ORDER BY indexed_at ASC, id ASC
-                    ) AS keep_id
-             FROM tracks
-             WHERE source_provider IS NULL
-               AND trim(title) != '' AND lower(trim(title)) != 'unknown'
-         )
-         WHERE id != keep_id;",
+         DELETE FROM _dedup_map;",
     )
     .map_err(|e| format!("Failed to map duplicate tracks: {e}"))?;
+
+    // Sourced rows are keyed by (provider, id), not by tags. A streamed track
+    // legitimately shares artist/album/title with a local file, so tag-based
+    // dedup must never see them. Oldest first, so the earliest copy is kept.
+    let candidates: Vec<(String, String, String, String, String)> = tx
+        .query_vec(
+            "SELECT id, path, artist, album, title FROM tracks
+             WHERE source_provider IS NULL
+               AND trim(title) != '' AND lower(trim(title)) != 'unknown'
+             ORDER BY indexed_at ASC, id ASC",
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .map_err(|e| format!("Failed to read tracks for dedup: {e}"))?;
+    let mut keepers: std::collections::HashMap<DedupeKey, String> =
+        std::collections::HashMap::new();
+    for (id, path, artist, album, title) in candidates {
+        let key = dedupe_key(&path, &artist, &album, &title);
+        match keepers.get(&key) {
+            Some(keep_id) => {
+                tx.execute(
+                    "INSERT INTO _dedup_map (dupe_id, keep_id) VALUES (?1, ?2)",
+                    params![id, keep_id],
+                )
+                .map_err(|e| format!("Failed to map duplicate track: {e}"))?;
+            }
+            None => {
+                keepers.insert(key, id);
+            }
+        }
+    }
 
     let duplicates: i64 = tx
         .query_row("SELECT COUNT(*) FROM _dedup_map", [], |row| row.get(0))
@@ -5337,6 +5384,58 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
             .unwrap();
         assert_eq!(rows, 2);
+    }
+
+    #[test]
+    fn dedup_keeps_untagged_files_from_different_folders_of_the_same_name() {
+        let library = open_test_library().unwrap();
+        // Untagged, so artist, album ("CD1") and title come from the path.
+        let guessed = |id: &str, path: &str| Track {
+            title: "01".into(),
+            artist: "Unknown Artist".into(),
+            album: "CD1".into(),
+            ..sample_track(id, path)
+        };
+        let mut same_folder = guessed("c", "/music/Album A/CD1/01.flac");
+        same_folder.indexed_at = 3;
+        {
+            let connection = library.lock_connection().unwrap();
+            upsert_track(&*connection, &guessed("a", "/music/Album A/CD1/01.mp3")).unwrap();
+            upsert_track(&*connection, &guessed("b", "/music/Album B/CD1/01.mp3")).unwrap();
+            upsert_track(&*connection, &same_folder).unwrap();
+            deduplicate_tracks(&connection).unwrap();
+        }
+        let ids: Vec<String> = library
+            .read_connection()
+            .prepare("SELECT id FROM tracks ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        // Two folders, two songs; the second format in Album A is one song.
+        assert_eq!(ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn dedup_still_merges_tagged_copies_in_different_folders() {
+        assert_eq!(
+            dedupe_key(
+                "/music/Artist/Album/song.mp3",
+                "Artist",
+                "Some Album",
+                "Song"
+            ),
+            dedupe_key("/downloads/song.flac", "ARTIST", "some album", "song"),
+        );
+        assert_ne!(
+            dedupe_key("/a/CD1/01.mp3", "Unknown Artist", "CD1", "01"),
+            dedupe_key("/b/CD1/01.mp3", "Unknown Artist", "CD1", "01"),
+        );
+        assert_eq!(
+            dedupe_key("C:\\Music\\CD1\\01.mp3", "x", "CD1", "01"),
+            dedupe_key("C:/Music/CD1/01.flac", "x", "cd1", "01"),
+        );
     }
 
     #[test]
