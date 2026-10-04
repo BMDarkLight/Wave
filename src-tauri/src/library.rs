@@ -4492,91 +4492,115 @@ fn repair_all_playlist_positions(connection: &Connection) -> Result<(), String> 
 /// Remove duplicate tracks that share the same artist, album, and title,
 /// keeping the earliest indexed copy. Untitled / "Unknown" rows are left alone
 /// so distinct untagged files are not collapsed together.
+///
+/// What pointed at a duplicate is moved onto the copy that stays: playlist
+/// entries, listening stats and track-to-track transitions. Deleting the row
+/// alone would cascade them away, so a track merged here would silently drop
+/// out of every playlist it was in and lose its play counts.
 fn deduplicate_tracks(connection: &Connection) -> Result<(), String> {
-    let keep_ids: Vec<String> = {
-        let mut stmt = connection
-            .prepare(
-                "SELECT id FROM (
-                     SELECT id,
-                            ROW_NUMBER() OVER (
-                                PARTITION BY lower(artist), lower(album), lower(title)
-                                ORDER BY indexed_at ASC, id ASC
-                            ) AS rn
-                     FROM tracks
-                     WHERE source_provider IS NULL
-                       AND trim(title) != '' AND lower(trim(title)) != 'unknown'
-                 )
-                 WHERE rn = 1
-                 UNION ALL
-                 SELECT id FROM tracks
-                 WHERE source_provider IS NULL
-                   AND (trim(title) = '' OR lower(trim(title)) = 'unknown')
-                 UNION ALL
-                 -- Sourced rows are keyed by (provider, id), not by tags. A
-                 -- streamed track legitimately shares artist/album/title with
-                 -- a local file, so tag-based dedup must never see them.
-                 SELECT id FROM tracks WHERE source_provider IS NOT NULL",
-            )
-            .map_err(|e| format!("Failed to prepare dedup query: {e}"))?;
-        let rows = stmt
-            .query_map([], |row| row.get(0))
-            .map_err(|e| format!("Failed to query dedup keepers: {e}"))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to read dedup keepers: {e}"))?;
-        rows
-    };
-
-    if keep_ids.is_empty() {
-        return Ok(());
-    }
-
     let tx = connection
         .unchecked_transaction()
         .map_err(|e| format!("Failed to begin dedup transaction: {e}"))?;
 
-    // Build a temporary table of ids to keep for efficient NOT IN filtering
-    tx.execute_batch("CREATE TEMPORARY TABLE IF NOT EXISTS _dedup_keep (id TEXT PRIMARY KEY)")
-        .map_err(|e| format!("Failed to create dedup temp table: {e}"))?;
-    tx.execute("DELETE FROM _dedup_keep", [])
-        .map_err(|e| format!("Failed to clear dedup temp table: {e}"))?;
-    for id in &keep_ids {
-        tx.execute("INSERT INTO _dedup_keep (id) VALUES (?1)", params![id])
-            .map_err(|e| format!("Failed to insert dedup keeper: {e}"))?;
+    tx.execute_batch(
+        "CREATE TEMPORARY TABLE IF NOT EXISTS _dedup_map (
+             dupe_id TEXT PRIMARY KEY,
+             keep_id TEXT NOT NULL
+         );
+         DELETE FROM _dedup_map;
+         -- Sourced rows are keyed by (provider, id), not by tags. A streamed
+         -- track legitimately shares artist/album/title with a local file,
+         -- so tag-based dedup must never see them.
+         INSERT INTO _dedup_map (dupe_id, keep_id)
+         SELECT id, keep_id FROM (
+             SELECT id,
+                    FIRST_VALUE(id) OVER (
+                        PARTITION BY lower(artist), lower(album), lower(title)
+                        ORDER BY indexed_at ASC, id ASC
+                    ) AS keep_id
+             FROM tracks
+             WHERE source_provider IS NULL
+               AND trim(title) != '' AND lower(trim(title)) != 'unknown'
+         )
+         WHERE id != keep_id;",
+    )
+    .map_err(|e| format!("Failed to map duplicate tracks: {e}"))?;
+
+    let duplicates: i64 = tx
+        .query_row("SELECT COUNT(*) FROM _dedup_map", [], |row| row.get(0))
+        .map_err(|e| format!("Failed to count duplicate tracks: {e}"))?;
+    if duplicates == 0 {
+        let _ = tx.execute_batch("DROP TABLE IF EXISTS _dedup_map");
+        return tx
+            .commit()
+            .map_err(|e| format!("Failed to commit dedup transaction: {e}"));
     }
 
-    // Remove orphaned playlist_tracks entries first
-    tx.execute(
-        "DELETE FROM playlist_tracks
-         WHERE track_id NOT IN (SELECT id FROM _dedup_keep)",
-        [],
-    )
-    .map_err(|e| format!("Failed to remove duplicate playlist tracks: {e}"))?;
+    tx.execute_batch(
+        "-- A playlist that already holds the kept copy keeps that entry; the
+         -- duplicate's entry is dropped rather than doubled.
+         UPDATE OR IGNORE playlist_tracks
+            SET track_id = (SELECT keep_id FROM _dedup_map WHERE dupe_id = track_id)
+          WHERE track_id IN (SELECT dupe_id FROM _dedup_map);
+         DELETE FROM playlist_tracks
+          WHERE track_id IN (SELECT dupe_id FROM _dedup_map);
 
-    // Remove the duplicate tracks themselves
+         INSERT INTO listen_stats
+             (track_id, play_count, skip_count, listen_seconds, last_played_at)
+         SELECT m.keep_id, SUM(s.play_count), SUM(s.skip_count),
+                SUM(s.listen_seconds), MAX(s.last_played_at)
+           FROM listen_stats s
+           JOIN _dedup_map m ON m.dupe_id = s.track_id
+          WHERE true
+          GROUP BY m.keep_id
+         ON CONFLICT(track_id) DO UPDATE SET
+             play_count = play_count + excluded.play_count,
+             skip_count = skip_count + excluded.skip_count,
+             listen_seconds = listen_seconds + excluded.listen_seconds,
+             last_played_at = MAX(last_played_at, excluded.last_played_at);
+         DELETE FROM listen_stats
+          WHERE track_id IN (SELECT dupe_id FROM _dedup_map);
+
+         -- A transition between two copies of the same song is not a real
+         -- transition, so it is not carried over.
+         INSERT INTO track_transitions (from_track_id, to_track_id, kind, count, last_at)
+         SELECT COALESCE(mf.keep_id, t.from_track_id) AS from_id,
+                COALESCE(mt.keep_id, t.to_track_id) AS to_id,
+                t.kind, SUM(t.count), MAX(t.last_at)
+           FROM track_transitions t
+           LEFT JOIN _dedup_map mf ON mf.dupe_id = t.from_track_id
+           LEFT JOIN _dedup_map mt ON mt.dupe_id = t.to_track_id
+          WHERE (mf.dupe_id IS NOT NULL OR mt.dupe_id IS NOT NULL)
+            AND COALESCE(mf.keep_id, t.from_track_id) != COALESCE(mt.keep_id, t.to_track_id)
+          GROUP BY from_id, to_id, t.kind
+         ON CONFLICT(from_track_id, to_track_id, kind) DO UPDATE SET
+             count = count + excluded.count,
+             last_at = MAX(last_at, excluded.last_at);
+         DELETE FROM track_transitions
+          WHERE from_track_id IN (SELECT dupe_id FROM _dedup_map)
+             OR to_track_id IN (SELECT dupe_id FROM _dedup_map);",
+    )
+    .map_err(|e| format!("Failed to move duplicate track references: {e}"))?;
+
     let removed = tx
         .execute(
-            "DELETE FROM tracks
-             WHERE id NOT IN (SELECT id FROM _dedup_keep)",
+            "DELETE FROM tracks WHERE id IN (SELECT dupe_id FROM _dedup_map)",
             [],
         )
         .map_err(|e| format!("Failed to remove duplicate tracks: {e}"))?;
-
     let _ = tx.execute(
-        "DELETE FROM tracks_fts
-         WHERE track_id NOT IN (SELECT id FROM _dedup_keep)",
+        "DELETE FROM tracks_fts WHERE track_id IN (SELECT dupe_id FROM _dedup_map)",
         [],
     );
 
-    tx.execute("DROP TABLE IF EXISTS _dedup_keep", [])
+    tx.execute("DROP TABLE IF EXISTS _dedup_map", [])
         .map_err(|e| format!("Failed to drop dedup temp table: {e}"))?;
-
     tx.commit()
         .map_err(|e| format!("Failed to commit dedup transaction: {e}"))?;
 
     if removed > 0 {
         tracing::info!("Removed {removed} duplicate track(s) on startup");
     }
-
     Ok(())
 }
 
@@ -5244,6 +5268,75 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 2, "local file and cached stream must both survive");
+    }
+
+    #[test]
+    fn dedup_moves_playlists_and_stats_onto_the_copy_it_keeps() {
+        let library = open_test_library().unwrap();
+        let playlist = library.create_playlist("Road Trip", None).unwrap();
+        let mut keep = sample_track("keep", "/music/song.flac");
+        keep.indexed_at = 1;
+        let mut dupe = sample_track("dupe", "/music/song.mp3");
+        dupe.indexed_at = 2;
+        let other = Track {
+            title: "Other".into(),
+            ..sample_track("other", "/music/other.mp3")
+        };
+        {
+            let connection = library.lock_connection().unwrap();
+            for track in [&keep, &dupe, &other] {
+                upsert_track(&*connection, track).unwrap();
+            }
+            connection
+                .execute_batch(&format!(
+                    "INSERT INTO playlist_tracks VALUES ('{p}', 'dupe', 0, 0);
+                     INSERT INTO playlist_tracks VALUES ('{p}', 'other', 1, 0);
+                     INSERT INTO listen_stats VALUES ('keep', 2, 0, 100, 10);
+                     INSERT INTO listen_stats VALUES ('dupe', 3, 1, 50, 20);
+                     INSERT INTO track_transitions VALUES ('dupe', 'other', 'next', 4, 5);
+                     INSERT INTO track_transitions VALUES ('keep', 'dupe', 'next', 1, 5);",
+                    p = playlist.id
+                ))
+                .unwrap();
+            deduplicate_tracks(&connection).unwrap();
+        }
+
+        let connection = library.read_connection();
+        let in_playlist: Vec<String> = connection
+            .prepare(
+                "SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position",
+            )
+            .unwrap()
+            .query_map(params![playlist.id], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(in_playlist, vec!["keep", "other"]);
+
+        let stats: (i64, i64, f64, i64) = connection
+            .query_row(
+                "SELECT play_count, skip_count, listen_seconds, last_played_at
+                 FROM listen_stats WHERE track_id = 'keep'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(stats, (5, 1, 150.0, 20));
+
+        let transitions: Vec<(String, String, i64)> = connection
+            .prepare("SELECT from_track_id, to_track_id, count FROM track_transitions")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        // The keep -> dupe edge was between two copies of one song.
+        assert_eq!(transitions, vec![("keep".into(), "other".into(), 4)]);
+
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 2);
     }
 
     #[test]
