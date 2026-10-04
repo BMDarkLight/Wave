@@ -124,10 +124,12 @@ impl EqPresetFile {
     pub fn load_from(path: &str) -> Result<EqConfig, String> {
         let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
         let pf: Self = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+        // The file may have been edited by hand, so hold it to the same
+        // limits the controls enforce.
         Ok(EqConfig {
-            bands: pf.bands,
+            bands: pf.bands.map(|db| db.clamp(-12.0, 12.0)),
             enabled: pf.enabled,
-            crossfade_duration: pf.crossfade_duration,
+            crossfade_duration: pf.crossfade_duration.clamp(0.0, 8.0),
         })
     }
 }
@@ -886,6 +888,21 @@ impl Source for SoftFade {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_imported_eq_file_is_held_to_the_control_limits() {
+        let path = std::env::temp_dir().join(format!("wave-eq-{}.json", uuid::Uuid::new_v4()));
+        let mut config = EqConfig::default();
+        config.bands[0] = 40.0;
+        config.bands[9] = -40.0;
+        config.crossfade_duration = 30.0;
+        EqPresetFile::save_to(path.to_str().unwrap(), &config, None).unwrap();
+        let loaded = EqPresetFile::load_from(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(loaded.bands[0], 12.0);
+        assert_eq!(loaded.bands[9], -12.0);
+        assert_eq!(loaded.crossfade_duration, 8.0);
+    }
 
     // ── EqConfig::apply_preset / list_presets ───────────────────────────────
 

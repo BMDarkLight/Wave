@@ -42,6 +42,16 @@ pub fn run(cmd: DspCmd) {
                     ui::EXIT_GENERAL,
                 );
             }
+            if bands
+                .iter()
+                .any(|db| !db.is_finite() || !(-12.0..=12.0).contains(db))
+            {
+                ui::fail(
+                    "Band gains must be between -12 and +12 dB.",
+                    None,
+                    ui::EXIT_GENERAL,
+                );
+            }
             let mut arr = [0.0f32; 10];
             arr.copy_from_slice(&bands);
             let dsp = apply_dsp_request(DaemonRequest::SetEqBands { bands: arr });
