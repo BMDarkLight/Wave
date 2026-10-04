@@ -392,12 +392,10 @@ impl Library {
                     WHERE source_provider IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS idx_tracks_source_state
                     ON tracks(source_state, source_fetched_at);
-                DROP VIEW IF EXISTS library_tracks;
-                CREATE VIEW library_tracks AS
-                    SELECT * FROM tracks
-                    WHERE source_state IS NULL OR source_state = 'downloaded';
                 ",
             )
+            .map_err(|error| format!("Failed to initialize source schema: {error}"))?;
+        ensure_library_tracks_view(&connection)
             .map_err(|error| format!("Failed to initialize source schema: {error}"))?;
         ensure_playlist_column(&connection, "sync_folder", "TEXT")?;
         ensure_table_column(&connection, "artist_similar", "similar_mbid", "TEXT")?;
@@ -651,7 +649,7 @@ impl Library {
             let tx = connection
                 .transaction()
                 .map_err(|e| format!("Failed to begin transaction: {e}"))?;
-            let track_id = upsert_track(&tx, &track)?;
+            let track_id = upsert_or_reuse_duplicate(&tx, &track)?;
             track.id = track_id;
             tx.commit()
                 .map_err(|e| format!("Failed to commit transaction: {e}"))?;
@@ -664,7 +662,7 @@ impl Library {
             .transaction()
             .map_err(|e| format!("Failed to begin transaction: {e}"))?;
 
-        let track_id = upsert_track(&tx, &track)?;
+        let track_id = upsert_or_reuse_duplicate(&tx, &track)?;
         track.id = track_id.clone();
 
         let already_in_playlist = tx
@@ -1004,12 +1002,35 @@ impl Library {
                             continue;
                         }
                     };
-                    let track_id = match upsert_track(&tx, &track) {
-                        Ok(id) => id,
-                        Err(e) => {
-                            failed.push(format!("{path}: {e}"));
+                    // The startup dedupe removes a second row with the same
+                    // artist, album and title, so inserting one here would
+                    // count a track as imported that is gone on next launch.
+                    let duplicate = if already_indexed {
+                        None
+                    } else {
+                        match tag_duplicate_of(&tx, &track) {
+                            Ok(found) => found,
+                            Err(e) => {
+                                failed.push(format!("{path}: {e}"));
+                                continue;
+                            }
+                        }
+                    };
+                    let track_id = match duplicate {
+                        Some((_, existing)) if library_playlist => {
+                            failed.push(format!(
+                                "{path}: same artist, album and title as {existing}"
+                            ));
                             continue;
                         }
+                        Some((id, _)) => id,
+                        None => match upsert_track(&tx, &track) {
+                            Ok(id) => id,
+                            Err(e) => {
+                                failed.push(format!("{path}: {e}"));
+                                continue;
+                            }
+                        },
                     };
                     track.id = track_id.clone();
                     if library_playlist {
@@ -3907,6 +3928,91 @@ fn resolve_track_id_by_path(conn: &impl Queryable, path: &str) -> Result<Option<
         }
     }
     Ok(None)
+}
+
+/// Definition of the `library_tracks` view, exactly as SQLite stores it.
+const LIBRARY_TRACKS_VIEW_SQL: &str = "CREATE VIEW library_tracks AS \
+     SELECT * FROM tracks WHERE source_state IS NULL OR source_state = 'downloaded'";
+
+/// Create or update the `library_tracks` view, but only when it is missing or
+/// out of date. Every process that opens the library runs this, and the CLI is
+/// often started several times at once: dropping and recreating the view
+/// unconditionally let two of them interleave and fail with "already exists",
+/// and left a window in which other readers found no view at all.
+fn ensure_library_tracks_view(connection: &Connection) -> rusqlite::Result<()> {
+    let current = || {
+        connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'library_tracks'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+    };
+    if current()?.as_deref() == Some(LIBRARY_TRACKS_VIEW_SQL) {
+        return Ok(());
+    }
+    // Check again under the write lock: another process may have just done it.
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| {
+        if current()?.as_deref() != Some(LIBRARY_TRACKS_VIEW_SQL) {
+            connection.execute_batch("DROP VIEW IF EXISTS library_tracks")?;
+            connection.execute_batch(LIBRARY_TRACKS_VIEW_SQL)?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => connection.execute_batch("COMMIT"),
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// The local row `deduplicate_tracks` would keep in place of `track`, as its
+/// id and path. Mirrors that function's rules so an import agrees with what
+/// the library will hold after the next startup.
+fn tag_duplicate_of(
+    conn: &impl Queryable,
+    track: &Track,
+) -> Result<Option<(String, String)>, String> {
+    let title = track.title.trim();
+    if title.is_empty() || title.eq_ignore_ascii_case("unknown") {
+        return Ok(None);
+    }
+    conn.query_opt(
+        "SELECT id, path FROM tracks
+         WHERE source_provider IS NULL
+           AND lower(artist) = lower(?1)
+           AND lower(album) = lower(?2)
+           AND lower(title) = lower(?3)
+         ORDER BY indexed_at ASC, id ASC
+         LIMIT 1",
+        params![track.artist, track.album, track.title],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .map_err(|e| format!("Failed to look up duplicate track: {e}"))
+}
+
+/// Store `track`, unless it is a new path that duplicates an existing row by
+/// tags. The startup dedupe would delete such a row, and its playlist entries
+/// with it, so the existing row is used in its place.
+fn upsert_or_reuse_duplicate(conn: &impl Queryable, track: &Track) -> Result<String, String> {
+    let known_path = conn
+        .query_opt(
+            "SELECT 1 FROM tracks WHERE path = ?1",
+            params![track.path],
+            |_| Ok(()),
+        )
+        .map_err(|e| format!("Failed to look up track: {e}"))?
+        .is_some();
+    if !known_path {
+        if let Some((id, _)) = tag_duplicate_of(conn, track)? {
+            return Ok(id);
+        }
+    }
+    upsert_track(conn, track)
 }
 
 /// Find an existing library row for this file: path → fingerprint → tags.
@@ -6989,6 +7095,60 @@ mod tests {
         };
         assert_eq!(count_in(&listed), Some(1));
         assert_eq!(count_in(&found), Some(1));
+    }
+
+    #[test]
+    fn the_library_view_is_left_alone_once_it_is_current() {
+        let library = open_test_library().unwrap();
+        let connection = library.lock_connection().unwrap();
+        let stored = |c: &Connection| -> String {
+            c.query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'library_tracks'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        // Stored text must match exactly, or every open would rebuild it.
+        assert_eq!(stored(&connection), LIBRARY_TRACKS_VIEW_SQL);
+        connection
+            .execute_batch(
+                "DROP VIEW library_tracks;
+                 CREATE VIEW library_tracks AS SELECT * FROM tracks;",
+            )
+            .unwrap();
+        ensure_library_tracks_view(&connection).unwrap();
+        assert_eq!(stored(&connection), LIBRARY_TRACKS_VIEW_SQL);
+        ensure_library_tracks_view(&connection).unwrap();
+    }
+
+    #[test]
+    fn an_import_does_not_count_a_tag_duplicate_the_startup_dedupe_removes() {
+        let library = open_test_library().unwrap();
+        let dir = import_dir();
+        // Same folder and stem, so the same fallback artist, album and title.
+        write_silent_wav(&dir.join("song.wav"));
+        write_silent_wav(&dir.join("song.wave"));
+
+        let (tracks, failed) = library
+            .index_directory_with_progress(
+                None,
+                None,
+                dir.to_string_lossy().to_string(),
+                &mut |_, _, _| {},
+            )
+            .expect("import ran");
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert!(failed[0].contains("same artist, album and title"));
+
+        let rows: i64 = library
+            .lock_connection()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "what was counted is what is stored");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

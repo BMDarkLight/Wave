@@ -132,8 +132,19 @@ fn cmd_tracks_import(paths: Vec<String>) {
                 Err(e) => ui::report(format!("Could not import {path}: {e}"), None),
             }
         } else if p.is_file() {
+            let known = matches!(library.get_track_details(path), Ok(Some(_)));
             match library.add_track_to_default_playlist(path.clone()) {
+                // Already in the library, so nothing new was imported.
+                Ok(_) if known => {}
                 Ok(track) => {
+                    // A file whose tags match a track already in the library
+                    // is folded into that track rather than stored again.
+                    if !matches!(library.get_track_details(path), Ok(Some(_))) {
+                        skipped.push(format!(
+                            "{path}: same artist, album and title as a track already in the library"
+                        ));
+                        continue;
+                    }
                     if !ui.json {
                         println!("  {} by {}", track.title, track.artist);
                     }
@@ -142,7 +153,12 @@ fn cmd_tracks_import(paths: Vec<String>) {
                 Err(e) => skipped.push(format!("{path}: {e}")),
             }
         } else {
-            ui::report(format!("Path not found: {path}"), None);
+            // Under --json the skipped list carries it, so stderr stays empty
+            // for a command that otherwise succeeded.
+            if !ui.json {
+                ui::report(format!("Path not found: {path}"), None);
+            }
+            skipped.push(format!("{path}: not found"));
         }
     }
 
@@ -256,6 +272,15 @@ fn cmd_tracks_remove(track_id: String, playlist_id: Option<String>) {
 }
 
 fn cmd_tracks_reset(yes: bool) {
+    // A program driving the CLI has nobody to answer the prompt, and an
+    // open pipe on stdin would leave it waiting for good.
+    if !yes && (ui::current().json || !std::io::stdin().is_terminal()) {
+        ui::fail(
+            "Refusing to reset the library without confirmation.",
+            Some("pass --yes to confirm when not running interactively"),
+            ui::EXIT_GENERAL,
+        );
+    }
     if !yes {
         let confirmed = confirm_prompt(
             "This will delete ALL tracks and ALL playlists except Library and Favorites.\n\
