@@ -36,6 +36,15 @@ catalogs — in a single portable app built on Rust + Tauri + React.
   - [Desktop & OS integration](#desktop--os-integration)
   - [Command line](#command-line)
 - [Android](#android)
+- [Command line interface](#command-line-interface)
+  - [Library](#library)
+  - [Playlists and favorites](#playlists-and-favorites)
+  - [Playback](#playback)
+  - [Tags and cover art](#tags-and-cover-art)
+  - [Equalizer and playback settings](#equalizer-and-playback-settings)
+  - [Stats](#stats)
+  - [Terminal output](#terminal-output)
+  - [Scripting and automation](#scripting-and-automation)
 - [Screens](#screens)
 - [Tech stack](#tech-stack)
 - [Project structure](#project-structure)
@@ -219,38 +228,13 @@ genres — computed locally from your own playback history.
 
 ### Command line
 
-The same binary runs headless. `wave --cli` opens with the Wave mark, what is
-in the library, what is playing, and the commands worth knowing first; `wave
---help` has the full reference. Subcommands cover `tracks`, `playlists`,
-`playback`, `queue`, `devices`, `favorite`, `metadata`, `dsp`, `stats` and
-`now`, backed by a background playback daemon with its own tray icon and a
-localhost control socket.
+The same binary runs headless, with everything the app can do: the library,
+playlists, playback with a live dashboard, tags, the equalizer, and listening
+stats. Its JSON output, event stream, and batch input make it a dependable
+backend for scripts and other programs. See
+[Command line interface](#command-line-interface) for the full guide.
 
-```bash
-wave tracks import ~/Music          # scan files or folders into the library
-wave tracks list                    # fits your terminal, short IDs
-wave tracks info 3f2a91c4           # any unambiguous ID prefix works
-wave playlists export <id> m3u out.m3u
-wave play Favorites                 # a playlist by name or id, or a track
-wave now                            # live now-playing dashboard
-wave metadata set <id> --genre "Post-Punk" --year 1979
-wave stats artists --limit 10       # top artists by listen time
-wave tracks list --json             # machine-readable output
-wave now --json --watch             # playback changes as JSON lines
-find ~/Music -name '*.flac' | wave favorite add -    # many tracks from stdin
-wave --json batch < requests.txt    # many commands, one result line each
-wave completions zsh > _wave        # shell completions
-```
-
-Output adapts to the terminal: colour is dropped when stdout is not a TTY or
-when `NO_COLOR` is set (`--color` overrides both), the block characters fall
-back to ASCII when the console cannot render them or when `WAVE_ASCII` is set,
-and tables stack rather than wrap on narrow terminals. `--json` is the stable
-surface for scripts. Exit codes are 0 for success, 1 for a general failure, 2
-for a usage error, 3 when something is not found, 4 when the playback daemon is
-not running, and 5 for a conflict such as a playlist name that is taken. The
-full contract for other programs, with every JSON shape, is in
-[`docs/cli.md`](docs/cli.md).
+<img src="docs/screenshots/cli-landing.png" alt="wave --cli: the Wave mark, a summary of the library and what is playing, and the first commands to try" width="100%">
 
 ---
 
@@ -287,6 +271,208 @@ directly — no copying your music into app storage.
 </div>
 
 Details: [`docs/backend/android.md`](docs/backend/android.md).
+
+---
+
+## Command line interface
+
+`wave` with arguments runs as a command-line tool instead of opening the
+window. Every feature of the app is there, and it works well both for people at
+a terminal and for programs driving it.
+
+```bash
+wave --cli        # the landing screen: library summary, what's playing, first steps
+wave --help       # every command
+wave tracks --help
+```
+
+Library commands work any time, even while the app is open. Playback runs in a
+small background service, started by the first playback command, with its own
+tray or menu-bar icon (play/pause, next, previous, playlists). While the
+desktop app is open, it owns playback and the CLI's playback commands step
+aside.
+
+Anywhere a command wants a **track**, you can give its full id, the first few
+characters of the id (`3f2a91c4`, any prefix that matches only one track), or
+the path to the audio file. A **playlist** can be given by name (any case, or
+just the start of it when that is unique) or by id.
+
+### Library
+
+```bash
+wave tracks import ~/Music            # scan folders or files into the library
+wave tracks import a.flac b.mp3       # several at once
+wave tracks list                      # everything, sized to your terminal
+wave tracks list "Late Night Drive"   # one playlist's tracks
+wave tracks query solveig             # search title, artist and album
+wave tracks info 4a72a8cc             # every detail of one track
+wave tracks remove 4a72a8cc           # drop it from the library (the file stays)
+```
+
+<img src="docs/screenshots/cli-tracks.png" alt="wave tracks list: a table of short ids, durations, artists, albums and titles" width="100%">
+
+An import reports how many tracks were new and lists anything it skipped, with
+the reason, such as an unreadable file or a second copy of a song already in
+the library.
+
+### Playlists and favorites
+
+```bash
+wave playlists list
+wave playlists create "Road Trip"
+wave playlists add-track "Road Trip" 68a9c5c6
+wave playlists remove-track "Road Trip" 68a9c5c6
+wave playlists info "Road Trip"
+wave playlists rename "Road Trip" "Long Drive"
+wave playlists export "Long Drive" drive.m3u    # .m3u, .m3u8 or .json
+wave playlists import ~/Downloads/mix.m3u       # paths may be relative to the file
+wave playlists sync "Rainy Sunday"              # re-scan a folder-linked playlist
+wave playlists delete "Long Drive"
+
+wave favorite add 4a72a8cc
+wave favorite list
+```
+
+<img src="docs/screenshots/cli-playlist.png" alt="wave playlists info: the playlist's id and track count, then its tracks in order" width="100%">
+
+### Playback
+
+```bash
+wave play "Late Night Drive"     # a playlist, by name or id...
+wave play 4a72a8cc               # ...or a single track
+wave playback pause              # also: resume, stop, next, previous
+wave playback seek 1:30          # or 90, or a step: +10, -15
+wave queue add 68a9c5c6          # to the end of the queue
+wave queue next 68a9c5c6         # straight after the current track
+wave queue list
+wave queue remove 3              # positions as queue list shows them
+wave queue shuffle on            # omit on/off to toggle
+wave queue repeat all            # off, one or all
+wave devices list
+wave devices switch "External Headphones"
+wave devices volume 60%          # or 0.6, or a step: +10, -10
+wave playback shutdown           # stop the background service
+```
+
+`wave now` is a live dashboard of what's playing: the track, a progress bar,
+volume, output device, shuffle and repeat, and the next two tracks. It redraws
+in place until you press Ctrl-C, and `wave now --once` prints a single frame.
+
+<img src="docs/screenshots/cli-now.png" alt="wave now: the playing track with a progress bar, volume, device, repeat mode and the next two tracks" width="100%">
+
+<img src="docs/screenshots/cli-queue.png" alt="wave queue list: the queue in order with the current track marked" width="100%">
+
+### Tags and cover art
+
+```bash
+wave metadata get 4a72a8cc
+wave metadata set 4a72a8cc --title "Harbour Lights" --year 2023 --genre "Dream Pop"
+wave metadata set 4a72a8cc --genre ""          # an empty value clears the tag
+wave metadata cover-set 4a72a8cc cover.jpg     # into the file and the library
+wave metadata cover-export 4a72a8cc cover.jpg  # the full-size embedded cover
+```
+
+Tags are written into the audio file itself, so other players see them too,
+and the library is updated to match. The fields are `--title`, `--artist`,
+`--album`, `--album-artist`, `--genre`, `--year`, `--track-number` and
+`--disc-number`.
+
+### Equalizer and playback settings
+
+```bash
+wave dsp eq-show                 # the current curve, drawn
+wave dsp presets                 # flat, bass-boost, rock, jazz, vocal, ...
+wave dsp preset rock
+wave dsp eq-band 1k +3           # one band, by number (1-10) or frequency
+wave dsp eq-set 3 2 0 -1 -1 0 1 2 3 2   # all ten bands, 31 Hz to 16 kHz
+wave dsp bass +4                 # or treble: a dial that reshapes the curve
+wave dsp eq-disable              # also: eq-enable, eq-reset
+wave dsp crossfade 3             # seconds, 0 to 8; 0 turns it off
+wave dsp gapless on
+wave dsp export my-eq.json       # and wave dsp import my-eq.json
+```
+
+Gains run from -12 to +12 dB. With playback running, changes are heard at
+once; otherwise they are saved for the next time Wave plays.
+
+<img src="docs/screenshots/cli-eq.png" alt="wave dsp eq-show: equalizer, gapless and crossfade settings, and a bar per band" width="100%">
+
+### Stats
+
+```bash
+wave stats summary               # totals and the top tracks, artists, albums, genres
+wave stats recent                # recently played
+wave stats most                  # most played, by listening time
+wave stats artists --limit 10    # also: albums, genres
+```
+
+<img src="docs/screenshots/cli-stats.png" alt="wave stats summary: total listening time and plays, then top tracks, artists, albums and genres" width="100%">
+
+### Terminal output
+
+Output fits the terminal it lands in. Tables size their columns to the window
+and stack rather than wrap when it is narrow. Colour is dropped when output
+goes to a pipe or a file, or when `NO_COLOR` is set; `--color always|never`
+overrides both. Block characters fall back to ASCII on consoles that cannot
+draw them, or when `WAVE_ASCII` is set. Progress from a long import goes to
+stderr, so `wave tracks import ~/Music > log.txt` keeps the file clean.
+
+Shell completions are built in:
+
+```bash
+wave completions zsh > ~/.zfunc/_wave     # also bash, fish, elvish, powershell
+```
+
+### Scripting and automation
+
+Add `--json` to any command and the output becomes a stable contract that
+other programs can rely on: JSON on stdout when the command succeeds, a JSON
+error on stderr when it fails, and nothing else on either. Every documented
+shape carries a schema version, so a program can tell what it is talking to.
+
+<img src="docs/screenshots/cli-json.png" alt="wave --json playback status piped through jq, showing the state, title, position and queue position" width="100%">
+
+Failures exit with a status and a matching `kind`, so callers can branch
+without reading messages:
+
+| Exit status | `kind` | Meaning |
+|---|---|---|
+| 0 | | Success |
+| 1 | `general` | Something went wrong, such as an unreadable file |
+| 2 | `usage` | A wrong command, flag, or value, such as `dsp bass 30` |
+| 3 | `not_found` | No such track, playlist, file or cover |
+| 4 | `no_daemon` | Playback is not running |
+| 5 | `conflict` | A name already taken, a protected playlist, or the app owning playback |
+
+```bash
+$ wave --json playlists rename Nope Other
+{"code":3,"error":"Playlist not found: Nope","kind":"not_found","ok":false}
+```
+
+**Follow playback** as it happens, instead of polling: `wave now --json
+--watch` writes one JSON line per change (track, state, volume, queue, a seek)
+until playback stops.
+
+<img src="docs/screenshots/cli-watch.png" alt="wave now --json --watch piped through jq, printing an event line for each change: playing, paused, the next track, and the end" width="100%">
+
+**Send many requests at once** with `wave batch`, which reads them from stdin,
+runs them in order, and answers each on its own line. A request can be a
+command line, a JSON array of arguments, or a JSON object with an `id` that
+comes back in its answer. One failed request does not stop the rest.
+
+<img src="docs/screenshots/cli-batch.png" alt="wave batch reading four requests from a heredoc and printing a result line for each, with the duplicate playlist reported as a conflict" width="100%">
+
+**Pass many tracks** to any command that takes one by putting `-` in its place
+and listing them on stdin, one per line, NUL-separated, or as a JSON array:
+
+```bash
+find ~/Music/Jazz -name '*.flac' | wave favorite add -
+wave --json tracks query solveig | jq -r '.[].id' | wave queue next -
+printf '%s\n' a.flac b.flac | wave playlists add-track "Road Trip" -
+```
+
+The full contract, with every JSON shape, every event, and the batch format, is
+in [`docs/cli.md`](docs/cli.md).
 
 ---
 
