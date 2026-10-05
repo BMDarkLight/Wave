@@ -555,7 +555,7 @@ pub(crate) fn playlist_or_exit(library: &Library, query: &str) -> crate::library
 
     let playlists = library
         .list_playlists(None)
-        .unwrap_or_else(|e| ui::fail(e, None, ui::EXIT_GENERAL));
+        .unwrap_or_else(|e| ui::fail_with(e));
     match match_playlist(&playlists, query) {
         PlaylistMatch::One(id) => playlists
             .into_iter()
@@ -804,17 +804,13 @@ pub(crate) fn daemon_cmd(request: DaemonRequest) {
             ui::done(msg, serde_json::json!({ "status": resp.status }));
         }
         Ok(Some(resp)) => {
-            ui::fail(
-                resp.error.unwrap_or_else(|| "Unknown error".to_string()),
-                None,
-                ui::EXIT_GENERAL,
-            );
+            ui::fail_with(resp.error.unwrap_or_else(|| "Unknown error".to_string()));
         }
         Ok(None) => {
             ui::no_daemon();
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }

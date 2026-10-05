@@ -1,0 +1,118 @@
+# Wave CLI for scripts and other programs
+
+`wave` is built to be driven by other software as well as by people. This page
+is the contract for that use: what goes to which stream, the shape of every
+JSON document, what each exit code means, and how input can be fed in. Anything
+described here is covered by the integration tests in
+[`src-tauri/tests/cli.rs`](../src-tauri/tests/cli.rs).
+
+For the human-facing tour of the commands, see the
+[Command line](../README.md#command-line) section of the README and
+`wave --help`.
+
+## Contents
+
+- [The JSON contract](#the-json-contract)
+- [Errors](#errors)
+- [Schema version](#schema-version)
+
+## The JSON contract
+
+Pass `--json` anywhere on the command line to get machine-readable output.
+
+- **On success** the exit status is 0, stdout holds exactly one JSON document,
+  and stderr is empty.
+- **On failure** the exit status is not 0, stdout is empty, and stderr holds
+  exactly one JSON error document (see [Errors](#errors)).
+- Nothing else is ever printed: no colour codes, progress bars, prompts, or
+  hints.
+- `--json` never waits for input it was not given. A command that would ask a
+  person to confirm, such as `tracks reset`, fails with a `usage` error instead
+  and names the flag that confirms it (`--yes`).
+
+Commands come in two kinds, and their success output differs.
+
+**Reads** (`tracks list`, `playlists info`, `stats …`, `queue list`, `playback
+status`, …) print the data itself: a JSON array for a list, an object for a
+single item.
+
+```bash
+$ wave --json playlists list
+[
+  {
+    "id": "5fa7d96a-8b10-4df5-bf83-72cd751757a8",
+    "profile_id": "default",
+    "name": "Library",
+    "track_count": 4,
+    "created_at": 1791116050,
+    "updated_at": 1791116050,
+    "sync_folder": null
+  }
+]
+```
+
+**Changes** (`playlists create`, `queue add`, `metadata set`, …) print an
+envelope with `"ok": true`, a human-readable `message`, and any fields the
+command reports about what it did.
+
+```bash
+$ wave --json playlists create "Road Trip"
+{"message":"Created playlist \"Road Trip\"","ok":true,"playlist":{"created_at":1791203083,"id":"46c9b376-363a-444a-92d3-89d1936663a5","name":"Road Trip","profile_id":"default","sync_folder":null,"track_count":0,"updated_at":1791203083}}
+```
+
+Field order is not significant, and `message` is for display only: its wording
+may change in any release, so never parse it.
+
+## Errors
+
+A failed command writes one error document to stderr:
+
+```json
+{"ok": false, "error": "Playlist not found: Nope", "code": 3, "kind": "not_found"}
+```
+
+- `code` is the process exit status.
+- `kind` is a stable name for the same thing; branch on either.
+- `error` is a human-readable message. Like `message` above, its wording is not
+  part of the contract.
+
+| Exit status | `kind` | Meaning |
+|---|---|---|
+| 0 | | Success. |
+| 1 | `general` | The command failed for a reason not listed below, such as an unreadable file or a full disk. |
+| 2 | `usage` | The command line was wrong: an unknown command or flag, a missing argument, or a value out of range (`dsp bass 30`, `playback seek abc`, `queue remove 99`). Retrying the same command will fail the same way. |
+| 3 | `not_found` | The track, playlist, file, or cover the command names does not exist, or a name matches more than one playlist or track. |
+| 4 | `no_daemon` | The command needs the playback daemon and it is not running. Start playback first (`wave play …`). |
+| 5 | `conflict` | The request clashes with what is already there: a playlist name that is taken, a track already in the playlist, a protected playlist (Library, Favorites), or the desktop app being open while the command needs the playback daemon. |
+
+Errors in the command line itself are reported the same way under `--json`,
+with exit status 2:
+
+```json
+{"ok": false, "error": "invalid value 'sideways' for '[MODE]' [possible values: off, one, all]", "code": 2, "kind": "usage"}
+```
+
+`--help` and `--version` are not errors: they print their text and exit 0,
+with or without `--json`.
+
+## Schema version
+
+The shapes on this page are versioned as a whole. `wave --json` with no
+command reports the version along with a summary of the library:
+
+```bash
+$ wave --json
+{
+  "schema_version": 1,
+  "version": "0.5.0",
+  "tracks": 1284,
+  "playlists": 9,
+  "listened": "4h 6m 1s",
+  "playback": null
+}
+```
+
+`schema_version` goes up whenever a field is removed or renamed, or its meaning
+changes. Adding a field does not raise it, so read the fields you need and
+ignore the rest. A program can check the version once at startup and refuse to
+run against one it does not know.

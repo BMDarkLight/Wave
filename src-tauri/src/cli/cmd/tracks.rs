@@ -59,7 +59,7 @@ fn cmd_tracks_list(playlist_id: Option<String>) {
             print!("{}", render::track_table(ui, &tracks));
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -226,7 +226,7 @@ fn cmd_tracks_query(query: String) {
             print!("{}", render::track_table(ui, &tracks));
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -246,7 +246,7 @@ fn cmd_tracks_add(track_id: String, playlist_id: Option<String>) {
             json!({ "track": track }),
         ),
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -266,7 +266,7 @@ fn cmd_tracks_remove(track_id: String, playlist_id: Option<String>) {
     match result {
         Ok(msg) => ui::done(msg, json!({ "path": path })),
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -278,7 +278,7 @@ fn cmd_tracks_reset(yes: bool) {
         ui::fail(
             "Refusing to reset the library without confirmation.",
             Some("pass --yes to confirm when not running interactively"),
-            ui::EXIT_GENERAL,
+            ui::EXIT_USAGE,
         );
     }
     if !yes {
@@ -309,7 +309,7 @@ fn cmd_tracks_reset(yes: bool) {
             );
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }

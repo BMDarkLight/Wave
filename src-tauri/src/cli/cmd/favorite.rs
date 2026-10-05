@@ -35,14 +35,14 @@ pub fn run(cmd: FavoriteCmd) {
                     format!("Added to favorites: {} by {}", track.title, track.artist),
                     json!({ "track": track }),
                 ),
-                Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
+                Err(e) => ui::fail_with(e),
             }
         }
         FavoriteCmd::Remove { track_id } => {
             let path = track_path_or_exit(&library, &track_id);
             match library.remove_track_from_favorites(&path) {
                 Ok(()) => ui::done("Removed from favorites.", json!({ "path": path })),
-                Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
+                Err(e) => ui::fail_with(e),
             }
         }
         FavoriteCmd::List => match library.get_favorites() {
@@ -59,11 +59,11 @@ pub fn run(cmd: FavoriteCmd) {
                 );
                 print!("{}", render::track_table(ui, &tracks));
             }
-            Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
+            Err(e) => ui::fail_with(e),
         },
         FavoriteCmd::Clear => match library.clear_favorites() {
             Ok(()) => ui::done("Favorites cleared.", json!({})),
-            Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
+            Err(e) => ui::fail_with(e),
         },
     }
 }

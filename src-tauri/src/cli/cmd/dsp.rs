@@ -39,7 +39,7 @@ pub fn run(cmd: DspCmd) {
                 ui::fail(
                     format!("Expected exactly 10 EQ band values, got {}.", bands.len()),
                     Some("to change a single band: wave dsp eq-band <band> <dB>"),
-                    ui::EXIT_GENERAL,
+                    ui::EXIT_USAGE,
                 );
             }
             if bands
@@ -49,7 +49,7 @@ pub fn run(cmd: DspCmd) {
                 ui::fail(
                     "Band gains must be between -12 and +12 dB.",
                     None,
-                    ui::EXIT_GENERAL,
+                    ui::EXIT_USAGE,
                 );
             }
             let mut arr = [0.0f32; 10];
@@ -67,14 +67,14 @@ pub fn run(cmd: DspCmd) {
                 ui::fail(
                     format!("No EQ band \"{band}\"."),
                     Some("use 1 to 10, or one of 31, 62, 125, 250, 500, 1k, 2k, 4k, 8k, 16k"),
-                    ui::EXIT_GENERAL,
+                    ui::EXIT_USAGE,
                 );
             };
             if !db.is_finite() || !(-12.0..=12.0).contains(&db) {
                 ui::fail(
                     "Band gain must be between -12 and +12 dB.",
                     None,
-                    ui::EXIT_GENERAL,
+                    ui::EXIT_USAGE,
                 );
             }
             let mut bands = load_dsp_status().bands;
@@ -184,7 +184,7 @@ pub fn run(cmd: DspCmd) {
                     ui::fail(
                         "Crossfade must be between 0 and 8 seconds.",
                         None,
-                        ui::EXIT_GENERAL,
+                        ui::EXIT_USAGE,
                     );
                 }
                 let dsp = apply_dsp_request(DaemonRequest::SetCrossfade { seconds: secs });
@@ -205,11 +205,7 @@ pub fn run(cmd: DspCmd) {
             }
             Some(value) => {
                 if !value.is_finite() || !(-12.0..=12.0).contains(&value) {
-                    ui::fail(
-                        "Bass must be between -12 and +12 dB.",
-                        None,
-                        ui::EXIT_GENERAL,
-                    );
+                    ui::fail("Bass must be between -12 and +12 dB.", None, ui::EXIT_USAGE);
                 }
                 let dsp = apply_dsp_request(DaemonRequest::SetBass { db: value });
                 ui::done(
@@ -233,7 +229,7 @@ pub fn run(cmd: DspCmd) {
                     ui::fail(
                         "Treble must be between -12 and +12 dB.",
                         None,
-                        ui::EXIT_GENERAL,
+                        ui::EXIT_USAGE,
                     );
                 }
                 let dsp = apply_dsp_request(DaemonRequest::SetTreble { db: value });
@@ -284,11 +280,11 @@ fn load_dsp_status() -> DspStatus {
         }
         Ok(Some(resp)) => {
             if let Some(err) = resp.error {
-                ui::fail(err, None, ui::EXIT_GENERAL);
+                ui::fail_with(err);
             }
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
         _ => {}
     }
@@ -312,11 +308,7 @@ fn apply_dsp_request(request: DaemonRequest) -> DspStatus {
     match daemon_request_if_running(request.clone()) {
         Ok(Some(resp)) => {
             if !resp.ok {
-                ui::fail(
-                    resp.error.unwrap_or_else(|| "DSP request failed".into()),
-                    None,
-                    ui::EXIT_GENERAL,
-                );
+                ui::fail_with(resp.error.unwrap_or_else(|| "DSP request failed".into()));
             }
             LAST_DSP_MESSAGE.with(|cell| {
                 *cell.borrow_mut() = resp.message.clone();
@@ -327,7 +319,7 @@ fn apply_dsp_request(request: DaemonRequest) -> DspStatus {
             return load_dsp_status();
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
         Ok(None) => {}
     }
@@ -412,7 +404,7 @@ fn parse_on_off(raw: &str, label: &str) -> bool {
             ui::fail(
                 format!("{label} expects on/off, got \"{raw}\""),
                 None,
-                ui::EXIT_GENERAL,
+                ui::EXIT_USAGE,
             );
         }
     }

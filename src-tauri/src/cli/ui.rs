@@ -287,9 +287,64 @@ pub fn terminal_width() -> usize {
         .unwrap_or(80)
 }
 
+/// Exit codes. Each has a matching `kind` string in JSON errors; both are
+/// part of the documented contract in docs/cli.md, so neither may change.
 pub const EXIT_GENERAL: i32 = 1;
+/// A bad command line, or an argument value out of range.
+pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_NOT_FOUND: i32 = 3;
 pub const EXIT_NO_DAEMON: i32 = 4;
+/// The request clashes with what is already there: a duplicate name, a
+/// track already in the playlist, a protected playlist, the app being open.
+pub const EXIT_CONFLICT: i32 = 5;
+
+/// The `kind` reported beside an exit code in a JSON error.
+pub fn error_kind(code: i32) -> &'static str {
+    match code {
+        EXIT_USAGE => "usage",
+        EXIT_NOT_FOUND => "not_found",
+        EXIT_NO_DAEMON => "no_daemon",
+        EXIT_CONFLICT => "conflict",
+        _ => "general",
+    }
+}
+
+/// The exit code for an error message passed through from the library or
+/// the daemon, which report failures as plain text. Matches the wording
+/// those layers use; anything unrecognised is a general failure.
+pub fn classify(message: &str) -> i32 {
+    let text = message.to_ascii_lowercase();
+    let any = |needles: &[&str]| needles.iter().any(|n| text.contains(n));
+    if any(&["not found", "does not exist", "is not in the", "no such"]) {
+        EXIT_NOT_FOUND
+    } else if any(&[
+        "already",
+        "cannot be deleted",
+        "cannot be renamed",
+        "cannot be cleared",
+        "cannot be edited",
+    ]) {
+        EXIT_CONFLICT
+    } else if any(&[
+        "cannot be empty",
+        "cannot contain",
+        "must be between",
+        "invalid ",
+        "unsupported ",
+    ]) {
+        EXIT_USAGE
+    } else {
+        EXIT_GENERAL
+    }
+}
+
+/// Fail with an error passed through from the library or the daemon, its
+/// exit code chosen by [`classify`].
+pub fn fail_with(message: impl std::fmt::Display) -> ! {
+    let message = message.to_string();
+    let code = classify(&message);
+    fail(message, None, code)
+}
 
 /// Render an error and its optional next step.
 ///
@@ -376,6 +431,30 @@ pub fn current() -> &'static Ui {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_and_daemon_errors_get_a_stable_kind() {
+        let cases = [
+            ("Playlist not found", EXIT_NOT_FOUND),
+            ("Track is not in the playlist", EXIT_NOT_FOUND),
+            ("Audio file does not exist: /a.mp3", EXIT_NOT_FOUND),
+            ("A playlist named \"Mix\" already exists", EXIT_CONFLICT),
+            ("Track is already in the playlist", EXIT_CONFLICT),
+            (
+                "The default Library playlist cannot be deleted",
+                EXIT_CONFLICT,
+            ),
+            ("Playlist name cannot be empty", EXIT_USAGE),
+            ("Invalid queue index: 9", EXIT_USAGE),
+            ("Unsupported playlist file format: .txt", EXIT_USAGE),
+            ("Failed to write cover art: disk full", EXIT_GENERAL),
+        ];
+        for (message, code) in cases {
+            assert_eq!(classify(message), code, "{message}");
+        }
+        assert_eq!(error_kind(EXIT_NO_DAEMON), "no_daemon");
+        assert_eq!(error_kind(EXIT_GENERAL), "general");
+    }
 
     #[test]
     fn counts_agree_with_their_noun() {

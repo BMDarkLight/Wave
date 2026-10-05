@@ -246,8 +246,10 @@ when `NO_COLOR` is set (`--color` overrides both), the block characters fall
 back to ASCII when the console cannot render them or when `WAVE_ASCII` is set,
 and tables stack rather than wrap on narrow terminals. `--json` is the stable
 surface for scripts. Exit codes are 0 for success, 1 for a general failure, 2
-for a usage error, 3 when something is not found, and 4 when the playback
-daemon is not running.
+for a usage error, 3 when something is not found, 4 when the playback daemon is
+not running, and 5 for a conflict such as a playlist name that is taken. The
+full contract for other programs, with every JSON shape, is in
+[`docs/cli.md`](docs/cli.md).
 
 ---
 

@@ -90,7 +90,7 @@ fn current_volume() -> f32 {
     match daemon_request_if_running(DaemonRequest::Status) {
         Ok(Some(resp)) => resp.status.map_or(0.0, |s| s.volume),
         Ok(None) => ui::no_daemon(),
-        Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
+        Err(e) => ui::fail_with(e),
     }
 }
 
@@ -110,7 +110,7 @@ fn cmd_devices_volume(level: Option<String>) {
     let level = match parse_volume(&raw) {
         Ok(VolumeInput::Level(level)) => level,
         Ok(VolumeInput::Step(points)) => (current_volume() + points / 100.0).clamp(0.0, 1.0),
-        Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
+        Err(e) => ui::fail(e, None, ui::EXIT_USAGE),
     };
     daemon_cmd(DaemonRequest::Volume { level });
 }

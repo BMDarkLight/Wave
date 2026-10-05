@@ -41,15 +41,13 @@ pub(crate) fn cmd_playback_start(id: String) {
             );
         }
         Ok(resp) => {
-            ui::fail(
+            ui::fail_with(
                 resp.error
                     .unwrap_or_else(|| "Failed to start playback".to_string()),
-                None,
-                ui::EXIT_GENERAL,
             );
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -101,9 +99,9 @@ fn cmd_playback_seek(raw: &str) {
                 (status.position_seconds + step).clamp(0.0, end)
             }
             Ok(None) => ui::no_daemon(),
-            Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
+            Err(e) => ui::fail_with(e),
         },
-        Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
+        Err(e) => ui::fail(e, None, ui::EXIT_USAGE),
     };
     daemon_cmd(DaemonRequest::Seek { seconds });
 }
@@ -117,17 +115,15 @@ fn cmd_playback_shutdown() {
             ui::done(msg, json!({}));
         }
         Ok(Some(resp)) => {
-            ui::fail(
+            ui::fail_with(
                 resp.error
                     .unwrap_or_else(|| "Failed to shut down daemon".to_string()),
-                None,
-                ui::EXIT_GENERAL,
             );
         }
         // Shutting down something that is already down is not a failure.
         Ok(None) => ui::done("Playback daemon is not running.", json!({})),
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }

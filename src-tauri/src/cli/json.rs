@@ -14,6 +14,12 @@
 
 use serde_json::{json, Value};
 
+/// Version of the JSON shapes described in docs/cli.md. Raised whenever a
+/// field is removed, renamed or changes meaning; adding a field does not
+/// raise it. Reported by `wave --json` (the landing facts) and by every line
+/// of `wave batch` and `wave now --watch`.
+pub const SCHEMA_VERSION: u32 = 1;
+
 pub fn ok_payload(extra: Value) -> Value {
     let mut payload = json!({ "ok": true });
     match extra {
@@ -33,7 +39,12 @@ pub fn ok_payload(extra: Value) -> Value {
 }
 
 pub fn error_payload(message: &str, code: i32) -> Value {
-    json!({ "ok": false, "error": message, "code": code })
+    json!({
+        "ok": false,
+        "error": message,
+        "code": code,
+        "kind": crate::cli::ui::error_kind(code),
+    })
 }
 
 /// Print a value as JSON and exit successfully.

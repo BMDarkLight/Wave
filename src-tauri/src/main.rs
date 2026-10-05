@@ -43,11 +43,13 @@ fn main() {
         // GUI is running: allow library/metadata CLI, block playback daemon spawn.
         if wave_lib::single_instance::gui_is_running() {
             if wave_lib::cli::conflicts_with_gui(&args) {
-                eprintln!(
-                    "Wave desktop app is already running. Quit it before starting CLI playback, \
-                     or manage playback from the app window."
-                );
-                std::process::exit(1);
+                let message = "Wave desktop app is already running. Quit it before starting \
+                               CLI playback, or manage playback from the app window.";
+                if args.iter().any(|arg| arg == "--json") {
+                    wave_lib::cli::json::emit_error(message, wave_lib::cli::ui::EXIT_CONFLICT);
+                }
+                eprintln!("{message}");
+                std::process::exit(wave_lib::cli::ui::EXIT_CONFLICT);
             }
             wave_lib::cli::run();
             return;

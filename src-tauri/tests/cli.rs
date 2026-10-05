@@ -28,6 +28,18 @@ const EXIT_GENERAL: i32 = 1;
 const EXIT_USAGE: i32 = 2;
 const EXIT_NOT_FOUND: i32 = 3;
 const EXIT_NO_DAEMON: i32 = 4;
+const EXIT_CONFLICT: i32 = 5;
+
+fn kind(code: i32) -> &'static str {
+    match code {
+        EXIT_USAGE => "usage",
+        EXIT_NOT_FOUND => "not_found",
+        EXIT_NO_DAEMON => "no_daemon",
+        EXIT_CONFLICT => "conflict",
+        EXIT_GENERAL => "general",
+        other => panic!("exit code {other} is not part of the contract"),
+    }
+}
 
 /// A Wave installation of its own: data folder, music folder, and the binary.
 struct Wave {
@@ -126,6 +138,7 @@ impl Wave {
             .unwrap_or_else(|e| panic!("wave {args:?} stderr is not JSON ({e}): {stderr}"));
         assert_eq!(error["ok"], Value::Bool(false));
         assert_eq!(error["code"], Value::from(code));
+        assert_eq!(error["kind"], kind(code), "wave {args:?}");
         error["error"].as_str().expect("error message").to_string()
     }
 
@@ -292,7 +305,7 @@ fn favorites_add_list_and_remove() {
     wave.ok(&["favorite", "add", &song]);
     assert_eq!(wave.track_names(&["favorite", "list"]), vec!["song.wav"]);
     wave.ok(&["favorite", "remove", &song]);
-    wave.fails(&["favorite", "remove", &song], EXIT_GENERAL);
+    wave.fails(&["favorite", "remove", &song], EXIT_NOT_FOUND);
 }
 
 #[test]
@@ -302,12 +315,20 @@ fn failures_use_the_error_envelope_and_their_exit_codes() {
     wave.fails(&["playlists", "rename", "Nope", "Other"], EXIT_NOT_FOUND);
     wave.fails(&["playback", "status"], EXIT_NO_DAEMON);
     wave.fails(&["queue", "list"], EXIT_NO_DAEMON);
-    wave.fails(&["dsp", "bass", "30"], EXIT_GENERAL);
-    wave.fails(&["dsp", "eq-set", "1", "2", "3"], EXIT_GENERAL);
+    wave.fails(&["dsp", "bass", "30"], EXIT_USAGE);
+    wave.fails(&["dsp", "eq-set", "1", "2", "3"], EXIT_USAGE);
+    wave.fails(&["playback", "seek", "abc"], EXIT_USAGE);
     wave.fails(
-        &["playlists", "import", &wave.path("list.txt")],
-        EXIT_GENERAL,
+        &["playlists", "import", &wave.path("missing.m3u")],
+        EXIT_NOT_FOUND,
     );
+    let text = wave.path("list.txt");
+    std::fs::write(&text, "not a playlist").unwrap();
+    wave.fails(&["playlists", "import", &text], EXIT_USAGE);
+
+    wave.ok(&["playlists", "create", "Mix"]);
+    wave.fails(&["playlists", "create", "Mix"], EXIT_CONFLICT);
+    wave.fails(&["playlists", "delete", "Library"], EXIT_CONFLICT);
 
     let usage = wave.fails(&["queue", "repeat", "sideways"], EXIT_USAGE);
     assert!(usage.contains("possible values"), "{usage}");
@@ -318,9 +339,17 @@ fn failures_use_the_error_envelope_and_their_exit_codes() {
 #[test]
 fn a_reset_is_refused_rather_than_waiting_for_an_answer() {
     let wave = Wave::new();
-    wave.fails(&["tracks", "reset"], EXIT_GENERAL);
+    wave.fails(&["tracks", "reset"], EXIT_USAGE);
     let reset = wave.ok(&["tracks", "reset", "--yes"]);
     assert_eq!(reset["ok"], true);
+}
+
+#[test]
+fn the_landing_facts_report_the_schema_version() {
+    let wave = Wave::new();
+    let facts = wave.ok(&[]);
+    assert_eq!(facts["schema_version"], 1);
+    assert!(facts["version"].is_string());
 }
 
 #[test]
@@ -419,6 +448,6 @@ fn removing_the_playing_track_moves_on_to_the_next() {
     wave.ok(&["queue", "remove", "0"]);
     assert_eq!(wave.ok(&["playback", "status"])["state"], "Stopped");
 
-    wave.fails(&["queue", "remove", "5"], EXIT_GENERAL);
+    wave.fails(&["queue", "remove", "5"], EXIT_USAGE);
     wave.fails(&["queue", "repeat", "sideways"], EXIT_USAGE);
 }

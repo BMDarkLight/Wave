@@ -32,19 +32,19 @@ fn cmd_metadata_set(track_id: String, edit: TagEdit) {
     let path = track_path_or_exit(&library, &track_id);
 
     let edit = edit.resolve().unwrap_or_else(|e| {
-        ui::fail(e, None, ui::EXIT_GENERAL);
+        ui::fail_with(e);
     });
     if edit.is_empty() {
         ui::fail(
             "Nothing to change. Pass at least one field, such as --title.",
             None,
-            ui::EXIT_GENERAL,
+            ui::EXIT_USAGE,
         );
     }
 
     let indexed = matches!(library.get_track_details(&path), Ok(Some(_)));
     if let Err(e) = crate::tag_edit::write_to_file(Path::new(&path), &edit) {
-        ui::fail(e, None, ui::EXIT_GENERAL);
+        ui::fail_with(e);
     }
 
     if !indexed {
@@ -163,7 +163,7 @@ fn cmd_metadata_cover_set(track_id: String, image: String) {
     }
     .resolve()
     .unwrap_or_else(|e| {
-        ui::fail(e, None, ui::EXIT_GENERAL);
+        ui::fail_with(e);
     });
     let Some(Change::Set(jpeg)) = edit.cover.clone() else {
         ui::fail(
@@ -174,7 +174,7 @@ fn cmd_metadata_cover_set(track_id: String, image: String) {
     };
 
     if let Err(e) = crate::tag_edit::write_to_file(Path::new(&path), &edit) {
-        ui::fail(e, None, ui::EXIT_GENERAL);
+        ui::fail_with(e);
     }
 
     // Look up the track ID in the database

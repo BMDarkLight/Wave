@@ -130,7 +130,7 @@ fn fetch(live: bool) -> (PlaybackStatus, Vec<String>) {
         }
         Err(e) => {
             restore_cursor(live);
-            ui::fail(e, None, ui::EXIT_GENERAL)
+            ui::fail_with(e)
         }
     };
     match response.status {

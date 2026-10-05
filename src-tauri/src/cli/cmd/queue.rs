@@ -38,15 +38,11 @@ pub fn run(cmd: QueueCmd) {
                 );
             }
             Ok(Some(resp)) => {
-                ui::fail(
-                    resp.error.unwrap_or_else(|| "Daemon error".to_string()),
-                    None,
-                    ui::EXIT_GENERAL,
-                );
+                ui::fail_with(resp.error.unwrap_or_else(|| "Daemon error".to_string()));
             }
             Ok(None) => ui::no_daemon(),
             Err(e) => {
-                ui::fail(e, None, ui::EXIT_GENERAL);
+                ui::fail_with(e);
             }
         },
         QueueCmd::Add { track_id } => daemon_cmd(DaemonRequest::QueueAdd {
@@ -72,7 +68,7 @@ pub fn run(cmd: QueueCmd) {
                 println!("{}", ui::current().kv("Repeat", &repeat, 6));
             }
             Ok(None) => ui::no_daemon(),
-            Err(e) => ui::fail(e, None, ui::EXIT_GENERAL),
+            Err(e) => ui::fail_with(e),
         },
         QueueCmd::Clear => daemon_cmd(DaemonRequest::QueueClear),
     }

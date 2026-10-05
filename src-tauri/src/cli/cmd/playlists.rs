@@ -50,7 +50,7 @@ fn cmd_playlists_list() {
             print!("{}", render::playlist_table(ui, &playlists));
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -58,7 +58,7 @@ fn cmd_playlists_list() {
 fn cmd_playlists_import(file: String, name: Option<String>) {
     let library = open_library();
     if let Err(e) = crate::path_validation::validate_playlist_import_path(&file) {
-        ui::fail(e, None, ui::EXIT_GENERAL);
+        ui::fail_with(e);
     }
     let result = library.import_playlist_file(&file, name.as_deref());
     match result {
@@ -79,7 +79,7 @@ fn cmd_playlists_import(file: String, name: Option<String>) {
             println!("  {}", ui::current().dim(&format!("id {id}")));
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -113,13 +113,8 @@ fn export_target(target: &[String]) -> Result<(&'static str, &str), String> {
 
 fn cmd_playlists_export(query: String, target: Vec<String>) {
     let library = open_library();
-    let (format, output) = export_target(&target).unwrap_or_else(|e| {
-        ui::fail(
-            e,
-            Some("use a .m3u, .m3u8, or .json file"),
-            ui::EXIT_GENERAL,
-        )
-    });
+    let (format, output) = export_target(&target)
+        .unwrap_or_else(|e| ui::fail(e, Some("use a .m3u, .m3u8, or .json file"), ui::EXIT_USAGE));
     let info = playlist_or_exit(&library, &query);
     let ext = Path::new(output)
         .extension()
@@ -133,14 +128,14 @@ fn cmd_playlists_export(query: String, target: Vec<String>) {
         format
     };
     if let Err(e) = crate::path_validation::validate_safe_output_path(output, expected_ext) {
-        ui::fail(e, None, ui::EXIT_GENERAL);
+        ui::fail_with(e);
     }
     match format {
         "m3u" => library.export_playlist_m3u(&info.id, output),
         _ => library.export_playlist_json(&info.id, output),
     }
     .unwrap_or_else(|e| {
-        ui::fail(e, None, ui::EXIT_GENERAL);
+        ui::fail_with(e);
     });
     ui::done(
         format!(
@@ -184,7 +179,7 @@ fn cmd_playlists_query(query: String) {
             print!("{}", render::playlist_table(ui, &playlists));
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -200,7 +195,7 @@ fn cmd_playlists_create(name: String) {
             println!("  {}", ui::current().dim(&format!("id {}", info.id)));
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -214,7 +209,7 @@ fn cmd_playlists_delete(query: String) {
             json!({ "id": info.id }),
         ),
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -228,7 +223,7 @@ fn cmd_playlists_rename(query: String, name: String) {
             json!({ "id": info.id, "name": name }),
         ),
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -246,7 +241,7 @@ fn cmd_playlists_clear(query: String) {
             json!({ "id": info.id }),
         ),
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -264,7 +259,7 @@ fn cmd_playlists_add_track(query: String, track_id: String) {
             json!({ "id": info.id, "track": track }),
         ),
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -279,7 +274,7 @@ fn cmd_playlists_remove_track(query: String, track_id: String) {
             json!({ "id": info.id }),
         ),
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }
@@ -296,7 +291,7 @@ fn cmd_playlists_sync(query: String) {
         ui::fail(
             format!("Playlist \"{}\" is not linked to a sync folder.", info.name),
             Some("link one in the app: Create playlist, then Sync with folder"),
-            ui::EXIT_GENERAL,
+            ui::EXIT_CONFLICT,
         );
     };
 
@@ -305,7 +300,7 @@ fn cmd_playlists_sync(query: String) {
         ui::fail(
             format!("Sync folder is missing or not a directory: {folder}"),
             None,
-            ui::EXIT_GENERAL,
+            ui::EXIT_NOT_FOUND,
         );
     }
 
@@ -347,7 +342,7 @@ fn cmd_playlists_sync(query: String) {
             );
         }
         Err(e) => {
-            ui::fail(e, None, ui::EXIT_GENERAL);
+            ui::fail_with(e);
         }
     }
 }

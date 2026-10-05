@@ -115,6 +115,9 @@ pub fn mark(ui: &Ui) -> String {
 /// is usually not running.
 #[derive(serde::Serialize)]
 pub struct LandingFacts {
+    /// `json::SCHEMA_VERSION`, so a caller can check what it is talking to.
+    pub schema_version: u32,
+    pub version: &'static str,
     pub tracks: Option<i64>,
     pub playlists: Option<usize>,
     pub listened: Option<String>,
@@ -135,6 +138,8 @@ impl LandingFacts {
         .and_then(|response| response.status);
 
         LandingFacts {
+            schema_version: crate::cli::json::SCHEMA_VERSION,
+            version: env!("CARGO_PKG_VERSION"),
             tracks: library.as_ref().and_then(|l| l.count_tracks().ok()),
             playlists: library
                 .as_ref()
@@ -294,6 +299,8 @@ mod tests {
 
     fn facts() -> LandingFacts {
         LandingFacts {
+            schema_version: 1,
+            version: "0.0.0",
             tracks: Some(1284),
             playlists: Some(9),
             listened: Some("4h 6m 1s".into()),
@@ -386,6 +393,8 @@ mod tests {
     #[test]
     fn the_landing_text_omits_what_it_does_not_know() {
         let bare = LandingFacts {
+            schema_version: 1,
+            version: "0.0.0",
             tracks: None,
             playlists: None,
             listened: None,
