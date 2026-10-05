@@ -103,6 +103,35 @@ impl Wave {
         self.command(args).output().expect("failed to run wave")
     }
 
+    /// Run with --json, `input` on stdin, and read stdout as JSON lines.
+    /// Returns the exit status and the lines; stderr must stay empty.
+    fn lines(&self, args: &[&str], input: &str) -> (i32, Vec<Value>) {
+        use std::io::Write as _;
+        let mut full = vec!["--json"];
+        full.extend_from_slice(args);
+        let mut child = self
+            .command(&full)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.is_empty(), "wave {args:?} wrote to stderr: {stderr}");
+        let lines = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("{e}: {line}")))
+            .collect();
+        (out.status.code().unwrap(), lines)
+    }
+
     /// Run with --json and expect success: JSON on stdout, stderr empty.
     fn ok(&self, args: &[&str]) -> Value {
         let mut full = vec!["--json"];
@@ -511,4 +540,133 @@ fn the_watch_stream_reports_changes_until_the_daemon_stops() {
     }
     assert_eq!(last["event"], "daemon_stopped");
     assert!(watcher.wait().unwrap().success());
+}
+
+#[test]
+fn a_batch_runs_every_request_in_order() {
+    let wave = Wave::new();
+    let song = wave.write_wav("song.wav");
+    wave.ok(&["tracks", "import", &song]);
+    let input = format!(
+        "# set up a playlist\n\
+         playlists create \"Road Trip\"\n\
+         [\"playlists\", \"add-track\", \"Road Trip\", \"{song}\"]\n\
+         {{\"id\": \"again\", \"args\": [\"playlists\", \"create\", \"Road Trip\"]}}\n\
+         tracks frobnicate\n\
+         {{\"args\": 5}}\n\
+         batch\n"
+    );
+    let (code, lines) = wave.lines(&["batch"], &input);
+    assert_eq!(code, EXIT_GENERAL, "some requests failed");
+    let summary: Vec<(i64, bool, &str)> = lines
+        .iter()
+        .map(|l| {
+            assert_eq!(l["schema_version"], 1);
+            (
+                l["index"].as_i64().unwrap(),
+                l["ok"].as_bool().unwrap(),
+                l["kind"].as_str().unwrap_or(""),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            (0, true, ""),
+            (1, true, ""),
+            (2, false, "conflict"),
+            (3, false, "usage"),
+            (4, false, "usage"),
+            (5, false, "usage"),
+        ]
+    );
+    assert_eq!(lines[0]["result"]["playlist"]["name"], "Road Trip");
+    assert_eq!(lines[2]["id"], "again");
+    assert_eq!(lines[2]["code"], EXIT_CONFLICT);
+}
+
+#[test]
+fn a_batch_of_one_json_array_succeeds_as_a_whole() {
+    let wave = Wave::new();
+    let (code, lines) = wave.lines(
+        &["batch"],
+        r#"[["playlists", "create", "A"], {"id": 2, "args": ["playlists", "list"]}]"#,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[1]["id"], 2);
+    assert_eq!(lines[1]["result"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn a_batch_can_stop_at_the_first_failure() {
+    let wave = Wave::new();
+    let (code, lines) = wave.lines(
+        &["batch", "--stop-on-error"],
+        "playlists create A\nplaylists create A\nplaylists create B\n",
+    );
+    assert_eq!(code, EXIT_GENERAL);
+    assert_eq!(lines.len(), 2);
+}
+
+#[test]
+fn a_dash_reads_tracks_from_stdin_in_any_list_format() {
+    let wave = Wave::new();
+    let a = wave.write_wav("a.wav");
+    let b = wave.write_wav("b.wav");
+    let missing = wave.path("music/missing.wav");
+
+    let (code, lines) = wave.lines(&["tracks", "import", "-"], &format!("{a}\n{b}\n"));
+    assert_eq!(code, 0);
+    assert_eq!(lines[0]["imported"], 2, "one process, one summary");
+
+    let (code, lines) = wave.lines(
+        &["favorite", "add", "-"],
+        &serde_json::to_string(&[&a, &missing]).unwrap(),
+    );
+    assert_eq!(code, EXIT_GENERAL);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["input"], a.as_str());
+    assert_eq!(lines[0]["ok"], true);
+    assert_eq!(lines[1]["kind"], "not_found");
+
+    // NUL-separated, for paths that may contain newlines.
+    let (code, lines) = wave.lines(&["favorite", "remove", "-"], &format!("{a}\0"));
+    assert_eq!(code, 0);
+    assert_eq!(lines.len(), 1);
+
+    wave.ok(&["playlists", "create", "Mix"]);
+    let (code, _) = wave.lines(
+        &["playlists", "add-track", "Mix", "-"],
+        &format!("{b}\n{a}\n"),
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        wave.track_names(&["playlists", "info", "Mix"]),
+        vec!["b.wav", "a.wav"]
+    );
+}
+
+#[test]
+#[ignore = "needs an audio output device"]
+fn queueing_several_tracks_next_keeps_their_order() {
+    let wave = Wave::new();
+    silent(&wave);
+    let now = wave.write_wav("now.wav");
+    let a = wave.write_wav("a.wav");
+    let b = wave.write_wav("b.wav");
+    wave.ok(&["playback", "start", &now]);
+    wave.ok(&["queue", "clear"]);
+    wave.ok(&["playback", "pause"]);
+    let (code, lines) = wave.lines(&["queue", "next", "-"], &format!("{a}\n{b}\n"));
+    assert_eq!(code, 0);
+    assert_eq!(lines[0]["input"], a.as_str(), "results stay in input order");
+    let queue = wave.ok(&["queue", "list"]);
+    let names: Vec<&str> = queue["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.as_str().unwrap().rsplit('/').next().unwrap())
+        .collect();
+    assert_eq!(names, vec!["now.wav", "a.wav", "b.wav"]);
 }

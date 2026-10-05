@@ -8,6 +8,7 @@
 
 pub mod banner;
 pub mod bar;
+pub mod batch;
 pub mod cmd;
 pub mod json;
 pub mod now;
@@ -95,6 +96,15 @@ pub enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+    /// Run many requests from stdin, one result per line (see docs/cli.md)
+    ///
+    /// Each line is a JSON array of arguments, a JSON object with "args" and
+    /// an optional "id", or a command line such as: queue add "a b.mp3".
+    Batch {
+        /// Stop at the first request that fails
+        #[arg(long)]
+        stop_on_error: bool,
+    },
     /// Live now-playing dashboard
     Now {
         /// Print one frame and exit instead of redrawing
@@ -124,7 +134,7 @@ pub enum TracksCmd {
     },
     /// Import audio file(s) or a directory into the library
     Import {
-        /// One or more file or directory paths
+        /// One or more file or directory paths; '-' reads more from stdin
         paths: Vec<String>,
     },
     /// Show detailed metadata for a track
@@ -750,7 +760,14 @@ pub fn run() {
     // environment to go on.
     ui::install(ui::Ui::resolve(cli.color, cli.json, cli.verbose));
 
+    // `-` in place of a track: run the command once per item on stdin.
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if batch::wants_stdin_list(&raw) {
+        batch::run_list(&raw);
+    }
+
     match cli.command {
+        Some(Commands::Batch { stop_on_error }) => batch::run(stop_on_error),
         Some(Commands::Play { id }) => cmd::playback::play(id),
         Some(Commands::Tracks(cmd)) => cmd::tracks::run(cmd),
         Some(Commands::Playlists(cmd)) => cmd::playlists::run(cmd),

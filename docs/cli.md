@@ -17,6 +17,9 @@ For the human-facing tour of the commands, see the
 - [Schema version](#schema-version)
 - [Playback status](#playback-status)
 - [Watching playback](#watching-playback)
+- [Batch requests](#batch-requests)
+- [Lists from stdin](#lists-from-stdin)
+- [Command reference](#command-reference)
 
 ## The JSON contract
 
@@ -223,3 +226,217 @@ seconds, default 0.5) sets how often the daemon is checked, which bounds how
 late an event can arrive. If the daemon is not running when the watch starts,
 the command fails with exit status 4 (`no_daemon`), like other playback
 commands. Closing the pipe ends the watch quietly.
+
+## Batch requests
+
+`wave batch` runs many requests in one call. It reads them from stdin, runs
+them one after another in the order given, and writes one JSON line per
+request as each finishes.
+
+Each request can be written three ways, and they can be mixed:
+
+```text
+# A command line, quoted the way a shell would quote it
+playlists create "Road Trip"
+
+# A JSON array of the arguments
+["playlists", "add-track", "Road Trip", "/music/a.flac"]
+
+# A JSON object with the arguments and an id of your choosing
+{"id": "fav-1", "args": ["favorite", "add", "/music/a.flac"]}
+```
+
+Blank lines and lines starting with `#` are skipped. The whole input can
+instead be a single JSON array of requests, which is handy when the requests
+are built by a program:
+
+```json
+[["playlists", "create", "Mix"], {"id": 2, "args": ["playlists", "list"]}]
+```
+
+The arguments are the same as on the command line, without the program name
+and without `--json`, which every request gets anyway. Shell-style lines
+support single quotes, double quotes (with `\"` and `\\` inside) and
+backslash escapes; there are no variables, globs or pipes.
+
+Each result line looks like this:
+
+```json
+{"index":0,"ok":true,"code":0,"result":{"message":"Created playlist \"Road Trip\"","ok":true,"playlist":{...}},"schema_version":1}
+{"index":2,"id":"fav-1","ok":false,"code":5,"kind":"conflict","error":"A playlist named \"Road Trip\" already exists","schema_version":1}
+```
+
+| Field | Meaning |
+|---|---|
+| `index` | Position of the request in the input, counting from 0. Skipped lines are not counted. |
+| `id` | The request's `id`, when it had one. |
+| `ok` | Whether the request succeeded. |
+| `code` | Its exit status, as in [Errors](#errors). |
+| `result` | On success, the JSON the command printed. |
+| `kind`, `error` | On failure, as in [Errors](#errors). |
+| `schema_version` | See [Schema version](#schema-version). |
+
+Every request runs exactly as if it had been typed on its own, with its own
+exit status, and a failed request does not stop the ones after it. Pass
+`--stop-on-error` to stop at the first failure instead. A line that cannot be
+read (bad JSON, an unclosed quote) fails with `usage` in its place, so results
+always line up with the input.
+
+`wave batch` exits with status 0 when every request succeeded and 1 when any
+failed. Unlike other commands it writes its results to stdout either way;
+stderr stays empty. A batch request cannot itself be `batch`, `now --watch`,
+or use `-`, since it has no stdin of its own.
+
+## Lists from stdin
+
+Commands that take one track accept `-` in its place, and then read any
+number of tracks from stdin:
+
+```bash
+find ~/Music/Jazz -name '*.flac' | wave --json favorite add -
+wave --json tracks query Bowie | jq -r '.[].id' | wave --json queue add -
+```
+
+The list can be:
+
+- one item per line (blank lines are skipped),
+- NUL-separated, for paths that contain newlines (`find -print0`), or
+- a JSON array of strings: `["/music/a.flac", "/music/b.flac"]`.
+
+The form is detected from the input. Each item can be anything the command
+accepts as a track: a path, an id, or an id prefix.
+
+The command runs once per item, and the results come back exactly as for
+[`wave batch`](#batch-requests), one line each, with the item it was for under
+`input`. The exit status is 0 when every item succeeded and 1 when any failed.
+
+`-` works with `tracks info`, `tracks add`, `tracks remove`, `queue add`,
+`queue next`, `playlists add-track`, `playlists remove-track`, `favorite add`,
+`favorite remove`, `metadata get` and `metadata set` (the same tags are written
+to every track). `queue next -` queues the tracks so that they play in the
+order given.
+
+`tracks import -` is different: it reads paths the same way but imports them
+together in one run, so its output is the usual single import summary, and
+`-` can sit beside other paths (`wave tracks import ~/Music -`).
+
+## Command reference
+
+Reads print the data directly; changes print the envelope described in
+[The JSON contract](#the-json-contract), with the fields listed here beside
+`ok` and `message`.
+
+### Tracks and the library
+
+| Command | Output |
+|---|---|
+| `tracks list [PLAYLIST]` | Array of [tracks](#track), all of them or one playlist's. |
+| `tracks query TEXT` | Array of tracks matching title, artist or album. |
+| `tracks info TRACK` | One track. |
+| `tracks import PATH...` | `imported` (count of new tracks) and `skipped` (one string per file not imported, with the reason, such as a duplicate of a track already in the library). |
+| `tracks add TRACK [--playlist-id P]` | `track`. |
+| `tracks remove TRACK [--playlist-id P]` | `path`. |
+| `tracks reset --yes` | `tracks_removed`, `playlists_deleted`. |
+| `metadata get TRACK` | One track, read from the library or straight from the file. |
+| `metadata set TRACK --title ...` | `track`, the updated track; or `path` alone when the file is not in the library. |
+| `metadata cover-export TRACK FILE` | `output`, `mime`, `bytes`. |
+| `metadata cover-set TRACK IMAGE` | `id`, the track's id. |
+
+A `TRACK` is a full track id, an id prefix of at least four characters, or a
+path to an audio file.
+
+### Playlists and favorites
+
+| Command | Output |
+|---|---|
+| `playlists list` | Array of [playlists](#playlist). |
+| `playlists query TEXT` | Array of playlists whose name matches. |
+| `playlists info PLAYLIST` | `playlist` and `tracks`, the playlist's tracks in order. |
+| `playlists create NAME` | `playlist`. |
+| `playlists rename PLAYLIST NAME` | `id`, `name`. |
+| `playlists delete PLAYLIST`, `playlists clear PLAYLIST` | `id`. |
+| `playlists add-track PLAYLIST TRACK` | `id` (the playlist's) and `track`. |
+| `playlists remove-track PLAYLIST TRACK` | `id`. |
+| `playlists import FILE` | `id`, `name`, and `tracks` (how many were added). |
+| `playlists export PLAYLIST FILE` | `id`, `output`, `format` (`m3u` or `json`). |
+| `favorite list` | Array of tracks. |
+| `favorite add TRACK` | `track`. |
+| `favorite remove TRACK` | `path`. |
+
+A `PLAYLIST` is an exact name (any case), a unique start of a name, a full id,
+or an id prefix.
+
+### Playback
+
+| Command | Output |
+|---|---|
+| `play TRACK_OR_PLAYLIST`, `playback start ...` | `status`, see [Playback status](#playback-status). Starts the daemon when needed. |
+| `playback status` | The [playback status](#playback-status) itself. |
+| `playback pause`, `resume`, `stop`, `next`, `previous`, `seek POS` | `status`. `seek` takes seconds, `m:ss`, or a step like `+10` or `-30`. |
+| `playback shutdown` | Nothing beyond the envelope; succeeds when no daemon is running. |
+| `queue list` | `queue_position` and `tracks`. |
+| `queue add TRACK`, `queue next TRACK`, `queue remove POSITION`, `queue clear`, `queue shuffle [on\|off]`, `queue repeat MODE` | `status`. |
+| `queue repeat` (no mode) | `repeat`. |
+| `devices list` | `default` and `devices`, the output names. |
+| `devices switch NAME`, `devices volume LEVEL` | `status`. `LEVEL` is `50%`, `0.5`, or a step like `+10`. |
+| `devices volume` (no level) | `volume`, 0.0 to 1.0. |
+| `now --json` | The playback status, once. |
+| `now --json --watch` | A stream of events, see [Watching playback](#watching-playback). |
+
+### Equalizer and playback settings
+
+| Command | Output |
+|---|---|
+| `dsp eq-show` | `eq_enabled`, `bands` (ten gains in dB, 31 Hz to 16 kHz), `bass`, `treble`, `crossfade_duration`, `gapless_enabled`. |
+| `dsp presets` | Array of `name` and `description`. |
+| `dsp eq-set ...`, `eq-band`, `eq-enable`, `eq-disable`, `eq-reset`, `preset`, `bass DB`, `treble DB`, `crossfade SECONDS`, `gapless on\|off` | `dsp`, the settings as `eq-show` prints them. |
+| `dsp gapless`, `dsp crossfade`, `dsp bass`, `dsp treble` (no value) | `gapless`, `crossfade_seconds`, `bass_db` or `treble_db`. |
+| `dsp export FILE` | `output`. |
+| `dsp import FILE` | `dsp`, the settings now in effect. |
+
+Gains are -12 to +12 dB and crossfade is 0 to 8 seconds; anything outside
+fails with `usage`. These commands work with or without the daemon: with it
+they change the sound at once, without it they change the saved settings.
+
+### Listening stats
+
+| Command | Output |
+|---|---|
+| `stats summary` | `total_listen_seconds`, `total_plays`, `tracks_played`, and `top_tracks`, `top_artists`, `top_albums`, `top_genres`. |
+| `stats recent`, `stats most` | Array of tracks. |
+| `stats artists`, `stats albums`, `stats genres` | Array of `name`, `listen_seconds`, `play_count`. |
+
+Each takes `--limit N`.
+
+### Track
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | Stable id; use it to refer to the track later. |
+| `path` | string | Where the file is, spelled the way it was imported. |
+| `name` | string | File name. |
+| `title`, `artist`, `album` | string | From the tags, or guessed from the file and folder name when the file has none. |
+| `album_artist`, `genre` | string or null | |
+| `year`, `track_number`, `disc_number` | integer or null | |
+| `duration_seconds` | number or null | |
+| `format` | string | Upper-case extension, such as `FLAC`. |
+| `sample_rate`, `channels`, `bit_depth` | integer or null | |
+| `file_size` | integer | Bytes. |
+| `modified_at`, `indexed_at` | integer | Seconds since the Unix epoch. |
+| `lyrics`, `lyrics_source` | string or null | |
+| `album_art_id` | string or null | Shared by every track with the same cover. |
+| `cover_art_data_url`, `cover_art_mime`, `cover_art_source` | string or null | Where the library keeps the cover and what kind it is. Use `metadata cover-export` to get the image. |
+| `fingerprint_sha256`, `acoustid_fingerprint`, `musicbrainz_recording_id` | string or null | |
+| `is_saf_uri` | boolean | Android only: the path is a document URI. |
+| `source_provider`, `source_state` | string or null | Set for tracks streamed or downloaded from an online source. |
+
+### Playlist
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | Stable id. |
+| `name` | string | |
+| `track_count` | integer | |
+| `profile_id` | string | Always `default` for now. |
+| `created_at`, `updated_at` | integer | Seconds since the Unix epoch. |
+| `sync_folder` | string or null | The folder the playlist mirrors, when it is linked to one. |

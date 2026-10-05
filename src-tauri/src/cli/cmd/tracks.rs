@@ -82,6 +82,20 @@ fn all_tracks(library: &crate::library::Library) -> Result<Vec<Track>, String> {
 }
 
 fn cmd_tracks_import(paths: Vec<String>) {
+    // `-` stands for paths on stdin, imported together with the rest so the
+    // counts and duplicate checks cover the whole set.
+    let paths: Vec<String> = if paths.iter().any(|p| p == "-") {
+        let mut stdin = Some(crate::cli::batch::stdin_items());
+        paths
+            .into_iter()
+            .flat_map(|p| match p.as_str() {
+                "-" => stdin.take().unwrap_or_default(),
+                _ => vec![p],
+            })
+            .collect()
+    } else {
+        paths
+    };
     let library = open_library();
     let ui = ui::current();
     // Progress goes to stderr, so `wave tracks import ~/Music > out.txt`
