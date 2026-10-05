@@ -249,15 +249,10 @@ pub fn playback_status(ui: &Ui, status: &PlaybackStatus, album: Option<&str>) ->
     let room = ui.width.saturating_sub(display_width(INDENT));
     let mut out = String::new();
 
-    // An idle daemon names its current file "None", which reads like a track.
-    let idle = status.queue_index == 0 && matches!(status.file.as_str(), "" | "None");
-    let title = match status.title.as_deref() {
-        Some(title) => title,
-        None if idle => "Nothing playing",
-        None => std::path::Path::new(&status.file)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&status.file),
+    let title = match (status.title.as_deref(), status.file.as_deref()) {
+        (Some(title), _) => title,
+        (None, Some(file)) => file,
+        (None, None) => "Nothing playing",
     };
     let glyph = state_glyph(ui, &status.state);
     // The ASCII paused glyph is two columns, so measure rather than assume.
@@ -278,17 +273,18 @@ pub fn playback_status(ui: &Ui, status: &PlaybackStatus, album: Option<&str>) ->
     out.push_str(&dim_line(ui, &byline.join(&dot)));
     out.push('\n');
 
-    // A stopped daemon reports a zero duration, so guard the division.
-    let fraction = if status.duration_seconds > 0.0 {
-        status.position_seconds / status.duration_seconds
+    // A stopped daemon has no duration, so guard the division.
+    let duration = status.duration_seconds.unwrap_or(0.0);
+    let fraction = if duration > 0.0 {
+        status.position_seconds / duration
     } else {
         0.0
     };
-    let remaining = (status.duration_seconds - status.position_seconds).max(0.0);
+    let remaining = (duration - status.position_seconds).max(0.0);
     let timing = format!(
         "  {} / {}  -{}",
         format_duration(status.position_seconds as u64),
-        format_duration(status.duration_seconds as u64),
+        format_duration(duration as u64),
         format_duration(remaining as u64)
     );
     let bar_width = room.saturating_sub(display_width(&timing)).min(60);
@@ -335,8 +331,8 @@ pub fn playback_status(ui: &Ui, status: &PlaybackStatus, album: Option<&str>) ->
             "Shuffle {}{dot}Repeat {}{dot}Track {} of {}",
             if status.shuffle { "on" } else { "off" },
             status.repeat.to_ascii_lowercase(),
-            status.queue_index,
-            status.queue_total
+            status.queue_position.map_or(0, |i| i + 1),
+            status.queue_length
         ),
     ));
 
@@ -579,15 +575,16 @@ mod tests {
     fn status() -> PlaybackStatus {
         PlaybackStatus {
             state: "playing".into(),
-            file: "/music/a.flac".into(),
+            file: Some("a.flac".into()),
+            path: Some("/music/a.flac".into()),
             position_seconds: 72.0,
-            duration_seconds: 260.0,
+            duration_seconds: Some(260.0),
             volume: 0.62,
             device: "MacBook Pro Speakers".into(),
             repeat: "all".into(),
             shuffle: false,
-            queue_index: 1,
-            queue_total: 12,
+            queue_position: Some(0),
+            queue_length: 12,
             title: Some("Once in a Lifetime".into()),
             artist: Some("Talking Heads".into()),
         }
@@ -767,12 +764,13 @@ mod tests {
     #[test]
     fn an_idle_daemon_says_nothing_is_playing() {
         let mut s = status();
-        s.state = "Stopped".into();
-        s.file = "None".into();
+        s.state = "stopped".into();
+        s.file = None;
+        s.path = None;
         s.title = None;
         s.artist = None;
-        s.queue_index = 0;
-        s.queue_total = 0;
+        s.queue_position = None;
+        s.queue_length = 0;
         let out = playback_status(&wide(80), &s, None);
         assert!(out.contains("Nothing playing"), "{out}");
         assert!(!out.contains("None"), "{out}");
@@ -861,7 +859,7 @@ mod tests {
     #[test]
     fn repeat_mode_reads_in_lowercase() {
         let mut s = status();
-        s.repeat = "All".into();
+        s.repeat = "all".into();
         let out = playback_status(&wide(80), &s, None);
         assert!(out.contains("Repeat all"), "{out}");
     }
@@ -889,7 +887,7 @@ mod tests {
         let mut s = status();
         s.state = "stopped".into();
         s.position_seconds = 0.0;
-        s.duration_seconds = 0.0;
+        s.duration_seconds = None;
         s.title = None;
         s.artist = None;
         let out = playback_status(&wide(80), &s, None);

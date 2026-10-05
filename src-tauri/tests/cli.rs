@@ -435,18 +435,29 @@ fn removing_the_playing_track_moves_on_to_the_next() {
     silent(&wave);
     let first = wave.write_wav("first.wav");
     let second = wave.write_wav("second.wav");
-    wave.ok(&["playback", "start", &first]);
+    let started = wave.ok(&["playback", "start", &first]);
+    assert_eq!(started["status"]["file"], "first.wav");
     wave.ok(&["queue", "clear"]);
-    wave.ok(&["queue", "add", &second]);
-    wave.ok(&["playback", "pause"]);
+    // Every change reports where playback ended up.
+    let added = wave.ok(&["queue", "add", &second]);
+    assert_eq!(added["status"]["queue_length"], 2);
+    let paused = wave.ok(&["playback", "pause"]);
+    assert_eq!(paused["status"]["state"], "paused");
+
+    let queue = wave.ok(&["queue", "list"]);
+    assert_eq!(queue["queue_position"], 0, "positions count from 0");
+    assert_eq!(queue["tracks"].as_array().unwrap().len(), 2);
+
+    let removed = wave.ok(&["queue", "remove", "0"]);
+    assert_eq!(removed["status"]["file"], "second.wav");
+    assert_eq!(removed["status"]["state"], "paused");
+    assert_eq!(removed["status"]["queue_position"], 0);
 
     wave.ok(&["queue", "remove", "0"]);
     let status = wave.ok(&["playback", "status"]);
-    assert_eq!(status["file"], "second.wav");
-    assert_eq!(status["state"], "Paused");
-
-    wave.ok(&["queue", "remove", "0"]);
-    assert_eq!(wave.ok(&["playback", "status"])["state"], "Stopped");
+    assert_eq!(status["state"], "stopped");
+    assert_eq!(status["file"], Value::Null);
+    assert_eq!(status["queue_position"], Value::Null);
 
     wave.fails(&["queue", "remove", "5"], EXIT_USAGE);
     wave.fails(&["queue", "repeat", "sideways"], EXIT_USAGE);

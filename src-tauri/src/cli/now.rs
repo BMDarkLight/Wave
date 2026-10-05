@@ -12,7 +12,6 @@
 //! screen, so scrollback survives and the terminal is left as it was found.
 
 use std::io::{IsTerminal, Write};
-use std::path::Path;
 
 use crate::cli::ui::{self, Ui};
 use crate::cli::{json, render};
@@ -47,14 +46,15 @@ pub fn upcoming(status: &PlaybackStatus, queue_len: usize) -> Upcoming {
     if status.shuffle {
         return Upcoming::Shuffled;
     }
-    if queue_len == 0 || status.queue_index == 0 {
+    let Some(current) = status.queue_position else {
+        return Upcoming::Positions(Vec::new());
+    };
+    if queue_len == 0 {
         return Upcoming::Positions(Vec::new());
     }
     let wraps = status.repeat.eq_ignore_ascii_case("all");
-    // queue_index counts from 1, so it is also the 0-based position of the
-    // track after the current one.
     let positions = (0..PEEK.min(queue_len - 1))
-        .map(|slot| status.queue_index + slot)
+        .map(|slot| current + 1 + slot)
         .filter_map(|p| match p < queue_len {
             true => Some(p),
             false if wraps => Some(p % queue_len),
@@ -145,27 +145,6 @@ fn fetch(live: bool) -> (PlaybackStatus, Vec<String>) {
     }
 }
 
-/// The queue entry that is playing. The status names only the file, so the
-/// queue supplies the full path, and a disagreement between the two means the
-/// status is the one to trust.
-fn current_path(status: &PlaybackStatus, queue: &[String]) -> Option<String> {
-    let at_index = status
-        .queue_index
-        .checked_sub(1)
-        .and_then(|i| queue.get(i))
-        .filter(|path| file_name(path) == status.file);
-    at_index
-        .or_else(|| queue.iter().find(|path| file_name(path) == status.file))
-        .cloned()
-}
-
-fn file_name(path: &str) -> &str {
-    Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(path)
-}
-
 /// Album and upcoming labels for one frame, looked up together.
 struct Labels {
     album: Option<String>,
@@ -173,7 +152,7 @@ struct Labels {
 }
 
 fn label(status: &PlaybackStatus, queue: &[String]) -> Labels {
-    let current = current_path(status, queue);
+    let current = status.path.clone();
     let positions = match upcoming(status, queue.len()) {
         Upcoming::Positions(positions) => Some(positions),
         Upcoming::Shuffled => None,
@@ -218,7 +197,7 @@ pub fn run(once: bool, interval: f64) {
         print!("{HIDE_CURSOR}");
     }
 
-    type LabelKey = (String, usize, bool, String, Vec<String>);
+    type LabelKey = (Option<String>, Option<usize>, bool, String, Vec<String>);
     let mut labels_for: Option<(LabelKey, Labels)> = None;
     let mut previous_height = 0usize;
     loop {
@@ -230,8 +209,8 @@ pub fn run(once: bool, interval: f64) {
         // Album and the upcoming titles are not in the daemon's status, so
         // they come from the library, and only again when the queue moves.
         let key: LabelKey = (
-            status.file.clone(),
-            status.queue_index,
+            status.path.clone(),
+            status.queue_position,
             status.shuffle,
             status.repeat.clone(),
             queue.clone(),
@@ -286,15 +265,16 @@ mod tests {
     fn status() -> PlaybackStatus {
         PlaybackStatus {
             state: "playing".into(),
-            file: "current.flac".into(),
+            file: Some("current.flac".into()),
+            path: Some("/music/current.flac".into()),
             position_seconds: 72.0,
-            duration_seconds: 260.0,
+            duration_seconds: Some(260.0),
             volume: 0.62,
             device: "MacBook Pro Speakers".into(),
-            repeat: "Off".into(),
+            repeat: "off".into(),
             shuffle: false,
-            queue_index: 1,
-            queue_total: 3,
+            queue_position: Some(0),
+            queue_length: 3,
             title: Some("Once in a Lifetime".into()),
             artist: Some("Talking Heads".into()),
         }
@@ -397,12 +377,12 @@ mod tests {
     #[test]
     fn the_peek_wraps_to_the_start_only_under_repeat_all() {
         let mut s = status();
-        s.queue_index = 3;
+        s.queue_position = Some(2);
         assert_eq!(upcoming(&s, 3), Upcoming::Positions(vec![]));
-        s.repeat = "All".into();
+        s.repeat = "all".into();
         assert_eq!(upcoming(&s, 3), Upcoming::Positions(vec![0, 1]));
         // A lone track under repeat all is not its own "next".
-        s.queue_index = 1;
+        s.queue_position = Some(0);
         assert_eq!(upcoming(&s, 1), Upcoming::Positions(vec![]));
     }
 
@@ -414,18 +394,5 @@ mod tests {
         let out = frame_for(&at(100), &s, &queue(&["current", "next"]), None);
         assert!(!out.contains("next.flac"));
         assert!(out.contains("Shuffle is on"));
-    }
-
-    #[test]
-    fn the_current_path_follows_the_file_the_daemon_names() {
-        let q = queue(&["a", "current", "b"]);
-        let mut s = status();
-        s.queue_index = 2;
-        assert_eq!(current_path(&s, &q).as_deref(), Some("/music/current.flac"));
-        // An index that points somewhere else loses to the named file.
-        s.queue_index = 1;
-        assert_eq!(current_path(&s, &q).as_deref(), Some("/music/current.flac"));
-        s.file = "None".into();
-        assert_eq!(current_path(&s, &q), None);
     }
 }

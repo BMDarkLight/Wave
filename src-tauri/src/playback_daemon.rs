@@ -108,18 +108,33 @@ pub enum DaemonRequest {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// What the daemon is doing. This is also the `playback status` JSON, so its
+/// fields are the documented contract in docs/cli.md.
+///
+/// `serde(default)` lets a newer CLI read the reply of a daemon that was
+/// started by an older build and is still running, instead of failing on a
+/// field the old daemon does not send.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PlaybackStatus {
+    /// `playing`, `paused` or `stopped`.
     pub state: String,
-    pub file: String,
+    /// File name of the loaded track; `None` when nothing is loaded.
+    pub file: Option<String>,
+    /// Full path of the loaded track; `None` when nothing is loaded.
+    pub path: Option<String>,
     pub position_seconds: f64,
-    pub duration_seconds: f64,
+    /// `None` until the length is known.
+    pub duration_seconds: Option<f64>,
     pub volume: f32,
     pub device: String,
+    /// `off`, `one` or `all`.
     pub repeat: String,
     pub shuffle: bool,
-    pub queue_index: usize,
-    pub queue_total: usize,
+    /// Index into `queue list`, counting from 0; `None` when no queue entry
+    /// is current.
+    pub queue_position: Option<usize>,
+    pub queue_length: usize,
     pub title: Option<String>,
     pub artist: Option<String>,
 }
@@ -557,7 +572,13 @@ fn handle_ipc_connection(
                 poisoned.into_inner()
             }
         };
-        handle_request(&mut guard, request)
+        let mut response = handle_request(&mut guard, request);
+        // Every successful reply says where playback ended up, so a caller
+        // never needs a second request to learn the effect of the first.
+        if response.ok && response.status.is_none() {
+            response.status = Some(build_status(&guard.player, &guard.library));
+        }
+        response
     };
 
     let _ = write_response(&mut stream, &response);
@@ -1403,41 +1424,45 @@ fn format_now_playing(library: &Library, path: &str) -> String {
 
 fn build_status(player: &AudioPlayer, library: &Library) -> PlaybackStatus {
     let state = if player.is_playing() {
-        "Playing"
+        "playing"
     } else if player.is_paused() {
-        "Paused"
+        "paused"
     } else {
-        "Stopped"
+        "stopped"
     }
     .to_string();
 
     let path = player
         .get_current_path()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let (title, artist) = track_for_path(library, &path)
-        .map(|t| (Some(t.title), Some(t.artist)))
-        .unwrap_or((None, None));
-
+        .map(|p| p.to_string_lossy().into_owned());
     let file = player
         .get_current_path()
         .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("None")
-        .to_string();
+        .map(|n| n.to_string_lossy().into_owned());
+    let (title, artist) = path
+        .as_deref()
+        .and_then(|path| track_for_path(library, path))
+        .map(|t| (Some(t.title), Some(t.artist)))
+        .unwrap_or((None, None));
+    let repeat = match player.repeat {
+        RepeatMode::Off => "off",
+        RepeatMode::One => "one",
+        RepeatMode::All => "all",
+    }
+    .to_string();
 
     PlaybackStatus {
         state,
         file,
+        path,
         position_seconds: player.position_seconds(),
-        duration_seconds: player.duration_seconds().unwrap_or(0.0),
+        duration_seconds: player.duration_seconds(),
         volume: player.volume(),
         device: AudioPlayer::current_output_name(),
-        repeat: format!("{:?}", player.repeat),
+        repeat,
         shuffle: player.queue.is_shuffled(),
-        queue_index: player.queue.current_index().map_or(0, |i| i + 1),
-        queue_total: player.queue.tracks().len(),
+        queue_position: player.queue.current_index(),
+        queue_length: player.queue.tracks().len(),
         title,
         artist,
     }

@@ -20,8 +20,11 @@ pub fn run(cmd: QueueCmd) {
             Ok(Some(resp)) if resp.ok => {
                 let tracks = resp.queue.unwrap_or_default();
                 let shuffle = resp.status.as_ref().is_some_and(|s| s.shuffle);
-                let current = resp.status.and_then(|s| s.queue_index.checked_sub(1));
-                json::maybe_emit(&serde_json::json!({ "queue": tracks, "current": current }));
+                let current = resp.status.and_then(|s| s.queue_position);
+                json::maybe_emit(&serde_json::json!({
+                    "queue_position": current,
+                    "tracks": tracks,
+                }));
                 let known = library_tracks_for(&tracks);
                 let labels: Vec<String> = tracks
                     .iter()

@@ -15,6 +15,7 @@ For the human-facing tour of the commands, see the
 - [The JSON contract](#the-json-contract)
 - [Errors](#errors)
 - [Schema version](#schema-version)
+- [Playback status](#playback-status)
 
 ## The JSON contract
 
@@ -116,3 +117,66 @@ $ wave --json
 changes. Adding a field does not raise it, so read the fields you need and
 ignore the rest. A program can check the version once at startup and refuse to
 run against one it does not know.
+
+## Playback status
+
+Playback runs in a background daemon that the first playback command starts.
+`wave --json playback status` describes what it is doing:
+
+```json
+{
+  "state": "playing",
+  "file": "Once in a Lifetime.flac",
+  "path": "/Users/me/Music/Talking Heads/Remain in Light/Once in a Lifetime.flac",
+  "position_seconds": 72.4,
+  "duration_seconds": 260.0,
+  "volume": 0.62,
+  "device": "MacBook Pro Speakers",
+  "repeat": "off",
+  "shuffle": false,
+  "queue_position": 0,
+  "queue_length": 12,
+  "title": "Once in a Lifetime",
+  "artist": "Talking Heads"
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `state` | string | `playing`, `paused` or `stopped`. |
+| `file` | string or null | File name of the loaded track; `null` when nothing is loaded. |
+| `path` | string or null | Full path of the loaded track; `null` when nothing is loaded. |
+| `position_seconds` | number | Position in the track. |
+| `duration_seconds` | number or null | Length of the track; `null` until it is known. |
+| `volume` | number | 0.0 to 1.0. |
+| `device` | string | Name of the audio output. |
+| `repeat` | string | `off`, `one` or `all`, the same words `queue repeat` takes. |
+| `shuffle` | boolean | |
+| `queue_position` | integer or null | Index of the current track in `queue list`, counting from 0; `null` when no queue entry is current. |
+| `queue_length` | integer | Number of tracks in the queue. |
+| `title`, `artist` | string or null | From the library; `null` for a file the library does not know. |
+
+Every command that changes playback (`play`, `playback pause`, `queue add`,
+`devices volume`, …) returns the same object under `status`, showing where
+playback ended up after the change, so a second request is never needed:
+
+```json
+{"message": "Paused.", "ok": true, "status": {"state": "paused", "...": "..."}}
+```
+
+`wave --json queue list` gives the queue in stored order, with the same 0-based
+position. With shuffle on, tracks play in a different order than listed.
+
+```json
+{"queue_position": 0, "tracks": ["/music/a.flac", "/music/b.flac"]}
+```
+
+Pass a position from that list straight to `queue remove`. Removing the track
+that is playing moves playback on to the next one, keeping it paused if it was
+paused, or stops when it was the last.
+
+When no daemon is running, playback commands fail with exit status 4
+(`no_daemon`), except `play` and `playback start`, which start one. Several of
+those can run at once: they share one daemon. While the Wave desktop app is
+open it owns playback, and commands that need the daemon fail with exit status
+5 (`conflict`).

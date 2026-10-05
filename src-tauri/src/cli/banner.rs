@@ -195,7 +195,10 @@ pub fn landing_text(ui: &Ui, facts: &LandingFacts) -> String {
         let what = match (&status.artist, &status.title) {
             (Some(artist), Some(title)) => format!("{artist}{dot}{title}"),
             (None, Some(title)) => title.clone(),
-            _ => status.file.clone(),
+            _ => status
+                .file
+                .clone()
+                .unwrap_or_else(|| "Nothing playing".to_string()),
         };
         out.push_str(&fact(
             ui,
@@ -204,7 +207,7 @@ pub fn landing_text(ui: &Ui, facts: &LandingFacts) -> String {
                 "{} {what}   {} / {}",
                 render::state_glyph(ui, &status.state),
                 render::format_duration(status.position_seconds as u64),
-                render::format_duration(status.duration_seconds as u64)
+                render::format_duration(status.duration_seconds.unwrap_or(0.0) as u64)
             ),
             LABEL_WIDTH,
         ));
@@ -306,15 +309,16 @@ mod tests {
             listened: Some("4h 6m 1s".into()),
             playback: Some(PlaybackStatus {
                 state: "playing".into(),
-                file: "/music/a.flac".into(),
+                file: Some("a.flac".into()),
+                path: Some("/music/a.flac".into()),
                 position_seconds: 72.0,
-                duration_seconds: 260.0,
+                duration_seconds: Some(260.0),
                 volume: 0.62,
                 device: "MacBook Pro Speakers".into(),
                 repeat: "all".into(),
                 shuffle: false,
-                queue_index: 1,
-                queue_total: 12,
+                queue_position: Some(0),
+                queue_length: 12,
                 title: Some("Once in a Lifetime".into()),
                 artist: Some("Talking Heads".into()),
             }),

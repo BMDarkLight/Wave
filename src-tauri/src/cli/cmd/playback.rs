@@ -95,7 +95,8 @@ fn cmd_playback_seek(raw: &str) {
                 let status = resp.status.unwrap_or_else(|| {
                     ui::fail("The daemon returned no status.", None, ui::EXIT_GENERAL)
                 });
-                let end = status.duration_seconds.max(0.0);
+                // An unknown length puts no ceiling on a forward step.
+                let end = status.duration_seconds.unwrap_or(f64::INFINITY).max(0.0);
                 (status.position_seconds + step).clamp(0.0, end)
             }
             Ok(None) => ui::no_daemon(),
