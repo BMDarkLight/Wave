@@ -224,7 +224,36 @@ impl Library {
         Ok(self.write_connection())
     }
 
+    /// Bring the schema up to date and run the startup repairs, one process
+    /// at a time. Every process that opens the library runs these steps, and
+    /// several CLI commands are often started at once; unserialized, two of
+    /// them could both find a column missing and both try to add it.
     fn initialize(&self) -> Result<(), String> {
+        let _exclusive = self.lock_for_initialize()?;
+        self.initialize_schema()
+    }
+
+    /// An exclusive lock on a file beside the database, held until dropped.
+    /// An in-memory database belongs to one process and needs none.
+    fn lock_for_initialize(&self) -> Result<Option<std::fs::File>, String> {
+        use fs4::fs_std::FileExt;
+        if self.db_path == Path::new(":memory:") {
+            return Ok(None);
+        }
+        let mut lock_path = self.db_path.clone().into_os_string();
+        lock_path.push(".init-lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|e| format!("Failed to open library init lock: {e}"))?;
+        file.lock_exclusive()
+            .map_err(|e| format!("Failed to lock library for setup: {e}"))?;
+        Ok(Some(file))
+    }
+
+    fn initialize_schema(&self) -> Result<(), String> {
         let connection = self.lock_connection()?;
         connection
             .execute_batch(
