@@ -52,10 +52,11 @@ fn main() {
             wave_lib::cli::run();
             return;
         }
-        if wave_lib::single_instance::primary_is_running() {
-            eprintln!("{}", wave_lib::single_instance::already_running_message());
-            std::process::exit(1);
-        }
+        // Otherwise the lock, if held at all, is held by a playback daemon
+        // that is still starting up and not yet accepting connections. The
+        // CLI works alongside the daemon, and the commands that talk to it
+        // wait for it to come up, so turning them away here only made
+        // commands run in parallel fail at random.
         wave_lib::cli::run();
     } else {
         wave_lib::run();

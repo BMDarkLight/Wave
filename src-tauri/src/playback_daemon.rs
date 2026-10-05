@@ -355,14 +355,28 @@ fn ensure_daemon_connection() -> Result<DaemonConnection, String> {
     if crate::single_instance::gui_is_running() {
         return Err(crate::single_instance::already_running_message());
     }
+    // Another command is starting the daemon right now, which happens
+    // whenever several are run at once. Wait for it rather than fail.
     if crate::single_instance::daemon_is_running() {
-        return Err(
-            "Playback daemon is starting but not yet accepting connections. Try again.".to_string(),
-        );
+        return wait_for_daemon().ok_or_else(|| {
+            "Playback daemon is running but did not accept connections within 10 seconds."
+                .to_string()
+        });
     }
     spawn_daemon()?;
     read_daemon_connection()
         .ok_or_else(|| "Playback daemon failed to publish connection details.".to_string())
+}
+
+/// Poll for a starting daemon's connection details for up to ten seconds.
+fn wait_for_daemon() -> Option<DaemonConnection> {
+    for _ in 0..100 {
+        if let Some(conn) = read_daemon_connection() {
+            return Some(conn);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    None
 }
 
 /// Ensure the background daemon is running; returns its TCP port.
@@ -1540,13 +1554,9 @@ fn spawn_daemon() -> Result<(), String> {
     cmd.spawn()
         .map_err(|e| format!("Failed to spawn playback daemon: {e}"))?;
 
-    for _ in 0..100 {
-        if read_daemon_connection().is_some() {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Err("Playback daemon failed to start within 10 seconds.".to_string())
+    wait_for_daemon()
+        .map(|_| ())
+        .ok_or_else(|| "Playback daemon failed to start within 10 seconds.".to_string())
 }
 
 #[cfg(test)]

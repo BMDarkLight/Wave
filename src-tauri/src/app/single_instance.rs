@@ -68,13 +68,6 @@ pub fn try_acquire(mode: InstanceMode) -> Result<InstanceGuard, String> {
     Ok(InstanceGuard { _file: file })
 }
 
-/// Whether a primary Wave instance (GUI or daemon) appears to be running.
-pub fn primary_is_running() -> bool {
-    read_lock_info()
-        .map(|(pid, _)| is_process_alive(pid))
-        .unwrap_or(false)
-}
-
 /// Whether the Tauri GUI instance holds the primary lock.
 pub fn gui_is_running() -> bool {
     read_lock_info()
