@@ -462,3 +462,53 @@ fn removing_the_playing_track_moves_on_to_the_next() {
     wave.fails(&["queue", "remove", "5"], EXIT_USAGE);
     wave.fails(&["queue", "repeat", "sideways"], EXIT_USAGE);
 }
+
+#[test]
+fn watching_needs_json_and_a_running_daemon() {
+    let wave = Wave::new();
+    wave.fails(&["now", "--watch"], EXIT_NO_DAEMON);
+    let plain = wave.run(&["now", "--watch"]);
+    assert_eq!(plain.status.code(), Some(EXIT_USAGE));
+}
+
+#[test]
+#[ignore = "needs an audio output device"]
+fn the_watch_stream_reports_changes_until_the_daemon_stops() {
+    use std::io::{BufRead, BufReader};
+
+    let wave = Wave::new();
+    silent(&wave);
+    let song = wave.write_wav("song.wav");
+    wave.ok(&["playback", "start", &song]);
+    let mut watcher = wave
+        .command(&["--json", "now", "--watch", "--interval", "0.1"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(watcher.stdout.take().unwrap()).lines();
+    let mut next_event = || -> Value {
+        let line = lines.next().expect("stream ended early").unwrap();
+        serde_json::from_str(&line).unwrap()
+    };
+
+    let first = next_event();
+    assert_eq!(first["event"], "status");
+    assert_eq!(first["schema_version"], 1);
+    assert!(first["at"].as_u64().unwrap() > 0);
+    assert_eq!(next_event()["event"], "queue");
+
+    wave.ok(&["playback", "pause"]);
+    // The short track may end on its own first; either way a status event
+    // with the new state arrives.
+    let paused = next_event();
+    assert_eq!(paused["event"], "status");
+    assert_ne!(paused["status"]["state"], "playing");
+
+    wave.ok(&["playback", "shutdown"]);
+    let mut last = next_event();
+    while last["event"] == "status" {
+        last = next_event();
+    }
+    assert_eq!(last["event"], "daemon_stopped");
+    assert!(watcher.wait().unwrap().success());
+}

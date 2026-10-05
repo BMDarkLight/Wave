@@ -14,6 +14,7 @@ pub mod now;
 pub mod render;
 pub mod table;
 pub mod ui;
+pub mod watch;
 
 use std::io::IsTerminal;
 use std::path::Path;
@@ -102,6 +103,10 @@ pub enum Commands {
         /// Seconds between redraws (0.1 to 10)
         #[arg(long, default_value_t = 0.5)]
         interval: f64,
+        /// With --json, stream one JSON line per playback change until the
+        /// daemon stops (see docs/cli.md)
+        #[arg(long, conflicts_with = "once")]
+        watch: bool,
     },
     /// Listening stats (play time, top tracks / artists / albums / genres)
     #[command(subcommand, visible_alias = "listen")]
@@ -756,7 +761,12 @@ pub fn run() {
         Some(Commands::Metadata(cmd)) => cmd::metadata::run(cmd),
         Some(Commands::Dsp(cmd)) => cmd::dsp::run(cmd),
         Some(Commands::Stats(cmd)) => cmd::stats::run(cmd),
-        Some(Commands::Now { once, interval }) => now::run(once, interval),
+        Some(Commands::Now {
+            watch: true,
+            interval,
+            ..
+        }) => watch::run(interval),
+        Some(Commands::Now { once, interval, .. }) => now::run(once, interval),
         Some(Commands::Completions { shell }) => {
             clap_complete::generate(shell, &mut Cli::command(), "wave", &mut std::io::stdout())
         }

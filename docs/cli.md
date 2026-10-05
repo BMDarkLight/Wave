@@ -16,6 +16,7 @@ For the human-facing tour of the commands, see the
 - [Errors](#errors)
 - [Schema version](#schema-version)
 - [Playback status](#playback-status)
+- [Watching playback](#watching-playback)
 
 ## The JSON contract
 
@@ -180,3 +181,45 @@ When no daemon is running, playback commands fail with exit status 4
 those can run at once: they share one daemon. While the Wave desktop app is
 open it owns playback, and commands that need the daemon fail with exit status
 5 (`conflict`).
+
+## Watching playback
+
+`wave now --json --watch` follows playback as a stream of
+[JSON Lines](https://jsonlines.org): one compact JSON object per line, written
+and flushed the moment something happens. It runs until the playback daemon
+stops, so a program can follow playback without polling.
+
+```bash
+$ wave now --json --watch
+{"at":1791203512843,"event":"status","schema_version":1,"status":{"artist":"Talking Heads","file":"a.flac",...,"state":"playing",...}}
+{"at":1791203512843,"event":"queue","queue_position":0,"schema_version":1,"tracks":["/music/a.flac","/music/b.flac"]}
+{"at":1791203519102,"event":"status","schema_version":1,"status":{...,"state":"paused",...}}
+{"at":1791203530410,"event":"daemon_stopped","schema_version":1}
+```
+
+Every line has these fields:
+
+| Field | Meaning |
+|---|---|
+| `event` | `status`, `queue` or `daemon_stopped`. |
+| `at` | When the change was seen, in milliseconds since the Unix epoch. |
+| `schema_version` | See [Schema version](#schema-version). |
+
+The events:
+
+- **`status`** carries the full [playback status](#playback-status) under
+  `status`. One is sent first, then again whenever anything in it changes: the
+  state, the track, the volume, the device, repeat or shuffle, the queue
+  position or length, or the position jumping because of a seek. Steady
+  playback is not an event; to show a moving position, add the time since `at`
+  to `position_seconds` while `state` is `playing`.
+- **`queue`** carries `queue_position` and `tracks`, the same as
+  `queue list`. One is sent first, then again whenever the queue's contents
+  change.
+- **`daemon_stopped`** is the last line. The command then exits with status 0.
+
+Unknown event names may be added later; skip them. `--interval` (0.1 to 10
+seconds, default 0.5) sets how often the daemon is checked, which bounds how
+late an event can arrive. If the daemon is not running when the watch starts,
+the command fails with exit status 4 (`no_daemon`), like other playback
+commands. Closing the pipe ends the watch quietly.
