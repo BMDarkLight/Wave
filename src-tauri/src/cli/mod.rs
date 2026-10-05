@@ -600,7 +600,17 @@ fn resolve_track_path(library: &Library, id_or_path: &str) -> Result<String, Str
     }
 
     if Path::new(id_or_path).exists() {
-        return Ok(library_path_spelling(id_or_path));
+        // The library keeps a path spelled the way it was imported, which
+        // need not be canonical: a folder imported through a symlink, such
+        // as /var on macOS, is stored under that name. Use whichever spelling
+        // the library has, so the file is not mistaken for a new one.
+        let canonical = library_path_spelling(id_or_path);
+        for spelling in [id_or_path, canonical.as_str()] {
+            if matches!(library.get_track_details(spelling), Ok(Some(_))) {
+                return Ok(spelling.to_string());
+            }
+        }
+        return Ok(canonical);
     }
 
     let looks_like_id = id_or_path.len() >= MIN_PREFIX
