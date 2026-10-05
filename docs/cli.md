@@ -100,6 +100,11 @@ with exit status 2:
 `--help` and `--version` are not errors: they print their text and exit 0,
 with or without `--json`.
 
+If whatever reads the output closes it early, as `head` does in
+`wave tracks list | head`, `wave` stops writing and exits with status 141 and
+nothing on stderr, the same status a Unix tool stopped by SIGPIPE reports. This
+holds for `wave batch` and `wave now --watch` too.
+
 ## Schema version
 
 The shapes on this page are versioned as a whole. `wave --json` with no
@@ -225,7 +230,7 @@ Unknown event names may be added later; skip them. `--interval` (0.1 to 10
 seconds, default 0.5) sets how often the daemon is checked, which bounds how
 late an event can arrive. If the daemon is not running when the watch starts,
 the command fails with exit status 4 (`no_daemon`), like other playback
-commands. Closing the pipe ends the watch quietly.
+commands. Closing the pipe ends the watch quietly, with status 141.
 
 ## Batch requests
 

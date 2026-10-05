@@ -85,7 +85,7 @@ fn emit(line: Value) {
         .and_then(|_| stdout.flush())
         .is_err()
     {
-        std::process::exit(0);
+        std::process::exit(crate::cli::EXIT_BROKEN_PIPE);
     }
 }
 

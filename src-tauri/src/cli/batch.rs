@@ -272,7 +272,7 @@ fn print(line: &Value) {
         .is_err()
     {
         // The reader went away; nothing left to tell.
-        std::process::exit(0);
+        std::process::exit(crate::cli::EXIT_BROKEN_PIPE);
     }
 }
 

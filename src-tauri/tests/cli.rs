@@ -670,3 +670,31 @@ fn queueing_several_tracks_next_keeps_their_order() {
         .collect();
     assert_eq!(names, vec!["now.wav", "a.wav", "b.wav"]);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_reader_closing_the_pipe_ends_output_quietly() {
+    use std::io::Read as _;
+
+    let wave = Wave::new();
+    // Far more than a pipe buffer holds, so writing must hit the closed pipe.
+    let mut child = wave
+        .command(&["completions", "bash"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = [0u8; 16];
+    child.stdout.take().unwrap().read_exact(&mut first).unwrap();
+    // The read end is dropped here, as `head` would close it.
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(141), "{stderr}");
+    assert!(stderr.is_empty(), "no panic message: {stderr}");
+}

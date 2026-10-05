@@ -736,7 +736,35 @@ pub fn conflicts_with_gui(args: &[String]) -> bool {
     )
 }
 
+/// Status for output cut off by the reader closing the pipe, as in
+/// `wave tracks list | head`: what a Unix tool killed by SIGPIPE reports.
+pub(crate) const EXIT_BROKEN_PIPE: i32 = 141;
+
+/// Stop quietly when whatever reads our output goes away. Rust ignores
+/// SIGPIPE, so printing to a closed pipe panics instead, and a long listing
+/// piped into `head` would end in a panic message. Only that case is caught:
+/// a closed socket to the daemon still surfaces as an ordinary error.
+fn exit_quietly_on_broken_pipe() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        let broken_pipe = ["Broken pipe", "BrokenPipe", "os error 109", "os error 232"]
+            .iter()
+            .any(|sign| payload.contains(sign));
+        if broken_pipe {
+            std::process::exit(EXIT_BROKEN_PIPE);
+        }
+        default_hook(info);
+    }));
+}
+
 pub fn run() {
+    exit_quietly_on_broken_pipe();
     let ui = ui::Ui::resolve(ui::ColorChoice::Auto, false, false);
 
     // The mark heads the top-level help, but only on a terminal: help piped
