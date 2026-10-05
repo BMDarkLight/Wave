@@ -140,9 +140,7 @@ you added it, the editor says so and offers to add it again, which is enough to
 upgrade the permission.
 
 30-second previews aren't files Wave can rewrite, so the option doesn't appear
-for them. WAV and AIFF are written correctly but Wave's own decoder stops
-reading a RIFF file at the audio data, so a WAV re-imported from scratch comes
-back with its old tags.
+for them.
 
 ### Three-tier search
 
@@ -238,6 +236,9 @@ wave now                            # live now-playing dashboard
 wave metadata set <id> --genre "Post-Punk" --year 1979
 wave stats artists --limit 10       # top artists by listen time
 wave tracks list --json             # machine-readable output
+wave now --json --watch             # playback changes as JSON lines
+find ~/Music -name '*.flac' | wave favorite add -    # many tracks from stdin
+wave --json batch < requests.txt    # many commands, one result line each
 wave completions zsh > _wave        # shell completions
 ```
 
