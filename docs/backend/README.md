@@ -70,6 +70,7 @@ Important behaviors:
 | `get_playback_state` | Poll playing/paused state, position, duration, volume |
 | `seek_track` | Seek to position in seconds |
 | `set_volume` | Set volume (`0.0`–`1.0`) |
+| `set_sleep_timer` | Pause after a countdown or at the end of the track |
 
 ### Library & playlists
 

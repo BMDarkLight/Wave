@@ -81,6 +81,32 @@ const state = await invoke<PlaybackState>("get_playback_state");
 
 ---
 
+### `set_sleep_timer`
+
+Pauses playback after a countdown, or when the current track ends. The output
+fades over the last ten seconds. When a track-end timer fires, the next queue
+track is loaded paused at its start. Passing `{ mode: "off" }` cancels it.
+
+**Arguments**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `request` | [`SleepRequest`](./types.md#sleeprequest) | What to set |
+
+**Returns:** [`SleepTimerStatus`](./types.md#sleeptimerstatus)
+
+**Errors:** a countdown of 0 seconds or over 24 hours.
+
+**Example**
+
+```typescript
+await invoke("set_sleep_timer", {
+  request: { mode: "countdown", seconds: 30 * 60 },
+});
+```
+
+---
+
 ### `seek_track`
 
 Seek to a position within the current track. Uses Rodio’s native seek (no full re-decode).

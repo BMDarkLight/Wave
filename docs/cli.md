@@ -146,7 +146,8 @@ Playback runs in a background daemon that the first playback command starts.
   "queue_position": 0,
   "queue_length": 12,
   "title": "Once in a Lifetime",
-  "artist": "Talking Heads"
+  "artist": "Talking Heads",
+  "sleep_timer": {"mode": "countdown", "remaining_seconds": 1740.0}
 }
 ```
 
@@ -164,6 +165,7 @@ Playback runs in a background daemon that the first playback command starts.
 | `queue_position` | integer or null | Index of the current track in `queue list`, counting from 0; `null` when no queue entry is current. |
 | `queue_length` | integer | Number of tracks in the queue. |
 | `title`, `artist` | string or null | From the library; `null` for a file the library does not know. |
+| `sleep_timer` | object | `mode` is `off`, `countdown` or `end_of_track`. A countdown also has `remaining_seconds`. |
 
 Every command that changes playback (`play`, `playback pause`, `queue add`,
 `devices volume`, …) returns the same object under `status`, showing where
@@ -218,8 +220,9 @@ The events:
 - **`status`** carries the full [playback status](#playback-status) under
   `status`. One is sent first, then again whenever anything in it changes: the
   state, the track, the volume, the device, repeat or shuffle, the queue
-  position or length, or the position jumping because of a seek. Steady
-  playback is not an event; to show a moving position, add the time since `at`
+  position or length, the sleep timer being set or cleared, or the position
+  jumping because of a seek. Steady playback is not an event, and neither is a
+  sleep countdown ticking down; to show a moving position, add the time since `at`
   to `position_seconds` while `state` is `playing`.
 - **`queue`** carries `queue_position` and `tracks`, the same as
   `queue list`. One is sent first, then again whenever the queue's contents
@@ -378,6 +381,8 @@ or an id prefix.
 | `play TRACK_OR_PLAYLIST`, `playback start ...` | `status`, see [Playback status](#playback-status). Starts the daemon when needed. |
 | `playback status` | The [playback status](#playback-status) itself. |
 | `playback pause`, `resume`, `stop`, `next`, `previous`, `seek POS` | `status`. `seek` takes seconds, `m:ss`, or a step like `+10` or `-30`. |
+| `playback sleep WHEN` | `status`. `WHEN` is minutes (`30`), a length with units (`45m`, `1h30m`, `90s`), `end` to pause when the current track ends, or `off`. |
+| `playback sleep` (no value) | `sleep_timer`, as in the [playback status](#playback-status). |
 | `playback shutdown` | Nothing beyond the envelope; succeeds when no daemon is running. |
 | `queue list` | `queue_position` and `tracks`. |
 | `queue add TRACK`, `queue next TRACK`, `queue remove POSITION`, `queue clear`, `queue shuffle [on\|off]`, `queue repeat MODE` | `status`. |

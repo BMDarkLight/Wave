@@ -16,6 +16,7 @@ interface PlaybackState {
   position_seconds: number;
   duration_seconds: number | null;
   volume: number; // 0.0 – 1.0
+  sleep_timer: SleepTimerStatus;
 }
 ```
 
@@ -27,6 +28,33 @@ interface PlaybackState {
 | `position_seconds` | Current playback head position |
 | `duration_seconds` | Total track length when known, else `null` |
 | `volume` | Current output volume |
+| `sleep_timer` | The sleep timer, see [`SleepTimerStatus`](#sleeptimerstatus) |
+
+---
+
+## `SleepTimerStatus`
+
+Part of `PlaybackState`, and returned by `set_sleep_timer`.
+
+```typescript
+interface SleepTimerStatus {
+  mode: "off" | "countdown" | "end_of_track";
+  remaining_seconds?: number; // countdown only
+}
+```
+
+---
+
+## `SleepRequest`
+
+Argument to `set_sleep_timer`.
+
+```typescript
+type SleepRequest =
+  | { mode: "off" }
+  | { mode: "countdown"; seconds: number } // 1 second to 24 hours
+  | { mode: "end_of_track" };
+```
 
 ---
 

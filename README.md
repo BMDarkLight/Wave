@@ -178,6 +178,11 @@ An in-memory queue independent of your playlists: reorder by drag, remove
 individual entries, queue a track next, shuffle, and repeat off / one / all.
 Previous rewinds the current track if you are more than three seconds in.
 
+A **sleep timer** pauses playback after 15 to 90 minutes, or when the current
+track ends. The volume eases down over the last ten seconds, and resuming
+picks up where it stopped. Set it from the moon button in the player bar, the
+Now Playing screen on Android, the tray menu, or `wave playback sleep`.
+
 <img src="docs/screenshots/desktop-queue.png" alt="Queue panel" width="100%">
 
 ### Lyrics
@@ -342,6 +347,7 @@ wave play "Late Night Drive"     # a playlist, by name or id...
 wave play 4a72a8cc               # ...or a single track
 wave playback pause              # also: resume, stop, next, previous
 wave playback seek 1:30          # or 90, or a step: +10, -15
+wave playback sleep 30           # pause in 30 minutes; also 1h30m, end, off
 wave queue add 68a9c5c6          # to the end of the queue
 wave queue next 68a9c5c6         # straight after the current track
 wave queue list
@@ -355,8 +361,9 @@ wave playback shutdown           # stop the background service
 ```
 
 `wave now` is a live dashboard of what's playing: the track, a progress bar,
-volume, output device, shuffle and repeat, and the next two tracks. It redraws
-in place until you press Ctrl-C, and `wave now --once` prints a single frame.
+volume, output device, shuffle and repeat, the sleep timer when one is set,
+and the next two tracks. It redraws in place until you press Ctrl-C, and
+`wave now --once` prints a single frame.
 
 <img src="docs/screenshots/cli-now.png" alt="wave now: the playing track with a progress bar, volume, device, repeat mode and the next two tracks" width="100%">
 
