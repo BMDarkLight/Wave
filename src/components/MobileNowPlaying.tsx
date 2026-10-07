@@ -41,9 +41,16 @@ import {
   EQ_BAND_LABELS,
   EQ_PRESETS,
 } from "../utils/player";
-import type { Track, PlaybackMode, EqSettings } from "../utils/player";
+import type {
+  Track,
+  PlaybackMode,
+  EqSettings,
+  SleepRequest,
+  SleepTimerStatus,
+} from "../utils/player";
 import { useDragDismiss } from "../hooks/useDragDismiss";
 import VirtualizedList from "./VirtualizedList";
+import SleepTimerButton from "./SleepTimerButton";
 
 const formatTime = (seconds?: number | null) => {
   if (!seconds || !Number.isFinite(seconds)) return "0:00";
@@ -402,6 +409,8 @@ interface MobileNowPlayingProps {
   onNext: () => void;
   onToggleShuffle: () => void;
   onCycleRepeat: () => void;
+  sleepTimer: SleepTimerStatus;
+  onSetSleepTimer: (request: SleepRequest) => void;
   closing?: boolean;
   onClose: () => void;
   /** Fired instead of onClose when the page is dismissed by drag (reopen guard). */
@@ -445,6 +454,8 @@ export default function MobileNowPlaying({
   onNext,
   onToggleShuffle,
   onCycleRepeat,
+  sleepTimer,
+  onSetSleepTimer,
   closing = false,
   onClose,
   onDragClose,
@@ -984,6 +995,11 @@ export default function MobileNowPlaying({
         >
           <BiListUl />
         </button>
+        <SleepTimerButton
+          status={sleepTimer}
+          onSet={onSetSleepTimer}
+          className="mnp-action-btn"
+        />
         <button
           className={`mnp-action-btn ${menuOpen ? "active" : ""}`}
           onClick={openSheet}

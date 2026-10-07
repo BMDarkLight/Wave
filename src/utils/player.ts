@@ -85,7 +85,29 @@ export interface PlaybackState {
   duration_seconds: number | null;
   volume: number;
   output_device_name: string;
+  sleep_timer: SleepTimerStatus;
 }
+
+export interface SleepTimerStatus {
+  mode: "off" | "countdown" | "end_of_track";
+  /** Seconds left on a countdown; absent otherwise. */
+  remaining_seconds?: number;
+}
+
+export type SleepRequest =
+  | { mode: "off" }
+  | { mode: "countdown"; seconds: number }
+  | { mode: "end_of_track" };
+
+/** Same choices as the tray menus. */
+export const SLEEP_CHOICES: { label: string; request: SleepRequest }[] = [
+  { label: "15 minutes", request: { mode: "countdown", seconds: 15 * 60 } },
+  { label: "30 minutes", request: { mode: "countdown", seconds: 30 * 60 } },
+  { label: "45 minutes", request: { mode: "countdown", seconds: 45 * 60 } },
+  { label: "1 hour", request: { mode: "countdown", seconds: 60 * 60 } },
+  { label: "90 minutes", request: { mode: "countdown", seconds: 90 * 60 } },
+  { label: "End of track", request: { mode: "end_of_track" } },
+];
 
 export interface Track {
   id: string;
@@ -215,6 +237,12 @@ export const setPlayerVolume = (volume: number): Promise<void> => {
 
 export const getPlaybackState = (): Promise<PlaybackState> => {
   return safeInvoke<PlaybackState>("get_playback_state");
+};
+
+export const setSleepTimer = (
+  request: SleepRequest,
+): Promise<SleepTimerStatus> => {
+  return safeInvoke<SleepTimerStatus>("set_sleep_timer", { request });
 };
 
 export const selectAudioFile = async (

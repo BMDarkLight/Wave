@@ -451,6 +451,7 @@ function App() {
     handleClearQueue,
     handleToggleShuffle,
     handleCycleRepeat,
+    handleSetSleepTimer,
     handlePlayFromQueue,
   } = usePlaybackController({
     androidHost,
@@ -2412,6 +2413,7 @@ function App() {
         onRefreshOutputDevices={() =>
           listOutputDevices().then(setOutputDevices).catch(console.error)
         }
+        onSetSleepTimer={(request) => void handleSetSleepTimer(request)}
       />
 
       {mobilePlayerOpen && currentTrack && (
@@ -2432,6 +2434,8 @@ function App() {
           onNext={handleNext}
           onToggleShuffle={handleToggleShuffle}
           onCycleRepeat={handleCycleRepeat}
+          sleepTimer={playbackState.sleep_timer}
+          onSetSleepTimer={(request) => void handleSetSleepTimer(request)}
           closing={mobilePlayerClosing}
           onClose={handleCloseMobilePlayer}
           onDragClose={handleDragCloseMobilePlayer}

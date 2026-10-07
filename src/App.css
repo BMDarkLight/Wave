@@ -3314,8 +3314,34 @@ img.queue-thumb {
 }
 
 .shuffle-btn.active,
-.repeat-btn.active {
+.repeat-btn.active,
+.sleep-timer-btn.active {
   color: var(--green-hot);
+}
+
+/* The countdown sits beside the moon, so the button grows sideways. */
+.sleep-timer-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.sleep-timer-label {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.control-btn.sleep-timer-btn.active {
+  padding: 0 8px;
+}
+
+.mnp-action-btn.sleep-timer-btn.active {
+  width: auto;
+  min-width: 52px;
+  padding: 0 10px;
+  border-radius: 999px;
 }
 
 .repeat-btn.repeat-one {

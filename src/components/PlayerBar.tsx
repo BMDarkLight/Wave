@@ -24,12 +24,14 @@ import {
   BiVolumeMute,
 } from "react-icons/bi";
 import Artwork from "./Artwork";
+import SleepTimerButton from "./SleepTimerButton";
 import { formatTime } from "../utils/format";
 import { getTrackTitle } from "../utils/track";
 import type {
   EqSettings,
   PlaybackMode,
   PlaybackState,
+  SleepRequest,
   Track,
 } from "../utils/player";
 
@@ -69,6 +71,7 @@ export default function PlayerBar({
   onVolumeChange,
   onToggleDevice,
   onRefreshOutputDevices,
+  onSetSleepTimer,
 }: {
   currentTrack: Track | null;
   playbackState: PlaybackState;
@@ -105,6 +108,7 @@ export default function PlayerBar({
   onVolumeChange: (value: number) => void;
   onToggleDevice: () => void;
   onRefreshOutputDevices: () => void;
+  onSetSleepTimer: (request: SleepRequest) => void;
 }) {
   return (
     <footer
@@ -298,6 +302,11 @@ export default function PlayerBar({
               <BiMusic />
             </button>
           )}
+          <SleepTimerButton
+            status={playbackState.sleep_timer}
+            onSet={onSetSleepTimer}
+            className="control-btn"
+          />
           <button
             className={`control-btn queue-toggle desktop-queue-btn ${showQueue ? "active" : ""}`}
             onClick={onToggleQueue}

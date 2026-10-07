@@ -29,6 +29,7 @@ import {
   setPlayerVolume,
   setRepeat,
   setShuffle,
+  setSleepTimer,
   stopTrack,
   toggleFavorite,
   updateMediaPosition,
@@ -36,6 +37,7 @@ import {
   type PlaybackState,
   type PlaylistInfo,
   type QueueTrackState,
+  type SleepRequest,
   type Track,
 } from "../utils/player";
 import { formatInvokeError } from "../utils/errors";
@@ -499,6 +501,15 @@ export function usePlaybackController({
     }
   };
 
+  const handleSetSleepTimer = async (request: SleepRequest) => {
+    try {
+      const sleepTimer = await setSleepTimer(request);
+      setPlaybackState((state) => ({ ...state, sleep_timer: sleepTimer }));
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to set the sleep timer"));
+    }
+  };
+
   const handlePlayFromQueue = async (index: number) => {
     try {
       setError(null);
@@ -551,6 +562,7 @@ export function usePlaybackController({
     handleClearQueue,
     handleToggleShuffle,
     handleCycleRepeat,
+    handleSetSleepTimer,
     handlePlayFromQueue,
   };
 }
