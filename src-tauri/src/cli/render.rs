@@ -11,6 +11,7 @@
 //! Nothing here prints. Every function returns a String, which is what lets
 //! the layout be tested without capturing stdout.
 
+use crate::audio::sleep_timer::SleepTimerStatus;
 use crate::cli::bar;
 use crate::cli::table::{Column, Table};
 use crate::cli::ui::{display_width, truncate, Align, Ui};
@@ -43,6 +44,34 @@ pub fn format_listen_duration(secs: f64) -> String {
         format!("{minutes}m {seconds}s")
     } else {
         format!("{seconds}s")
+    }
+}
+
+/// A sleep timer length: "1h 30m", "45m", "2m 30s", "40s".
+pub fn format_sleep_length(secs: u64) -> String {
+    let (hours, minutes, seconds) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    let mut parts = Vec::new();
+    if hours > 0 {
+        parts.push(format!("{hours}h"));
+    }
+    if minutes > 0 {
+        parts.push(format!("{minutes}m"));
+    }
+    if seconds > 0 || parts.is_empty() {
+        parts.push(format!("{seconds}s"));
+    }
+    parts.join(" ")
+}
+
+/// One line on a running sleep timer, or `None` when it is off.
+pub fn sleep_timer_summary(timer: &SleepTimerStatus) -> Option<String> {
+    match timer.mode.as_str() {
+        "countdown" => {
+            let left = timer.remaining_seconds.unwrap_or(0.0).max(0.0).ceil() as u64;
+            Some(format!("Sleep in {}", format_sleep_length(left)))
+        }
+        "end_of_track" => Some("Sleep when this track ends".to_string()),
+        _ => None,
     }
 }
 
@@ -325,16 +354,20 @@ pub fn playback_status(ui: &Ui, status: &PlaybackStatus, album: Option<&str>) ->
         ));
     }
 
-    out.push_str(&dim_line(
-        ui,
-        &format!(
-            "Shuffle {}{dot}Repeat {}{dot}Track {} of {}",
-            if status.shuffle { "on" } else { "off" },
-            status.repeat.to_ascii_lowercase(),
-            status.queue_position.map_or(0, |i| i + 1),
-            status.queue_length
-        ),
-    ));
+    // The sleep timer rides on this line rather than adding one, so the
+    // dashboard keeps a fixed height.
+    let mut modes = format!(
+        "Shuffle {}{dot}Repeat {}{dot}Track {} of {}",
+        if status.shuffle { "on" } else { "off" },
+        status.repeat.to_ascii_lowercase(),
+        status.queue_position.map_or(0, |i| i + 1),
+        status.queue_length
+    );
+    if let Some(sleep) = sleep_timer_summary(&status.sleep_timer) {
+        modes.push_str(&dot);
+        modes.push_str(&sleep);
+    }
+    out.push_str(&dim_line(ui, &modes));
 
     out
 }
@@ -587,6 +620,7 @@ mod tests {
             queue_length: 12,
             title: Some("Once in a Lifetime".into()),
             artist: Some("Talking Heads".into()),
+            sleep_timer: Default::default(),
         }
     }
 

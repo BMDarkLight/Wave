@@ -177,6 +177,7 @@ pub fn run() {
                     commands::tick_listen_progress(&tick_app);
                     #[cfg(target_os = "android")]
                     commands::tick_media_session(&tick_app);
+                    commands::tick_sleep_timer(&tick_app);
                     commands::tick_auto_advance(&tick_app);
                     commands::persist_playback_state_throttled(&tick_app);
                 }
@@ -210,6 +211,7 @@ pub fn run() {
             commands::resume_track,
             commands::stop_track,
             commands::get_playback_state,
+            commands::set_sleep_timer,
             commands::seek_track,
             commands::set_volume,
             commands::add_track_to_playlist,

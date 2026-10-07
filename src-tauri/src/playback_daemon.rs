@@ -21,6 +21,7 @@ use tray_icon::{TrayIconBuilder, TrayIconEvent};
 use crate::app_paths::{daemon_state_path, library_db_path};
 use crate::app_settings::AppSettings;
 use crate::audio::player::{AudioPlayer, Queue, RepeatMode};
+use crate::audio::sleep_timer::{SleepRequest, SleepTimerStatus};
 use crate::library::Library;
 use crate::listen::{ListenEndReason, ListenFlush, ListenTracker};
 use crate::media_controls::TrackMetadata;
@@ -106,6 +107,9 @@ pub enum DaemonRequest {
     SetTreble {
         db: f32,
     },
+    SetSleepTimer {
+        request: SleepRequest,
+    },
 }
 
 /// What the daemon is doing. This is also the `playback status` JSON, so its
@@ -137,6 +141,7 @@ pub struct PlaybackStatus {
     pub queue_length: usize,
     pub title: Option<String>,
     pub artist: Option<String>,
+    pub sleep_timer: SleepTimerStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -602,6 +607,13 @@ fn write_response(stream: &mut TcpStream, response: &DaemonResponse) -> std::io:
 fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResponse {
     match request {
         DaemonRequest::Start { id } => daemon_start(state, &id),
+        DaemonRequest::SetSleepTimer { request } => match state.player.set_sleep_timer(request) {
+            Ok(()) => DaemonResponse {
+                status: Some(build_status(&state.player, &state.library)),
+                ..DaemonResponse::ok_msg(sleep_timer_message(request))
+            },
+            Err(e) => DaemonResponse::err(e),
+        },
         DaemonRequest::Pause => match state.player.pause() {
             Ok(()) => {
                 sync_media_playback_state(state);
@@ -976,6 +988,7 @@ fn rebuild_player_on_device(state: &mut DaemonState, name: &str) -> Result<(), S
     state
         .player
         .set_volume_normalization_enabled(old.volume_normalization_enabled());
+    state.player.carry_sleep_timer_from(&old);
     let vol = old.volume();
     state.player.set_volume(vol).map_err(|e| e.to_string())?;
     if let Some(path) = old.get_current_path() {
@@ -1011,8 +1024,22 @@ fn playback_tick_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>
                 poisoned.into_inner()
             }
         };
+        if guard.player.tick_sleep_timer() {
+            sync_media_playback_state(&mut guard);
+        }
+
         if !guard.player.should_auto_advance() {
             // keep waiting
+        } else if guard.player.sleep_after_current_track() {
+            match guard.player.finish_held_track() {
+                Ok(Some(path)) => sync_media_for_path(&mut guard, &path),
+                Ok(None) => guard.media.clear(),
+                Err(e) => {
+                    tracing::warn!("Sleep timer could not load the next track: {e}");
+                    let _ = guard.player.stop();
+                    guard.media.clear();
+                }
+            }
         } else if let Ok(Some(path)) = guard.player.play_next() {
             // Repeat one restarts the same file, which tick_listen cannot
             // tell apart from the track simply playing on, so close the
@@ -1255,6 +1282,20 @@ fn handle_menu_event(shared: &SharedState, id: &str) {
             }
         };
         let _ = daemon_start(&mut guard, playlist_id);
+        return;
+    }
+    if let Some(request) = id
+        .strip_prefix("sleep:")
+        .and_then(crate::audio::sleep_timer::request_for_menu_choice)
+    {
+        let mut guard = match shared.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                tracing::warn!("Daemon mutex was poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+        let _ = guard.player.set_sleep_timer(request);
     }
 }
 
@@ -1318,6 +1359,16 @@ fn build_tray_menu(state: &Arc<Mutex<DaemonState>>) -> Menu {
     let _ = menu.append(&MenuItem::with_id("prev", "Previous", true, None));
     let _ = menu.append(&MenuItem::with_id("next", "Next", true, None));
     let _ = menu.append(&MenuItem::with_id("stop", "Stop", true, None));
+    let sleep_sub = Submenu::new("Sleep Timer", true);
+    for (choice, label) in crate::audio::sleep_timer::SLEEP_MENU {
+        let _ = sleep_sub.append(&MenuItem::with_id(
+            format!("sleep:{choice}"),
+            label,
+            true,
+            None,
+        ));
+    }
+    let _ = menu.append(&sleep_sub);
     let _ = menu.append(&PredefinedMenuItem::separator());
     let _ = menu.append(&MenuItem::with_id("quit", "Quit Wave", true, None));
 
@@ -1422,6 +1473,17 @@ fn format_now_playing(library: &Library, path: &str) -> String {
     }
 }
 
+fn sleep_timer_message(request: SleepRequest) -> String {
+    match request {
+        SleepRequest::Off => "Sleep timer off.".to_string(),
+        SleepRequest::EndOfTrack => "Playback will pause when this track ends.".to_string(),
+        SleepRequest::Countdown { seconds } => format!(
+            "Playback will pause in {}.",
+            crate::cli::render::format_sleep_length(seconds)
+        ),
+    }
+}
+
 fn build_status(player: &AudioPlayer, library: &Library) -> PlaybackStatus {
     let state = if player.is_playing() {
         "playing"
@@ -1465,6 +1527,7 @@ fn build_status(player: &AudioPlayer, library: &Library) -> PlaybackStatus {
         queue_length: player.queue.tracks().len(),
         title,
         artist,
+        sleep_timer: player.sleep_timer_status(),
     }
 }
 
@@ -1586,8 +1649,50 @@ fn spawn_daemon() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{artist_title, playlist_start_message, queue_play_now};
+    use super::{
+        artist_title, playlist_start_message, queue_play_now, sleep_timer_message, DaemonEnvelope,
+        DaemonRequest, PlaybackStatus,
+    };
     use crate::audio::player::{Queue, RepeatMode};
+    use crate::audio::sleep_timer::SleepRequest;
+
+    #[test]
+    fn a_sleep_request_survives_the_wire() {
+        let envelope = DaemonEnvelope {
+            token: "t".into(),
+            request: DaemonRequest::SetSleepTimer {
+                request: SleepRequest::Countdown { seconds: 1800 },
+            },
+        };
+        let json = serde_json::to_string(&envelope).unwrap();
+        let back: DaemonEnvelope = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back.request,
+            DaemonRequest::SetSleepTimer {
+                request: SleepRequest::Countdown { seconds: 1800 }
+            }
+        ));
+    }
+
+    #[test]
+    fn status_from_a_daemon_without_a_sleep_timer_reads_as_off() {
+        let status: PlaybackStatus = serde_json::from_str(r#"{"state":"playing"}"#).unwrap();
+        assert_eq!(status.sleep_timer.mode, "off");
+        assert_eq!(status.sleep_timer.remaining_seconds, None);
+    }
+
+    #[test]
+    fn sleep_messages_say_when_playback_pauses() {
+        assert_eq!(
+            sleep_timer_message(SleepRequest::Countdown { seconds: 5400 }),
+            "Playback will pause in 1h 30m."
+        );
+        assert_eq!(
+            sleep_timer_message(SleepRequest::EndOfTrack),
+            "Playback will pause when this track ends."
+        );
+        assert_eq!(sleep_timer_message(SleepRequest::Off), "Sleep timer off.");
+    }
 
     fn queue_of(paths: &[&str]) -> Queue {
         let mut queue = Queue::default();

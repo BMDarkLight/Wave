@@ -21,6 +21,7 @@ mod inner {
     };
 
     use crate::audio::player::AudioPlayer;
+    use crate::audio::sleep_timer::{request_for_menu_choice, SLEEP_MENU};
     use crate::commands::{ensure_player, LibraryState, PlayerState};
 
     static TRAY_CLICK_STATE: Mutex<Option<Instant>> = Mutex::new(None);
@@ -47,6 +48,17 @@ mod inner {
 
     pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let playlists_sub = build_playlists_submenu(app)?;
+        let sleep_sub = Submenu::with_id(app, "tray_sleep", "Sleep Timer", true)?;
+        for (choice, label) in SLEEP_MENU {
+            let item = MenuItem::with_id(
+                app,
+                format!("tray_sleep:{choice}"),
+                label,
+                true,
+                None::<&str>,
+            )?;
+            sleep_sub.append(&item)?;
+        }
         let play_pause =
             MenuItem::with_id(app, "tray_play_pause", "Play / Pause", true, None::<&str>)?;
         let prev = MenuItem::with_id(app, "tray_prev", "Previous", true, None::<&str>)?;
@@ -64,6 +76,7 @@ mod inner {
                 &prev,
                 &next,
                 &stop,
+                &sleep_sub,
                 &PredefinedMenuItem::separator(app)?,
                 &show,
                 &quit,
@@ -207,6 +220,13 @@ mod inner {
         }
         if let Some(playlist_id) = id.strip_prefix("tray_playlist:") {
             play_playlist(app, playlist_id);
+            return;
+        }
+        if let Some(request) = id
+            .strip_prefix("tray_sleep:")
+            .and_then(request_for_menu_choice)
+        {
+            let _ = with_player(app, |p| p.set_sleep_timer(request));
         }
     }
 

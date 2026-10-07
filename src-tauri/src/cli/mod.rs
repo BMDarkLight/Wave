@@ -271,6 +271,13 @@ pub enum PlaybackCmd {
     },
     /// Show current playback status
     Status,
+    /// Pause after a while, or when the current track ends
+    Sleep {
+        /// How long: minutes (30), or with units (45m, 1h30m, 90s); "end" to
+        /// pause when this track ends; "off" to cancel. Leave out to see the
+        /// timer.
+        when: Option<String>,
+    },
     /// Shut down the background playback daemon
     Shutdown,
 }

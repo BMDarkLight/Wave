@@ -22,6 +22,7 @@ use super::dsp::{
     SoftFade, SoftFadeState, VolumeGain, SOFT_FADE_SECS,
 };
 use super::normalization::{analyze_track_levels, VolumeNormalizer};
+use super::sleep_timer::{SleepRequest, SleepStep, SleepTimer, SleepTimerStatus};
 use super::symphonia_source::SymphoniaSource;
 
 // ── Playback modes ────────────────────────────────────────────────────────────
@@ -483,6 +484,14 @@ pub struct AudioPlayer {
     /// analysis thread can update it without holding the player-wide lock for
     /// the duration of a full-file decode.
     normalizer: Arc<Mutex<VolumeNormalizer>>,
+    sleep: SleepTimer,
+    /// Fraction of `volume` actually sent to the output while the sleep
+    /// timer fades out. 1.0 the rest of the time.
+    sleep_level: f32,
+    /// Set while the sleep timer waits for the current track to end. Nothing
+    /// after it is preloaded (no sink prefetch, crossfade or ExoPlayer
+    /// playlist), so the track can end without the next one starting.
+    stop_after_current: bool,
     /// Bumped on every track change; a background analysis result that
     /// arrives for a stale generation is dropped instead of being applied to
     /// whatever now-current track it no longer matches. Only Android defers
@@ -517,6 +526,9 @@ impl AudioPlayer {
             gapless_enabled: true,
             volume_normalization_enabled: false,
             normalizer: Arc::new(Mutex::new(VolumeNormalizer::new())),
+            sleep: SleepTimer::default(),
+            sleep_level: 1.0,
+            stop_after_current: false,
             #[cfg(target_os = "android")]
             normalization_generation: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "android")]
@@ -638,6 +650,9 @@ impl AudioPlayer {
                 gapless_enabled: true,
                 volume_normalization_enabled: false,
                 normalizer: Arc::new(Mutex::new(VolumeNormalizer::new())),
+                sleep: SleepTimer::default(),
+                sleep_level: 1.0,
+                stop_after_current: false,
                 #[cfg(target_os = "android")]
                 normalization_generation: Arc::new(AtomicU64::new(0)),
                 #[cfg(target_os = "android")]
@@ -845,7 +860,7 @@ impl AudioPlayer {
             let _ = crate::android::audio::exo_set_incoming_normalization_gain(1.0);
             return;
         }
-        let Some(next) = self.queue.peek_next(&self.repeat).map(str::to_string) else {
+        let Some(next) = self.upcoming_for_preload() else {
             let _ = crate::android::audio::exo_set_incoming_normalization_gain(1.0);
             return;
         };
@@ -1016,7 +1031,7 @@ impl AudioPlayer {
             // SoftFade instances start at gain 0 and ramp toward this target.
             self.set_soft_fade_target(1.0);
 
-            let next_path = self.queue.peek_next(&self.repeat).map(|s| s.to_string());
+            let next_path = self.upcoming_for_preload();
             let track_gain = self.normalization_gain_cell_for_path(path);
             let next_gain = next_path
                 .as_deref()
@@ -1053,7 +1068,7 @@ impl AudioPlayer {
                 }
             };
 
-            sink.set_volume(self.volume);
+            sink.set_volume(self.output_volume());
             sink.append(source);
             sink.play();
 
@@ -1084,7 +1099,8 @@ impl AudioPlayer {
         // repeat-one for the same reason; this mirrors that.
         let use_gapless = self.gapless_enabled
             && self.crossfade_duration <= 0.0
-            && self.repeat != RepeatMode::One;
+            && self.repeat != RepeatMode::One
+            && !self.stop_after_current;
         if use_gapless {
             let paths = self.queue.paths_from_current_forward(&self.repeat);
             let paths = if paths.is_empty() {
@@ -1104,7 +1120,7 @@ impl AudioPlayer {
             crate::android::audio::exo_play_uri(path).map_err(AudioError::Decode)?;
         }
         self.apply_android_normalization_for_path(path);
-        let _ = crate::android::audio::exo_set_volume(self.volume);
+        let _ = crate::android::audio::exo_set_volume(self.output_volume());
         self.sync_android_eq();
 
         let duration = crate::android::audio::exo_get_duration()
@@ -1131,7 +1147,7 @@ impl AudioPlayer {
         let _ = crate::android::audio::exo_set_gapless_enabled(self.gapless_enabled);
         self.sync_android_crossfade_normalization();
         if self.crossfade_duration > 0.0 {
-            let next = self.queue.peek_next(&self.repeat).map(str::to_string);
+            let next = self.upcoming_for_preload();
             let _ = crate::android::audio::exo_set_upcoming_uri(next.as_deref());
             return;
         }
@@ -1240,7 +1256,7 @@ impl AudioPlayer {
         if self.crossfade_duration > 0.0 {
             return;
         }
-        let Some(next_path) = self.queue.peek_next(&self.repeat).map(str::to_string) else {
+        let Some(next_path) = self.upcoming_for_preload() else {
             return;
         };
         let next_gain = self.peek_normalization_gain_cell_for_path(&next_path);
@@ -1312,7 +1328,7 @@ impl AudioPlayer {
         self.ensure_output()?;
         let position_ms = (position_secs.max(0.0) * 1000.0) as i64;
         crate::android::audio::exo_prepare_uri_at(path, position_ms).map_err(AudioError::Decode)?;
-        let _ = crate::android::audio::exo_set_volume(self.volume);
+        let _ = crate::android::audio::exo_set_volume(self.output_volume());
         self.sync_android_eq();
 
         let duration = crate::android::audio::exo_get_duration()
@@ -1379,7 +1395,7 @@ impl AudioPlayer {
             }
         };
 
-        sink.set_volume(self.volume);
+        sink.set_volume(self.output_volume());
         sink.append(source);
         sink.pause();
         sink.try_seek(offset)
@@ -1568,6 +1584,18 @@ impl AudioPlayer {
             return Err(AudioError::InvalidVolume);
         }
         self.volume = volume;
+        self.push_output_volume();
+        Ok(())
+    }
+
+    /// The level actually sent to the output: the user's volume, scaled down
+    /// while the sleep timer fades out.
+    fn output_volume(&self) -> f32 {
+        self.volume * self.sleep_level
+    }
+
+    fn push_output_volume(&self) {
+        let volume = self.output_volume();
         #[cfg(target_os = "android")]
         {
             let _ = crate::android::audio::exo_set_volume(volume);
@@ -1576,7 +1604,160 @@ impl AudioPlayer {
         if let Some(ref sink) = self.sink {
             sink.set_volume(volume);
         }
+    }
+
+    fn set_sleep_level(&mut self, level: f32) {
+        let level = level.clamp(0.0, 1.0);
+        if (self.sleep_level - level).abs() < f32::EPSILON {
+            return;
+        }
+        self.sleep_level = level;
+        self.push_output_volume();
+    }
+
+    /// The next queue track worth preloading for gapless or crossfade, or
+    /// `None` while the sleep timer is waiting for the current track to end.
+    fn upcoming_for_preload(&self) -> Option<String> {
+        if self.stop_after_current {
+            return None;
+        }
+        self.queue.peek_next(&self.repeat).map(str::to_string)
+    }
+
+    pub fn set_sleep_timer(&mut self, request: SleepRequest) -> Result<(), String> {
+        self.sleep.set(request, Instant::now())?;
+        if request == SleepRequest::Off {
+            self.set_sleep_level(1.0);
+        }
+        self.set_stop_after_current(self.sleep.is_end_of_track());
         Ok(())
+    }
+
+    /// Copy a running sleep timer onto a player built to replace `other`, such
+    /// as after an output device switch. Call before the new player starts
+    /// the track, so it is loaded without a preloaded follow-up.
+    pub fn carry_sleep_timer_from(&mut self, other: &AudioPlayer) {
+        self.sleep = other.sleep.clone();
+        self.sleep_level = other.sleep_level;
+        self.stop_after_current = other.stop_after_current;
+    }
+
+    pub fn sleep_timer_status(&self) -> SleepTimerStatus {
+        self.sleep.status(Instant::now())
+    }
+
+    /// True when the next natural track end should pause instead of advancing.
+    /// Auto-advance loops check this and call [`Self::finish_held_track`].
+    pub fn sleep_after_current_track(&self) -> bool {
+        self.stop_after_current
+    }
+
+    /// Advance the sleep timer by one tick: fade the output while it runs
+    /// down, and pause when a countdown expires.
+    ///
+    /// Returns `true` when this call paused playback.
+    pub fn tick_sleep_timer(&mut self) -> bool {
+        let track_left = self
+            .duration_seconds()
+            .map(|duration| Duration::from_secs_f64((duration - self.position_seconds()).max(0.0)));
+        match self.sleep.step(Instant::now(), track_left) {
+            SleepStep::Idle => false,
+            SleepStep::Level(level) => {
+                if self.is_playing() {
+                    self.set_sleep_level(level);
+                }
+                false
+            }
+            SleepStep::Expired => {
+                self.sleep.cancel();
+                let paused = self.is_playing() && self.pause().is_ok();
+                self.set_sleep_level(1.0);
+                paused
+            }
+        }
+    }
+
+    /// The track the sleep timer was waiting on has ended: turn the timer off
+    /// and load what would have played next, paused at its start, so resuming
+    /// carries on with the queue. Stops when the queue has nothing left.
+    ///
+    /// Returns the path that is now loaded.
+    pub fn finish_held_track(&mut self) -> Result<Option<String>, AudioError> {
+        self.sleep.cancel();
+        self.stop_after_current = false;
+        self.sleep_level = 1.0;
+
+        let next = if self.repeat == RepeatMode::One {
+            self.current_path
+                .as_ref()
+                .and_then(|path| path.to_str())
+                .map(str::to_string)
+        } else {
+            self.queue.next(&self.repeat).map(str::to_string)
+        };
+        let Some(path) = next else {
+            self.stop()?;
+            return Ok(None);
+        };
+        self.load_paused_at(&path, 0.0)?;
+        #[cfg(not(target_os = "android"))]
+        self.prefetch_next_into_sink();
+        Ok(Some(path))
+    }
+
+    fn set_stop_after_current(&mut self, enabled: bool) {
+        if self.stop_after_current == enabled {
+            return;
+        }
+        self.stop_after_current = enabled;
+        let Some(path) = self
+            .current_path
+            .as_ref()
+            .and_then(|path| path.to_str())
+            .map(str::to_string)
+        else {
+            return;
+        };
+
+        if !enabled {
+            // Preloading is allowed again. Gapless picks the next track back
+            // up now; a crossfade resumes from the following track.
+            #[cfg(not(target_os = "android"))]
+            if self.crossfade_duration <= 0.0 {
+                self.prefetch_next_into_sink();
+            }
+            #[cfg(target_os = "android")]
+            self.sync_android_playback_extras();
+            return;
+        }
+
+        // The next track may already be lined up behind this one. Reload the
+        // current track at the same spot without it.
+        #[cfg(not(target_os = "android"))]
+        let preloaded = self.has_sink_prefetch() || self.crossfade_state.is_some();
+        #[cfg(target_os = "android")]
+        let preloaded = self.android_gapless_playlist.len() > 1;
+        if !preloaded {
+            #[cfg(target_os = "android")]
+            self.sync_android_playback_extras();
+            return;
+        }
+
+        let position = self.position_seconds();
+        let was_playing = self.is_playing();
+        #[cfg(not(target_os = "android"))]
+        if was_playing {
+            self.fade_out_blocking();
+        }
+        if let Err(error) = self.load_paused_at(&path, position) {
+            tracing::warn!("Could not reload the track for the sleep timer: {error}");
+            return;
+        }
+        #[cfg(target_os = "android")]
+        self.android_gapless_playlist.clear();
+        if was_playing {
+            let _ = self.resume();
+        }
     }
 
     pub fn is_playing(&self) -> bool {

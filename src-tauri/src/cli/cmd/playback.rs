@@ -10,7 +10,8 @@
 
 use serde_json::json;
 
-use crate::cli::{daemon_cmd, ui, PlaybackCmd};
+use crate::audio::sleep_timer::{SleepRequest, MAX_SLEEP};
+use crate::cli::{daemon_cmd, render, ui, PlaybackCmd};
 use crate::playback_daemon::{daemon_request, daemon_request_if_running, DaemonRequest};
 
 pub fn run(cmd: PlaybackCmd) {
@@ -24,7 +25,82 @@ pub fn run(cmd: PlaybackCmd) {
         PlaybackCmd::Seek { position } => cmd_playback_seek(&position),
         // One renderer for both, so the two views cannot drift apart.
         PlaybackCmd::Status => crate::cli::now::run(true, 0.5),
+        PlaybackCmd::Sleep { when } => cmd_playback_sleep(when.as_deref()),
         PlaybackCmd::Shutdown => cmd_playback_shutdown(),
+    }
+}
+
+/// Minutes ("30"), units ("45m", "1h30m", "90s"), "end", or "off".
+fn parse_sleep(raw: &str) -> Result<SleepRequest, String> {
+    let bad = || format!("Can't read \"{raw}\" as a sleep time; try 30, 45m, 1h30m, end, or off.");
+    let text = raw.trim().to_ascii_lowercase();
+    match text.as_str() {
+        "off" => return Ok(SleepRequest::Off),
+        "end" => return Ok(SleepRequest::EndOfTrack),
+        _ => {}
+    }
+
+    let seconds = if let Ok(minutes) = text.parse::<u64>() {
+        minutes.checked_mul(60).ok_or_else(bad)?
+    } else {
+        // Each unit at most once, largest first: 1h30m, not 30m1h.
+        let mut total: u64 = 0;
+        let mut digits = String::new();
+        let mut last_unit = u64::MAX;
+        for c in text.chars() {
+            if c.is_ascii_digit() {
+                digits.push(c);
+                continue;
+            }
+            let unit = match c {
+                'h' => 3600,
+                'm' => 60,
+                's' => 1,
+                _ => return Err(bad()),
+            };
+            if digits.is_empty() || unit >= last_unit {
+                return Err(bad());
+            }
+            let value: u64 = digits.parse().map_err(|_| bad())?;
+            total = value
+                .checked_mul(unit)
+                .and_then(|v| total.checked_add(v))
+                .ok_or_else(bad)?;
+            digits.clear();
+            last_unit = unit;
+        }
+        if !digits.is_empty() || last_unit == u64::MAX {
+            return Err(bad());
+        }
+        total
+    };
+
+    if seconds == 0 || seconds > MAX_SLEEP.as_secs() {
+        return Err("The sleep timer runs from 1 second to 24 hours.".to_string());
+    }
+    Ok(SleepRequest::Countdown { seconds })
+}
+
+fn cmd_playback_sleep(raw: Option<&str>) {
+    let Some(raw) = raw else {
+        return show_sleep_timer();
+    };
+    match parse_sleep(raw) {
+        Ok(request) => daemon_cmd(DaemonRequest::SetSleepTimer { request }),
+        Err(e) => ui::fail(e, None, ui::EXIT_USAGE),
+    }
+}
+
+fn show_sleep_timer() {
+    match daemon_request_if_running(DaemonRequest::Status) {
+        Ok(Some(resp)) => {
+            let timer = resp.status.map(|s| s.sleep_timer).unwrap_or_default();
+            let line = render::sleep_timer_summary(&timer)
+                .unwrap_or_else(|| "Sleep timer off.".to_string());
+            ui::done(line, json!({ "sleep_timer": timer }));
+        }
+        Ok(None) => ui::no_daemon(),
+        Err(e) => ui::fail_with(e),
     }
 }
 
@@ -206,6 +282,39 @@ pub fn play(id: String) {
 mod tests {
     use super::*;
     use crate::library::PlaylistInfo;
+
+    fn countdown(seconds: u64) -> Result<SleepRequest, String> {
+        Ok(SleepRequest::Countdown { seconds })
+    }
+
+    #[test]
+    fn a_bare_sleep_number_is_minutes() {
+        assert_eq!(parse_sleep("30"), countdown(1800));
+    }
+
+    #[test]
+    fn sleep_reads_units() {
+        assert_eq!(parse_sleep("45m"), countdown(2700));
+        assert_eq!(parse_sleep("1h30m"), countdown(5400));
+        assert_eq!(parse_sleep("90s"), countdown(90));
+        assert_eq!(parse_sleep(" 2H "), countdown(7200));
+    }
+
+    #[test]
+    fn sleep_reads_end_and_off() {
+        assert_eq!(parse_sleep("end"), Ok(SleepRequest::EndOfTrack));
+        assert_eq!(parse_sleep("OFF"), Ok(SleepRequest::Off));
+    }
+
+    #[test]
+    fn sleep_rejects_garbage_and_out_of_range() {
+        for raw in ["", "m", "30x", "30m1h", "1m1m", "1h30", "-5", "soon"] {
+            assert!(parse_sleep(raw).is_err(), "{raw:?} should be rejected");
+        }
+        assert!(parse_sleep("0").is_err());
+        assert!(parse_sleep("25h").is_err());
+        assert!(parse_sleep("99999999999999999999").is_err());
+    }
 
     #[test]
     fn a_seek_reads_seconds_or_clock_time() {

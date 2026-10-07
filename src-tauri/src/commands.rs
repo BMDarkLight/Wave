@@ -14,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::app_settings::{AppSettings, AppSettingsState};
 use crate::audio::player::AudioPlayer;
+use crate::audio::sleep_timer::{SleepRequest, SleepTimerStatus};
 use crate::dto::{
     AlbumSummaryDto, ArtistSummaryDto, CloseAction, EqSettingsDto, HomeSuggestionsDto,
     ImportResultDto, ListeningStatsDto, LyricsImportResultDto, PlaybackModeDto, PlaybackStateDto,
@@ -715,6 +716,18 @@ pub(crate) fn tick_auto_advance(app: &tauri::AppHandle) {
             return;
         }
 
+        // The sleep timer was waiting for this track to end.
+        if player.sleep_after_current_track() {
+            let loaded = player.finish_held_track().unwrap_or_else(|error| {
+                tracing::warn!("Sleep timer could not load the next track: {error}");
+                let _ = player.stop();
+                None
+            });
+            drop(slot);
+            finish_sleep_track_end(app, loaded);
+            return;
+        }
+
         // Skip past unreadable files instead of stopping. A single bad track
         // must not halt background queue playback on Android.
         let mut result = None;
@@ -765,6 +778,59 @@ pub(crate) fn tick_auto_advance(app: &tauri::AppHandle) {
             }
         }
     }
+}
+
+/// The sleep timer's end-of-track wait is over. `loaded` is the track now
+/// sitting paused at its start, or `None` when the queue ran out.
+fn finish_sleep_track_end(app: &tauri::AppHandle, loaded: Option<String>) {
+    match loaded {
+        Some(path) => {
+            let track = match app.state::<LibraryState>().0.lock() {
+                Ok(lib) => resolve_track(&lib, &path),
+                Err(_) => placeholder_track(&path),
+            };
+            listen_switch_track(app, &track.path, ListenEndReason::Completed);
+            sync_bridge_now_playing(app, &track);
+            app.state::<MediaBridgeState>().0.set_paused(0.0);
+        }
+        None => {
+            listen_flush_partial(app);
+            app.state::<MediaBridgeState>().0.set_stopped();
+        }
+    }
+    persist_playback_state(app);
+}
+
+/// Fade and pause for the sleep timer. Runs on the same tick as auto-advance.
+pub(crate) fn tick_sleep_timer(app: &tauri::AppHandle) {
+    let paused_at = {
+        let Some(state) = app.try_state::<PlayerState>() else {
+            return;
+        };
+        let mut slot = match state.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(player) = slot.as_mut() else {
+            return;
+        };
+        player.tick_sleep_timer().then(|| player.position_seconds())
+    };
+    if let Some(position) = paused_at {
+        app.state::<MediaBridgeState>().0.set_paused(position);
+        persist_playback_state(app);
+    }
+}
+
+#[tauri::command]
+pub async fn set_sleep_timer(
+    request: SleepRequest,
+    state: tauri::State<'_, PlayerState>,
+) -> Result<SleepTimerStatus, String> {
+    let mut slot = lock_player_state(&state);
+    let player = ensure_player(&mut slot)?;
+    player.set_sleep_timer(request)?;
+    Ok(player.sleep_timer_status())
 }
 
 /// Apply a media-session action from the Android native JNI bridge.
@@ -1177,6 +1243,7 @@ pub async fn get_playback_state(
             duration_seconds: None,
             volume: 0.8,
             output_device_name: AudioPlayer::current_output_name(),
+            sleep_timer: SleepTimerStatus::default(),
         });
     };
     Ok(PlaybackStateDto {
@@ -1190,6 +1257,7 @@ pub async fn get_playback_state(
         duration_seconds: player.duration_seconds(),
         volume: player.volume(),
         output_device_name: AudioPlayer::current_output_name(),
+        sleep_timer: player.sleep_timer_status(),
     })
 }
 
@@ -2638,6 +2706,7 @@ pub async fn set_output_device(
     new_player.set_crossfade_duration(crossfade);
     new_player.set_gapless_enabled(gapless);
     new_player.set_volume_normalization_enabled(normalization);
+    new_player.carry_sleep_timer_from(guard);
 
     // Resume playback best-effort: a failure here (e.g. the file that was
     // playing has since been deleted) shouldn't discard an otherwise-

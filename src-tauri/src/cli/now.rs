@@ -277,6 +277,7 @@ mod tests {
             queue_length: 3,
             title: Some("Once in a Lifetime".into()),
             artist: Some("Talking Heads".into()),
+            sleep_timer: Default::default(),
         }
     }
 

@@ -45,6 +45,8 @@ pub fn status_changed(last: &PlaybackStatus, next: &PlaybackStatus, elapsed: Dur
             s.queue_length,
             s.title.clone(),
             s.artist.clone(),
+            // The mode only: a countdown ticking down is not a change.
+            s.sleep_timer.mode.clone(),
         )
     };
     if same(last) != same(next) {
@@ -176,6 +178,20 @@ mod tests {
             queue_length: 3,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn arming_the_sleep_timer_is_a_change_but_its_countdown_is_not() {
+        let last = playing();
+        let mut armed = playing();
+        armed.sleep_timer.mode = "countdown".into();
+        armed.sleep_timer.remaining_seconds = Some(600.0);
+        assert!(status_changed(&last, &armed, Duration::ZERO));
+
+        let mut later = armed.clone();
+        later.sleep_timer.remaining_seconds = Some(599.5);
+        later.position_seconds = 10.5;
+        assert!(!status_changed(&armed, &later, Duration::from_millis(500)));
     }
 
     #[test]

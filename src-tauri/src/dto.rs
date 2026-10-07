@@ -7,6 +7,7 @@
 // https://github.com/BMDarkLight/Wave
 
 use crate::audio::player::RepeatMode;
+use crate::audio::sleep_timer::SleepTimerStatus;
 use crate::metadata::Track;
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +31,7 @@ pub struct PlaybackStateDto {
     pub duration_seconds: Option<f64>,
     pub volume: f32,
     pub output_device_name: String,
+    pub sleep_timer: SleepTimerStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
