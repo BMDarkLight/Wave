@@ -109,8 +109,8 @@ await invoke("set_sleep_timer", {
 
 ### `set_playback_speed`
 
-Set the playback speed without changing pitch. Speed is session-only and
-resets to 1.0 when the daemon starts.
+Set the playback speed without changing pitch. Speed is session-only; the
+next launch starts at normal speed.
 
 **Arguments**
 
