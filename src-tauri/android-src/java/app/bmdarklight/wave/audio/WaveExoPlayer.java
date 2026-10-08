@@ -58,8 +58,8 @@ public final class WaveExoPlayer {
     private volatile float crossfadeDurationSec = 0f;
     private volatile String upcomingUri = null;
     private volatile boolean crossfadeActive = false;
-    private volatile long crossfadeStartMs = 0L;
-    private volatile long crossfadeWindowMs = 0L;
+    private volatile long crossfadeOutEndMs = 0L;
+    private volatile long crossfadeMediaWindowMs = 0L;
     private volatile String pendingHandoffUri = null;
     private volatile boolean gaplessEnabled = true;
     private volatile int pendingMediaIndexChange = -1;
@@ -470,8 +470,8 @@ public final class WaveExoPlayer {
 
     private void cancelCrossfadeInternal() {
         crossfadeActive = false;
-        crossfadeStartMs = 0L;
-        crossfadeWindowMs = 0L;
+        crossfadeOutEndMs = 0L;
+        crossfadeMediaWindowMs = 0L;
         pendingHandoffUri = null;
         if (crossfadePlayer != null) {
             crossfadePlayer.stop();
@@ -513,9 +513,11 @@ public final class WaveExoPlayer {
         String nextUri = upcomingUri;
         upcomingUri = null;
         crossfadeActive = true;
-        crossfadeStartMs = System.currentTimeMillis();
+        // Both are media time, so the fade tracks the outgoing track at any speed.
+        crossfadeOutEndMs = durationMsCached;
         long remaining = Math.max(250L, durationMsCached - positionMsCached);
-        crossfadeWindowMs = Math.min((long) (crossfadeDurationSec * 1000f), remaining);
+        crossfadeMediaWindowMs = Math.max(1L,
+                Math.min((long) (crossfadeDurationSec * 1000f), remaining));
         pendingHandoffUri = nextUri;
 
         ExoPlayer incoming = ensureCrossfadePlayer();
@@ -534,10 +536,10 @@ public final class WaveExoPlayer {
         if (!crossfadeActive || crossfadePlayer == null || player == null) {
             return;
         }
-        long elapsed = System.currentTimeMillis() - crossfadeStartMs;
-        float progress = crossfadeWindowMs > 0L
-                ? Math.min(1f, (float) elapsed / (float) crossfadeWindowMs)
-                : 1f;
+        // The outgoing player is `player`; positionMsCached follows the incoming one.
+        long outgoingLeftMs = crossfadeOutEndMs - player.getCurrentPosition();
+        float progress = 1f - Math.max(0f, Math.min(1f,
+                (float) outgoingLeftMs / (float) crossfadeMediaWindowMs));
         float outVol = effectiveVolume(trackNormalizationGain) * (1f - progress);
         float inVol = effectiveVolume(incomingNormalizationGain) * progress;
         player.setVolume(outVol);
@@ -574,8 +576,8 @@ public final class WaveExoPlayer {
         attachEqualizerForPlayer(player, /* crossfade= */ false);
 
         crossfadeActive = false;
-        crossfadeStartMs = 0L;
-        crossfadeWindowMs = 0L;
+        crossfadeOutEndMs = 0L;
+        crossfadeMediaWindowMs = 0L;
         ended = false;
         playingCached = player.isPlaying();
         refreshCacheFromPlayer();
