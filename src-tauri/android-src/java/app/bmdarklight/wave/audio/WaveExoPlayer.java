@@ -544,7 +544,9 @@ public final class WaveExoPlayer {
         float inVol = effectiveVolume(incomingNormalizationGain) * progress;
         player.setVolume(outVol);
         crossfadePlayer.setVolume(inVol);
-        if (progress >= 1f) {
+        // A stream can end short of its reported duration, so its end also
+        // finishes the fade.
+        if (progress >= 1f || player.getPlaybackState() == Player.STATE_ENDED) {
             completeCrossfade();
         }
     }
