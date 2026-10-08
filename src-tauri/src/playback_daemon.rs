@@ -989,6 +989,7 @@ fn rebuild_player_on_device(state: &mut DaemonState, name: &str) -> Result<(), S
         .player
         .set_volume_normalization_enabled(old.volume_normalization_enabled());
     state.player.carry_sleep_timer_from(&old);
+    let _ = state.player.set_speed(old.speed());
     let vol = old.volume();
     state.player.set_volume(vol).map_err(|e| e.to_string())?;
     if let Some(path) = old.get_current_path() {

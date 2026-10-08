@@ -2707,6 +2707,7 @@ pub async fn set_output_device(
     new_player.set_gapless_enabled(gapless);
     new_player.set_volume_normalization_enabled(normalization);
     new_player.carry_sleep_timer_from(guard);
+    let _ = new_player.set_speed(guard.speed());
 
     // Resume playback best-effort: a failure here (e.g. the file that was
     // playing has since been deleted) shouldn't discard an otherwise-

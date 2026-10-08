@@ -882,33 +882,26 @@ impl Source for SoftFade {
 
 /// Playback speed shared by the player and every [`TimeStretch`] it builds,
 /// stored as f32 bits.
-#[allow(dead_code)] // wired into the player by a later change
 pub type SharedSpeed = Arc<std::sync::atomic::AtomicU32>;
 
-#[allow(dead_code)] // wired into the player by a later change
 pub fn shared_speed(initial: f32) -> SharedSpeed {
     Arc::new(std::sync::atomic::AtomicU32::new(initial.to_bits()))
 }
 
-#[allow(dead_code)] // wired into the player by a later change
 pub fn set_shared_speed(cell: &SharedSpeed, speed: f32) {
     cell.store(speed.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
-#[allow(dead_code)] // wired into the player by a later change
 pub fn load_shared_speed(cell: &SharedSpeed) -> f32 {
     f32::from_bits(cell.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Half a window: windows are two hops long and overlap by one.
-#[allow(dead_code)] // wired into the player by a later change
 const STRETCH_HOP_SECS: f32 = 0.020;
 /// How far a window may shift from its ideal start to line up with the audio
 /// it overlaps.
-#[allow(dead_code)] // wired into the player by a later change
 const STRETCH_SEEK_SECS: f32 = 0.006;
 /// Correlation reads every nth frame, which is plenty to find the splice.
-#[allow(dead_code)] // wired into the player by a later change
 const STRETCH_CORRELATION_STRIDE: usize = 4;
 
 /// Changes playback speed without changing pitch (WSOLA).
@@ -918,7 +911,6 @@ const STRETCH_CORRELATION_STRIDE: usize = 4;
 /// output runs `speed` times faster. Each window may shift by up to `seek`
 /// frames to where it best matches the hop it overlaps, which keeps the
 /// waveform continuous. At exactly 1.0 samples pass straight through.
-#[allow(dead_code)] // wired into the player by a later change
 pub struct TimeStretch {
     inner: Box<dyn Source<Item = f32> + Send>,
     speed: SharedSpeed,
@@ -940,9 +932,7 @@ pub struct TimeStretch {
     inner_done: bool,
 }
 
-#[allow(dead_code)] // wired into the player by a later change
 impl TimeStretch {
-    #[allow(dead_code)] // wired into the player by a later change
     pub fn new(inner: Box<dyn Source<Item = f32> + Send>, speed: SharedSpeed) -> Self {
         let channels = inner.channels().max(1) as usize;
         let sr = inner.sample_rate().max(1);

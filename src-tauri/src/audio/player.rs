@@ -18,8 +18,9 @@ use std::time::{Duration, Instant};
 use crate::error::AudioError;
 
 use super::dsp::{
-    set_shared_gain, shared_gain, Crossfade, CrossfadeState, EqConfig, Equalizer, SharedGain,
-    SoftFade, SoftFadeState, VolumeGain, SOFT_FADE_SECS,
+    load_shared_speed, set_shared_gain, set_shared_speed, shared_gain, shared_speed, Crossfade,
+    CrossfadeState, EqConfig, Equalizer, SharedGain, SharedSpeed, SoftFade, SoftFadeState,
+    TimeStretch, VolumeGain, SOFT_FADE_SECS,
 };
 use super::normalization::{analyze_track_levels, VolumeNormalizer};
 use super::sleep_timer::{SleepRequest, SleepStep, SleepTimer, SleepTimerStatus};
@@ -43,6 +44,8 @@ struct PlaybackClock {
     started_at: Option<Instant>,
     elapsed_before_start: Duration,
     duration: Option<Duration>,
+    /// Track seconds per wall second.
+    speed: f32,
 }
 
 impl PlaybackClock {
@@ -51,12 +54,14 @@ impl PlaybackClock {
             started_at: None,
             elapsed_before_start: Duration::ZERO,
             duration: None,
+            speed: 1.0,
         }
     }
 
+    /// Track time played so far, not capped at the duration.
     fn raw_elapsed(&self) -> Duration {
         self.started_at
-            .map(|started_at| self.elapsed_before_start + started_at.elapsed())
+            .map(|started_at| self.elapsed_before_start + started_at.elapsed().mul_f32(self.speed))
             .unwrap_or(self.elapsed_before_start)
     }
 
@@ -65,6 +70,15 @@ impl PlaybackClock {
         self.duration
             .map(|duration| elapsed.min(duration))
             .unwrap_or(elapsed)
+    }
+
+    /// Switch speed without moving the position.
+    fn set_speed(&mut self, speed: f32) {
+        self.elapsed_before_start = self.raw_elapsed();
+        if self.started_at.is_some() {
+            self.started_at = Some(Instant::now());
+        }
+        self.speed = speed;
     }
 }
 
@@ -453,6 +467,9 @@ type BuiltSource = (
     Option<Arc<Mutex<CrossfadeState>>>,
 );
 
+pub const MIN_SPEED: f32 = 0.5;
+pub const MAX_SPEED: f32 = 2.0;
+
 pub struct AudioPlayer {
     /// Lazily opened so Android can finish JNI setup before cpal/oboe runs.
     output: Option<AudioOutput>,
@@ -492,6 +509,8 @@ pub struct AudioPlayer {
     /// after it is preloaded (no sink prefetch, crossfade or ExoPlayer
     /// playlist), so the track can end without the next one starting.
     stop_after_current: bool,
+    /// Playback speed, shared with the time stretch in every source.
+    speed: SharedSpeed,
     /// Bumped on every track change; a background analysis result that
     /// arrives for a stale generation is dropped instead of being applied to
     /// whatever now-current track it no longer matches. Only Android defers
@@ -529,6 +548,7 @@ impl AudioPlayer {
             sleep: SleepTimer::default(),
             sleep_level: 1.0,
             stop_after_current: false,
+            speed: shared_speed(1.0),
             #[cfg(target_os = "android")]
             normalization_generation: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "android")]
@@ -653,6 +673,7 @@ impl AudioPlayer {
                 sleep: SleepTimer::default(),
                 sleep_level: 1.0,
                 stop_after_current: false,
+                speed: shared_speed(1.0),
                 #[cfg(target_os = "android")]
                 normalization_generation: Arc::new(AtomicU64::new(0)),
                 #[cfg(target_os = "android")]
@@ -916,6 +937,7 @@ impl AudioPlayer {
         next_path: Option<&str>,
         next_gain: SharedGain,
         soft_fade: Arc<Mutex<SoftFadeState>>,
+        speed: SharedSpeed,
     ) -> Result<BuiltSource, AudioError> {
         let source = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             SymphoniaSource::new(path)
@@ -979,7 +1001,8 @@ impl AudioPlayer {
                         Some(path.to_string()),
                         Some(next_path.to_string()),
                     );
-                    let faded = SoftFade::new(Box::new(crossfade), soft_fade);
+                    let stretched = TimeStretch::new(Box::new(crossfade), speed);
+                    let faded = SoftFade::new(Box::new(stretched), soft_fade);
                     return Ok((Box::new(faded), duration, Some(state)));
                 }
             }
@@ -988,7 +1011,8 @@ impl AudioPlayer {
             Box::new(eq)
         };
 
-        let faded = SoftFade::new(chain, soft_fade);
+        let stretched = TimeStretch::new(chain, speed);
+        let faded = SoftFade::new(Box::new(stretched), soft_fade);
         Ok((Box::new(faded), duration, None))
     }
 
@@ -1046,6 +1070,7 @@ impl AudioPlayer {
                 next_path.as_deref(),
                 next_gain,
                 self.soft_fade.clone(),
+                self.speed.clone(),
             )?;
 
             let handle = &self.output.as_ref().expect("output ensured").handle;
@@ -1078,6 +1103,7 @@ impl AudioPlayer {
                 started_at: Some(Instant::now()),
                 elapsed_before_start: Duration::ZERO,
                 duration,
+                speed: self.speed(),
             };
 
             self.crossfade_state = crossfade_state;
@@ -1136,6 +1162,7 @@ impl AudioPlayer {
             started_at: Some(Instant::now()),
             elapsed_before_start: Duration::ZERO,
             duration,
+            speed: self.speed(),
         };
         self.sync_android_playback_extras();
         Ok(())
@@ -1180,6 +1207,7 @@ impl AudioPlayer {
             started_at: Some(Instant::now()),
             elapsed_before_start: Duration::ZERO,
             duration,
+            speed: self.speed(),
         };
         true
     }
@@ -1237,6 +1265,7 @@ impl AudioPlayer {
             started_at: Some(Instant::now()),
             elapsed_before_start: Duration::ZERO,
             duration,
+            speed: self.speed(),
         };
         self.apply_android_normalization_for_path(&next_path);
         self.sync_android_playback_extras();
@@ -1269,6 +1298,7 @@ impl AudioPlayer {
             None,
             shared_gain(1.0),
             self.soft_fade.clone(),
+            self.speed.clone(),
         ) else {
             return;
         };
@@ -1295,6 +1325,7 @@ impl AudioPlayer {
             started_at: Some(Instant::now()),
             elapsed_before_start: Duration::ZERO,
             duration,
+            speed: self.speed(),
         };
         self.prefetched_next = None;
         self.crossfade_state = None;
@@ -1344,6 +1375,7 @@ impl AudioPlayer {
             started_at: None,
             elapsed_before_start: Duration::from_secs_f64(position_secs.max(0.0)),
             duration,
+            speed: self.speed(),
         };
         self.sync_android_playback_extras();
         Ok(())
@@ -1375,6 +1407,7 @@ impl AudioPlayer {
             None,
             shared_gain(1.0),
             self.soft_fade.clone(),
+            self.speed.clone(),
         )?;
 
         let handle = &self.output.as_ref().expect("output ensured").handle;
@@ -1407,6 +1440,7 @@ impl AudioPlayer {
             started_at: None,
             elapsed_before_start: offset,
             duration,
+            speed: self.speed(),
         };
         self.crossfade_state = crossfade_state;
         Ok(())
@@ -1624,6 +1658,32 @@ impl AudioPlayer {
         self.queue.peek_next(&self.repeat).map(str::to_string)
     }
 
+    pub fn speed(&self) -> f32 {
+        load_shared_speed(&self.speed)
+    }
+
+    /// Set the playback speed. Returns the speed in effect, which is exactly
+    /// 1.0 for anything within 0.01 of it.
+    pub fn set_speed(&mut self, speed: f32) -> Result<f32, String> {
+        if !speed.is_finite() || !(MIN_SPEED..=MAX_SPEED).contains(&speed) {
+            return Err(format!(
+                "Speed must be between {MIN_SPEED}x and {MAX_SPEED}x"
+            ));
+        }
+        let speed = if (speed - 1.0).abs() < 0.01 {
+            1.0
+        } else {
+            speed
+        };
+        self.clock.set_speed(speed);
+        set_shared_speed(&self.speed, speed);
+        #[cfg(target_os = "android")]
+        {
+            let _ = crate::android::audio::exo_set_speed(speed);
+        }
+        Ok(speed)
+    }
+
     pub fn set_sleep_timer(&mut self, request: SleepRequest) -> Result<(), String> {
         self.sleep.set(request, Instant::now())?;
         if request == SleepRequest::Off {
@@ -1657,9 +1717,10 @@ impl AudioPlayer {
     ///
     /// Returns `true` when this call paused playback.
     pub fn tick_sleep_timer(&mut self) -> bool {
-        let track_left = self
-            .duration_seconds()
-            .map(|duration| Duration::from_secs_f64((duration - self.position_seconds()).max(0.0)));
+        let speed = f64::from(self.speed());
+        let track_left = self.duration_seconds().map(|duration| {
+            Duration::from_secs_f64(((duration - self.position_seconds()) / speed).max(0.0))
+        });
         match self.sleep.step(Instant::now(), track_left) {
             SleepStep::Idle => false,
             SleepStep::Level(level) => {
@@ -1960,6 +2021,7 @@ impl AudioPlayer {
                 started_at: was_playing.then(Instant::now),
                 elapsed_before_start: position,
                 duration,
+                speed: self.speed(),
             };
             true
         }
@@ -2660,6 +2722,56 @@ mod tests {
         assert_eq!(clock.duration, None);
         assert_eq!(clock.raw_elapsed(), Duration::ZERO);
         assert_eq!(clock.position(), Duration::ZERO);
+    }
+
+    #[test]
+    fn clock_runs_at_the_playback_speed() {
+        let clock = PlaybackClock {
+            started_at: Some(Instant::now() - Duration::from_secs(1)),
+            elapsed_before_start: Duration::ZERO,
+            duration: None,
+            speed: 2.0,
+        };
+        let position = clock.position().as_secs_f64();
+        assert!((1.95..2.2).contains(&position), "{position}");
+    }
+
+    #[test]
+    fn changing_speed_keeps_the_position() {
+        let mut player = AudioPlayer::new_deferred();
+        player.clock = PlaybackClock {
+            started_at: Some(Instant::now() - Duration::from_secs(1)),
+            elapsed_before_start: Duration::ZERO,
+            duration: None,
+            speed: 1.0,
+        };
+        assert_eq!(player.set_speed(2.0), Ok(2.0));
+        let position = player.clock.position().as_secs_f64();
+        assert!((0.95..1.1).contains(&position), "{position}");
+        assert_eq!(player.speed(), 2.0);
+    }
+
+    #[test]
+    fn speed_is_range_checked_and_snaps_to_normal() {
+        let mut player = AudioPlayer::new_deferred();
+        assert!(player.set_speed(0.4).is_err());
+        assert!(player.set_speed(2.01).is_err());
+        assert!(player.set_speed(f32::NAN).is_err());
+        assert_eq!(player.set_speed(1.004), Ok(1.0));
+        assert_eq!(player.set_speed(0.5), Ok(0.5));
+        assert_eq!(player.speed(), 0.5);
+    }
+
+    #[test]
+    fn a_track_ends_sooner_at_double_speed() {
+        let clock = PlaybackClock {
+            started_at: Some(Instant::now() - Duration::from_secs(6)),
+            elapsed_before_start: Duration::ZERO,
+            duration: Some(Duration::from_secs(10)),
+            speed: 2.0,
+        };
+        // Six wall seconds at 2x is twelve seconds of a ten second track.
+        assert!(clock.raw_elapsed() >= Duration::from_secs(10));
     }
 
     #[test]
