@@ -930,9 +930,9 @@ pub struct TimeStretch {
     input: Vec<f32>,
     /// Ideal start of the next window, in frames into `input`.
     nominal: f64,
-    /// Start of the last window taken, in frames into `input`. Kept relative
+    /// End of the last window taken, in frames into `input`. Kept relative
     /// to `input` when the front of it is dropped.
-    last_start: usize,
+    window_end: usize,
     /// Second half of the last window: the hop the next window fades into.
     tail: Vec<f32>,
     out: VecDeque<f32>,
@@ -955,7 +955,7 @@ impl TimeStretch {
             seek: ((sr as f32 * STRETCH_SEEK_SECS) as usize).max(1),
             input: Vec::new(),
             nominal: 0.0,
-            last_start: 0,
+            window_end: 0,
             tail: Vec::new(),
             out: VecDeque::new(),
             stretching: false,
@@ -1003,7 +1003,7 @@ impl TimeStretch {
         self.tail
             .extend_from_slice(&self.input[hop * ch..2 * hop * ch]);
         self.nominal = 0.0;
-        self.last_start = 0;
+        self.window_end = 2 * hop;
         self.stretching = true;
         true
     }
@@ -1019,7 +1019,7 @@ impl TimeStretch {
         if spent > 0 {
             self.input.drain(..spent * ch);
             self.nominal -= spent as f64;
-            self.last_start = self.last_start.saturating_sub(spent);
+            self.window_end = self.window_end.saturating_sub(spent);
         }
 
         let ideal = self.nominal.round() as usize;
@@ -1029,7 +1029,7 @@ impl TimeStretch {
         if self.frames() < 2 * hop || hi < lo {
             self.out.extend(self.tail.drain(..));
             self.out
-                .extend(self.input.drain(..).skip((self.last_start + 2 * hop) * ch));
+                .extend(self.input.drain(..).skip(self.window_end * ch));
             self.input.clear();
             self.stretching = false;
             return false;
@@ -1049,7 +1049,7 @@ impl TimeStretch {
         self.tail.clear();
         self.tail
             .extend_from_slice(&self.input[(start + hop) * ch..(start + 2 * hop) * ch]);
-        self.last_start = start;
+        self.window_end = start + 2 * hop;
         true
     }
 
@@ -1086,7 +1086,7 @@ impl TimeStretch {
         if self.step(1.0) {
             let ch = self.channels;
             self.out.extend(self.tail.drain(..));
-            let rest = (self.last_start + 2 * self.hop) * ch;
+            let rest = self.window_end * ch;
             self.out.extend(self.input.drain(..).skip(rest));
         }
         self.input.clear();
@@ -1098,7 +1098,7 @@ impl TimeStretch {
         self.tail.clear();
         self.out.clear();
         self.nominal = 0.0;
-        self.last_start = 0;
+        self.window_end = 0;
         self.stretching = false;
         self.inner_done = false;
     }
@@ -1451,5 +1451,21 @@ mod tests {
         let out: Vec<f32> = TimeStretch::new(Box::new(source), cell).collect();
         assert_eq!(out.len() % 2, 0);
         assert!(out.iter().skip(1).step_by(2).all(|s| s.abs() < 1e-6));
+    }
+
+    #[test]
+    fn the_end_of_a_stretched_track_is_played_without_a_click() {
+        let input = sine(220.0, 2.0, 0.3);
+        for speed in [1.5f32, 2.0] {
+            let (stretch, _) = stretch(input.clone(), speed);
+            let out: Vec<f32> = stretch.collect();
+            let worst = out
+                .windows(2)
+                .map(|w| (w[1] - w[0]).abs())
+                .fold(0.0f32, f32::max);
+            assert!(worst < 0.05, "{speed}: jump of {worst}");
+            let n = 100;
+            assert_eq!(out[out.len() - n..], input[input.len() - n..], "{speed}");
+        }
     }
 }
