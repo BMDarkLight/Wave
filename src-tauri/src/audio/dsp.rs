@@ -1048,7 +1048,12 @@ impl TimeStretch {
         let (ch, hop) = (self.channels, self.hop);
         let mut best = lo;
         let mut best_score = f32::NEG_INFINITY;
-        for start in lo..=hi {
+        // `hop` and the seek range grow with the sample rate, so the search
+        // coarsens by the same factor to keep its cost flat. It is 1 at
+        // 44.1 and 48 kHz.
+        let factor = (self.sr as usize / 44_100).max(1);
+        let stride = STRETCH_CORRELATION_STRIDE * factor;
+        for start in (lo..=hi).step_by(factor) {
             let (mut dot, mut energy) = (0.0f32, 1e-9f32);
             let mut frame = 0;
             while frame < hop {
@@ -1059,7 +1064,7 @@ impl TimeStretch {
                 }
                 dot += a * b;
                 energy += b * b;
-                frame += STRETCH_CORRELATION_STRIDE;
+                frame += stride;
             }
             let score = dot / energy.sqrt();
             if score > best_score {
@@ -1405,6 +1410,23 @@ mod tests {
             let hz = measured_hz(&stretch.collect::<Vec<_>>());
             assert!((hz - 440.0).abs() < 440.0 * 0.02, "{speed}: {hz} Hz");
         }
+    }
+
+    #[test]
+    fn pitch_stays_put_at_192_khz() {
+        const HIGH: u32 = 192_000;
+        let mono: Vec<f32> = (0..HIGH as usize * 2)
+            .map(|i| 0.5 * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / HIGH as f32).sin())
+            .collect();
+        let stereo: Vec<f32> = mono.iter().flat_map(|&s| [s, s]).collect();
+        let cell = shared_speed(1.5);
+        let source = SamplesBuffer::new(2, HIGH, stereo);
+        let out: Vec<f32> = TimeStretch::new(Box::new(source), cell).collect();
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        let mid = &left[left.len() / 4..left.len() * 3 / 4];
+        let crossings = mid.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+        let hz = crossings as f32 / (mid.len() as f32 / HIGH as f32);
+        assert!((hz - 440.0).abs() < 440.0 * 0.02, "{hz} Hz");
     }
 
     #[test]
