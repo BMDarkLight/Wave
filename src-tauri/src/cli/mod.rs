@@ -278,6 +278,13 @@ pub enum PlaybackCmd {
         /// timer.
         when: Option<String>,
     },
+    /// Set how fast playback runs, without changing pitch (resets on restart)
+    Speed {
+        /// 0.5 to 2: a rate (1.25 or 1.25x), a percentage (125%), or a step
+        /// from here (+0.25, -25%). Leave out to see the speed.
+        #[arg(allow_hyphen_values = true)]
+        value: Option<String>,
+    },
     /// Shut down the background playback daemon
     Shutdown,
 }

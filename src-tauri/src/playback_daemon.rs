@@ -110,6 +110,9 @@ pub enum DaemonRequest {
     SetSleepTimer {
         request: SleepRequest,
     },
+    SetSpeed {
+        speed: f32,
+    },
 }
 
 /// What the daemon is doing. This is also the `playback status` JSON, so its
@@ -142,6 +145,13 @@ pub struct PlaybackStatus {
     pub title: Option<String>,
     pub artist: Option<String>,
     pub sleep_timer: SleepTimerStatus,
+    /// Playback speed; 1.0 is normal.
+    #[serde(default = "normal_speed")]
+    pub speed: f32,
+}
+
+fn normal_speed() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -611,6 +621,16 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
             Ok(()) => DaemonResponse {
                 status: Some(build_status(&state.player, &state.library)),
                 ..DaemonResponse::ok_msg(sleep_timer_message(request))
+            },
+            Err(e) => DaemonResponse::err(e),
+        },
+        DaemonRequest::SetSpeed { speed } => match state.player.set_speed(speed) {
+            Ok(speed) => DaemonResponse {
+                status: Some(build_status(&state.player, &state.library)),
+                ..DaemonResponse::ok_msg(format!(
+                    "Playback speed {}.",
+                    crate::cli::render::format_speed(speed)
+                ))
             },
             Err(e) => DaemonResponse::err(e),
         },
@@ -1529,6 +1549,7 @@ fn build_status(player: &AudioPlayer, library: &Library) -> PlaybackStatus {
         title,
         artist,
         sleep_timer: player.sleep_timer_status(),
+        speed: player.speed(),
     }
 }
 
@@ -1673,6 +1694,23 @@ mod tests {
                 request: SleepRequest::Countdown { seconds: 1800 }
             }
         ));
+    }
+
+    #[test]
+    fn a_speed_request_survives_the_wire() {
+        let envelope = DaemonEnvelope {
+            token: "t".into(),
+            request: DaemonRequest::SetSpeed { speed: 1.25 },
+        };
+        let json = serde_json::to_string(&envelope).unwrap();
+        let back: DaemonEnvelope = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back.request, DaemonRequest::SetSpeed { speed } if speed == 1.25));
+    }
+
+    #[test]
+    fn status_from_a_daemon_without_speed_reads_as_normal() {
+        let status: PlaybackStatus = serde_json::from_str(r#"{"state":"playing"}"#).unwrap();
+        assert_eq!(status.speed, 1.0);
     }
 
     #[test]

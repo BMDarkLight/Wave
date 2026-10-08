@@ -10,6 +10,7 @@
 
 use serde_json::json;
 
+use crate::audio::player::{MAX_SPEED, MIN_SPEED};
 use crate::audio::sleep_timer::{SleepRequest, MAX_SLEEP};
 use crate::cli::{daemon_cmd, render, ui, PlaybackCmd};
 use crate::playback_daemon::{daemon_request, daemon_request_if_running, DaemonRequest};
@@ -26,6 +27,7 @@ pub fn run(cmd: PlaybackCmd) {
         // One renderer for both, so the two views cannot drift apart.
         PlaybackCmd::Status => crate::cli::now::run(true, 0.5),
         PlaybackCmd::Sleep { when } => cmd_playback_sleep(when.as_deref()),
+        PlaybackCmd::Speed { value } => cmd_playback_speed(value.as_deref()),
         PlaybackCmd::Shutdown => cmd_playback_shutdown(),
     }
 }
@@ -89,6 +91,65 @@ fn cmd_playback_sleep(raw: Option<&str>) {
         Ok(request) => daemon_cmd(DaemonRequest::SetSleepTimer { request }),
         Err(e) => ui::fail(e, None, ui::EXIT_USAGE),
     }
+}
+
+/// A speed to set, before a step is added to the current one.
+#[derive(Debug, PartialEq)]
+enum SpeedTo {
+    At(f32),
+    Step(f32),
+}
+
+/// A rate ("1.25", "1.25x"), a percentage ("125%"), or a step ("+0.25", "-25%").
+fn parse_speed(raw: &str) -> Result<SpeedTo, String> {
+    let bad = || format!("Can't read \"{raw}\" as a speed; try 1.25, 125%, or +0.25.");
+    let text = raw.trim().to_ascii_lowercase();
+    let (sign, body) = match text.chars().next() {
+        Some('+') => (Some(1.0), &text[1..]),
+        Some('-') => (Some(-1.0), &text[1..]),
+        _ => (None, text.as_str()),
+    };
+    let (body, scale) = match body.strip_suffix('%') {
+        Some(body) => (body, 0.01),
+        None => (body.strip_suffix('x').unwrap_or(body), 1.0),
+    };
+    let value: f32 = body.trim().parse().map_err(|_| bad())?;
+    if !value.is_finite() || value < 0.0 {
+        return Err(bad());
+    }
+    let value = value * scale;
+    Ok(match sign {
+        Some(sign) => SpeedTo::Step(sign * value),
+        None => SpeedTo::At(value),
+    })
+}
+
+fn cmd_playback_speed(raw: Option<&str>) {
+    let current = || match daemon_request_if_running(DaemonRequest::Status) {
+        Ok(Some(resp)) => resp.status.map(|s| s.speed).unwrap_or(1.0),
+        Ok(None) => ui::no_daemon(),
+        Err(e) => ui::fail_with(e),
+    };
+    let Some(raw) = raw else {
+        let speed = current();
+        return ui::done(
+            format!("Playback speed {}.", render::format_speed(speed)),
+            json!({ "speed": speed }),
+        );
+    };
+    let speed = match parse_speed(raw) {
+        Ok(SpeedTo::At(speed)) => speed,
+        Ok(SpeedTo::Step(step)) => (current() + step).clamp(MIN_SPEED, MAX_SPEED),
+        Err(e) => ui::fail(e, None, ui::EXIT_USAGE),
+    };
+    if !(MIN_SPEED..=MAX_SPEED).contains(&speed) {
+        ui::fail(
+            format!("Speed must be between {MIN_SPEED}x and {MAX_SPEED}x."),
+            None,
+            ui::EXIT_USAGE,
+        );
+    }
+    daemon_cmd(DaemonRequest::SetSpeed { speed });
 }
 
 fn show_sleep_timer() {
@@ -290,6 +351,22 @@ mod tests {
     #[test]
     fn a_bare_sleep_number_is_minutes() {
         assert_eq!(parse_sleep("30"), countdown(1800));
+    }
+
+    #[test]
+    fn speed_reads_plain_percent_and_steps() {
+        assert_eq!(parse_speed("1.25"), Ok(SpeedTo::At(1.25)));
+        assert_eq!(parse_speed("1.5x"), Ok(SpeedTo::At(1.5)));
+        assert_eq!(parse_speed("125%"), Ok(SpeedTo::At(1.25)));
+        assert_eq!(parse_speed("+0.25"), Ok(SpeedTo::Step(0.25)));
+        assert_eq!(parse_speed("-25%"), Ok(SpeedTo::Step(-0.25)));
+    }
+
+    #[test]
+    fn speed_rejects_garbage() {
+        for raw in ["", "fast", "x", "1.2.3", "%", "nan", "inf"] {
+            assert!(parse_speed(raw).is_err(), "{raw:?} should be rejected");
+        }
     }
 
     #[test]

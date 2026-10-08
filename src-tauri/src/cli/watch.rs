@@ -46,14 +46,19 @@ pub fn status_changed(last: &PlaybackStatus, next: &PlaybackStatus, elapsed: Dur
             s.title.clone(),
             s.artist.clone(),
             // The mode only: a countdown ticking down is not a change.
-            s.sleep_timer.mode.clone(),
+            (s.sleep_timer.mode.clone(), s.speed.to_bits()),
         )
     };
     if same(last) != same(next) {
         return true;
     }
     let expected = if last.state == "playing" {
-        last.position_seconds + elapsed.as_secs_f64()
+        let speed = if last.speed > 0.0 {
+            f64::from(last.speed)
+        } else {
+            1.0
+        };
+        last.position_seconds + elapsed.as_secs_f64() * speed
     } else {
         last.position_seconds
     };
@@ -176,8 +181,26 @@ mod tests {
             repeat: "off".into(),
             queue_position: Some(0),
             queue_length: 3,
+            speed: 1.0,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn double_speed_playback_is_not_a_seek() {
+        let mut last = playing();
+        last.speed = 2.0;
+        let mut next = last.clone();
+        next.position_seconds = last.position_seconds + 1.0;
+        assert!(!status_changed(&last, &next, Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn changing_speed_is_a_change() {
+        let last = playing();
+        let mut next = playing();
+        next.speed = 1.5;
+        assert!(status_changed(&last, &next, Duration::ZERO));
     }
 
     #[test]

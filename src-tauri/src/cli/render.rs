@@ -64,6 +64,13 @@ pub fn format_sleep_length(secs: u64) -> String {
 }
 
 /// One line on a running sleep timer, or `None` when it is off.
+/// A playback speed as "1.25x", "1.5x" or "2x".
+pub fn format_speed(speed: f32) -> String {
+    let text = format!("{speed:.2}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    format!("{text}x")
+}
+
 pub fn sleep_timer_summary(timer: &SleepTimerStatus) -> Option<String> {
     match timer.mode.as_str() {
         "countdown" => {
@@ -367,6 +374,10 @@ pub fn playback_status(ui: &Ui, status: &PlaybackStatus, album: Option<&str>) ->
         modes.push_str(&dot);
         modes.push_str(&sleep);
     }
+    if status.speed > 0.0 && (status.speed - 1.0).abs() > f32::EPSILON {
+        modes.push_str(&dot);
+        modes.push_str(&format!("Speed {}", format_speed(status.speed)));
+    }
     out.push_str(&dim_line(ui, &modes));
 
     out
@@ -605,6 +616,14 @@ mod tests {
     use super::*;
     use crate::cli::ui::{display_width, Ui};
 
+    #[test]
+    fn speeds_print_without_trailing_zeros() {
+        assert_eq!(format_speed(1.25), "1.25x");
+        assert_eq!(format_speed(1.5), "1.5x");
+        assert_eq!(format_speed(2.0), "2x");
+        assert_eq!(format_speed(0.75), "0.75x");
+    }
+
     fn status() -> PlaybackStatus {
         PlaybackStatus {
             state: "playing".into(),
@@ -621,6 +640,7 @@ mod tests {
             title: Some("Once in a Lifetime".into()),
             artist: Some("Talking Heads".into()),
             sleep_timer: Default::default(),
+            speed: 1.0,
         }
     }
 
