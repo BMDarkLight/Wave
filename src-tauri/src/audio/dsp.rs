@@ -6,6 +6,7 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -879,6 +880,290 @@ impl Source for SoftFade {
     }
 }
 
+/// Playback speed shared by the player and every [`TimeStretch`] it builds,
+/// stored as f32 bits.
+#[allow(dead_code)] // wired into the player by a later change
+pub type SharedSpeed = Arc<std::sync::atomic::AtomicU32>;
+
+#[allow(dead_code)] // wired into the player by a later change
+pub fn shared_speed(initial: f32) -> SharedSpeed {
+    Arc::new(std::sync::atomic::AtomicU32::new(initial.to_bits()))
+}
+
+#[allow(dead_code)] // wired into the player by a later change
+pub fn set_shared_speed(cell: &SharedSpeed, speed: f32) {
+    cell.store(speed.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+#[allow(dead_code)] // wired into the player by a later change
+pub fn load_shared_speed(cell: &SharedSpeed) -> f32 {
+    f32::from_bits(cell.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Half a window: windows are two hops long and overlap by one.
+#[allow(dead_code)] // wired into the player by a later change
+const STRETCH_HOP_SECS: f32 = 0.020;
+/// How far a window may shift from its ideal start to line up with the audio
+/// it overlaps.
+#[allow(dead_code)] // wired into the player by a later change
+const STRETCH_SEEK_SECS: f32 = 0.006;
+/// Correlation reads every nth frame, which is plenty to find the splice.
+#[allow(dead_code)] // wired into the player by a later change
+const STRETCH_CORRELATION_STRIDE: usize = 4;
+
+/// Changes playback speed without changing pitch (WSOLA).
+///
+/// The output is a chain of windows two hops long, each overlapping the next
+/// by one hop. The read position moves `hop * speed` frames per window, so the
+/// output runs `speed` times faster. Each window may shift by up to `seek`
+/// frames to where it best matches the hop it overlaps, which keeps the
+/// waveform continuous. At exactly 1.0 samples pass straight through.
+#[allow(dead_code)] // wired into the player by a later change
+pub struct TimeStretch {
+    inner: Box<dyn Source<Item = f32> + Send>,
+    speed: SharedSpeed,
+    channels: usize,
+    sr: u32,
+    hop: usize,
+    seek: usize,
+    /// Interleaved input not yet used up.
+    input: Vec<f32>,
+    /// Ideal start of the next window, in frames into `input`.
+    nominal: f64,
+    /// Start of the last window taken, in frames into `input`. Kept relative
+    /// to `input` when the front of it is dropped.
+    last_start: usize,
+    /// Second half of the last window: the hop the next window fades into.
+    tail: Vec<f32>,
+    out: VecDeque<f32>,
+    stretching: bool,
+    inner_done: bool,
+}
+
+#[allow(dead_code)] // wired into the player by a later change
+impl TimeStretch {
+    #[allow(dead_code)] // wired into the player by a later change
+    pub fn new(inner: Box<dyn Source<Item = f32> + Send>, speed: SharedSpeed) -> Self {
+        let channels = inner.channels().max(1) as usize;
+        let sr = inner.sample_rate().max(1);
+        Self {
+            inner,
+            speed,
+            channels,
+            sr,
+            hop: ((sr as f32 * STRETCH_HOP_SECS) as usize).max(8),
+            seek: ((sr as f32 * STRETCH_SEEK_SECS) as usize).max(1),
+            input: Vec::new(),
+            nominal: 0.0,
+            last_start: 0,
+            tail: Vec::new(),
+            out: VecDeque::new(),
+            stretching: false,
+            inner_done: false,
+        }
+    }
+
+    fn frames(&self) -> usize {
+        self.input.len() / self.channels
+    }
+
+    /// Read from the inner source until `input` holds `frames` frames or the
+    /// source ends. A partial last frame is padded with silence.
+    fn fill(&mut self, frames: usize) {
+        while self.frames() < frames && !self.inner_done {
+            for channel in 0..self.channels {
+                match self.inner.next() {
+                    Some(sample) => self.input.push(sample),
+                    None => {
+                        self.inner_done = true;
+                        if channel > 0 {
+                            self.input
+                                .resize(self.input.len() + self.channels - channel, 0.0);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Begin stretching from the current read position. Returns false when
+    /// too little audio is left for a window; that remainder plays as is.
+    fn start(&mut self) -> bool {
+        let (ch, hop) = (self.channels, self.hop);
+        self.fill(2 * hop);
+        if self.frames() < 2 * hop {
+            self.out.extend(self.input.drain(..));
+            return false;
+        }
+        // The first half of the first window continues straight on from what
+        // already played.
+        self.out.extend(self.input[..hop * ch].iter().copied());
+        self.tail.clear();
+        self.tail
+            .extend_from_slice(&self.input[hop * ch..2 * hop * ch]);
+        self.nominal = 0.0;
+        self.last_start = 0;
+        self.stretching = true;
+        true
+    }
+
+    /// Splice in the next window. Returns false when the input ran out; the
+    /// tail and any unread input are played out and stretching stops.
+    fn step(&mut self, speed: f32) -> bool {
+        let (ch, hop, seek) = (self.channels, self.hop, self.seek);
+        self.nominal += hop as f64 * speed as f64;
+
+        // Drop input no window can reach any more.
+        let spent = (self.nominal as usize).saturating_sub(seek);
+        if spent > 0 {
+            self.input.drain(..spent * ch);
+            self.nominal -= spent as f64;
+            self.last_start = self.last_start.saturating_sub(spent);
+        }
+
+        let ideal = self.nominal.round() as usize;
+        self.fill(ideal + seek + 2 * hop);
+        let lo = ideal.saturating_sub(seek);
+        let hi = (ideal + seek).min(self.frames().saturating_sub(2 * hop));
+        if self.frames() < 2 * hop || hi < lo {
+            self.out.extend(self.tail.drain(..));
+            self.out
+                .extend(self.input.drain(..).skip((self.last_start + 2 * hop) * ch));
+            self.input.clear();
+            self.stretching = false;
+            return false;
+        }
+
+        let start = self.best_splice(lo, hi);
+        for frame in 0..hop {
+            let t = (frame as f32 + 0.5) / hop as f32;
+            let fade_in = 0.5 - 0.5 * (std::f32::consts::PI * t).cos();
+            for channel in 0..ch {
+                let outgoing = self.tail[frame * ch + channel];
+                let incoming = self.input[(start + frame) * ch + channel];
+                self.out
+                    .push_back(outgoing * (1.0 - fade_in) + incoming * fade_in);
+            }
+        }
+        self.tail.clear();
+        self.tail
+            .extend_from_slice(&self.input[(start + hop) * ch..(start + 2 * hop) * ch]);
+        self.last_start = start;
+        true
+    }
+
+    /// The start in `lo..=hi` whose first hop best matches the tail.
+    fn best_splice(&self, lo: usize, hi: usize) -> usize {
+        let (ch, hop) = (self.channels, self.hop);
+        let mut best = lo;
+        let mut best_score = f32::NEG_INFINITY;
+        for start in lo..=hi {
+            let (mut dot, mut energy) = (0.0f32, 1e-9f32);
+            let mut frame = 0;
+            while frame < hop {
+                let (mut a, mut b) = (0.0f32, 0.0f32);
+                for channel in 0..ch {
+                    a += self.tail[frame * ch + channel];
+                    b += self.input[(start + frame) * ch + channel];
+                }
+                dot += a * b;
+                energy += b * b;
+                frame += STRETCH_CORRELATION_STRIDE;
+            }
+            let score = dot / energy.sqrt();
+            if score > best_score {
+                best_score = score;
+                best = start;
+            }
+        }
+        best
+    }
+
+    /// Back to 1.0: one last splice, then everything already read plays in
+    /// order before reads go straight to the inner source again.
+    fn finish(&mut self) {
+        if self.step(1.0) {
+            let ch = self.channels;
+            self.out.extend(self.tail.drain(..));
+            let rest = (self.last_start + 2 * self.hop) * ch;
+            self.out.extend(self.input.drain(..).skip(rest));
+        }
+        self.input.clear();
+        self.stretching = false;
+    }
+
+    fn reset(&mut self) {
+        self.input.clear();
+        self.tail.clear();
+        self.out.clear();
+        self.nominal = 0.0;
+        self.last_start = 0;
+        self.stretching = false;
+        self.inner_done = false;
+    }
+}
+
+impl Iterator for TimeStretch {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        loop {
+            if let Some(sample) = self.out.pop_front() {
+                return Some(sample);
+            }
+            let speed = load_shared_speed(&self.speed);
+            let normal = (speed - 1.0).abs() < 1e-6;
+            if self.stretching {
+                if normal {
+                    self.finish();
+                } else {
+                    self.step(speed);
+                }
+                continue;
+            }
+            if normal {
+                if !self.input.is_empty() {
+                    self.out.extend(self.input.drain(..));
+                    continue;
+                }
+                return self.inner.next();
+            }
+            if self.inner_done && self.input.is_empty() {
+                return None;
+            }
+            self.start();
+        }
+    }
+}
+
+impl Source for TimeStretch {
+    fn current_frame_len(&self) -> Option<usize> {
+        // The sample count no longer follows the inner frames; the format
+        // is fixed at construction.
+        None
+    }
+
+    fn channels(&self) -> u16 {
+        self.channels as u16
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sr
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        // Track time. The player clock turns it into wall time.
+        self.inner.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.inner.try_seek(pos)?;
+        self.reset();
+        Ok(())
+    }
+}
+
 // `Crossfade::configured_fade_secs` and `Crossfade::fade_window` are not
 // covered here. `Crossfade` holds `Box<dyn Source<Item = f32> + Send>` fields,
 // so constructing a real instance in a unit test needs a full `rodio::Source`
@@ -1075,5 +1360,96 @@ mod tests {
         for (a, b) in first_run.iter().zip(second_run.iter()) {
             assert!((a - b).abs() < 1e-5, "expected {a}, got {b}");
         }
+    }
+
+    use rodio::buffer::SamplesBuffer;
+
+    const SR: u32 = 44_100;
+
+    fn sine(hz: f32, secs: f32, amp: f32) -> Vec<f32> {
+        let n = (SR as f32 * secs) as usize;
+        (0..n)
+            .map(|i| amp * (2.0 * std::f32::consts::PI * hz * i as f32 / SR as f32).sin())
+            .collect()
+    }
+
+    fn stretch(samples: Vec<f32>, speed: f32) -> (TimeStretch, SharedSpeed) {
+        let cell = shared_speed(speed);
+        let source = SamplesBuffer::new(1, SR, samples);
+        (TimeStretch::new(Box::new(source), cell.clone()), cell)
+    }
+
+    /// Positive-going zero crossings per second over the middle half.
+    fn measured_hz(out: &[f32]) -> f32 {
+        let mid = &out[out.len() / 4..out.len() * 3 / 4];
+        let crossings = mid.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+        crossings as f32 / (mid.len() as f32 / SR as f32)
+    }
+
+    #[test]
+    fn normal_speed_passes_samples_through_untouched() {
+        let input = sine(440.0, 0.5, 0.5);
+        let (stretch, _) = stretch(input.clone(), 1.0);
+        assert_eq!(stretch.collect::<Vec<_>>(), input);
+    }
+
+    #[test]
+    fn output_length_follows_the_speed() {
+        let input = sine(440.0, 2.0, 0.5);
+        for speed in [0.5f32, 1.5, 2.0] {
+            let (stretch, _) = stretch(input.clone(), speed);
+            let out = stretch.count() as f32;
+            let want = input.len() as f32 / speed;
+            // A tenth of a second of slack either way.
+            assert!(
+                (out - want).abs() < SR as f32 * 0.1,
+                "{speed}: {out} vs {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn pitch_stays_put() {
+        for speed in [0.5f32, 1.5, 2.0] {
+            let (stretch, _) = stretch(sine(440.0, 2.0, 0.5), speed);
+            let hz = measured_hz(&stretch.collect::<Vec<_>>());
+            assert!((hz - 440.0).abs() < 440.0 * 0.02, "{speed}: {hz} Hz");
+        }
+    }
+
+    #[test]
+    fn changing_speed_mid_stream_does_not_click() {
+        let (mut stretch, cell) = stretch(sine(220.0, 3.0, 0.3), 1.5);
+        let mut out = Vec::new();
+        for (i, speed) in [
+            (20_000, 1.0f32),
+            (40_000, 0.75),
+            (60_000, 2.0),
+            (80_000, 1.0),
+        ] {
+            while out.len() < i {
+                out.push(stretch.next().expect("stream ended early"));
+            }
+            set_shared_speed(&cell, speed);
+        }
+        out.extend(stretch);
+        // A 220 Hz sine at 0.3 moves at most ~0.01 per sample.
+        let worst = out
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 0.05, "jump of {worst}");
+    }
+
+    #[test]
+    fn stereo_channels_stay_in_order() {
+        // Left carries the sine, right is silent; stretching must not swap them.
+        let mono = sine(440.0, 1.0, 0.5);
+        let stereo: Vec<f32> = mono.iter().flat_map(|&s| [s, 0.0]).collect();
+        let cell = shared_speed(1.5);
+        let source = SamplesBuffer::new(2, SR, stereo);
+        let out: Vec<f32> = TimeStretch::new(Box::new(source), cell).collect();
+        assert_eq!(out.len() % 2, 0);
+        assert!(out.iter().skip(1).step_by(2).all(|s| s.abs() < 1e-6));
     }
 }
