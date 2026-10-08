@@ -63,7 +63,6 @@ pub fn format_sleep_length(secs: u64) -> String {
     parts.join(" ")
 }
 
-/// One line on a running sleep timer, or `None` when it is off.
 /// A playback speed as "1.25x", "1.5x" or "2x".
 pub fn format_speed(speed: f32) -> String {
     let text = format!("{speed:.2}");
@@ -71,6 +70,7 @@ pub fn format_speed(speed: f32) -> String {
     format!("{text}x")
 }
 
+/// One line on a running sleep timer, or `None` when it is off.
 pub fn sleep_timer_summary(timer: &SleepTimerStatus) -> Option<String> {
     match timer.mode.as_str() {
         "countdown" => {
