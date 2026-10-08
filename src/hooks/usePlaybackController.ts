@@ -29,6 +29,7 @@ import {
   setPlayerVolume,
   setRepeat,
   setShuffle,
+  setPlaybackSpeed,
   setSleepTimer,
   stopTrack,
   toggleFavorite,
@@ -510,6 +511,15 @@ export function usePlaybackController({
     }
   };
 
+  const handleSetSpeed = async (speed: number) => {
+    try {
+      const applied = await setPlaybackSpeed(speed);
+      setPlaybackState((state) => ({ ...state, speed: applied }));
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to change the playback speed"));
+    }
+  };
+
   const handlePlayFromQueue = async (index: number) => {
     try {
       setError(null);
@@ -563,6 +573,7 @@ export function usePlaybackController({
     handleToggleShuffle,
     handleCycleRepeat,
     handleSetSleepTimer,
+    handleSetSpeed,
     handlePlayFromQueue,
   };
 }

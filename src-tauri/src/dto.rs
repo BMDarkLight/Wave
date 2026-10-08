@@ -32,6 +32,7 @@ pub struct PlaybackStateDto {
     pub volume: f32,
     pub output_device_name: String,
     pub sleep_timer: SleepTimerStatus,
+    pub speed: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]

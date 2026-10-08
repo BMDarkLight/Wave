@@ -3675,11 +3675,36 @@ img.queue-thumb {
   transform: scale(1.15);
 }
 
-/* Sits right under crossfade, so it drops the divider above it. */
-.eq-sleep {
+/* Rows under crossfade drop the divider above them. */
+.eq-subrow {
   margin-top: 10px;
   padding-top: 0;
   border-top: 0;
+}
+
+.eq-speed-value {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.mnp-speed-section {
+  border-top: 1px solid var(--line);
+  padding: 4px 0 14px;
+}
+
+.speed-tag {
+  margin-left: 8px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--green-hot);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
 }
 
 .eq-crossfade-value {

@@ -44,4 +44,5 @@ export const emptyPlaybackState: PlaybackState = {
   volume: 0.8,
   output_device_name: "",
   sleep_timer: { mode: "off" },
+  speed: 1,
 };

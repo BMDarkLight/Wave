@@ -833,6 +833,22 @@ pub async fn set_sleep_timer(
     Ok(player.sleep_timer_status())
 }
 
+#[tauri::command]
+pub async fn set_playback_speed(
+    speed: f32,
+    state: tauri::State<'_, PlayerState>,
+    bridge: tauri::State<'_, MediaBridgeState>,
+) -> Result<f32, String> {
+    let (speed, position, playing) = {
+        let mut slot = lock_player_state(&state);
+        let player = ensure_player(&mut slot)?;
+        let speed = player.set_speed(speed)?;
+        (speed, player.position_seconds(), player.is_playing())
+    };
+    bridge.0.update_position(position, playing);
+    Ok(speed)
+}
+
 /// Apply a media-session action from the Android native JNI bridge.
 /// Used when the WebView is frozen in the background and JS handlers cannot run.
 #[cfg(target_os = "android")]
@@ -1244,6 +1260,7 @@ pub async fn get_playback_state(
             volume: 0.8,
             output_device_name: AudioPlayer::current_output_name(),
             sleep_timer: SleepTimerStatus::default(),
+            speed: 1.0,
         });
     };
     Ok(PlaybackStateDto {
@@ -1258,6 +1275,7 @@ pub async fn get_playback_state(
         volume: player.volume(),
         output_device_name: AudioPlayer::current_output_name(),
         sleep_timer: player.sleep_timer_status(),
+        speed: player.speed(),
     })
 }
 

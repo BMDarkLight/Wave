@@ -51,6 +51,7 @@ import type {
 import { useDragDismiss } from "../hooks/useDragDismiss";
 import VirtualizedList from "./VirtualizedList";
 import SleepTimerButton from "./SleepTimerButton";
+import SpeedRow from "./SpeedRow";
 
 const formatTime = (seconds?: number | null) => {
   if (!seconds || !Number.isFinite(seconds)) return "0:00";
@@ -411,6 +412,8 @@ interface MobileNowPlayingProps {
   onCycleRepeat: () => void;
   sleepTimer: SleepTimerStatus;
   onSetSleepTimer: (request: SleepRequest) => void;
+  speed: number;
+  onSpeedChange: (speed: number) => void;
   closing?: boolean;
   onClose: () => void;
   /** Fired instead of onClose when the page is dismissed by drag (reopen guard). */
@@ -456,6 +459,8 @@ export default function MobileNowPlaying({
   onCycleRepeat,
   sleepTimer,
   onSetSleepTimer,
+  speed,
+  onSpeedChange,
   closing = false,
   onClose,
   onDragClose,
@@ -1055,6 +1060,13 @@ export default function MobileNowPlaying({
                   gain={trebleGain}
                   onChange={applyTrebleGain}
                   size={hideVolume ? 120 : 104}
+                />
+              </div>
+              <div className="mnp-speed-section">
+                <SpeedRow
+                  id="mnp-speed-range"
+                  speed={speed}
+                  onChange={onSpeedChange}
                 />
               </div>
               <div className="mnp-eq-section">

@@ -452,6 +452,7 @@ function App() {
     handleToggleShuffle,
     handleCycleRepeat,
     handleSetSleepTimer,
+    handleSetSpeed,
     handlePlayFromQueue,
   } = usePlaybackController({
     androidHost,
@@ -2435,6 +2436,8 @@ function App() {
           onCycleRepeat={handleCycleRepeat}
           sleepTimer={playbackState.sleep_timer}
           onSetSleepTimer={(request) => void handleSetSleepTimer(request)}
+          speed={playbackState.speed}
+          onSpeedChange={(speed) => void handleSetSpeed(speed)}
           closing={mobilePlayerClosing}
           onClose={handleCloseMobilePlayer}
           onDragClose={handleDragCloseMobilePlayer}
@@ -2530,6 +2533,8 @@ function App() {
           onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
           sleepTimer={playbackState.sleep_timer}
           onSleepTimerChange={(request) => void handleSetSleepTimer(request)}
+          speed={playbackState.speed}
+          onSpeedChange={(speed) => void handleSetSpeed(speed)}
         />
       )}
 

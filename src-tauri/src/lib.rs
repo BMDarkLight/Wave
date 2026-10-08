@@ -212,6 +212,7 @@ pub fn run() {
             commands::stop_track,
             commands::get_playback_state,
             commands::set_sleep_timer,
+            commands::set_playback_speed,
             commands::seek_track,
             commands::set_volume,
             commands::add_track_to_playlist,

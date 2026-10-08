@@ -11,6 +11,7 @@
 import { createPortal } from "react-dom";
 import { BiX } from "react-icons/bi";
 import { formatTime } from "../utils/format";
+import SpeedRow from "./SpeedRow";
 import {
   EQ_BAND_LABELS,
   EQ_PRESETS,
@@ -48,6 +49,8 @@ export default function EqPanel({
   onGaplessChange,
   sleepTimer,
   onSleepTimerChange,
+  speed,
+  onSpeedChange,
 }: {
   anchor: { bottom: number; right: number };
   onClose: () => void;
@@ -62,6 +65,8 @@ export default function EqPanel({
   onGaplessChange: (enabled: boolean) => void;
   sleepTimer: SleepTimerStatus;
   onSleepTimerChange: (request: SleepRequest) => void;
+  speed: number;
+  onSpeedChange: (speed: number) => void;
 }) {
   return createPortal(
     <>
@@ -164,7 +169,7 @@ export default function EqPanel({
           </span>
         </div>
         <div
-          className="eq-crossfade eq-sleep"
+          className="eq-crossfade eq-subrow"
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
@@ -199,6 +204,7 @@ export default function EqPanel({
                 : "Off"}
           </span>
         </div>
+        <SpeedRow id="eq-speed-range" speed={speed} onChange={onSpeedChange} />
         <label
           className="eq-gapless"
           onPointerDown={(event) => event.stopPropagation()}

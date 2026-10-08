@@ -26,6 +26,7 @@ import {
 import Artwork from "./Artwork";
 import { formatTime } from "../utils/format";
 import { getTrackTitle } from "../utils/track";
+import { formatSpeed } from "../utils/player";
 import type {
   EqSettings,
   PlaybackMode,
@@ -284,6 +285,16 @@ export default function PlayerBar({
           }
         />
         <span>{formatTime(displayDuration)}</span>
+        {playbackState.speed !== 1 && (
+          <button
+            type="button"
+            className="speed-tag desktop-only-control"
+            onClick={onToggleEqPanel}
+            title="Playback speed"
+          >
+            {formatSpeed(playbackState.speed)}
+          </button>
+        )}
       </div>
 
       <div className="player-right">

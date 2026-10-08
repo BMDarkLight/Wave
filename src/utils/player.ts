@@ -86,6 +86,7 @@ export interface PlaybackState {
   volume: number;
   output_device_name: string;
   sleep_timer: SleepTimerStatus;
+  speed: number;
 }
 
 export interface SleepTimerStatus {
@@ -243,6 +244,17 @@ export const setSleepTimer = (
   request: SleepRequest,
 ): Promise<SleepTimerStatus> => {
   return safeInvoke<SleepTimerStatus>("set_sleep_timer", { request });
+};
+
+export const MIN_SPEED = 0.5;
+export const MAX_SPEED = 2;
+
+/** "1.25x", "1.5x", "2x": the same form the CLI prints. */
+export const formatSpeed = (speed: number): string =>
+  `${Number(speed.toFixed(2))}x`;
+
+export const setPlaybackSpeed = (speed: number): Promise<number> => {
+  return safeInvoke<number>("set_playback_speed", { speed });
 };
 
 export const selectAudioFile = async (
