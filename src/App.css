@@ -3333,10 +3333,6 @@ img.queue-thumb {
   font-variant-numeric: tabular-nums;
 }
 
-.control-btn.sleep-timer-btn.active {
-  padding: 0 8px;
-}
-
 .mnp-action-btn.sleep-timer-btn.active {
   width: auto;
   min-width: 52px;
@@ -3677,6 +3673,13 @@ img.queue-thumb {
 
 .eq-crossfade input[type="range"]:hover::-moz-range-thumb {
   transform: scale(1.15);
+}
+
+/* Sits right under crossfade, so it drops the divider above it. */
+.eq-sleep {
+  margin-top: 10px;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .eq-crossfade-value {

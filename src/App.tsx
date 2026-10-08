@@ -2413,7 +2413,6 @@ function App() {
         onRefreshOutputDevices={() =>
           listOutputDevices().then(setOutputDevices).catch(console.error)
         }
-        onSetSleepTimer={(request) => void handleSetSleepTimer(request)}
       />
 
       {mobilePlayerOpen && currentTrack && (
@@ -2529,6 +2528,8 @@ function App() {
           onCrossfadeChange={handleCrossfadeChange}
           gaplessEnabled={gaplessEnabled}
           onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
+          sleepTimer={playbackState.sleep_timer}
+          onSleepTimerChange={(request) => void handleSetSleepTimer(request)}
         />
       )}
 

@@ -180,8 +180,9 @@ Previous rewinds the current track if you are more than three seconds in.
 
 A **sleep timer** pauses playback after 15 to 90 minutes, or when the current
 track ends. The volume eases down over the last ten seconds, and resuming
-picks up where it stopped. Set it from the moon button in the player bar, the
-Now Playing screen on Android, the tray menu, or `wave playback sleep`.
+picks up where it stopped. Set it in the volume and equalizer panel on
+desktop, from the moon button on the Android Now Playing screen, from the tray
+menu, or with `wave playback sleep`.
 
 <img src="docs/screenshots/desktop-queue.png" alt="Queue panel" width="100%">
 

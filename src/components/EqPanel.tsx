@@ -10,7 +10,29 @@
 
 import { createPortal } from "react-dom";
 import { BiX } from "react-icons/bi";
-import { EQ_BAND_LABELS, EQ_PRESETS, type EqSettings } from "../utils/player";
+import { formatTime } from "../utils/format";
+import {
+  EQ_BAND_LABELS,
+  EQ_PRESETS,
+  SLEEP_CHOICES,
+  type EqSettings,
+  type SleepRequest,
+  type SleepTimerStatus,
+} from "../utils/player";
+
+/** The select's value for the timer as it stands. */
+function sleepSelectValue(status: SleepTimerStatus): string {
+  if (status.mode === "off") return "off";
+  if (status.mode === "countdown") return "countdown";
+  return String(
+    SLEEP_CHOICES.findIndex(({ request }) => request.mode === "end_of_track"),
+  );
+}
+
+function sleepRequestFor(value: string): SleepRequest {
+  if (value === "off") return { mode: "off" };
+  return SLEEP_CHOICES[Number(value)].request;
+}
 
 export default function EqPanel({
   anchor,
@@ -24,6 +46,8 @@ export default function EqPanel({
   onCrossfadeChange,
   gaplessEnabled,
   onGaplessChange,
+  sleepTimer,
+  onSleepTimerChange,
 }: {
   anchor: { bottom: number; right: number };
   onClose: () => void;
@@ -36,6 +60,8 @@ export default function EqPanel({
   onCrossfadeChange: (duration: number) => void;
   gaplessEnabled: boolean;
   onGaplessChange: (enabled: boolean) => void;
+  sleepTimer: SleepTimerStatus;
+  onSleepTimerChange: (request: SleepRequest) => void;
 }) {
   return createPortal(
     <>
@@ -135,6 +161,42 @@ export default function EqPanel({
             {crossfadeDuration === 0
               ? "Off"
               : `${crossfadeDuration.toFixed(1)}s`}
+          </span>
+        </div>
+        <div
+          className="eq-crossfade eq-sleep"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <label className="eq-crossfade-label" htmlFor="eq-sleep-select">
+            Sleep
+          </label>
+          <select
+            id="eq-sleep-select"
+            className="eq-preset-select"
+            value={sleepSelectValue(sleepTimer)}
+            onChange={(event) =>
+              onSleepTimerChange(sleepRequestFor(event.target.value))
+            }
+          >
+            <option value="off">Off</option>
+            {sleepTimer.mode === "countdown" && (
+              <option value="countdown" disabled hidden>
+                Counting down
+              </option>
+            )}
+            {SLEEP_CHOICES.map(({ label }, index) => (
+              <option key={label} value={index}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <span className="eq-crossfade-value">
+            {sleepTimer.mode === "countdown"
+              ? formatTime(Math.ceil(sleepTimer.remaining_seconds ?? 0))
+              : sleepTimer.mode === "end_of_track"
+                ? "End"
+                : "Off"}
           </span>
         </div>
         <label
