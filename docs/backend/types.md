@@ -16,6 +16,7 @@ interface PlaybackState {
   position_seconds: number;
   duration_seconds: number | null;
   volume: number; // 0.0 – 1.0
+  speed: number; // 0.5 – 2.0
   sleep_timer: SleepTimerStatus;
 }
 ```
@@ -28,6 +29,7 @@ interface PlaybackState {
 | `position_seconds` | Current playback head position |
 | `duration_seconds` | Total track length when known, else `null` |
 | `volume` | Current output volume |
+| `speed` | Playback speed; 1.0 is normal |
 | `sleep_timer` | The sleep timer, see [`SleepTimerStatus`](#sleeptimerstatus) |
 
 ---

@@ -107,6 +107,29 @@ await invoke("set_sleep_timer", {
 
 ---
 
+### `set_playback_speed`
+
+Set the playback speed without changing pitch. Speed is session-only and
+resets to 1.0 when the daemon starts.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `speed` | `number` | yes | Playback speed from `0.5` to `2.0` |
+
+**Returns:** `number` (the speed in effect, snapped to exactly 1.0 within 0.01)
+
+**Errors:** speed outside 0.5 to 2.0.
+
+**Example**
+
+```typescript
+await invoke<number>("set_playback_speed", { speed: 1.25 });
+```
+
+---
+
 ### `seek_track`
 
 Seek to a position within the current track. Uses Rodio’s native seek (no full re-decode).

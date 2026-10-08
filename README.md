@@ -184,6 +184,11 @@ picks up where it stopped. Set it in the volume and equalizer panel on
 desktop, from the moon button on the Android Now Playing screen, from the tray
 menu, or with `wave playback sleep`.
 
+**Playback speed** runs from 0.5x to 2x without changing pitch. It lasts
+until Wave closes, so the next launch always starts at normal speed. Set it in
+the volume and equalizer panel on desktop, in the Now Playing sheet on
+Android, or with `wave playback speed`.
+
 <img src="docs/screenshots/desktop-queue.png" alt="Queue panel" width="100%">
 
 ### Lyrics
@@ -349,6 +354,7 @@ wave play 4a72a8cc               # ...or a single track
 wave playback pause              # also: resume, stop, next, previous
 wave playback seek 1:30          # or 90, or a step: +10, -15
 wave playback sleep 30           # pause in 30 minutes; also 1h30m, end, off
+wave playback speed 1.25         # 0.5 to 2; also 125%, or a step: +0.25
 wave queue add 68a9c5c6          # to the end of the queue
 wave queue next 68a9c5c6         # straight after the current track
 wave queue list

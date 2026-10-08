@@ -71,6 +71,7 @@ Important behaviors:
 | `seek_track` | Seek to position in seconds |
 | `set_volume` | Set volume (`0.0`–`1.0`) |
 | `set_sleep_timer` | Pause after a countdown or at the end of the track |
+| `set_playback_speed` | Set playback speed (`0.5`–`2.0`), pitch preserved |
 
 ### Library & playlists
 
