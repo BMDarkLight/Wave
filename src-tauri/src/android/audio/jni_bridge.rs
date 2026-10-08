@@ -282,6 +282,10 @@ pub fn exo_set_volume(volume: f32) -> Result<(), String> {
     with_player(|p| p.call_void("setVolume", "(F)V", &[JValue::Float(volume)]))
 }
 
+pub fn exo_set_speed(speed: f32) -> Result<(), String> {
+    with_player(|p| p.call_void("setSpeed", "(F)V", &[JValue::Float(speed)]))
+}
+
 pub fn exo_set_eq_enabled(enabled: bool) -> Result<(), String> {
     with_player(|p| p.call_void("setEqEnabled", "(Z)V", &[JValue::Bool(enabled as u8)]))
 }

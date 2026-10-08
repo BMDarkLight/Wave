@@ -11,6 +11,7 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
+import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
 import androidx.media3.exoplayer.ExoPlayer;
 
@@ -64,6 +65,7 @@ public final class WaveExoPlayer {
     private volatile int pendingMediaIndexChange = -1;
     private volatile int lastReportedMediaIndex = -1;
     private float userVolume = 1f;
+    private volatile float playbackSpeed = 1f;
     private volatile float trackNormalizationGain = 1f;
     private volatile float incomingNormalizationGain = 1f;
     private volatile boolean eqEnabled = false;
@@ -123,6 +125,7 @@ public final class WaveExoPlayer {
                 .setAudioAttributes(buildAudioAttributes(), /* handleAudioFocus= */ true)
                 .setHandleAudioBecomingNoisy(true)
                 .build();
+        player.setPlaybackParameters(new PlaybackParameters(playbackSpeed));
 
         player.addListener(new Player.Listener() {
             @Override
@@ -177,6 +180,7 @@ public final class WaveExoPlayer {
                     .setAudioAttributes(buildAudioAttributes(), /* handleAudioFocus= */ false)
                     .setHandleAudioBecomingNoisy(false)
                     .build();
+            crossfadePlayer.setPlaybackParameters(new PlaybackParameters(playbackSpeed));
             crossfadePlayer.addListener(new Player.Listener() {
                 @Override
                 public void onAudioSessionIdChanged(int audioSessionId) {
@@ -690,6 +694,19 @@ public final class WaveExoPlayer {
         runOnMainAsync(() -> {
             if (player != null && !crossfadeActive) {
                 player.setVolume(effectiveVolume(trackNormalizationGain));
+            }
+        });
+    }
+
+    public void setSpeed(float speed) {
+        playbackSpeed = Math.max(0.5f, Math.min(2f, speed));
+        runOnMainAsync(() -> {
+            PlaybackParameters params = new PlaybackParameters(playbackSpeed);
+            if (player != null) {
+                player.setPlaybackParameters(params);
+            }
+            if (crossfadePlayer != null) {
+                crossfadePlayer.setPlaybackParameters(params);
             }
         });
     }
