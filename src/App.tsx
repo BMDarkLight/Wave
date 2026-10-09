@@ -11,7 +11,7 @@
 // The Code for Frontend of Wave is currently completely AI Generated and may contain bugs or rough edges. Please report any issues you encounter at
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BiX, BiFolderOpen, BiSearch, BiChevronRight } from "react-icons/bi";
+import { BiFolderOpen, BiSearch, BiChevronRight } from "react-icons/bi";
 import type { SourceSettings, SourceTrack } from "./utils/player";
 import {
   addTrackToPlaylistById,
@@ -114,6 +114,7 @@ import MobileNowPlaying from "./components/MobileNowPlaying";
 import MobileSettings from "./components/MobileSettings";
 import MobileTabBar, { type MobileTab } from "./components/MobileTabBar";
 import MobileLibraryPage from "./components/MobileLibraryPage";
+import MobileSearchPage from "./components/MobileSearchPage";
 import {
   MobileAlbumsPage,
   MobileArtistsPage,
@@ -235,7 +236,6 @@ function App() {
     focusMainSearchInput,
     openMainSearch,
     closeMainSearch,
-    toggleMainSearch,
   } = useLibrarySearch();
 
   // Tier 3 of the search ladder. Manual by design: unlike scope and library,
@@ -344,8 +344,8 @@ function App() {
     setShowQueue(false);
     setShowDeviceList(false);
     setLyricsPanelTrack(null);
-    // Wait a beat so the mobile topbar expansion has started before focusing.
-    const id = window.setTimeout(() => focusMainSearchInput(), 180);
+    // Wait for the search field (the mobile Search page) to be mounted.
+    const id = window.setTimeout(() => focusMainSearchInput(), 50);
     return () => window.clearTimeout(id);
   }, [mainSearchOpen]);
 
@@ -1880,7 +1880,7 @@ function App() {
 
   return (
     <div
-      className={`app-container${mobileNavOpen ? " nav-open" : ""}${rightPanelOpen || rightPanelClosing ? " panel-open" : ""}${rightPanelClosing ? " panel-closing" : ""}${mainSearchOpen ? " mobile-search-open" : ""}${mobilePlayerOpen && !mobilePlayerClosing ? " now-playing-open" : ""}`}
+      className={`app-container${mobileNavOpen ? " nav-open" : ""}${rightPanelOpen || rightPanelClosing ? " panel-open" : ""}${rightPanelClosing ? " panel-closing" : ""}${mobilePlayerOpen && !mobilePlayerClosing ? " now-playing-open" : ""}`}
       style={
         {
           "--sidebar-width": `${sidebarWidth}px`,
@@ -1895,50 +1895,8 @@ function App() {
         } as React.CSSProperties
       }
     >
-      <header
-        className={`mobile-topbar${mainSearchOpen ? " search-open" : ""}`}
-      >
-        <div className="mobile-topbar-search" aria-hidden={!mainSearchOpen}>
-          <div className="mobile-topbar-search-inner">
-            <BiSearch className="library-search-icon" aria-hidden />
-            <input
-              ref={mobileSearchInputRef}
-              className="library-search-input"
-              type="search"
-              placeholder="Search songs, artists, albums, lyrics…"
-              value={mainSearchQuery}
-              onChange={(e) => setMainSearchQuery(e.target.value)}
-              aria-label="Search library"
-              autoComplete="off"
-              spellCheck={false}
-              tabIndex={mainSearchOpen ? 0 : -1}
-            />
-            {mainSearchQuery ? (
-              <button
-                className="library-search-clear"
-                type="button"
-                onClick={() => setMainSearchQuery("")}
-                title="Clear search"
-                aria-label="Clear search"
-                tabIndex={mainSearchOpen ? 0 : -1}
-              >
-                <BiX />
-              </button>
-            ) : (
-              <button
-                className="library-search-clear"
-                type="button"
-                onClick={closeMainSearch}
-                title="Close search"
-                aria-label="Close search"
-                tabIndex={mainSearchOpen ? 0 : -1}
-              >
-                <BiX />
-              </button>
-            )}
-          </div>
-        </div>
-      </header>
+      {/* Narrow layout: no top bar, just a fade under the status bar. */}
+      <div className="mobile-status-fade" aria-hidden />
 
       <button
         className={`nav-backdrop${mobileNavOpen || rightPanelOpen || rightPanelClosing ? " nav-backdrop-open" : ""}${rightPanelClosing ? " nav-backdrop-closing" : ""}`}
@@ -1977,7 +1935,14 @@ function App() {
         onMouseDown={onDragStart("sidebar")}
       />
 
-      {mainSearchQuery.trim() && (viewingAlbum || viewingArtist) ? (
+      {mainSearchOpen && isMobileLayout() ? (
+        <MobileSearchPage
+          inputRef={mobileSearchInputRef}
+          query={mainSearchQuery}
+          onQueryChange={setMainSearchQuery}
+          results={mainSearchResultsPanel}
+        />
+      ) : mainSearchQuery.trim() && (viewingAlbum || viewingArtist) ? (
         <main className="main-content">
           <div className="hero-copy">
             <h1>Search</h1>
@@ -2462,7 +2427,7 @@ function App() {
       <MobileTabBar
         active={mobileTab}
         onHome={goHome}
-        onSearch={toggleMainSearch}
+        onSearch={openMainSearch}
         onLibrary={goLibrary}
         librarySyncLabel={
           isScanningFolder ? (folderScanIsSync ? "Syncing" : "Importing") : null

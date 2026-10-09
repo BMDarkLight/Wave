@@ -3926,8 +3926,8 @@ img.queue-thumb {
   max-width: 100%;
 }
 
-.mobile-topbar,
-.nav-backdrop {
+.nav-backdrop,
+.mobile-status-fade {
   display: none;
 }
 
@@ -4350,9 +4350,6 @@ div.album-hero-cover {
 
 @media (max-width: 900px) {
   :root {
-    /* No top bar row: the strip only covers the status bar, plus the
-       search field while it is open. */
-    --mobile-topbar-height: 0px;
     /* Tabs plus the system gesture bar below them. */
     --mobile-tabbar-height: calc(
       56px + max(8px, env(safe-area-inset-bottom, 0px))
@@ -4390,79 +4387,6 @@ div.album-hero-cover {
   .app-container {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr);
-  }
-
-  .mobile-topbar {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 60;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    grid-column: auto;
-    grid-row: auto;
-    gap: 0;
-    padding: 0;
-    padding-top: env(safe-area-inset-top, 0px);
-    background: rgba(12, 12, 12, 0.78);
-    backdrop-filter: blur(28px) saturate(1.6);
-    -webkit-backdrop-filter: blur(28px) saturate(1.6);
-    box-shadow: none;
-  }
-
-  .mobile-topbar-search {
-    overflow: hidden;
-    max-height: 0;
-    padding: 0 12px;
-    opacity: 0;
-    pointer-events: none;
-    transition:
-      max-height 0.28s cubic-bezier(0.22, 1, 0.36, 1),
-      opacity 0.2s ease,
-      padding 0.28s cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  .mobile-topbar.search-open .mobile-topbar-search {
-    max-height: 64px;
-    padding-top: 10px;
-    padding-bottom: 10px;
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .mobile-topbar-search-inner {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    height: 44px;
-    padding: 0 12px 0 14px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-  }
-
-  .mobile-topbar.search-open .mobile-topbar-search-inner:focus-within {
-    background: rgba(255, 255, 255, 0.09);
-    border-color: rgba(255, 255, 255, 0.22);
-    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06);
-  }
-
-  .mobile-topbar-search-inner .library-search-icon {
-    font-size: 18px;
-  }
-
-  .mobile-topbar-search-inner .library-search-input {
-    font-size: 15px;
-  }
-
-  .app-container {
-    --mobile-search-panel: 0px;
-  }
-
-  .app-container.mobile-search-open {
-    --mobile-search-panel: 64px;
   }
 
   .nav-backdrop {
@@ -4585,24 +4509,16 @@ div.album-hero-cover {
     grid-row: 1;
     margin: 0;
     border-radius: 0;
-    padding: calc(
-        var(--mobile-topbar-height) + var(--mobile-search-panel, 0px) +
-          env(safe-area-inset-top, 0px) + 12px
-      )
-      0 calc(var(--player-height) + 28px);
+    padding: calc(env(safe-area-inset-top, 0px) + 12px) 0
+      calc(var(--player-height) + 28px);
     -webkit-overflow-scrolling: touch;
-    transition: padding-top 0.28s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .page-with-float-back > .page-back-btn,
   .page-with-float-back > .page-float-action {
-    top: calc(
-      var(--mobile-topbar-height) + var(--mobile-search-panel, 0px) +
-        env(safe-area-inset-top, 0px) + 8px
-    );
+    top: calc(env(safe-area-inset-top, 0px) + 8px);
     left: 10px;
     z-index: 40;
-    transition: top 0.28s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .page-with-float-back > .page-float-action {
@@ -6449,7 +6365,6 @@ div.album-hero-cover {
 }
 
 @media (min-width: 901px) {
-  .mobile-topbar,
   .nav-backdrop {
     display: none !important;
   }
@@ -6564,10 +6479,6 @@ div.album-hero-cover {
 }
 
 @media (max-width: 900px) {
-  .no-glass .mobile-topbar {
-    background: #121212;
-  }
-
   .no-glass .sidebar .brand-mark,
   .no-glass .sidebar .sidebar-pins,
   .no-glass .sidebar .playlist-section,
@@ -7211,5 +7122,84 @@ div.album-hero-cover {
   .app-container.now-playing-open .player-bar > *,
   .app-container.now-playing-open .mobile-tab {
     opacity: 0;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Narrow layout has no top bar. Pages run up under the status bar and a
+   soft fade keeps the clock and icons readable over them, the way it
+   looks on phones with a notch or camera cutout.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 900px) {
+  .mobile-status-fade {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 55;
+    height: calc(env(safe-area-inset-top, 0px) + 28px);
+    background: linear-gradient(
+      to bottom,
+      rgba(18, 18, 18, 0.92) 0%,
+      rgba(18, 18, 18, 0.62) 55%,
+      rgba(18, 18, 18, 0) 100%
+    );
+    pointer-events: none;
+  }
+
+  /* Search tab: the field sits at the top and stays there while the
+     results scroll beneath it. */
+  .mobile-search-page {
+    overflow-y: auto;
+  }
+
+  .msearch-header {
+    position: sticky;
+    /* Clear of the status bar once results scroll beneath it. */
+    top: env(safe-area-inset-top, 0px);
+    z-index: 2;
+    padding: 4px 16px 12px;
+    background: linear-gradient(to bottom, #121212 75%, rgba(18, 18, 18, 0));
+  }
+
+  .msearch-header h1 {
+    margin: 0 0 12px 8px;
+    font-size: 26px;
+    letter-spacing: -0.04em;
+  }
+
+  .msearch-field {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 48px;
+    padding: 0 8px 0 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .msearch-field:focus-within {
+    border-color: rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.11);
+  }
+
+  .msearch-field .library-search-icon {
+    flex-shrink: 0;
+    font-size: 20px;
+  }
+
+  .msearch-field .library-search-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 16px;
+  }
+
+  .msearch-hint {
+    padding: 24px;
+    color: var(--muted);
+    text-align: center;
   }
 }
