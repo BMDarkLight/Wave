@@ -4487,8 +4487,7 @@ div.album-hero-cover {
 
 .mini-progress,
 .mobile-tabbar,
-.mobile-dock-glass,
-.home-settings-btn {
+.mobile-dock-glass {
   display: none;
 }
 
@@ -6933,7 +6932,7 @@ div.album-hero-cover {
   }
 
   /* Same title as Home's greeting: size, spacing, and centred on the
-     44px row its settings button sets. */
+     same 44px row. */
   .mlib-header h1 {
     margin: 0;
     font-size: 26px;
@@ -7038,28 +7037,13 @@ div.album-hero-cover {
 }
 
 @media (max-width: 900px) {
+  /* The greeting sits on a 44px row; the Library and Search titles are
+     set to the same row so all three tab pages line up. */
   .home-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding-right: 12px;
-  }
-
-  .home-settings-btn {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
-    border: 0;
-    border-radius: 50%;
-    background: transparent;
-    color: var(--text);
-    font-size: 24px;
-  }
-
-  .home-settings-btn:active {
-    background: rgba(255, 255, 255, 0.1);
+    /* 44px row plus the header's 4px top padding. */
+    min-height: 48px;
   }
 
   .mobile-tab-icon {
@@ -7320,8 +7304,8 @@ div.album-hero-cover {
     display: contents;
   }
 
-  /* Matches the Home and Library titles: a 44px line puts the text on the
-     same row their header buttons set. */
+  /* Matches the Home and Library titles: a 44px line puts the text on
+     their 44px row. */
   .msearch-header h1 {
     margin: 4px 24px 12px;
     font-size: 26px;

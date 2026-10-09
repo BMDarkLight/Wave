@@ -2053,7 +2053,6 @@ function App() {
           onOpenLibrary={() => {
             if (libraryPlaylist) handleSelectPlaylist(libraryPlaylist.id);
           }}
-          onOpenSettings={handleOpenMobileSettings}
         />
       ) : (mainView === "recently_played" || mainView === "most_played") &&
         !mainSearchQuery.trim() ? (

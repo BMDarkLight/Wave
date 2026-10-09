@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { BiCog, BiPlay, BiMusic } from "react-icons/bi";
+import { BiPlay, BiMusic } from "react-icons/bi";
 import {
   getHomeSuggestions,
   getPlaylistTracksById,
@@ -242,7 +242,6 @@ type HomePageProps = {
   onOpenAlbum: (album: string, albumArtist: string | null) => void;
   onOpenArtist: (artist: string) => void;
   onOpenLibrary: () => void;
-  onOpenSettings: () => void;
 };
 
 export default function HomePage({
@@ -251,7 +250,6 @@ export default function HomePage({
   onOpenAlbum,
   onOpenArtist,
   onOpenLibrary,
-  onOpenSettings,
 }: HomePageProps) {
   const initialCache = readHomeCache(libraryPlaylistId);
   const [suggestions, setSuggestions] = useState<HomeSuggestions | null>(
@@ -372,19 +370,6 @@ export default function HomePage({
   const trackCount = fallbackTracks.length || playQueue.length;
   const curated = Boolean(suggestions?.curated);
 
-  // Narrow layout only: with no top bar, Settings sits beside the greeting.
-  const settingsButton = (
-    <button
-      className="home-settings-btn"
-      onClick={onOpenSettings}
-      type="button"
-      title="Settings"
-      aria-label="Settings"
-    >
-      <BiCog />
-    </button>
-  );
-
   if (loading) {
     return (
       <main className="main-content home-page">
@@ -407,7 +392,6 @@ export default function HomePage({
             <h1>{greeting}</h1>
             <p className="home-sub">Your library is empty</p>
           </div>
-          {settingsButton}
         </header>
         <div className="empty-state">
           <div className="empty-icon">
@@ -435,7 +419,6 @@ export default function HomePage({
               : `Picked from ${trackCount.toLocaleString()} tracks in your library`}
           </p>
         </div>
-        {settingsButton}
       </header>
 
       {featured && (
