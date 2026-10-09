@@ -5310,7 +5310,7 @@ div.album-hero-cover {
   touch-action: none;
 }
 
-.mnp-cover-wrap.mnp-layer-active {
+.mnp-cover-wrap.mnp-layer-active[role="button"] {
   cursor: pointer;
 }
 

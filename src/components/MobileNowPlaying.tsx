@@ -636,6 +636,9 @@ export default function MobileNowPlaying({
     activeLineRef,
   );
 
+  // Tapping the cover only leads to lyrics that follow the music.
+  const coverOpensLyrics = view === "cover" && !!timedLyrics;
+
   const title = getTrackTitle(track);
   const coverLetters = title.slice(0, 2).toUpperCase();
 
@@ -746,16 +749,16 @@ export default function MobileNowPlaying({
                 onClick: (event) => {
                   pageDismiss.bind.onClick?.(event);
                   // Ignore the click that ends a drag-dismiss gesture.
-                  if (event.defaultPrevented) return;
+                  if (event.defaultPrevented || !coverOpensLyrics) return;
                   onViewChange("lyrics");
                 },
               }
             : undefined)}
-          role={view === "cover" ? "button" : undefined}
-          tabIndex={view === "cover" ? 0 : undefined}
-          aria-label={view === "cover" ? "Open lyrics" : undefined}
+          role={coverOpensLyrics ? "button" : undefined}
+          tabIndex={coverOpensLyrics ? 0 : undefined}
+          aria-label={coverOpensLyrics ? "Open lyrics" : undefined}
           onKeyDown={
-            view === "cover"
+            coverOpensLyrics
               ? (event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
