@@ -560,7 +560,7 @@ pub fn exo_analyze_levels(uri: &str) -> Result<(f32, f32), String> {
     }
 }
 
-/// Peak level (0.0 to 1.0) of every short block of the track, for its
+/// RMS level (0.0 to 1.0) of every short block of the track, for its
 /// waveform. Empty when the file cannot be decoded.
 pub fn exo_analyze_waveform(uri: &str) -> Result<Vec<f32>, String> {
     let peaks = call_peak_analyzer("analyzeWaveform", uri)?;

@@ -6,6 +6,7 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
+use crate::audio::waveform::WAVEFORM_VERSION;
 use crate::dto::{
     AlbumSummaryDto, ArtistSummaryDto, DiscoveryArtistDto, HomeSuggestionsDto, ListenRankDto,
     ListeningStatsDto, SearchHitDto,
@@ -415,6 +416,14 @@ impl Library {
         ensure_track_column(&connection, "source_url", "TEXT")?;
         ensure_track_column(&connection, "source_state", "TEXT")?;
         ensure_track_column(&connection, "source_fetched_at", "INTEGER")?;
+        // Which analysis made a saved waveform. Rows from before the column
+        // existed are version 1 and get recomputed.
+        ensure_table_column(
+            &connection,
+            "waveforms",
+            "version",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
 
         // `library_tracks` is the browse-visible subset: local files plus
         // downloads the user chose to keep. Rows that exist only because
@@ -2910,7 +2919,7 @@ impl Library {
     }
 
     /// The saved waveform for `path`, unless the file has changed size or
-    /// modified time since it was computed.
+    /// modified time since it was computed, or it came from an older analysis.
     pub fn get_waveform(&self, path: &str) -> Result<Option<Vec<u8>>, String> {
         let connection = self.read_connection();
         connection
@@ -2919,8 +2928,9 @@ impl Library {
                  JOIN tracks t ON t.id = w.track_id
                  WHERE t.path = ?1
                    AND w.file_size = t.file_size
-                   AND w.modified_at = t.modified_at",
-                params![path],
+                   AND w.modified_at = t.modified_at
+                   AND w.version = ?2",
+                params![path, WAVEFORM_VERSION],
                 |row| row.get(0),
             )
             .optional()
@@ -2933,13 +2943,14 @@ impl Library {
         let connection = self.write_connection();
         connection
             .execute(
-                "INSERT INTO waveforms (track_id, bins, file_size, modified_at)
-                 SELECT id, ?2, file_size, modified_at FROM tracks WHERE path = ?1
+                "INSERT INTO waveforms (track_id, bins, file_size, modified_at, version)
+                 SELECT id, ?2, file_size, modified_at, ?3 FROM tracks WHERE path = ?1
                  ON CONFLICT(track_id) DO UPDATE SET
                    bins = excluded.bins,
                    file_size = excluded.file_size,
-                   modified_at = excluded.modified_at",
-                params![path, bins],
+                   modified_at = excluded.modified_at,
+                   version = excluded.version",
+                params![path, bins, WAVEFORM_VERSION],
             )
             .map_err(|e| format!("Failed to save waveform: {e}"))?;
         Ok(())

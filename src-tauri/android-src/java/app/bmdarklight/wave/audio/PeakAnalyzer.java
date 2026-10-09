@@ -15,7 +15,7 @@ import java.nio.ByteOrder;
 
 /**
  * Offline peak + RMS amplitude scan for volume normalization, and per-block
- * peaks for the seek bar waveform.
+ * RMS levels for the seek bar waveform.
  *
  * Decodes the audio track via {@link MediaExtractor} + {@link MediaCodec} and
  * returns {peak, rms}, both normalised to 0.0–1.0. Peak alone doesn't track
@@ -83,7 +83,7 @@ public final class PeakAnalyzer {
     }
 
     /**
-     * Peak level of every {@link #WAVEFORM_BLOCK_SECS} of the track, 0.0-1.0,
+     * RMS level of every {@link #WAVEFORM_BLOCK_SECS} of the track, 0.0-1.0,
      * for drawing its waveform. Empty when the file cannot be decoded.
      */
     @Keep
@@ -95,13 +95,13 @@ public final class PeakAnalyzer {
         return blocks.toArray();
     }
 
-    /** Groups samples into blocks and keeps the loudest of each. */
+    /** Groups samples into blocks and keeps the RMS level of each. */
     private static final class WaveformBlocks implements SampleConsumer {
-        private float[] peaks = new float[4096];
+        private float[] levels = new float[4096];
         private int size = 0;
         private int blockSamples = 1;
         private int count = 0;
-        private float loudest = 0f;
+        private double sumSquares = 0.0;
 
         @Override
         public void format(MediaFormat format) {
@@ -116,20 +116,20 @@ public final class PeakAnalyzer {
 
         @Override
         public void sample(float value) {
-            loudest = Math.max(loudest, Math.abs(value));
+            sumSquares += (double) value * value;
             if (++count >= blockSamples) {
                 push();
             }
         }
 
         private void push() {
-            if (size == peaks.length) {
-                float[] grown = new float[peaks.length * 2];
-                System.arraycopy(peaks, 0, grown, 0, size);
-                peaks = grown;
+            if (size == levels.length) {
+                float[] grown = new float[levels.length * 2];
+                System.arraycopy(levels, 0, grown, 0, size);
+                levels = grown;
             }
-            peaks[size++] = Math.min(1f, loudest);
-            loudest = 0f;
+            levels[size++] = Math.min(1f, (float) Math.sqrt(sumSquares / count));
+            sumSquares = 0.0;
             count = 0;
         }
 
@@ -138,7 +138,7 @@ public final class PeakAnalyzer {
                 push();
             }
             float[] out = new float[size];
-            System.arraycopy(peaks, 0, out, 0, size);
+            System.arraycopy(levels, 0, out, 0, size);
             return out;
         }
     }

@@ -18,8 +18,8 @@ export const REST_HEIGHT = 0.7;
 export const LIVE_REACH = 10;
 
 /**
- * Fold the stored waveform (0-255 per value) into `count` bars, each keeping
- * the loudest value it covers.
+ * Fold the stored waveform (0-255 per value) into `count` bars, each the
+ * average of the values it covers.
  */
 export const barHeights = (bins: number[], count: number): number[] => {
   const bars = new Array<number>(count).fill(0);
@@ -30,11 +30,13 @@ export const barHeights = (bins: number[], count: number): number[] => {
       start + 1,
       Math.floor(((bar + 1) * bins.length) / count),
     );
-    let loudest = 0;
+    let sum = 0;
+    let covered = 0;
     for (let i = start; i < end && i < bins.length; i++) {
-      loudest = Math.max(loudest, bins[i]);
+      sum += bins[i];
+      covered++;
     }
-    bars[bar] = loudest;
+    bars[bar] = covered > 0 ? sum / covered : 0;
   }
   return bars;
 };
