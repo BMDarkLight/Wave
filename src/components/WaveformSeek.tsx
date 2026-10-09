@@ -15,14 +15,11 @@ import {
   listenToWaveformReady,
 } from "../utils/player";
 import {
-  LIVE_HISTORY,
-  LIVE_STEP_MS,
   REST_HEIGHT,
   barHeights,
-  liveHeight,
   liveLift,
+  pulseLift,
   smoothLevel,
-  stepLiveMix,
 } from "../utils/waveform";
 import { lessMotion } from "../utils/appearance";
 
@@ -85,8 +82,8 @@ function useWaveform(path: string | null): number[] | null {
 
 /**
  * Seek bar drawn as the track's waveform. The part already played is lit.
- * While playing, the played side becomes a live trace of the music: each new
- * reading enters at the playhead and slides left, and on pause the bars ease
+ * While playing, the whole played side pulses with the music, and the bars
+ * just ahead of the playhead follow it a little. On pause the bars settle
  * back to the stored waveform.
  * Shows `fallback` (the plain slider) until the waveform is ready, and for
  * tracks that have none, such as streams.
@@ -153,12 +150,6 @@ function WaveformCanvas({
   const dragging = useRef(false);
   const measuredLevel = useRef(0);
   const shownLevel = useRef(0);
-  // Recent live readings, newest last, and when the last one was taken.
-  const liveTrace = useRef<number[]>([]);
-  const lastReading = useRef(0);
-  // How far the played side has turned from the stored waveform to the live
-  // trace, 0 to 1.
-  const liveMix = useRef(0);
   // When the waveform first appeared, for the entrance animation.
   const shownAt = useRef(0);
   // Where the mouse is hovering, as a fraction of the width.
@@ -239,31 +230,6 @@ function WaveformCanvas({
         now.playing ? measuredLevel.current : 0,
       );
 
-      const live = now.playing && !lessMotion();
-      const trace = liveTrace.current;
-      const clock = performance.now();
-      if (live) {
-        // Catch up on missed steps (a slow frame) with the same reading.
-        const steps = Math.min(
-          8,
-          Math.floor((clock - lastReading.current) / LIVE_STEP_MS),
-        );
-        if (steps > 0) {
-          const previous = trace.length > 0 ? trace[trace.length - 1] : 0;
-          // A light blend keeps the trace lively without flicker.
-          const reading = previous * 0.3 + measuredLevel.current * 0.7;
-          for (let step = 0; step < steps; step++) trace.push(reading);
-          if (trace.length > LIVE_HISTORY) {
-            trace.splice(0, trace.length - LIVE_HISTORY);
-          }
-          lastReading.current =
-            steps === 8 ? clock : lastReading.current + steps * LIVE_STEP_MS;
-        }
-      }
-      liveMix.current = stepLiveMix(liveMix.current, live);
-      // Once fully back on the stored waveform, start the next trace fresh.
-      if (liveMix.current === 0) trace.length = 0;
-
       const style = getComputedStyle(canvas);
       const playedColor =
         style.getPropertyValue("--waveform-played").trim() || "#fff";
@@ -286,21 +252,11 @@ function WaveformCanvas({
 
       for (let i = 0; i < count; i++) {
         const centre = i + 0.5;
-        let full: number;
-        if (centre < head) {
-          const stored = (heights[i] / 255) * height * REST_HEIGHT;
-          // Bars count back from the playhead into the trace. Where the
-          // trace hasn't reached yet, the stored waveform shows through.
-          const reading = trace[trace.length - 1 - Math.floor(head - centre)];
-          full =
-            reading === undefined
-              ? stored
-              : stored +
-                (liveHeight(reading) * height - stored) * liveMix.current;
-        } else {
-          const lift = liveLift(shownLevel.current, centre - head);
-          full = (heights[i] / 255) * height * REST_HEIGHT * lift;
-        }
+        const lift =
+          centre < head
+            ? pulseLift(shownLevel.current)
+            : liveLift(shownLevel.current, centre - head);
+        const full = (heights[i] / 255) * height * REST_HEIGHT * lift;
         const grown = entranceProgress(shownFor, i / count);
         const barHeight = Math.min(
           height,
@@ -326,7 +282,7 @@ function WaveformCanvas({
 
     const loop = () => {
       draw();
-      const settling = shownLevel.current > 0.001 || liveMix.current > 0;
+      const settling = shownLevel.current > 0.001;
       const entering =
         !lessMotion() && performance.now() - shownAt.current < ENTRANCE_MS;
       if (frame.current.playing || settling || entering) {

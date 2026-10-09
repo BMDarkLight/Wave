@@ -40,36 +40,23 @@ export const barHeights = (bins: number[], count: number): number[] => {
 };
 
 /**
- * How much a bar `distance` bars from the playhead grows with the live
- * level: up to 1.4x right at the playhead, fading to 1x at
+ * How much a played bar grows with the live level, up to 1.4x, so the part
+ * already heard pulses with the music while keeping its shape.
+ */
+export const pulseLift = (level: number): number =>
+  // Music RMS rarely passes 0.3, so stretch it to fill the range.
+  1 + 0.4 * Math.min(1, level * 3);
+
+/**
+ * How much a bar `distance` bars ahead of the playhead grows with the live
+ * level: the full {@link pulseLift} right at the playhead, fading to 1x at
  * {@link LIVE_REACH}.
  */
 export const liveLift = (level: number, distance: number): number => {
   if (distance >= LIVE_REACH) return 1;
-  // Music RMS rarely passes 0.3, so stretch it to fill the range.
-  const loudness = Math.min(1, level * 3);
-  return 1 + 0.4 * loudness * (1 - distance / LIVE_REACH);
+  return 1 + (pulseLift(level) - 1) * (1 - distance / LIVE_REACH);
 };
 
 /** Ease the drawn level toward the measured one: quick up, slow down. */
 export const smoothLevel = (shown: number, measured: number): number =>
   shown + (measured - shown) * (measured > shown ? 0.5 : 0.12);
-
-/** How often a new live reading enters the played side, in ms. */
-export const LIVE_STEP_MS = 50;
-
-/** Live readings kept for the played side, more than any bar count needs. */
-export const LIVE_HISTORY = 1200;
-
-/**
- * Height of a live bar from a reading, 0 to 1. Music RMS rarely passes 0.3,
- * so it is stretched, and the curve lifts quiet passages so they still move.
- */
-export const liveHeight = (level: number): number =>
-  Math.min(1, level * 3) ** 0.7;
-
-/** Ease the played side toward live while playing and back when paused. */
-export const stepLiveMix = (mix: number, playing: boolean): number => {
-  const next = mix + ((playing ? 1 : 0) - mix) * 0.1;
-  return Math.abs(next - (playing ? 1 : 0)) < 0.002 ? (playing ? 1 : 0) : next;
-};
