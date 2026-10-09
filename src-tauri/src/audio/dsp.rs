@@ -880,6 +880,89 @@ impl Source for SoftFade {
     }
 }
 
+/// Loudness of the audio being played (0.0 to 1.0, RMS), shared with the UI's
+/// live waveform as f32 bits.
+pub type SharedLevel = Arc<std::sync::atomic::AtomicU32>;
+
+pub fn shared_level() -> SharedLevel {
+    Arc::new(std::sync::atomic::AtomicU32::new(0f32.to_bits()))
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn load_level(cell: &SharedLevel) -> f32 {
+    f32::from_bits(cell.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// How much audio each level reading covers.
+const LEVEL_WINDOW_SECS: f32 = 0.03;
+
+/// Measures the RMS level of the audio passing through, one short window at a
+/// time, and leaves the samples untouched.
+pub struct LevelMeter {
+    inner: Box<dyn Source<Item = f32> + Send>,
+    level: SharedLevel,
+    window: usize,
+    count: usize,
+    sum_squares: f32,
+}
+
+impl LevelMeter {
+    pub fn new(inner: Box<dyn Source<Item = f32> + Send>, level: SharedLevel) -> Self {
+        let window = (inner.sample_rate() as f32 * LEVEL_WINDOW_SECS) as usize
+            * inner.channels().max(1) as usize;
+        Self {
+            inner,
+            level,
+            window: window.max(1),
+            count: 0,
+            sum_squares: 0.0,
+        }
+    }
+}
+
+impl Iterator for LevelMeter {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        let sample = self.inner.next()?;
+        self.sum_squares += sample * sample;
+        self.count += 1;
+        if self.count >= self.window {
+            let rms = (self.sum_squares / self.count as f32).sqrt().min(1.0);
+            self.level
+                .store(rms.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            self.count = 0;
+            self.sum_squares = 0.0;
+        }
+        Some(sample)
+    }
+}
+
+impl Source for LevelMeter {
+    fn current_frame_len(&self) -> Option<usize> {
+        self.inner.current_frame_len()
+    }
+
+    fn channels(&self) -> u16 {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.inner.try_seek(pos)?;
+        self.count = 0;
+        self.sum_squares = 0.0;
+        Ok(())
+    }
+}
+
 /// Playback speed shared by the player and every [`TimeStretch`] it builds,
 /// stored as f32 bits.
 pub type SharedSpeed = Arc<std::sync::atomic::AtomicU32>;
@@ -1479,5 +1562,28 @@ mod tests {
             let n = 100;
             assert_eq!(out[out.len() - n..], input[input.len() - n..], "{speed}");
         }
+    }
+
+    fn metered(samples: Vec<f32>) -> (Vec<f32>, f32) {
+        let cell = shared_level();
+        let source = SamplesBuffer::new(1, SR, samples);
+        let out: Vec<f32> = LevelMeter::new(Box::new(source), cell.clone()).collect();
+        (out, load_level(&cell))
+    }
+
+    #[test]
+    fn the_level_meter_leaves_samples_alone() {
+        let input = sine(440.0, 0.2, 0.5);
+        let (out, _) = metered(input.clone());
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn the_level_meter_reads_rms() {
+        let (_, level) = metered(sine(440.0, 0.2, 0.5));
+        // A sine's RMS is its amplitude over root two.
+        assert!((level - 0.5 / 2f32.sqrt()).abs() < 0.02, "{level}");
+        let (_, silent) = metered(vec![0.0; SR as usize / 5]);
+        assert_eq!(silent, 0.0);
     }
 }

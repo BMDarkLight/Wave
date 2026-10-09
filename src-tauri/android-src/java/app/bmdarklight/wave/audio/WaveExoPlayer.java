@@ -13,7 +13,15 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
+import androidx.media3.common.audio.AudioProcessor;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.audio.AudioSink;
+import androidx.media3.exoplayer.audio.DefaultAudioSink;
+import androidx.media3.exoplayer.audio.TeeAudioProcessor;
+
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 /**
  * Lightweight ExoPlayer holder for Wave.
@@ -65,6 +73,9 @@ public final class WaveExoPlayer {
     private volatile int pendingMediaIndexChange = -1;
     private volatile int lastReportedMediaIndex = -1;
     private float userVolume = 1f;
+    /** RMS of the audio being played, 0.0-1.0, for the live waveform. */
+    private volatile float level = 0f;
+    private final LevelSink levelSink = new LevelSink();
     private volatile float playbackSpeed = 1f;
     private volatile float trackNormalizationGain = 1f;
     private volatile float incomingNormalizationGain = 1f;
@@ -121,7 +132,7 @@ public final class WaveExoPlayer {
         if (player != null) {
             return;
         }
-        player = new ExoPlayer.Builder(appContext)
+        player = new ExoPlayer.Builder(appContext, meteredRenderers())
                 .setAudioAttributes(buildAudioAttributes(), /* handleAudioFocus= */ true)
                 .setHandleAudioBecomingNoisy(true)
                 .build();
@@ -176,7 +187,7 @@ public final class WaveExoPlayer {
 
     private ExoPlayer ensureCrossfadePlayer() {
         if (crossfadePlayer == null) {
-            crossfadePlayer = new ExoPlayer.Builder(appContext)
+            crossfadePlayer = new ExoPlayer.Builder(appContext, meteredRenderers())
                     .setAudioAttributes(buildAudioAttributes(), /* handleAudioFocus= */ false)
                     .setHandleAudioBecomingNoisy(false)
                     .build();
@@ -730,6 +741,68 @@ public final class WaveExoPlayer {
 
     public static float[] analyzeLevels(Context context, String uriString) {
         return PeakAnalyzer.analyzeLevels(context, uriString);
+    }
+
+    public static float[] analyzeWaveform(Context context, String uriString) {
+        return PeakAnalyzer.analyzeWaveform(context, uriString);
+    }
+
+    public float getLevel() {
+        return level;
+    }
+
+    /** Renderers whose audio passes through {@link #levelSink} on its way out. */
+    private DefaultRenderersFactory meteredRenderers() {
+        return new DefaultRenderersFactory(appContext) {
+            @Override
+            protected AudioSink buildAudioSink(
+                    Context context,
+                    boolean enableFloatOutput,
+                    boolean enableAudioTrackPlaybackParams) {
+                return new DefaultAudioSink.Builder(context)
+                        .setEnableFloatOutput(enableFloatOutput)
+                        .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                        .setAudioProcessors(new AudioProcessor[] {new TeeAudioProcessor(levelSink)})
+                        .build();
+            }
+        };
+    }
+
+    /** Measures the RMS of each buffer ExoPlayer is about to play. */
+    private final class LevelSink implements TeeAudioProcessor.AudioBufferSink {
+        private volatile int encoding = C.ENCODING_PCM_16BIT;
+
+        @Override
+        public void flush(int sampleRateHz, int channelCount, int encoding) {
+            this.encoding = encoding;
+            level = 0f;
+        }
+
+        @Override
+        public void handleBuffer(ByteBuffer buffer) {
+            // The sink must not move the buffer's position.
+            ByteBuffer data = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+            double sumSquares = 0.0;
+            int count = 0;
+            if (encoding == C.ENCODING_PCM_FLOAT) {
+                while (data.remaining() >= 4) {
+                    float sample = data.getFloat();
+                    sumSquares += sample * sample;
+                    count++;
+                }
+            } else if (encoding == C.ENCODING_PCM_16BIT) {
+                while (data.remaining() >= 2) {
+                    float sample = data.getShort() / 32768f;
+                    sumSquares += sample * sample;
+                    count++;
+                }
+            } else {
+                return;
+            }
+            if (count > 0) {
+                level = (float) Math.min(1.0, Math.sqrt(sumSquares / count));
+            }
+        }
     }
 
     private static float clampNormalizationGain(float gain) {

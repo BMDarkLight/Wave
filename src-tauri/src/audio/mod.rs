@@ -11,3 +11,4 @@ pub mod normalization;
 pub mod player;
 pub mod sleep_timer;
 pub mod symphonia_source;
+pub mod waveform;

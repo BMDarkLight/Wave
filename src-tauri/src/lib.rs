@@ -25,6 +25,7 @@ mod path_validation;
 pub mod playback_daemon;
 mod sources;
 mod tag_edit;
+mod waveform_service;
 pub mod win_console;
 
 pub use app::paths as app_paths;
@@ -37,7 +38,7 @@ use app_settings::AppSettingsState;
 use commands::{EnrichmentState, LibraryState, ListenState, MediaBridgeState, PlayerState};
 use dto::CloseAction;
 use listen::ListenTracker;
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -105,6 +106,19 @@ pub fn run() {
             app.manage(EnrichmentState(std::sync::atomic::AtomicBool::new(false)));
 
             let app_handle = app.handle().clone();
+
+            let waveforms = waveform_service::WaveformService::default();
+            let save_handle = app_handle.clone();
+            let ready_handle = app_handle.clone();
+            waveforms.spawn_worker(
+                |path| audio::waveform::compute_waveform(path).map_err(|e| e.to_string()),
+                move |path, bins| commands::save_waveform(&save_handle, path, bins),
+                move |path| {
+                    let _ = ready_handle.emit("waveform-ready", path);
+                },
+            );
+            app.manage(commands::WaveformState(waveforms));
+
             app.manage(MediaBridgeState(media_controls::MediaBridgeState::new(
                 app_handle.clone(),
             )));
@@ -213,6 +227,8 @@ pub fn run() {
             commands::get_playback_state,
             commands::set_sleep_timer,
             commands::set_playback_speed,
+            commands::get_waveform,
+            commands::get_playback_level,
             commands::seek_track,
             commands::set_volume,
             commands::add_track_to_playlist,

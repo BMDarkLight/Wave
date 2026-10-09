@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 use crate::error::AudioError;
 
 use super::dsp::{
-    load_shared_speed, set_shared_gain, set_shared_speed, shared_gain, shared_speed, Crossfade,
-    CrossfadeState, EqConfig, Equalizer, SharedGain, SharedSpeed, SoftFade, SoftFadeState,
-    TimeStretch, VolumeGain, SOFT_FADE_SECS,
+    load_shared_speed, set_shared_gain, set_shared_speed, shared_gain, shared_level, shared_speed,
+    Crossfade, CrossfadeState, EqConfig, Equalizer, LevelMeter, SharedGain, SharedLevel,
+    SharedSpeed, SoftFade, SoftFadeState, TimeStretch, VolumeGain, SOFT_FADE_SECS,
 };
 use super::normalization::{analyze_track_levels, VolumeNormalizer};
 use super::sleep_timer::{SleepRequest, SleepStep, SleepTimer, SleepTimerStatus};
@@ -511,6 +511,10 @@ pub struct AudioPlayer {
     stop_after_current: bool,
     /// Playback speed, shared with the time stretch in every source.
     speed: SharedSpeed,
+    /// Loudness of what is playing, measured at the end of the chain for the
+    /// live waveform.
+    #[cfg_attr(target_os = "android", allow(dead_code))]
+    level: SharedLevel,
     /// Bumped on every track change; a background analysis result that
     /// arrives for a stale generation is dropped instead of being applied to
     /// whatever now-current track it no longer matches. Only Android defers
@@ -549,6 +553,7 @@ impl AudioPlayer {
             sleep_level: 1.0,
             stop_after_current: false,
             speed: shared_speed(1.0),
+            level: shared_level(),
             #[cfg(target_os = "android")]
             normalization_generation: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "android")]
@@ -674,6 +679,7 @@ impl AudioPlayer {
                 sleep_level: 1.0,
                 stop_after_current: false,
                 speed: shared_speed(1.0),
+                level: shared_level(),
                 #[cfg(target_os = "android")]
                 normalization_generation: Arc::new(AtomicU64::new(0)),
                 #[cfg(target_os = "android")]
@@ -938,6 +944,7 @@ impl AudioPlayer {
         next_gain: SharedGain,
         soft_fade: Arc<Mutex<SoftFadeState>>,
         speed: SharedSpeed,
+        level: SharedLevel,
     ) -> Result<BuiltSource, AudioError> {
         let source = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             SymphoniaSource::new(path)
@@ -1003,7 +1010,8 @@ impl AudioPlayer {
                     );
                     let stretched = TimeStretch::new(Box::new(crossfade), speed);
                     let faded = SoftFade::new(Box::new(stretched), soft_fade);
-                    return Ok((Box::new(faded), duration, Some(state)));
+                    let metered = LevelMeter::new(Box::new(faded), level);
+                    return Ok((Box::new(metered), duration, Some(state)));
                 }
             }
             Box::new(eq)
@@ -1013,7 +1021,8 @@ impl AudioPlayer {
 
         let stretched = TimeStretch::new(chain, speed);
         let faded = SoftFade::new(Box::new(stretched), soft_fade);
-        Ok((Box::new(faded), duration, None))
+        let metered = LevelMeter::new(Box::new(faded), level);
+        Ok((Box::new(metered), duration, None))
     }
 
     fn set_soft_fade_target(&self, target: f32) {
@@ -1071,6 +1080,7 @@ impl AudioPlayer {
                 next_gain,
                 self.soft_fade.clone(),
                 self.speed.clone(),
+                self.level.clone(),
             )?;
 
             let handle = &self.output.as_ref().expect("output ensured").handle;
@@ -1299,6 +1309,7 @@ impl AudioPlayer {
             shared_gain(1.0),
             self.soft_fade.clone(),
             self.speed.clone(),
+            self.level.clone(),
         ) else {
             return;
         };
@@ -1408,6 +1419,7 @@ impl AudioPlayer {
             shared_gain(1.0),
             self.soft_fade.clone(),
             self.speed.clone(),
+            self.level.clone(),
         )?;
 
         let handle = &self.output.as_ref().expect("output ensured").handle;
@@ -1656,6 +1668,20 @@ impl AudioPlayer {
             return None;
         }
         self.queue.peek_next(&self.repeat).map(str::to_string)
+    }
+
+    /// Loudness of what is playing right now, 0.0 to 1.0. Zero while paused or
+    /// stopped.
+    pub fn output_level(&self) -> f32 {
+        if !self.is_playing() {
+            return 0.0;
+        }
+        #[cfg(target_os = "android")]
+        {
+            return crate::android::audio::exo_get_level().unwrap_or(0.0);
+        }
+        #[cfg(not(target_os = "android"))]
+        super::dsp::load_level(&self.level)
     }
 
     pub fn speed(&self) -> f32 {
@@ -2760,6 +2786,59 @@ mod tests {
         assert_eq!(player.set_speed(1.004), Ok(1.0));
         assert_eq!(player.set_speed(0.5), Ok(0.5));
         assert_eq!(player.speed(), 0.5);
+    }
+
+    /// Two seconds of a 440 Hz tone at half scale, as a mono WAV.
+    fn tone_wav() -> std::path::PathBuf {
+        let rate = 22_050u32;
+        let samples: Vec<i16> = (0..rate * 2)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                (16_000.0 * (2.0 * std::f32::consts::PI * 440.0 * t).sin()) as i16
+            })
+            .collect();
+        let data_len = (samples.len() * 2) as u32;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&rate.to_le_bytes());
+        bytes.extend_from_slice(&(rate * 2).to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        let path = std::env::temp_dir().join(format!("wave-tone-{}.wav", uuid::Uuid::new_v4()));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// Plays through the real audio output (at zero volume), so CI skips it.
+    /// Run with `cargo test --lib -- --ignored live_level`.
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore]
+    fn live_level_follows_what_is_playing() {
+        let path = tone_wav();
+        let mut player = AudioPlayer::new().unwrap();
+        player.set_volume(0.0).unwrap();
+        assert_eq!(player.output_level(), 0.0);
+        player.play(path.to_str().unwrap()).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        let playing = player.output_level();
+        player.pause().unwrap();
+        let paused = player.output_level();
+        player.stop().unwrap();
+        std::fs::remove_file(&path).ok();
+        // A half-scale sine has an RMS of about 0.35, measured before volume.
+        assert!((0.25..0.45).contains(&playing), "{playing}");
+        assert_eq!(paused, 0.0);
     }
 
     #[test]

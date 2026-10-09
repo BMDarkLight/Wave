@@ -14,7 +14,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /**
- * Offline peak + RMS amplitude scan for volume normalization.
+ * Offline peak + RMS amplitude scan for volume normalization, and per-block
+ * peaks for the seek bar waveform.
  *
  * Decodes the audio track via {@link MediaExtractor} + {@link MediaCodec} and
  * returns {peak, rms}, both normalised to 0.0–1.0. Peak alone doesn't track
@@ -34,6 +35,10 @@ public final class PeakAnalyzer {
     // indefinitely. Runs off the player lock, so this only bounds one
     // background thread's lifetime, not playback.
     private static final long MAX_SCAN_MS = 8_000L;
+    // A waveform needs the whole track, so it gets a longer cap. Past it the
+    // shape covers only the part decoded so far.
+    private static final long MAX_WAVEFORM_SCAN_MS = 60_000L;
+    private static final float WAVEFORM_BLOCK_SECS = 0.02f;
 
     private PeakAnalyzer() {}
 
@@ -44,11 +49,109 @@ public final class PeakAnalyzer {
         long count = 0L;
     }
 
+    /** Receives each decoded sample as -1.0 to 1.0, with the output format. */
+    private interface SampleConsumer {
+        void format(MediaFormat format);
+
+        void sample(float value);
+    }
+
     /** Returns {peak, rms}, both 0.0-1.0. */
     @Keep
     public static float[] analyzeLevels(Context context, String uriString) {
-        if (context == null || uriString == null || uriString.trim().isEmpty()) {
+        Accumulator acc = new Accumulator();
+        boolean decoded = decode(context, uriString, MAX_SCAN_MS, new SampleConsumer() {
+            @Override
+            public void format(MediaFormat format) {}
+
+            @Override
+            public void sample(float value) {
+                float abs = Math.abs(value);
+                acc.peak = Math.max(acc.peak, abs);
+                acc.sumSquares += (double) abs * abs;
+                acc.count++;
+            }
+        });
+        if (!decoded) {
             return new float[] {DEFAULT_PEAK, DEFAULT_RMS};
+        }
+        float peak = acc.peak > 0f ? Math.min(1f, acc.peak) : DEFAULT_PEAK;
+        float rms = acc.count > 0
+                ? Math.min(1f, (float) Math.sqrt(acc.sumSquares / acc.count))
+                : DEFAULT_RMS;
+        return new float[] {peak, rms};
+    }
+
+    /**
+     * Peak level of every {@link #WAVEFORM_BLOCK_SECS} of the track, 0.0-1.0,
+     * for drawing its waveform. Empty when the file cannot be decoded.
+     */
+    @Keep
+    public static float[] analyzeWaveform(Context context, String uriString) {
+        WaveformBlocks blocks = new WaveformBlocks();
+        if (!decode(context, uriString, MAX_WAVEFORM_SCAN_MS, blocks)) {
+            return new float[0];
+        }
+        return blocks.toArray();
+    }
+
+    /** Groups samples into blocks and keeps the loudest of each. */
+    private static final class WaveformBlocks implements SampleConsumer {
+        private float[] peaks = new float[4096];
+        private int size = 0;
+        private int blockSamples = 1;
+        private int count = 0;
+        private float loudest = 0f;
+
+        @Override
+        public void format(MediaFormat format) {
+            int rate = format.containsKey(MediaFormat.KEY_SAMPLE_RATE)
+                    ? format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    : 44100;
+            int channels = format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)
+                    ? format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    : 2;
+            blockSamples = Math.max(1, (int) (rate * WAVEFORM_BLOCK_SECS) * Math.max(1, channels));
+        }
+
+        @Override
+        public void sample(float value) {
+            loudest = Math.max(loudest, Math.abs(value));
+            if (++count >= blockSamples) {
+                push();
+            }
+        }
+
+        private void push() {
+            if (size == peaks.length) {
+                float[] grown = new float[peaks.length * 2];
+                System.arraycopy(peaks, 0, grown, 0, size);
+                peaks = grown;
+            }
+            peaks[size++] = Math.min(1f, loudest);
+            loudest = 0f;
+            count = 0;
+        }
+
+        float[] toArray() {
+            if (count > 0) {
+                push();
+            }
+            float[] out = new float[size];
+            System.arraycopy(peaks, 0, out, 0, size);
+            return out;
+        }
+    }
+
+    /**
+     * Decode the first audio track of {@code uriString} and hand every sample
+     * to {@code consumer}, stopping after {@code maxMs} of wall time. Returns
+     * false when the file could not be opened or decoded at all.
+     */
+    private static boolean decode(
+            Context context, String uriString, long maxMs, SampleConsumer consumer) {
+        if (context == null || uriString == null || uriString.trim().isEmpty()) {
+            return false;
         }
         MediaExtractor extractor = new MediaExtractor();
         MediaCodec codec = null;
@@ -62,23 +165,23 @@ public final class PeakAnalyzer {
 
             int trackIndex = selectAudioTrack(extractor);
             if (trackIndex < 0) {
-                return new float[] {DEFAULT_PEAK, DEFAULT_RMS};
+                return false;
             }
             extractor.selectTrack(trackIndex);
             MediaFormat format = extractor.getTrackFormat(trackIndex);
             String mime = format.getString(MediaFormat.KEY_MIME);
             if (mime == null) {
-                return new float[] {DEFAULT_PEAK, DEFAULT_RMS};
+                return false;
             }
 
             codec = MediaCodec.createDecoderByType(mime);
             codec.configure(format, null, null, 0);
             codec.start();
+            consumer.format(format);
 
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-            Accumulator acc = new Accumulator();
             boolean inputDone = false;
-            long deadline = System.currentTimeMillis() + MAX_SCAN_MS;
+            long deadline = System.currentTimeMillis() + maxMs;
 
             while (true) {
                 if (System.currentTimeMillis() > deadline) {
@@ -113,6 +216,10 @@ public final class PeakAnalyzer {
                     continue;
                 }
                 if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    // The decoded format (sample rate, channels, encoding) can
+                    // differ from the container's.
+                    format = codec.getOutputFormat();
+                    consumer.format(format);
                     continue;
                 }
                 if (outIndex < 0) {
@@ -121,22 +228,17 @@ public final class PeakAnalyzer {
 
                 ByteBuffer outBuffer = codec.getOutputBuffer(outIndex);
                 if (outBuffer != null && info.size > 0) {
-                    scanPcmLevels(outBuffer, info.offset, info.size, format, acc);
+                    readSamples(outBuffer, info.offset, info.size, format, consumer);
                 }
                 codec.releaseOutputBuffer(outIndex, false);
                 if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                     break;
                 }
             }
-
-            float peak = acc.peak > 0f ? Math.min(1f, acc.peak) : DEFAULT_PEAK;
-            float rms = acc.count > 0
-                    ? Math.min(1f, (float) Math.sqrt(acc.sumSquares / acc.count))
-                    : DEFAULT_RMS;
-            return new float[] {peak, rms};
+            return true;
         } catch (Exception e) {
-            Log.w(TAG, "Level analysis failed for " + uriString + ": " + e.getMessage());
-            return new float[] {DEFAULT_PEAK, DEFAULT_RMS};
+            Log.w(TAG, "Decoding failed for " + uriString + ": " + e.getMessage());
+            return false;
         } finally {
             if (codec != null) {
                 try {
@@ -163,8 +265,8 @@ public final class PeakAnalyzer {
         return -1;
     }
 
-    private static void scanPcmLevels(
-            ByteBuffer buffer, int offset, int size, MediaFormat format, Accumulator acc) {
+    private static void readSamples(
+            ByteBuffer buffer, int offset, int size, MediaFormat format, SampleConsumer consumer) {
         buffer.position(offset);
         buffer.limit(offset + size);
         buffer.order(ByteOrder.LITTLE_ENDIAN);
@@ -176,24 +278,16 @@ public final class PeakAnalyzer {
 
         if (encoding == 4) { // ENCODING_PCM_FLOAT
             while (buffer.remaining() >= 4) {
-                float abs = Math.abs(buffer.getFloat());
-                acc.peak = Math.max(acc.peak, abs);
-                acc.sumSquares += (double) abs * abs;
-                acc.count++;
+                consumer.sample(buffer.getFloat());
             }
         } else {
             int sampleBytes = encoding == 3 ? 4 : 2; // 24-bit treated as 32, else 16-bit
             while (buffer.remaining() >= sampleBytes) {
-                float sample;
                 if (sampleBytes >= 4) {
-                    sample = buffer.getInt() / 2147483648f;
+                    consumer.sample(buffer.getInt() / 2147483648f);
                 } else {
-                    sample = buffer.getShort() / 32768f;
+                    consumer.sample(buffer.getShort() / 32768f);
                 }
-                float abs = Math.abs(sample);
-                acc.peak = Math.max(acc.peak, abs);
-                acc.sumSquares += (double) abs * abs;
-                acc.count++;
             }
         }
     }

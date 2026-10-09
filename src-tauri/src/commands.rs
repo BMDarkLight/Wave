@@ -43,6 +43,7 @@ pub struct ListenState(pub Mutex<ListenTracker>);
 /// Guards against overlapping artist-enrichment background jobs (e.g. from
 /// rapid Home page refreshes). Only one runs at a time.
 pub struct EnrichmentState(pub std::sync::atomic::AtomicBool);
+pub struct WaveformState(pub crate::waveform_service::WaveformService);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -831,6 +832,42 @@ pub async fn set_sleep_timer(
     let player = ensure_player(&mut slot)?;
     player.set_sleep_timer(request)?;
     Ok(player.sleep_timer_status())
+}
+
+/// Save a computed waveform to the library. Returns whether `path` is a
+/// library track, so the worker can keep other files in memory instead.
+pub(crate) fn save_waveform(app: &tauri::AppHandle, path: &str, bins: &[u8]) -> bool {
+    let Some(library) = app.try_state::<LibraryState>() else {
+        return false;
+    };
+    let library = match library.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Err(error) = library.save_waveform(path, bins) {
+        tracing::warn!("{error}");
+        return false;
+    }
+    library.get_waveform(path).ok().flatten().is_some()
+}
+
+/// The seek bar waveform for `path`, or `None` while it is being computed (a
+/// `waveform-ready` event follows) or when the track cannot be analysed.
+#[tauri::command]
+pub async fn get_waveform(
+    path: String,
+    library: tauri::State<'_, LibraryState>,
+    waveforms: tauri::State<'_, WaveformState>,
+) -> Result<Option<Vec<u8>>, String> {
+    let saved = lock_library(&library)?.get_waveform(&path)?;
+    Ok(waveforms.0.lookup(&path, saved))
+}
+
+/// Loudness of what is playing right now, 0.0 to 1.0, for the live waveform.
+#[tauri::command]
+pub async fn get_playback_level(state: tauri::State<'_, PlayerState>) -> Result<f32, String> {
+    let guard = lock_player_state(&state);
+    Ok(guard.as_ref().map_or(0.0, AudioPlayer::output_level))
 }
 
 #[tauri::command]

@@ -72,6 +72,20 @@ impl ExoHandle {
         })
     }
 
+    fn call_float(&self, method: &str) -> Result<f32, String> {
+        self.with_env(|env| {
+            let result = env
+                .call_method(self.instance.as_obj(), method, "()F", &[])
+                .map_err(|e| format!("{method}: {e}"))?;
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+                return Err(format!("{method} threw"));
+            }
+            result.f().map_err(|e| format!("{method} result: {e}"))
+        })
+    }
+
     fn call_int(&self, method: &str, sig: &str, args: &[JValue]) -> Result<i32, String> {
         self.with_env(|env| {
             let result = env
@@ -539,6 +553,31 @@ pub fn exo_set_incoming_normalization_gain(gain: f32) -> Result<(), String> {
 
 /// Returns `(peak, rms)`, both 0.0–1.0.
 pub fn exo_analyze_levels(uri: &str) -> Result<(f32, f32), String> {
+    let levels = call_peak_analyzer("analyzeLevels", uri)?;
+    match levels.as_slice() {
+        [peak, rms, ..] => Ok((*peak, *rms)),
+        _ => Err("analyzeLevels returned too few values".into()),
+    }
+}
+
+/// Peak level (0.0 to 1.0) of every short block of the track, for its
+/// waveform. Empty when the file cannot be decoded.
+pub fn exo_analyze_waveform(uri: &str) -> Result<Vec<f32>, String> {
+    let peaks = call_peak_analyzer("analyzeWaveform", uri)?;
+    if peaks.is_empty() {
+        return Err("analyzeWaveform found no audio".into());
+    }
+    Ok(peaks)
+}
+
+/// Loudness of what ExoPlayer is playing right now, 0.0 to 1.0.
+pub fn exo_get_level() -> Result<f32, String> {
+    with_player(|p| p.call_float("getLevel"))
+}
+
+/// Call a static analysis method on the player class taking
+/// `(Context, String)` and returning `float[]`, on the calling thread.
+fn call_peak_analyzer(method: &str, uri: &str) -> Result<Vec<f32>, String> {
     ensure_initialized()?;
     android_jni::ensure_jni_thread_attached();
 
@@ -567,28 +606,28 @@ pub fn exo_analyze_levels(uri: &str) -> Result<(f32, f32), String> {
     let result = env
         .call_static_method(
             &class,
-            "analyzeLevels",
+            method,
             "(Landroid/content/Context;Ljava/lang/String;)[F",
             &[JValue::Object(&activity), JValue::Object(&j_uri)],
         )
-        .map_err(|e| format!("analyzeLevels: {e}"))?;
+        .map_err(|e| format!("{method}: {e}"))?;
 
     if env.exception_check().unwrap_or(false) {
         let _ = env.exception_describe();
         let _ = env.exception_clear();
-        return Err("analyzeLevels threw".into());
+        return Err(format!("{method} threw"));
     }
 
-    let array_obj = result
-        .l()
-        .map_err(|e| format!("analyzeLevels result: {e}"))?;
+    let array_obj = result.l().map_err(|e| format!("{method} result: {e}"))?;
     if array_obj.is_null() {
-        return Err("analyzeLevels returned null".into());
+        return Err(format!("{method} returned null"));
     }
     let array = jni::objects::JFloatArray::from(array_obj);
-    let mut buf = [0f32; 2];
-    env.get_float_array_region(&array, 0, &mut buf)
-        .map_err(|e| format!("analyzeLevels array read: {e}"))?;
-
-    Ok((buf[0], buf[1]))
+    let len = env
+        .get_array_length(&array)
+        .map_err(|e| format!("{method} array length: {e}"))?;
+    let mut values = vec![0f32; len.max(0) as usize];
+    env.get_float_array_region(&array, 0, &mut values)
+        .map_err(|e| format!("{method} array read: {e}"))?;
+    Ok(values)
 }

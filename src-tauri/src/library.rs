@@ -386,6 +386,14 @@ impl Library {
                 );
                 CREATE INDEX IF NOT EXISTS idx_artist_similar_key
                     ON artist_similar(artist_key, score DESC);
+
+                CREATE TABLE IF NOT EXISTS waveforms (
+                    track_id TEXT PRIMARY KEY,
+                    bins BLOB NOT NULL,
+                    file_size INTEGER NOT NULL,
+                    modified_at INTEGER NOT NULL,
+                    FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
+                );
                 ",
             )
             .map_err(|error| format!("Failed to initialize library database: {error}"))?;
@@ -2898,6 +2906,42 @@ impl Library {
                 params![track_id, now],
             )
             .map_err(|e| format!("Failed to touch last played: {e}"))?;
+        Ok(())
+    }
+
+    /// The saved waveform for `path`, unless the file has changed size or
+    /// modified time since it was computed.
+    pub fn get_waveform(&self, path: &str) -> Result<Option<Vec<u8>>, String> {
+        let connection = self.read_connection();
+        connection
+            .query_row(
+                "SELECT w.bins FROM waveforms w
+                 JOIN tracks t ON t.id = w.track_id
+                 WHERE t.path = ?1
+                   AND w.file_size = t.file_size
+                   AND w.modified_at = t.modified_at",
+                params![path],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to read waveform: {e}"))
+    }
+
+    /// Save the waveform for `path`, stamped with the track's current size and
+    /// modified time. A path that is not a library track is ignored.
+    pub fn save_waveform(&self, path: &str, bins: &[u8]) -> Result<(), String> {
+        let connection = self.write_connection();
+        connection
+            .execute(
+                "INSERT INTO waveforms (track_id, bins, file_size, modified_at)
+                 SELECT id, ?2, file_size, modified_at FROM tracks WHERE path = ?1
+                 ON CONFLICT(track_id) DO UPDATE SET
+                   bins = excluded.bins,
+                   file_size = excluded.file_size,
+                   modified_at = excluded.modified_at",
+                params![path, bins],
+            )
+            .map_err(|e| format!("Failed to save waveform: {e}"))?;
         Ok(())
     }
 
@@ -5629,6 +5673,67 @@ mod tests {
             source_state: None,
             is_saf_uri: false,
         }
+    }
+
+    #[test]
+    fn a_saved_waveform_reads_back() {
+        let library = open_test_library().unwrap();
+        upsert_track(
+            &*library.write_connection(),
+            &sample_track("t1", "/music/a.mp3"),
+        )
+        .unwrap();
+        assert_eq!(library.get_waveform("/music/a.mp3").unwrap(), None);
+        library.save_waveform("/music/a.mp3", &[1, 2, 3]).unwrap();
+        assert_eq!(
+            library.get_waveform("/music/a.mp3").unwrap(),
+            Some(vec![1, 2, 3])
+        );
+        library.save_waveform("/music/a.mp3", &[9]).unwrap();
+        assert_eq!(library.get_waveform("/music/a.mp3").unwrap(), Some(vec![9]));
+    }
+
+    #[test]
+    fn a_waveform_goes_stale_when_the_file_changes() {
+        let library = open_test_library().unwrap();
+        upsert_track(
+            &*library.write_connection(),
+            &sample_track("t1", "/music/a.mp3"),
+        )
+        .unwrap();
+        library.save_waveform("/music/a.mp3", &[1, 2, 3]).unwrap();
+        library
+            .write_connection()
+            .execute(
+                "UPDATE tracks SET modified_at = 99 WHERE path = '/music/a.mp3'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(library.get_waveform("/music/a.mp3").unwrap(), None);
+    }
+
+    #[test]
+    fn waveforms_go_with_their_track() {
+        let library = open_test_library().unwrap();
+        upsert_track(
+            &*library.write_connection(),
+            &sample_track("t1", "/music/a.mp3"),
+        )
+        .unwrap();
+        library.save_waveform("/music/a.mp3", &[1]).unwrap();
+        library.remove_track_from_library("/music/a.mp3").unwrap();
+        let left: i64 = library
+            .read_connection()
+            .query_row("SELECT COUNT(*) FROM waveforms", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn a_waveform_for_an_unknown_path_is_not_saved() {
+        let library = open_test_library().unwrap();
+        library.save_waveform("/nowhere.mp3", &[1]).unwrap();
+        assert_eq!(library.get_waveform("/nowhere.mp3").unwrap(), None);
     }
 
     fn insert_playlist_track_with_connection(
