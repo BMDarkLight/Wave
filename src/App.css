@@ -7011,8 +7011,8 @@ div.album-hero-cover {
     width: 100%;
     aspect-ratio: 1;
     margin-bottom: 4px;
+    overflow: hidden;
     border-radius: 8px;
-    object-fit: cover;
     background: linear-gradient(145deg, #2a2a2a, #121212);
     color: rgba(255, 255, 255, 0.35);
     font-size: 36px;
@@ -7038,10 +7038,18 @@ div.album-hero-cover {
     font-weight: 600;
   }
 
+  .mcol-album-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
   .mcol-artist-avatar {
+    position: relative;
     display: grid;
     flex-shrink: 0;
     place-items: center;
+    overflow: hidden;
     width: 48px;
     height: 48px;
     border-radius: 50%;
@@ -7139,5 +7147,22 @@ div.album-hero-cover {
   .reduce-motion .player-bar,
   .reduce-motion .mobile-dock-glass {
     transition: none;
+  }
+}
+
+@media (max-width: 900px) {
+  /* Covers stack in the avatar and cross-fade as they take turns. */
+  .mcol-artist-avatar img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0;
+    transition: opacity 0.8s ease;
+  }
+
+  .mcol-artist-avatar img.is-shown {
+    opacity: 1;
   }
 }
