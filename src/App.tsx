@@ -2411,6 +2411,13 @@ function App() {
         />
       )}
 
+      {/* Mobile only: one glass layer behind both the mini player and the
+          tabs, so the two read as a single surface. */}
+      <div
+        className={`mobile-dock-glass${playbackState.current_path ? " is-extended" : ""}`}
+        aria-hidden
+      />
+
       <PlayerBar
         currentTrack={currentTrack}
         playbackState={playbackState}

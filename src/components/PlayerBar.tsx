@@ -128,7 +128,7 @@ export default function PlayerBar({
 
   return (
     <footer
-      className={`player-bar${currentTrack && (!mobilePlayerOpenRef.current || mobilePlayerClosing) ? " player-bar-tappable" : ""}`}
+      className={`player-bar${currentTrack && (!mobilePlayerOpenRef.current || mobilePlayerClosing) ? " player-bar-tappable" : ""}${playbackState.current_path ? "" : " player-bar-idle"}`}
       onClick={(event) => {
         // Tapping empty space in the mini player (mobile only) opens the
         // fullscreen Now Playing page. Clicks on transport/seek controls

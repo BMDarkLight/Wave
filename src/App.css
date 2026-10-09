@@ -4343,6 +4343,7 @@ div.album-hero-cover {
 
 .mini-progress,
 .mobile-tabbar,
+.mobile-dock-glass,
 .home-settings-btn {
   display: none;
 }
@@ -4937,13 +4938,11 @@ div.album-hero-cover {
     bottom: 0;
     z-index: 60;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     height: var(--mobile-tabbar-height);
     padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
     box-sizing: border-box;
-    background: rgba(12, 12, 12, 0.78);
-    backdrop-filter: blur(28px) saturate(1.6);
-    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    background: transparent;
   }
 
   .mobile-tab {
@@ -6523,7 +6522,7 @@ div.album-hero-cover {
 }
 
 .no-glass .player-bar,
-.no-glass .mobile-tabbar,
+.no-glass .mobile-dock-glass,
 .no-glass .mobile-now-playing,
 .no-glass .mobile-settings-page:not(.mset-embedded) {
   background: #121212;
@@ -7058,5 +7057,87 @@ div.album-hero-cover {
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Mobile dock: the mini player and the tabs share one glass layer. With
+   nothing loaded the mini player shrinks to its play button, floating
+   above the tabs, and it extends out of that button once a song loads.
+   ══════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 900px) {
+  .mobile-dock-glass {
+    display: block;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 59;
+    height: var(--mobile-tabbar-height);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(12, 12, 12, 0.78);
+    backdrop-filter: blur(28px) saturate(1.6);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    transition: height 0.36s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  .mobile-dock-glass.is-extended {
+    height: calc(68px + var(--mobile-tabbar-height));
+  }
+
+  .player-bar {
+    border-top: 0;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    /* Fixed height so the bar matches the glass layer behind it. */
+    height: 68px;
+    min-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    clip-path: inset(0 round 0);
+    transition: clip-path 0.36s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  .player-bar .play-pause-btn {
+    width: 48px;
+    min-width: 48px;
+    height: 48px;
+  }
+
+  /* Only the play button shows, in the spot it holds in the full bar:
+     right padding 14px, then the 44px next button and a 2px gap. */
+  .player-bar.player-bar-idle {
+    clip-path: inset(6px 56px 6px calc(100% - 112px) round 28px);
+  }
+
+  .player-bar .player-left,
+  .player-bar .mini-progress,
+  .player-bar .player-controls .control-btn:not(.play-pause-btn) {
+    transition: opacity 0.24s ease;
+  }
+
+  .player-bar.player-bar-idle .player-left,
+  .player-bar.player-bar-idle .mini-progress,
+  .player-bar.player-bar-idle
+    .player-controls
+    .control-btn:not(.play-pause-btn) {
+    opacity: 0;
+  }
+
+  .player-bar.player-bar-idle .play-pause-btn {
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  }
+
+  /* The dock layer is what turns solid; the bar itself stays clear. */
+  .no-glass .player-bar {
+    background: transparent;
+  }
+
+  /* Reduce motion: the bar appears in place rather than growing. */
+  .reduce-motion .player-bar,
+  .reduce-motion .mobile-dock-glass {
+    transition: none;
   }
 }
