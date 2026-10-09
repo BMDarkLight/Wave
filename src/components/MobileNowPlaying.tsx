@@ -745,10 +745,13 @@ export default function MobileNowPlaying({
     onEqBandsChange(buildWeightedToneBands(bassGain, gain));
   };
 
+  // Dragging lowers the page's top edge toward the mini player, the same
+  // cut the close fold ends on, so letting go or reaching the bar carries
+  // straight on into the fold with nothing to jump.
   const pageDragStyle =
     !isPageClosing && (pageDismiss.dragging || pageDismiss.offset > 0)
       ? {
-          transform: `translateY(${pageDismiss.offset}px)`,
+          clipPath: `inset(${pageDismiss.offset}px 0 0 0 round ${Math.min(16, pageDismiss.offset / 4)}px)`,
         }
       : undefined;
 

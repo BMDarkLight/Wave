@@ -5238,7 +5238,7 @@ div.album-hero-cover {
 
 .mobile-now-playing.mnp-dragging {
   transition: none !important;
-  will-change: transform;
+  will-change: clip-path;
 }
 
 .mnp-header {
