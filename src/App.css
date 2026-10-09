@@ -5197,21 +5197,31 @@ div.album-hero-cover {
   -webkit-backdrop-filter: blur(28px) saturate(1.6);
   color: var(--text);
   overflow: hidden;
-  transform: translateY(100%);
-  opacity: 1;
+  /* Closed, the page is cut down to the mini player and tabs, so opening
+     grows it up out of them and closing folds it back in. */
+  clip-path: inset(calc(100% - var(--player-height)) 0 0 0 round 16px);
+  opacity: 0;
   pointer-events: none;
-  transition: transform 0.36s cubic-bezier(0.32, 0.72, 0, 1);
-  will-change: transform;
+  transition:
+    clip-path 0.4s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.16s ease,
+    transform 0.36s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: clip-path;
 }
 
 .mobile-now-playing.mnp-open {
-  transform: translateY(0);
+  clip-path: inset(0 0 0 0 round 0);
+  opacity: 1;
   pointer-events: auto;
 }
 
+/* Fade only at the end of the fold, once it has shrunk into the bar. */
 .mobile-now-playing.mnp-closing {
-  transform: translateY(100%);
   pointer-events: none;
+  transition:
+    clip-path 0.36s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.14s ease 0.22s,
+    transform 0.36s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .mobile-now-playing.mnp-dragging {
