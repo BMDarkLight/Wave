@@ -1871,24 +1871,14 @@ function App() {
           <div className="mobile-topbar-title">
             <img src={trayTemplate} alt="Wave" className="mobile-topbar-logo" />
             {isScanningFolder || lyricsFetchPath ? (
-              <span
-                className="brand-sync-spinner"
-                title={
-                  isScanningFolder
-                    ? folderScanIsSync
-                      ? "Syncing folders…"
-                      : "Importing…"
-                    : "Fetching lyrics…"
-                }
-                aria-label={
-                  isScanningFolder
-                    ? folderScanIsSync
-                      ? "Syncing folders"
-                      : "Importing"
-                    : "Fetching lyrics"
-                }
-                role="status"
-              />
+              <span className="mobile-topbar-status" role="status">
+                <span className="brand-sync-spinner" aria-hidden />
+                {isScanningFolder
+                  ? folderScanIsSync
+                    ? "Syncing"
+                    : "Importing"
+                  : "Fetching lyrics"}
+              </span>
             ) : null}
           </div>
           <div className="mobile-topbar-actions">

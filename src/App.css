@@ -4447,6 +4447,22 @@ div.album-hero-cover {
     height: 9px;
   }
 
+  /* Sits beside the logo without pushing it off centre. */
+  .mobile-topbar-status {
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 6px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
   .mobile-topbar-btn {
     position: relative;
     display: grid;
