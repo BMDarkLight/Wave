@@ -7123,6 +7123,8 @@ div.album-hero-cover {
     -webkit-backdrop-filter: none;
     /* Fixed height so the bar matches the glass layer behind it. */
     height: 68px;
+    /* Vertical swipes open Now Playing rather than scrolling anything. */
+    touch-action: none;
     min-height: 0;
     padding-top: 0;
     padding-bottom: 0;

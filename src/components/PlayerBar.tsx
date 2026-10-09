@@ -8,7 +8,7 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import type { RefObject } from "react";
+import { useRef, type RefObject } from "react";
 import {
   BiListUl,
   BiMusic,
@@ -23,6 +23,7 @@ import {
   BiVolumeLow,
   BiVolumeMute,
 } from "react-icons/bi";
+import { armDragDismissGhostClickGuard } from "../hooks/useDragDismiss";
 import Artwork from "./Artwork";
 import WaveformSeek from "./WaveformSeek";
 import { formatTime } from "../utils/format";
@@ -110,6 +111,14 @@ export default function PlayerBar({
   onRefreshOutputDevices: () => void;
   waveformEnabled: boolean;
 }) {
+  // Mobile: swiping the mini player up opens Now Playing, which then grows
+  // out of the bar the same way a tap opens it.
+  const swipeStartY = useRef<number | null>(null);
+  const canOpenNowPlaying = () =>
+    isMobileLayout() &&
+    !!currentTrack &&
+    !(mobilePlayerOpenRef.current && !mobilePlayerClosingRef.current);
+
   const seekSlider = (
     <input
       className="range-slider"
@@ -129,6 +138,25 @@ export default function PlayerBar({
   return (
     <footer
       className={`player-bar${currentTrack && (!mobilePlayerOpenRef.current || mobilePlayerClosing) ? " player-bar-tappable" : ""}${playbackState.current_path ? "" : " player-bar-idle"}`}
+      onPointerDown={(event) => {
+        swipeStartY.current = canOpenNowPlaying() ? event.clientY : null;
+      }}
+      onPointerMove={(event) => {
+        if (swipeStartY.current === null) return;
+        if (swipeStartY.current - event.clientY > 32) {
+          swipeStartY.current = null;
+          // The release would land as a tap on whatever is under the
+          // finger, such as the play button.
+          armDragDismissGhostClickGuard();
+          onOpenMobilePlayer();
+        }
+      }}
+      onPointerUp={() => {
+        swipeStartY.current = null;
+      }}
+      onPointerCancel={() => {
+        swipeStartY.current = null;
+      }}
       onClick={(event) => {
         // Tapping empty space in the mini player (mobile only) opens the
         // fullscreen Now Playing page. Clicks on transport/seek controls
