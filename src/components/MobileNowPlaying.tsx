@@ -547,6 +547,11 @@ export default function MobileNowPlaying({
       (onDragClose ?? onClose)();
     },
     enabled: !isPageClosing,
+    // The page folds into the mini player, so dragging its top edge down to
+    // the bar is as far as it goes; past that the fold would give itself away.
+    maxOffset: () =>
+      document.querySelector(".mobile-dock-glass")?.getBoundingClientRect()
+        .top ?? window.innerHeight,
   });
 
   const sheetDismiss = useDragDismiss({

@@ -22,6 +22,11 @@ type UseDragDismissOptions = {
   threshold?: number;
   /** Downward velocity (px/ms) that dismisses even below the travel threshold. */
   velocityThreshold?: number;
+  /**
+   * Furthest the surface may travel (px), read when the drag starts.
+   * Reaching it dismisses straight away, without waiting for release.
+   */
+  maxOffset?: () => number;
 };
 
 /**
@@ -71,6 +76,7 @@ export function useDragDismiss({
   enabled = true,
   threshold = 110,
   velocityThreshold = 0.55,
+  maxOffset,
 }: UseDragDismissOptions) {
   const [offset, setOffset] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -81,6 +87,7 @@ export function useDragDismiss({
   const offsetRef = useRef(0);
   const velocityRef = useRef(0);
   const movedRef = useRef(false);
+  const limitRef = useRef(Number.POSITIVE_INFINITY);
   const onDismissRef = useRef(onDismiss);
   const enabledRef = useRef(enabled);
   onDismissRef.current = onDismiss;
@@ -113,6 +120,7 @@ export function useDragDismiss({
     lastTRef.current = performance.now();
     offsetRef.current = 0;
     velocityRef.current = 0;
+    limitRef.current = maxOffset?.() ?? Number.POSITIVE_INFINITY;
     setDragging(true);
     setOffset(0);
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -126,15 +134,20 @@ export function useDragDismiss({
     velocityRef.current = dy / dt;
     lastYRef.current = e.clientY;
     lastTRef.current = now;
-    const next = Math.max(0, e.clientY - startYRef.current);
+    const next = Math.min(
+      limitRef.current,
+      Math.max(0, e.clientY - startYRef.current),
+    );
     if (next > 8) movedRef.current = true;
     offsetRef.current = next;
     setOffset(next);
+    if (next >= limitRef.current) finish(e, true);
   };
 
-  const finish = (event?: ReactPointerEvent<HTMLElement>) => {
+  const finish = (event?: ReactPointerEvent<HTMLElement>, force = false) => {
     if (!activeRef.current) return;
     const shouldDismiss =
+      force ||
       offsetRef.current >= threshold ||
       velocityRef.current >= velocityThreshold;
     activeRef.current = false;
