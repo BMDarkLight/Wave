@@ -21,6 +21,28 @@ import {
   smoothLevel,
 } from "../utils/waveform";
 
+/** Height of a bar at rest before it grows, matching the plain slider. */
+const MIN_BAR = 2;
+
+/** How long the bars take to grow in when a waveform appears. */
+const ENTRANCE_MS = 560;
+/** Delay from the first bar to the last, so they grow in left to right. */
+const ENTRANCE_SWEEP_MS = 240;
+
+/**
+ * How far a bar has grown from a flat line to its full height, 0 to 1,
+ * `shownFor` ms after the waveform appeared. `along` is the bar's position
+ * from 0 (left) to 1 (right).
+ */
+function entranceProgress(shownFor: number, along: number): number {
+  const own = ENTRANCE_MS - ENTRANCE_SWEEP_MS;
+  const t = Math.min(
+    1,
+    Math.max(0, (shownFor - along * ENTRANCE_SWEEP_MS) / own),
+  );
+  return 1 - (1 - t) ** 3;
+}
+
 /** The stored waveform for `path`, or `null` until it is ready. */
 function useWaveform(path: string | null): number[] | null {
   const [loaded, setLoaded] = useState<{
@@ -88,6 +110,7 @@ export default function WaveformSeek({
   if (!bins || duration <= 0) return <>{fallback}</>;
   return (
     <WaveformCanvas
+      key={path}
       bins={bins}
       position={position}
       duration={duration}
@@ -123,6 +146,12 @@ function WaveformCanvas({
   const dragging = useRef(false);
   const measuredLevel = useRef(0);
   const shownLevel = useRef(0);
+  // When the waveform first appeared, for the entrance animation.
+  const shownAt = useRef(0);
+  // Where the mouse is hovering, as a fraction of the width.
+  const hover = useRef<number | null>(null);
+  // Redraw once; set by the drawing effect.
+  const redraw = useRef<() => void>(() => {});
   // What the drawing loop reads. `at` is when `position` was last reported,
   // so the playhead can move smoothly between the half-second polls.
   const frame = useRef({ bins, position, duration, playing, speed, at: 0 });
@@ -203,36 +232,59 @@ function WaveformCanvas({
       const restColor =
         style.getPropertyValue("--waveform-rest").trim() ||
         "rgba(255, 255, 255, 0.25)";
-      const bar = compact ? 2 : 3;
+      const hoverColor =
+        style.getPropertyValue("--waveform-hover").trim() ||
+        "rgba(255, 255, 255, 0.5)";
+      const bar = 2;
       const gap = compact ? 1 : 2;
       const count = Math.max(1, Math.floor((width + gap) / (bar + gap)));
       const heights = barHeights(now.bins, count);
       const head = fraction * count;
+      const hoverHead = hover.current === null ? null : hover.current * count;
+      const shownFor = performance.now() - shownAt.current;
+      const round = typeof context.roundRect === "function";
 
       for (let i = 0; i < count; i++) {
         const lift = liveLift(shownLevel.current, Math.abs(i + 0.5 - head));
+        const full = (heights[i] / 255) * height * REST_HEIGHT * lift;
+        const grown = entranceProgress(shownFor, i / count);
         const barHeight = Math.min(
           height,
-          Math.max(2, (heights[i] / 255) * height * REST_HEIGHT * lift),
+          Math.max(MIN_BAR, MIN_BAR + (full - MIN_BAR) * grown),
         );
-        context.fillStyle = i + 0.5 < head ? playedColor : restColor;
-        context.fillRect(
-          i * (bar + gap),
-          (height - barHeight) / 2,
-          bar,
-          barHeight,
-        );
+        const centre = i + 0.5;
+        context.fillStyle =
+          centre < head
+            ? playedColor
+            : hoverHead !== null && centre < hoverHead
+              ? hoverColor
+              : restColor;
+        const x = i * (bar + gap);
+        const y = (height - barHeight) / 2;
+        if (round) {
+          context.beginPath();
+          context.roundRect(x, y, bar, barHeight, bar / 2);
+          context.fill();
+        } else {
+          context.fillRect(x, y, bar, barHeight);
+        }
       }
     };
 
     const loop = () => {
       draw();
       const settling = shownLevel.current > 0.001;
-      if (frame.current.playing || settling) {
+      const entering = performance.now() - shownAt.current < ENTRANCE_MS;
+      if (frame.current.playing || settling || entering) {
         raf = requestAnimationFrame(loop);
       }
     };
+    if (shownAt.current === 0) shownAt.current = performance.now();
     loop();
+    redraw.current = () => {
+      cancelAnimationFrame(raf);
+      loop();
+    };
 
     const resize = new ResizeObserver(() => draw());
     resize.observe(canvas);
@@ -271,7 +323,17 @@ function WaveformCanvas({
         onSeekChange(secondsAt(event.clientX));
       }}
       onPointerMove={(event) => {
-        if (dragging.current) onSeekChange(secondsAt(event.clientX));
+        if (dragging.current) {
+          onSeekChange(secondsAt(event.clientX));
+          return;
+        }
+        if (event.pointerType !== "mouse" || duration <= 0) return;
+        hover.current = secondsAt(event.clientX) / duration;
+        redraw.current();
+      }}
+      onPointerLeave={() => {
+        hover.current = null;
+        redraw.current();
       }}
       onPointerUp={(event) => {
         if (!dragging.current) return;

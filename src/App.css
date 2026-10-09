@@ -3381,18 +3381,19 @@ img.queue-thumb {
 .waveform-seek {
   --waveform-played: var(--text);
   --waveform-rest: rgba(255, 255, 255, 0.22);
+  --waveform-hover: rgba(255, 255, 255, 0.5);
   display: block;
   flex: 1;
   width: 100%;
   min-width: 80px;
-  height: 40px;
+  height: 36px;
   cursor: pointer;
   touch-action: none;
   outline: none;
 }
 
 .waveform-seek-compact {
-  height: 28px;
+  height: 24px;
 }
 
 .waveform-seek:focus-visible {
@@ -5597,7 +5598,7 @@ div.album-hero-cover {
 }
 
 .mnp-seek-row .waveform-seek {
-  height: 56px;
+  height: 40px;
 }
 
 .mnp-seek-times {
