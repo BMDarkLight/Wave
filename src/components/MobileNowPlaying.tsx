@@ -755,7 +755,7 @@ export default function MobileNowPlaying({
   // Dragging lowers the page's top edge toward the mini player, the same
   // cut the close fold ends on, so letting go or reaching the bar carries
   // straight on into the fold with nothing to jump.
-  // The contents ride down with the edge and the cover fades as it goes
+  // The contents ride down with the edge and, below the header, fade as they go
   // (`--mnp-drag` and `--mnp-drag-progress` in App.css).
   const dragVars = (offset: number) => ({
     "--mnp-drag": `${offset}px`,

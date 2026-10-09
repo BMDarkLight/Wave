@@ -5143,6 +5143,13 @@ div.album-hero-cover {
   translate: 0 var(--mnp-drag, 0px);
 }
 
+/* Everything below the header also fades out over the whole drag, so the
+   header is the last thing left as the page reaches the bar. It uses the
+   filter so it stacks with the open and close fade on opacity. */
+.mobile-now-playing > :not(.mnp-header, .mnp-sheet, .mnp-sheet-backdrop) {
+  filter: opacity(calc(1 - var(--mnp-drag-progress, 0)));
+}
+
 .mobile-now-playing.mnp-open {
   clip-path: inset(0 0 0 0 round 0);
   opacity: 1;
@@ -5261,8 +5268,6 @@ div.album-hero-cover {
 }
 
 .mnp-cover {
-  /* Gone by halfway down a drag-to-close. */
-  opacity: calc(1 - 2 * var(--mnp-drag-progress, 0));
   /* Square that grows to the shorter side of the art area. */
   width: min(100cqi, 100cqb);
   height: min(100cqi, 100cqb);
