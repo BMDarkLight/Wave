@@ -151,6 +151,16 @@ export default function PlayerBar({
         onOpenMobilePlayer();
       }}
     >
+      {/* Mobile only: seeking happens on Now Playing, so the mini player shows
+          progress as a line it cannot be dragged by. */}
+      <div className="mini-progress" aria-hidden>
+        <span
+          style={{
+            width: `${displayDuration > 0 ? Math.min(100, (displayPosition / displayDuration) * 100) : 0}%`,
+          }}
+        />
+      </div>
+
       <div className="player-left">
         <button
           className="album-art-btn"
@@ -236,7 +246,7 @@ export default function PlayerBar({
           <BiShuffle />
         </button>
         <button
-          className="control-btn"
+          className="control-btn desktop-only-control"
           onClick={onPrevious}
           disabled={!canSkip}
           type="button"
