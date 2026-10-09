@@ -806,6 +806,18 @@ function App() {
     onCloseLyrics: () => setLyricsPanelTrack(null),
   });
 
+  // Parts of the page pick their phone or desktop markup with
+  // isMobileLayout() as they render, and a resize alone does not re-render
+  // them, so re-render when the window crosses the breakpoint. Without this,
+  // widening the window back to desktop could leave phone-only markup behind.
+  const [, setNarrowLayout] = useState(isMobileLayout);
+  useEffect(() => {
+    const narrow = window.matchMedia("(max-width: 900px)");
+    const onChange = () => setNarrowLayout(narrow.matches);
+    narrow.addEventListener("change", onChange);
+    return () => narrow.removeEventListener("change", onChange);
+  }, []);
+
   const playlistSearchPaths = useMemo(
     () => new Set(playlist.map((t) => t.path)),
     [playlist],

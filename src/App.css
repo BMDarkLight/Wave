@@ -5127,12 +5127,13 @@ div.album-hero-cover {
 
 /* The page's contents fade in a beat after it starts growing and fade out
    before it folds, so nothing appears or vanishes all at once. */
-.mobile-now-playing > * {
+/* The sheet and its backdrop keep their own slide and fade. */
+.mobile-now-playing > :not(.mnp-sheet, .mnp-sheet-backdrop) {
   opacity: 0;
   transition: opacity 0.16s ease;
 }
 
-.mobile-now-playing.mnp-open > * {
+.mobile-now-playing.mnp-open > :not(.mnp-sheet, .mnp-sheet-backdrop) {
   opacity: 1;
   transition: opacity 0.26s ease 0.1s;
 }
@@ -7209,5 +7210,27 @@ div.album-hero-cover {
     padding: 24px;
     color: var(--muted);
     text-align: center;
+  }
+}
+
+/* Wide layout: undo the mini player's phone-only states outright, so
+   widening the window from the phone layout never leaves the playback bar
+   clipped, faded or mid-transition. */
+@media (min-width: 901px) {
+  .player-bar {
+    clip-path: none !important;
+    transition: none !important;
+  }
+
+  .player-bar > * {
+    opacity: 1 !important;
+    transition: none !important;
+  }
+
+  .mini-progress,
+  .mobile-dock-glass,
+  .mobile-tabbar,
+  .mobile-status-fade {
+    display: none !important;
   }
 }
