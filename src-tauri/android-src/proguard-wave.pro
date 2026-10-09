@@ -18,6 +18,7 @@
     public static void clearLast(android.content.Context);
 }
 -keep class app.bmdarklight.wave.CrashInitProvider { *; }
+-keep class app.bmdarklight.wave.KeyboardInsets { *; }
 -keep class app.bmdarklight.wave.MediaNativeBridge { *; }
 -keepclassmembers class app.bmdarklight.wave.MediaNativeBridge {
     public static void dispatch(java.lang.String);

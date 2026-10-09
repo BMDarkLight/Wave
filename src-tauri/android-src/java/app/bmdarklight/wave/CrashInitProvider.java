@@ -25,6 +25,7 @@ public final class CrashInitProvider extends ContentProvider {
         if (context != null) {
             CrashReporter.install(context);
             Log.i(TAG, "Crash reporter ready");
+            KeyboardInsets.install(context);
         }
         return true;
     }
