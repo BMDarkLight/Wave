@@ -79,6 +79,7 @@ import {
 import { useEqualizerSettings } from "./hooks/useEqualizerSettings";
 import { useResizablePanels } from "./hooks/useResizablePanels";
 import { useLibrarySearch } from "./hooks/useLibrarySearch";
+import { useStatusFade } from "./hooks/useStatusFade";
 import { useSourceSearch } from "./hooks/useSourceSearch";
 import { SourceResults } from "./components/SourceResults";
 import { useLyricsPanel } from "./hooks/useLyricsPanel";
@@ -1342,6 +1343,14 @@ function App() {
           ? null
           : "library";
 
+  const statusFadeRef = useStatusFade([
+    mainView,
+    selectedPlaylistId,
+    viewingAlbum,
+    viewingArtist,
+    mainSearchOpen,
+  ]);
+
   // ── Queue operations ───────────────────────────────────────────────────────
 
   const handleAddTrackToPlaylist = async (
@@ -1896,7 +1905,7 @@ function App() {
       }
     >
       {/* Narrow layout: no top bar, just a fade under the status bar. */}
-      <div className="mobile-status-fade" aria-hidden />
+      <div className="mobile-status-fade" ref={statusFadeRef} aria-hidden />
 
       <button
         className={`nav-backdrop${mobileNavOpen || rightPanelOpen || rightPanelClosing ? " nav-backdrop-open" : ""}${rightPanelClosing ? " nav-backdrop-closing" : ""}`}

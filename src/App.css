@@ -7151,6 +7151,9 @@ div.album-hero-cover {
       rgba(18, 18, 18, 0.62) 55%,
       rgba(18, 18, 18, 0) 100%
     );
+    /* Clear at the top of a page; useStatusFade brings it in on scroll. */
+    opacity: 0;
+    transition: opacity 0.15s linear;
     pointer-events: none;
   }
 
