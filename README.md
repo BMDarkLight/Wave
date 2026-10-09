@@ -267,8 +267,9 @@ directly — no copying your music into app storage.
 
 - Touch layout with bottom tabs for Home, Search and Library, a slim mini
   player, and a full **Now Playing** sheet you can drag to dismiss. The
-  Library tab gathers all songs, favorites, listening history and playlists
-  in one list.
+  Library tab gathers all songs, favorites, albums, artists, listening
+  history and playlists in one list, and Settings opens from the gear on
+  Home or Library.
 - When a song has synced lyrics, tap the cover to read along, or keep watching
   the cover and Now Playing turns to the lyrics as the first verse starts.
 - **Glass effect** and **Animations** switches in Settings swap the blurred
