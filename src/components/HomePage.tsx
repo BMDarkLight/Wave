@@ -18,6 +18,7 @@ import {
   resolveCoverSrc,
 } from "../utils/player";
 import type { AlbumSummary, HomeSuggestions, Track } from "../utils/player";
+import { splitRemasterTag } from "../utils/track";
 
 const getTrackTitle = (track?: Track | null) => {
   if (track?.title) return track.title;
@@ -202,6 +203,39 @@ async function loadFallbackLibrary(libraryPlaylistId: string | null) {
   return { albums: albumList, tracks: libraryTracks };
 }
 
+/**
+ * Reorder so two songs from the same album don't sit side by side, which
+ * reads as a duplicate when both cards show the same cover. Keeps the
+ * original order wherever it can.
+ */
+function spreadAlbums(tracks: Track[]): Track[] {
+  const albumOf = (track: Track) =>
+    track.album
+      ? `${track.album}\u0000${track.album_artist || track.artist}`
+      : null;
+  const left = [...tracks];
+  const out: Track[] = [];
+  while (left.length > 0) {
+    const previous = out.length ? albumOf(out[out.length - 1]) : null;
+    const next = left.findIndex(
+      (track) => previous === null || albumOf(track) !== previous,
+    );
+    out.push(...left.splice(next === -1 ? 0 : next, 1));
+  }
+  return out;
+}
+
+/** A card title with any remaster note moved into a small tag. */
+function CardTitle({ title }: { title: string }) {
+  const { name, tag } = splitRemasterTag(title);
+  return (
+    <span className="home-card-title" title={title}>
+      {name}
+      {tag && <span className="home-card-tag">{tag}</span>}
+    </span>
+  );
+}
+
 type HomePageProps = {
   libraryPlaylistId: string | null;
   onPlayTrack: (path: string, queue: Track[]) => void;
@@ -290,9 +324,15 @@ export default function HomePage({
   }, [fallbackTracks, seed]);
 
   const featured = suggestions?.featured ?? coldSuggestions[0] ?? null;
-  const mixRow = suggestions?.mix?.length
-    ? suggestions.mix
-    : coldSuggestions.slice(1, 9);
+  const mixRow = useMemo(
+    () =>
+      spreadAlbums(
+        suggestions?.mix?.length
+          ? suggestions.mix
+          : coldSuggestions.slice(1, 9),
+      ),
+    [suggestions, coldSuggestions],
+  );
   const moreRow = suggestions?.more?.length
     ? suggestions.more
     : coldSuggestions.slice(9, 18);
@@ -393,7 +433,11 @@ export default function HomePage({
           </div>
           <div className="home-featured-copy">
             <p className="home-eyebrow">
-              {curated ? "Because you listened" : "Suggested for you"}
+              {curated && suggestions?.favorite_artist
+                ? `Because you listen to ${suggestions.favorite_artist.name}`
+                : curated
+                  ? "Picked from your listening"
+                  : "Suggested for you"}
             </p>
             <h2 title={getTrackTitle(featured)}>{getTrackTitle(featured)}</h2>
             <button
@@ -435,7 +479,7 @@ export default function HomePage({
             <h3>Mix for you</h3>
             <p>
               {curated
-                ? "Neighbors from songs you finish — plus recent favorites"
+                ? "Based on the songs you play to the end"
                 : "Random cuts from your collection"}
             </p>
           </div>
@@ -462,7 +506,7 @@ export default function HomePage({
                     <BiPlay />
                   </span>
                 </div>
-                <span className="home-card-title">{getTrackTitle(track)}</span>
+                <CardTitle title={getTrackTitle(track)} />
                 <span className="home-card-meta">
                   {track.artist || "Unknown"}
                 </span>
@@ -509,7 +553,7 @@ export default function HomePage({
             <h3>More to dig into</h3>
             <p>
               {curated
-                ? "More from your listen graph"
+                ? "More picked from what you play"
                 : "Another handful of random tracks"}
             </p>
           </div>
@@ -528,9 +572,7 @@ export default function HomePage({
               >
                 <TrackCover track={track} className="home-suggest-thumb" />
                 <span className="home-suggest-text">
-                  <span className="home-card-title">
-                    {getTrackTitle(track)}
-                  </span>
+                  <CardTitle title={getTrackTitle(track)} />
                   <span className="home-card-meta">
                     {track.artist || "Unknown"}
                     {track.album ? ` · ${track.album}` : ""}

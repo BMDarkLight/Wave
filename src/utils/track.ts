@@ -35,6 +35,31 @@ export const getTrackTitle = (
   return fallbackPath ? getFileName(fallbackPath) : "Choose a song";
 };
 
+/** Trailing `(Remastered)`, `[2011 Remaster]` and the like. */
+const REMASTER_BRACKETS_RE =
+  /\s*[([]([^)\]]*\bremaster(?:ed)?\b[^)\]]*)[)\]]\s*$/i;
+/** Trailing ` - 2016 Remaster`, ` - Remastered Version`. */
+const REMASTER_DASH_RE = /\s+-\s+([^-]*\bremaster(?:ed)?\b[^-]*)$/i;
+
+/**
+ * Split a remaster note off the end of a title, so a narrow card can show
+ * the song's name in full and the note as a small tag beside it.
+ */
+export const splitRemasterTag = (
+  title: string,
+): { name: string; tag: string | null } => {
+  const match =
+    title.match(REMASTER_BRACKETS_RE) ?? title.match(REMASTER_DASH_RE);
+  if (!match || match.index === undefined || match.index === 0) {
+    return { name: title, tag: null };
+  }
+  const note = match[1].trim();
+  return {
+    name: title.slice(0, match.index).trim(),
+    tag: /^remaster(?:ed)?$/i.test(note) ? "Remastered" : note,
+  };
+};
+
 export const emptyPlaybackState: PlaybackState = {
   is_playing: false,
   is_paused: false,

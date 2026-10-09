@@ -954,6 +954,17 @@ img.track-thumb {
   font-weight: 700;
 }
 
+.home-card-tag {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: 2px;
+}
+
 .home-card-meta {
   display: block;
   overflow: hidden;
@@ -1101,9 +1112,42 @@ img.track-thumb {
     font-size: 18px;
   }
 
+  /* Small corner button: the whole card already plays on tap. */
   .home-card-play {
+    right: 6px;
+    bottom: 6px;
+    width: 28px;
+    height: 28px;
+    font-size: 18px;
     opacity: 1;
     transform: none;
+  }
+
+  /* The logo already sits in the top bar, so the greeting stands alone. */
+  .home-header .home-eyebrow,
+  .home-header .home-sub {
+    display: none;
+  }
+
+  .home-header h1 {
+    font-size: 26px;
+  }
+
+  .home-page {
+    gap: 24px;
+  }
+
+  /* Rows run to the screen edge and show part of a third card, so it is
+     clear they scroll sideways. */
+  .home-card-row {
+    margin: 0 -24px;
+    padding-left: 24px;
+    padding-right: 24px;
+    scroll-padding-left: 24px;
+  }
+
+  .home-track-card {
+    width: calc((100vw - 52px) / 2.35);
   }
 }
 
