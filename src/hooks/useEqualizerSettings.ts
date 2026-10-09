@@ -14,6 +14,7 @@ import {
   getAnimationsEnabled,
   getAutoLyricsDownload,
   getGlassEffectsEnabled,
+  getReduceMotionEnabled,
   getWaveformSeekEnabled,
   getCrossfadeDuration,
   getEqSettings,
@@ -22,6 +23,7 @@ import {
   setAnimationsEnabled,
   setAutoLyricsDownload,
   setGlassEffectsEnabled,
+  setReduceMotionEnabled,
   setWaveformSeekEnabled,
   setCrossfadeDuration,
   setEqBands,
@@ -30,7 +32,7 @@ import {
   setVolumeNormalizationEnabled,
   type EqSettings,
 } from "../utils/player";
-import { applyAnimations, applyGlassEffects } from "../utils/appearance";
+import { applyGlassEffects, applyMotion } from "../utils/appearance";
 import { formatInvokeError } from "../utils/errors";
 
 export function useEqualizerSettings(
@@ -52,6 +54,7 @@ export function useEqualizerSettings(
   const [waveformSeekEnabled, setWaveformSeekEnabledState] = useState(false);
   const [glassEffectsEnabled, setGlassEffectsEnabledState] = useState(true);
   const [animationsEnabled, setAnimationsEnabledState] = useState(true);
+  const [reduceMotionEnabled, setReduceMotionEnabledState] = useState(false);
   // The seek bar, the glass and the motion are on screen from the start, so
   // read these at launch rather than waiting for the panels that load the rest.
   useEffect(() => {
@@ -64,12 +67,18 @@ export function useEqualizerSettings(
     getAnimationsEnabled()
       .then(setAnimationsEnabledState)
       .catch(() => {});
+    getReduceMotionEnabled()
+      .then(setReduceMotionEnabledState)
+      .catch(() => {});
   }, []);
   useEffect(
     () => applyGlassEffects(glassEffectsEnabled),
     [glassEffectsEnabled],
   );
-  useEffect(() => applyAnimations(animationsEnabled), [animationsEnabled]);
+  useEffect(
+    () => applyMotion(animationsEnabled, reduceMotionEnabled),
+    [animationsEnabled, reduceMotionEnabled],
+  );
   const [eqAnchor, setEqAnchor] = useState<{
     bottom: number;
     right: number;
@@ -95,6 +104,7 @@ export function useEqualizerSettings(
       setWaveformSeekEnabledState(await getWaveformSeekEnabled());
       setGlassEffectsEnabledState(await getGlassEffectsEnabled());
       setAnimationsEnabledState(await getAnimationsEnabled());
+      setReduceMotionEnabledState(await getReduceMotionEnabled());
     } catch (err) {
       console.error("Failed to load EQ settings", err);
     }
@@ -250,6 +260,16 @@ export function useEqualizerSettings(
     }
   };
 
+  const handleReduceMotionChange = async (enabled: boolean) => {
+    setReduceMotionEnabledState(enabled);
+    try {
+      await setReduceMotionEnabled(enabled);
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to update reduce motion"));
+      setReduceMotionEnabledState(await getReduceMotionEnabled());
+    }
+  };
+
   return {
     showEqPanel,
     setShowEqPanel,
@@ -261,6 +281,7 @@ export function useEqualizerSettings(
     waveformSeekEnabled,
     glassEffectsEnabled,
     animationsEnabled,
+    reduceMotionEnabled,
     eqAnchor,
     setEqAnchor,
     volumeIconRef,
@@ -278,5 +299,6 @@ export function useEqualizerSettings(
     handleWaveformSeekChange,
     handleGlassEffectsChange,
     handleAnimationsChange,
+    handleReduceMotionChange,
   };
 }

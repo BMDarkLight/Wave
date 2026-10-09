@@ -321,6 +321,8 @@ pub fn run() {
             commands::set_glass_effects_enabled,
             commands::get_animations_enabled,
             commands::set_animations_enabled,
+            commands::get_reduce_motion_enabled,
+            commands::set_reduce_motion_enabled,
             commands::get_close_action,
             commands::set_close_action,
             commands::toggle_close_action,

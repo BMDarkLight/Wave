@@ -6558,11 +6558,55 @@ div.album-hero-cover {
   scroll-behavior: auto !important;
 }
 
-.no-motion .mini-bars i {
+.no-motion .mini-bars i,
+.reduce-motion .mini-bars i {
   animation: none;
 }
 
-/* Same as reduced motion: words still light up as they are sung. */
-.no-motion .lyrics-word {
+/* Same as the system's reduced motion: words still light up as they are
+   sung, without the sweep. */
+.no-motion .lyrics-word,
+.reduce-motion .lyrics-word {
   animation-duration: 0.01ms !important;
+}
+
+/* Reduce motion keeps animation but nothing travels across the screen.
+   Pages and sheets fade where they stand: the open state only transitions
+   opacity, so the panel lands at once and fades in, and the closed state
+   fades out before the panel moves off screen. */
+.reduce-motion .mobile-now-playing,
+.reduce-motion .mnp-sheet,
+.reduce-motion .mobile-settings-page:not(.mset-embedded) {
+  opacity: 0;
+  transition:
+    opacity 0.18s ease,
+    transform 0s linear 0.18s;
+}
+
+.reduce-motion .mobile-now-playing.mnp-open,
+.reduce-motion .mnp-sheet.mnp-sheet-open,
+.reduce-motion .mobile-settings-page.mset-open:not(.mset-closing) {
+  opacity: 1;
+  transition: opacity 0.18s ease;
+}
+
+/* Cover, lyrics and queue swap with a fade and no drift. */
+.reduce-motion .mnp-layer {
+  transform: none;
+}
+
+@media (max-width: 900px) {
+  .reduce-motion .sidebar,
+  .reduce-motion .right-panel {
+    opacity: 0;
+    transition:
+      opacity 0.18s ease,
+      transform 0s linear 0.18s;
+  }
+
+  .reduce-motion .app-container.nav-open .sidebar,
+  .reduce-motion .app-container.panel-open:not(.panel-closing) .right-panel {
+    opacity: 1;
+    transition: opacity 0.18s ease;
+  }
 }

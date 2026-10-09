@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useRef, type RefObject } from "react";
-import { animationsOff } from "../utils/appearance";
+import { lessMotion } from "../utils/appearance";
 
 const LYRICS_SCROLL_PAUSE_MS = 3000;
 
@@ -38,7 +38,7 @@ export function useLyricsAutoScroll(
     isAutoScrollingRef.current = true;
     activeLineRef.current.scrollIntoView({
       block: "center",
-      behavior: animationsOff() ? "auto" : "smooth",
+      behavior: lessMotion() ? "auto" : "smooth",
     });
 
     const timer = window.setTimeout(() => {

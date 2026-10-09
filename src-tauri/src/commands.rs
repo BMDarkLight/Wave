@@ -1665,6 +1665,26 @@ pub async fn set_animations_enabled(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_reduce_motion_enabled(
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<bool, String> {
+    let settings = lock_settings(&settings_state)?;
+    Ok(settings.reduce_motion_enabled)
+}
+
+#[tauri::command]
+pub async fn set_reduce_motion_enabled(
+    enabled: bool,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut settings = lock_settings(&settings_state)?;
+    settings.reduce_motion_enabled = enabled;
+    settings.save(&app)?;
+    Ok(())
+}
+
 // ── Library / playlist commands ───────────────────────────────────────────────
 
 #[tauri::command]

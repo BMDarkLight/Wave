@@ -56,6 +56,10 @@ pub struct AppSettings {
     /// Slide, fade and scroll the interface. Off makes every change instant.
     #[serde(default = "default_animations_enabled")]
     pub animations_enabled: bool,
+    /// While animations are on, fade panels in place instead of sliding them
+    /// and drop the smaller flourishes.
+    #[serde(default)]
+    pub reduce_motion_enabled: bool,
     /// Master switch for the remote-source search tier. When off, no provider
     /// is queried and the escalation button never appears, so nothing in the
     /// app reaches the network for music discovery.
@@ -128,6 +132,7 @@ impl Default for AppSettings {
             waveform_seek_enabled: default_waveform_seek_enabled(),
             glass_effects_enabled: default_glass_effects_enabled(),
             animations_enabled: default_animations_enabled(),
+            reduce_motion_enabled: false,
             outside_sourcing_enabled: default_outside_sourcing_enabled(),
             spotify_client_id: None,
             jamendo_client_id: None,
@@ -247,9 +252,11 @@ mod tests {
         let fields = saved.as_object_mut().unwrap();
         fields.remove("glass_effects_enabled");
         fields.remove("animations_enabled");
+        fields.remove("reduce_motion_enabled");
         let loaded: AppSettings = serde_json::from_value(saved).unwrap();
         assert!(loaded.glass_effects_enabled);
         assert!(loaded.animations_enabled);
+        assert!(!loaded.reduce_motion_enabled);
     }
 
     #[test]
@@ -263,5 +270,16 @@ mod tests {
         let loaded: AppSettings = serde_json::from_str(&json).unwrap();
         assert!(!loaded.glass_effects_enabled);
         assert!(!loaded.animations_enabled);
+    }
+
+    #[test]
+    fn turning_reduce_motion_on_survives_a_save() {
+        let settings = AppSettings {
+            reduce_motion_enabled: true,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let loaded: AppSettings = serde_json::from_str(&json).unwrap();
+        assert!(loaded.reduce_motion_enabled);
     }
 }

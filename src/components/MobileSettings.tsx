@@ -212,6 +212,8 @@ interface MobileSettingsProps {
   onGlassEffectsChange: (enabled: boolean) => void;
   animationsEnabled: boolean;
   onAnimationsChange: (enabled: boolean) => void;
+  reduceMotionEnabled: boolean;
+  onReduceMotionChange: (enabled: boolean) => void;
   eqSettings: EqSettings;
   onEqEnabledChange: (enabled: boolean) => void;
   onEqBandChange: (index: number, gain: number) => void;
@@ -255,6 +257,8 @@ export default function MobileSettings({
   onGlassEffectsChange,
   animationsEnabled,
   onAnimationsChange,
+  reduceMotionEnabled,
+  onReduceMotionChange,
   eqSettings,
   onEqEnabledChange,
   onEqBandChange,
@@ -982,6 +986,28 @@ export default function MobileSettings({
                 </span>
               </span>
             </label>
+            {animationsEnabled && (
+              <>
+                <div className="mset-playback-divider" role="separator" />
+                <label className="mset-gapless-row">
+                  <input
+                    type="checkbox"
+                    checked={reduceMotionEnabled}
+                    onChange={(event) =>
+                      onReduceMotionChange(event.target.checked)
+                    }
+                  />
+                  <span className="mset-gapless-copy">
+                    <span className="mset-gapless-label">Reduce motion</span>
+                    <span className="mset-gapless-hint">
+                      Fade pages and sheets in place instead of sliding them
+                      across the screen, and move lyrics from line to line
+                      without scrolling or sweeping.
+                    </span>
+                  </span>
+                </label>
+              </>
+            )}
           </div>
         </section>
 

@@ -10,21 +10,28 @@
 
 /**
  * The Appearance switches in Settings work as classes on `<html>`, so the
- * stylesheet can turn the blur and the motion off everywhere at once. Code
+ * stylesheet can turn the blur and the motion down everywhere at once. Code
  * that animates outside CSS (smooth scrolling, canvas drawing) asks
- * `animationsOff()` instead.
+ * `lessMotion()` instead.
  */
 
 const NO_GLASS = "no-glass";
 const NO_MOTION = "no-motion";
+const REDUCE_MOTION = "reduce-motion";
 
 export const applyGlassEffects = (enabled: boolean) => {
   document.documentElement.classList.toggle(NO_GLASS, !enabled);
 };
 
-export const applyAnimations = (enabled: boolean) => {
-  document.documentElement.classList.toggle(NO_MOTION, !enabled);
+/** Reduce motion only means something while animations are on. */
+export const applyMotion = (animations: boolean, reduce: boolean) => {
+  const root = document.documentElement.classList;
+  root.toggle(NO_MOTION, !animations);
+  root.toggle(REDUCE_MOTION, animations && reduce);
 };
 
-export const animationsOff = (): boolean =>
-  document.documentElement.classList.contains(NO_MOTION);
+/** True when animations are off or reduced. */
+export const lessMotion = (): boolean => {
+  const root = document.documentElement.classList;
+  return root.contains(NO_MOTION) || root.contains(REDUCE_MOTION);
+};

@@ -268,6 +268,7 @@ function App() {
     waveformSeekEnabled,
     glassEffectsEnabled,
     animationsEnabled,
+    reduceMotionEnabled,
     eqAnchor,
     setEqAnchor,
     volumeIconRef,
@@ -285,6 +286,7 @@ function App() {
     handleWaveformSeekChange,
     handleGlassEffectsChange,
     handleAnimationsChange,
+    handleReduceMotionChange,
   } = useEqualizerSettings(setError);
 
   const {
@@ -2125,6 +2127,10 @@ function App() {
           }
           animationsEnabled={animationsEnabled}
           onAnimationsChange={(enabled) => void handleAnimationsChange(enabled)}
+          reduceMotionEnabled={reduceMotionEnabled}
+          onReduceMotionChange={(enabled) =>
+            void handleReduceMotionChange(enabled)
+          }
           eqSettings={eqSettings}
           onEqEnabledChange={handleEqEnabled}
           onEqBandChange={handleEqBandChange}
@@ -2522,6 +2528,10 @@ function App() {
           }
           animationsEnabled={animationsEnabled}
           onAnimationsChange={(enabled) => void handleAnimationsChange(enabled)}
+          reduceMotionEnabled={reduceMotionEnabled}
+          onReduceMotionChange={(enabled) =>
+            void handleReduceMotionChange(enabled)
+          }
           eqSettings={eqSettings}
           onEqEnabledChange={handleEqEnabled}
           onEqBandChange={handleEqBandChange}

@@ -1298,6 +1298,14 @@ export const setAnimationsEnabled = (enabled: boolean): Promise<void> => {
   return safeInvoke("set_animations_enabled", { enabled });
 };
 
+export const getReduceMotionEnabled = (): Promise<boolean> => {
+  return safeInvoke<boolean>("get_reduce_motion_enabled");
+};
+
+export const setReduceMotionEnabled = (enabled: boolean): Promise<void> => {
+  return safeInvoke("set_reduce_motion_enabled", { enabled });
+};
+
 // ── Audio Output Devices ──────────────────────────────────────────────────────
 
 export const listOutputDevices = (): Promise<string[]> => {
