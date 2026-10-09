@@ -1605,6 +1605,26 @@ pub async fn set_auto_lyrics_download(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_waveform_seek_enabled(
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<bool, String> {
+    let settings = lock_settings(&settings_state)?;
+    Ok(settings.waveform_seek_enabled)
+}
+
+#[tauri::command]
+pub async fn set_waveform_seek_enabled(
+    enabled: bool,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut settings = lock_settings(&settings_state)?;
+    settings.waveform_seek_enabled = enabled;
+    settings.save(&app)?;
+    Ok(())
+}
+
 // ── Library / playlist commands ───────────────────────────────────────────────
 
 #[tauri::command]

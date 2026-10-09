@@ -37,6 +37,7 @@ import {
   BiErrorCircle,
   BiReset,
   BiVolumeFull,
+  BiPulse,
 } from "react-icons/bi";
 import {
   listMediaFolders,
@@ -204,6 +205,8 @@ interface MobileSettingsProps {
   onImportLyrics: () => Promise<string | null>;
   autoLyricsDownload: boolean;
   onAutoLyricsDownloadChange: (enabled: boolean) => void;
+  waveformSeekEnabled: boolean;
+  onWaveformSeekChange: (enabled: boolean) => void;
   eqSettings: EqSettings;
   onEqEnabledChange: (enabled: boolean) => void;
   onEqBandChange: (index: number, gain: number) => void;
@@ -241,6 +244,8 @@ export default function MobileSettings({
   onImportLyrics,
   autoLyricsDownload,
   onAutoLyricsDownloadChange,
+  waveformSeekEnabled,
+  onWaveformSeekChange,
   eqSettings,
   onEqEnabledChange,
   onEqBandChange,
@@ -905,6 +910,29 @@ export default function MobileSettings({
                   Even out volume across your queue by boosting quiet tracks and
                   turning down loud ones toward the median loudness, without
                   clipping.
+                </span>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <section className="mset-section">
+          <h2>
+            <BiPulse /> Seek bar
+          </h2>
+          <div className="mset-card mset-playback-card">
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={waveformSeekEnabled}
+                onChange={(event) => onWaveformSeekChange(event.target.checked)}
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Waveform seek bar</span>
+                <span className="mset-gapless-hint">
+                  Show each track's waveform in the seek bar, moving with the
+                  music around the playhead. Turn off for a plain slider and no
+                  track analysis.
                 </span>
               </span>
             </label>

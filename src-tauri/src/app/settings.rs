@@ -45,6 +45,10 @@ pub struct AppSettings {
     /// Boost quieter tracks toward the median loudness of played tracks.
     #[serde(default)]
     pub volume_normalization_enabled: bool,
+    /// Draw the seek bar as the track's waveform, moving with the music
+    /// around the playhead. Off gives the plain slider and skips analysis.
+    #[serde(default = "default_waveform_seek_enabled")]
+    pub waveform_seek_enabled: bool,
     /// Master switch for the remote-source search tier. When off, no provider
     /// is queried and the escalation button never appears, so nothing in the
     /// app reaches the network for music discovery.
@@ -85,6 +89,10 @@ fn default_auto_lyrics_download() -> bool {
     true
 }
 
+fn default_waveform_seek_enabled() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -102,6 +110,7 @@ impl Default for AppSettings {
             gapless_enabled: true,
             auto_lyrics_download: true,
             volume_normalization_enabled: false,
+            waveform_seek_enabled: default_waveform_seek_enabled(),
             outside_sourcing_enabled: default_outside_sourcing_enabled(),
             spotify_client_id: None,
             jamendo_client_id: None,
@@ -187,4 +196,31 @@ fn settings_path(app: &tauri::AppHandle) -> PathBuf {
         .app_data_dir()
         .map(|dir| dir.join(SETTINGS_FILE))
         .unwrap_or_else(|_| PathBuf::from(SETTINGS_FILE))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_saved_before_the_waveform_switch_keep_it_on() {
+        let mut saved = serde_json::to_value(AppSettings::default()).unwrap();
+        saved
+            .as_object_mut()
+            .unwrap()
+            .remove("waveform_seek_enabled");
+        let loaded: AppSettings = serde_json::from_value(saved).unwrap();
+        assert!(loaded.waveform_seek_enabled);
+    }
+
+    #[test]
+    fn turning_the_waveform_off_survives_a_save() {
+        let settings = AppSettings {
+            waveform_seek_enabled: false,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let loaded: AppSettings = serde_json::from_str(&json).unwrap();
+        assert!(!loaded.waveform_seek_enabled);
+    }
 }

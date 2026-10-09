@@ -1274,6 +1274,14 @@ export const setAutoLyricsDownload = (enabled: boolean): Promise<void> => {
   return safeInvoke("set_auto_lyrics_download", { enabled });
 };
 
+export const getWaveformSeekEnabled = (): Promise<boolean> => {
+  return safeInvoke<boolean>("get_waveform_seek_enabled");
+};
+
+export const setWaveformSeekEnabled = (enabled: boolean): Promise<void> => {
+  return safeInvoke("set_waveform_seek_enabled", { enabled });
+};
+
 // ── Audio Output Devices ──────────────────────────────────────────────────────
 
 export const listOutputDevices = (): Promise<string[]> => {

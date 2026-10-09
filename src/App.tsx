@@ -265,6 +265,7 @@ function App() {
     gaplessEnabled,
     volumeNormalizationEnabled,
     autoLyricsDownload,
+    waveformSeekEnabled,
     eqAnchor,
     setEqAnchor,
     volumeIconRef,
@@ -279,6 +280,7 @@ function App() {
     handleGaplessChange,
     handleVolumeNormalizationChange,
     handleAutoLyricsDownloadChange,
+    handleWaveformSeekChange,
   } = useEqualizerSettings(setError);
 
   const {
@@ -2109,6 +2111,10 @@ function App() {
           onAutoLyricsDownloadChange={(enabled) =>
             void handleAutoLyricsDownloadChange(enabled)
           }
+          waveformSeekEnabled={waveformSeekEnabled}
+          onWaveformSeekChange={(enabled) =>
+            void handleWaveformSeekChange(enabled)
+          }
           eqSettings={eqSettings}
           onEqEnabledChange={handleEqEnabled}
           onEqBandChange={handleEqBandChange}
@@ -2414,6 +2420,7 @@ function App() {
         onRefreshOutputDevices={() =>
           listOutputDevices().then(setOutputDevices).catch(console.error)
         }
+        waveformEnabled={waveformSeekEnabled}
       />
 
       {mobilePlayerOpen && currentTrack && (
@@ -2470,6 +2477,7 @@ function App() {
           onRemoveFromQueue={handleRemoveFromQueue}
           onReorderQueue={handleMoveQueueTrack}
           onClearQueue={handleClearQueue}
+          waveformEnabled={waveformSeekEnabled}
         />
       )}
 
@@ -2493,6 +2501,10 @@ function App() {
           autoLyricsDownload={autoLyricsDownload}
           onAutoLyricsDownloadChange={(enabled) =>
             void handleAutoLyricsDownloadChange(enabled)
+          }
+          waveformSeekEnabled={waveformSeekEnabled}
+          onWaveformSeekChange={(enabled) =>
+            void handleWaveformSeekChange(enabled)
           }
           eqSettings={eqSettings}
           onEqEnabledChange={handleEqEnabled}

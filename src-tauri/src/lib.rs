@@ -315,6 +315,8 @@ pub fn run() {
             commands::set_volume_normalization_enabled,
             commands::get_auto_lyrics_download,
             commands::set_auto_lyrics_download,
+            commands::get_waveform_seek_enabled,
+            commands::set_waveform_seek_enabled,
             commands::get_close_action,
             commands::set_close_action,
             commands::toggle_close_action,

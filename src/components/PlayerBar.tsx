@@ -71,6 +71,7 @@ export default function PlayerBar({
   onVolumeChange,
   onToggleDevice,
   onRefreshOutputDevices,
+  waveformEnabled,
 }: {
   currentTrack: Track | null;
   playbackState: PlaybackState;
@@ -107,6 +108,7 @@ export default function PlayerBar({
   onVolumeChange: (value: number) => void;
   onToggleDevice: () => void;
   onRefreshOutputDevices: () => void;
+  waveformEnabled: boolean;
 }) {
   const seekSlider = (
     <input
@@ -286,7 +288,7 @@ export default function PlayerBar({
 
       <div className="seek-row">
         <span>{formatTime(displayPosition)}</span>
-        {isMobileLayout() ? (
+        {isMobileLayout() || !waveformEnabled ? (
           seekSlider
         ) : (
           <WaveformSeek

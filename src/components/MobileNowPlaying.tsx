@@ -440,6 +440,7 @@ interface MobileNowPlayingProps {
   onRemoveFromQueue: (index: number) => void;
   onReorderQueue: (from: number, to: number) => void;
   onClearQueue: () => void;
+  waveformEnabled: boolean;
 }
 
 export default function MobileNowPlaying({
@@ -486,7 +487,23 @@ export default function MobileNowPlaying({
   onRemoveFromQueue,
   onReorderQueue,
   onClearQueue,
+  waveformEnabled,
 }: MobileNowPlayingProps) {
+  const seekSlider = (
+    <input
+      className="range-slider"
+      type="range"
+      min="0"
+      max={Math.max(displayDuration, 1)}
+      step="1"
+      value={displayPosition}
+      onPointerDown={() => document.body.classList.add("is-seeking")}
+      onPointerCancel={() => document.body.classList.remove("is-seeking")}
+      onChange={(e) => onSeekChange(Number(e.target.value))}
+      onPointerUp={(e) => onSeekCommit(Number(e.currentTarget.value))}
+    />
+  );
+
   const [fullCover, setFullCover] = useState<string | null>(null);
   const [entered, setEntered] = useState(false);
   const [lyricsText, setLyricsText] = useState<string | null>(
@@ -919,31 +936,20 @@ export default function MobileNowPlaying({
       </div>
 
       <div className="mnp-seek-row">
-        <WaveformSeek
-          path={track.path}
-          position={displayPosition}
-          duration={displayDuration}
-          playing={isPlaying}
-          speed={speed}
-          onSeekChange={onSeekChange}
-          onSeekCommit={onSeekCommit}
-          fallback={
-            <input
-              className="range-slider"
-              type="range"
-              min="0"
-              max={Math.max(displayDuration, 1)}
-              step="1"
-              value={displayPosition}
-              onPointerDown={() => document.body.classList.add("is-seeking")}
-              onPointerCancel={() =>
-                document.body.classList.remove("is-seeking")
-              }
-              onChange={(e) => onSeekChange(Number(e.target.value))}
-              onPointerUp={(e) => onSeekCommit(Number(e.currentTarget.value))}
-            />
-          }
-        />
+        {waveformEnabled ? (
+          <WaveformSeek
+            path={track.path}
+            position={displayPosition}
+            duration={displayDuration}
+            playing={isPlaying}
+            speed={speed}
+            onSeekChange={onSeekChange}
+            onSeekCommit={onSeekCommit}
+            fallback={seekSlider}
+          />
+        ) : (
+          seekSlider
+        )}
         <div className="mnp-seek-times">
           <span>{formatTime(displayPosition)}</span>
           <span>{formatTime(displayDuration)}</span>

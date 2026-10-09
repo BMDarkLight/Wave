@@ -195,7 +195,8 @@ bars around the playhead rise and fall with the music. A track is analysed
 the first time it plays, and the shape is saved in the library so it shows
 straight away after that. Streams and previews keep a plain slider. On
 Android the waveform sits on the Now Playing screen; the mini player keeps its
-thin bar.
+thin bar. Turn off **Waveform seek bar** in Settings for a plain slider, which
+also stops Wave from analysing tracks for it.
 
 <img src="docs/screenshots/desktop-queue.png" alt="Queue panel" width="100%">
 

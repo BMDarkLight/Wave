@@ -8,15 +8,17 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   EQ_PRESETS,
   getAutoLyricsDownload,
+  getWaveformSeekEnabled,
   getCrossfadeDuration,
   getEqSettings,
   getGaplessEnabled,
   getVolumeNormalizationEnabled,
   setAutoLyricsDownload,
+  setWaveformSeekEnabled,
   setCrossfadeDuration,
   setEqBands,
   setEqEnabled,
@@ -40,6 +42,16 @@ export function useEqualizerSettings(
   const [volumeNormalizationEnabled, setVolumeNormalizationEnabledState] =
     useState(false);
   const [autoLyricsDownload, setAutoLyricsDownloadState] = useState(true);
+  // Off until the saved value arrives, so a launch never starts analysing a
+  // track for someone who turned the waveform off.
+  const [waveformSeekEnabled, setWaveformSeekEnabledState] = useState(false);
+  // The seek bar is on screen from the start, so read this one at launch
+  // rather than waiting for the panels that load the rest.
+  useEffect(() => {
+    getWaveformSeekEnabled()
+      .then(setWaveformSeekEnabledState)
+      .catch(() => {});
+  }, []);
   const [eqAnchor, setEqAnchor] = useState<{
     bottom: number;
     right: number;
@@ -62,6 +74,7 @@ export function useEqualizerSettings(
       setVolumeNormalizationEnabledState(volumeNormalization);
       const autoLyrics = await getAutoLyricsDownload();
       setAutoLyricsDownloadState(autoLyrics);
+      setWaveformSeekEnabledState(await getWaveformSeekEnabled());
     } catch (err) {
       console.error("Failed to load EQ settings", err);
     }
@@ -185,6 +198,18 @@ export function useEqualizerSettings(
     }
   };
 
+  const handleWaveformSeekChange = async (enabled: boolean) => {
+    setWaveformSeekEnabledState(enabled);
+    try {
+      await setWaveformSeekEnabled(enabled);
+    } catch (err) {
+      setError(
+        formatInvokeError(err, "Failed to update the waveform seek bar"),
+      );
+      setWaveformSeekEnabledState(await getWaveformSeekEnabled());
+    }
+  };
+
   return {
     showEqPanel,
     setShowEqPanel,
@@ -193,6 +218,7 @@ export function useEqualizerSettings(
     gaplessEnabled,
     volumeNormalizationEnabled,
     autoLyricsDownload,
+    waveformSeekEnabled,
     eqAnchor,
     setEqAnchor,
     volumeIconRef,
@@ -207,5 +233,6 @@ export function useEqualizerSettings(
     handleGaplessChange,
     handleVolumeNormalizationChange,
     handleAutoLyricsDownloadChange,
+    handleWaveformSeekChange,
   };
 }
