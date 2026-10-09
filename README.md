@@ -265,9 +265,10 @@ owns the library and the queue, but decoding and output go through **Media3
 ExoPlayer** over JNI so `content://` URIs from the Storage Access Framework play
 directly — no copying your music into app storage.
 
-- Touch layout with bottom tabs for Home, Search, Library and Favorites, a
-  drawer for playlists and history, a slim mini player, and a full **Now
-  Playing** sheet you can drag to dismiss.
+- Touch layout with bottom tabs for Home, Search and Library, a slim mini
+  player, and a full **Now Playing** sheet you can drag to dismiss. The
+  Library tab gathers all songs, favorites, listening history and playlists
+  in one list.
 - When a song has synced lyrics, tap the cover to read along, or keep watching
   the cover and Now Playing turns to the lyrics as the first verse starts.
 - **Glass effect** and **Animations** switches in Settings swap the blurred
