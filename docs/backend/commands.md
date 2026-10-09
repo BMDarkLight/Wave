@@ -130,6 +130,45 @@ await invoke<number>("set_playback_speed", { speed: 1.25 });
 
 ---
 
+### `get_waveform`
+
+The seek bar waveform for a track: 400 values from 0 to 255, the loudest part
+of the track at 255. Saved waveforms come from the library straight away. A
+missing one is computed in the background and announced with a
+[`waveform-ready`](./events.md#waveform-ready) event, so call this again when
+that arrives. A waveform goes stale when its file changes size or modified
+time, and is computed again.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `path` | `string` | yes | Track path or Android document URI |
+
+**Returns:** `number[] | null`. `null` while the waveform is being computed,
+and for anything that cannot be decoded, such as a stream or a missing file.
+
+**Example**
+
+```typescript
+const bins = await invoke<number[] | null>("get_waveform", { path });
+```
+
+---
+
+### `get_playback_level`
+
+Loudness of what is playing right now, as the RMS of the last 30 ms of
+audio, 0.0 to 1.0. It is measured before volume, so it does not drop when the
+user turns the volume down. Returns `0` while paused or stopped. Cheap enough
+to poll many times a second for a live display.
+
+**Arguments:** none
+
+**Returns:** `number`
+
+---
+
 ### `seek_track`
 
 Seek to a position within the current track. Uses Rodio’s native seek (no full re-decode).

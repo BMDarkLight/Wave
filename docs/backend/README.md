@@ -72,6 +72,8 @@ Important behaviors:
 | `set_volume` | Set volume (`0.0`–`1.0`) |
 | `set_sleep_timer` | Pause after a countdown or at the end of the track |
 | `set_playback_speed` | Set playback speed (`0.5`–`2.0`), pitch preserved |
+| `get_waveform` | Seek bar waveform for a track (computed in the background on first request) |
+| `get_playback_level` | Loudness of what is playing right now, for the live waveform |
 
 ### Library & playlists
 

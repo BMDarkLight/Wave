@@ -189,6 +189,14 @@ until Wave closes, so the next launch always starts at normal speed. Set it in
 the volume and equalizer panel on desktop, in the Now Playing sheet on
 Android, or with `wave playback speed`.
 
+The **seek bar is the track's waveform**: the part already played is lit, and
+you can click or drag anywhere on it to jump there. While a track plays, the
+bars around the playhead rise and fall with the music. A track is analysed
+the first time it plays, and the shape is saved in the library so it shows
+straight away after that. Streams and previews keep a plain slider. On
+Android the waveform sits on the Now Playing screen; the mini player keeps its
+thin bar.
+
 <img src="docs/screenshots/desktop-queue.png" alt="Queue panel" width="100%">
 
 ### Lyrics

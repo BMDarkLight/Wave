@@ -181,3 +181,22 @@ await listen<string>("source-download-fallback", (event) => {
   showToast(event.payload);
 });
 ```
+
+---
+
+### `waveform-ready`
+
+Emitted when the background worker has computed a track's waveform. Call
+[`get_waveform`](./commands.md#get_waveform) again for that path to read it.
+
+| Payload | Type |
+|---------|------|
+| path | `string`, the track whose waveform is ready |
+
+```typescript
+import { listen } from "@tauri-apps/api/event";
+
+await listen<string>("waveform-ready", (event) => {
+  if (event.payload === currentPath) reloadWaveform();
+});
+```
