@@ -119,6 +119,7 @@ import Sidebar, { type MainView } from "./components/Sidebar";
 import LibraryTrackList from "./components/LibraryTrackList";
 import MobileNowPlaying from "./components/MobileNowPlaying";
 import MobileSettings from "./components/MobileSettings";
+import MobileTabBar, { type MobileTab } from "./components/MobileTabBar";
 import "./App.css";
 import "./touch-hover.css";
 
@@ -1310,6 +1311,19 @@ function App() {
     setMainView("most_played");
   };
 
+  const mobileTab: MobileTab | null = mainSearchOpen
+    ? "search"
+    : viewingAlbum || viewingArtist
+      ? null
+      : mainView === "home"
+        ? "home"
+        : mainView === "playlist" && selectedPlaylistId === libraryPlaylist?.id
+          ? "library"
+          : mainView === "playlist" &&
+              selectedPlaylistId === favoritesPlaylist?.id
+            ? "favorites"
+            : null;
+
   // ── Queue operations ───────────────────────────────────────────────────────
 
   const handleAddTrackToPlaylist = async (
@@ -1881,18 +1895,6 @@ function App() {
               </span>
             ) : null}
           </div>
-          <div className="mobile-topbar-actions">
-            <button
-              className={`mobile-topbar-btn ${mainSearchOpen ? "active" : ""}`}
-              onClick={toggleMainSearch}
-              type="button"
-              title="Search"
-              aria-label={mainSearchOpen ? "Close search" : "Search library"}
-              aria-expanded={mainSearchOpen}
-            >
-              <BiSearch />
-            </button>
-          </div>
         </div>
         <div className="mobile-topbar-search" aria-hidden={!mainSearchOpen}>
           <div className="mobile-topbar-search-inner">
@@ -2427,6 +2429,18 @@ function App() {
           listOutputDevices().then(setOutputDevices).catch(console.error)
         }
         waveformEnabled={waveformSeekEnabled}
+      />
+
+      <MobileTabBar
+        active={mobileTab}
+        onHome={goHome}
+        onSearch={toggleMainSearch}
+        onLibrary={() => {
+          if (libraryPlaylist) handleSelectPlaylist(libraryPlaylist.id);
+        }}
+        onFavorites={() => {
+          if (favoritesPlaylist) handleSelectPlaylist(favoritesPlaylist.id);
+        }}
       />
 
       {mobilePlayerOpen && currentTrack && (

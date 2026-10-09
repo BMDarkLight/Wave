@@ -4353,14 +4353,20 @@ div.album-hero-cover {
   }
 }
 
-.mini-progress {
+.mini-progress,
+.mobile-tabbar {
   display: none;
 }
 
 @media (max-width: 900px) {
   :root {
     --mobile-topbar-height: 52px;
-    --player-height: 80px;
+    /* Tabs plus the system gesture bar below them. */
+    --mobile-tabbar-height: calc(
+      56px + max(8px, env(safe-area-inset-bottom, 0px))
+    );
+    /* Everything docked at the bottom: the mini player and the tabs. */
+    --player-height: calc(68px + var(--mobile-tabbar-height));
     --sidebar-width: 0px;
   }
 
@@ -4920,7 +4926,7 @@ div.album-hero-cover {
     position: absolute;
     left: 0;
     right: 0;
-    bottom: 0;
+    bottom: var(--mobile-tabbar-height);
     z-index: 60;
     grid-column: auto;
     grid-row: auto;
@@ -4928,8 +4934,8 @@ div.album-hero-cover {
     grid-template-rows: auto;
     column-gap: 10px;
     align-items: center;
-    padding: 10px 14px calc(3px + max(18px, env(safe-area-inset-bottom, 0px)));
-    min-height: var(--player-height);
+    padding: 10px 14px;
+    min-height: 68px;
     background: rgba(12, 12, 12, 0.78);
     border-top: 1px solid rgba(255, 255, 255, 0.1);
     backdrop-filter: blur(28px) saturate(1.6);
@@ -5020,6 +5026,43 @@ div.album-hero-cover {
 
   .player-bar .seek-row {
     display: none;
+  }
+
+  .mobile-tabbar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    height: var(--mobile-tabbar-height);
+    padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+    box-sizing: border-box;
+    background: #0c0c0c;
+  }
+
+  .mobile-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .mobile-tab.active {
+    color: var(--text);
+  }
+
+  .mobile-tab-icon {
+    display: grid;
+    font-size: 24px;
   }
 
   .mini-progress {
@@ -5189,10 +5232,6 @@ div.album-hero-cover {
 }
 
 @media (max-width: 560px) {
-  :root {
-    --player-height: 100px;
-  }
-
   .track-list-header .track-col-index,
   .track-item .track-col-index {
     display: none;
