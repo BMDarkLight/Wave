@@ -639,6 +639,45 @@ export default function MobileNowPlaying({
   // Tapping the cover only leads to lyrics that follow the music.
   const coverOpensLyrics = view === "cover" && !!timedLyrics;
 
+  // Skip a leading blank stamp such as `[00:00.00]`; the verse starts with
+  // the first line that has words.
+  const firstVerseTime = useMemo(
+    () => timedLyrics?.find((line) => line.text.trim())?.time ?? null,
+    [timedLyrics],
+  );
+
+  // Turn from the cover to the lyrics as the first verse begins. Only
+  // playback reaching it counts, not a seek past it, and only once per
+  // track, so going back to the cover keeps it there.
+  const lastPositionRef = useRef(displayPosition);
+  const verseOpenedPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = lastPositionRef.current;
+    lastPositionRef.current = displayPosition;
+    if (firstVerseTime === null || verseOpenedPathRef.current === track.path) {
+      return;
+    }
+    const reachedVerse =
+      isPlaying &&
+      previous < firstVerseTime &&
+      displayPosition >= firstVerseTime &&
+      displayPosition - previous < 3;
+    if (!reachedVerse) return;
+    verseOpenedPathRef.current = track.path;
+    if (view === "cover" && !menuOpen && !isPageClosing) {
+      onViewChange("lyrics");
+    }
+  }, [
+    displayPosition,
+    firstVerseTime,
+    track.path,
+    isPlaying,
+    view,
+    menuOpen,
+    isPageClosing,
+    onViewChange,
+  ]);
+
   const title = getTrackTitle(track);
   const coverLetters = title.slice(0, 2).toUpperCase();
 
