@@ -14,14 +14,17 @@
 
 import type { ReactNode } from "react";
 import {
+  BiAlbum,
   BiBarChartAlt2,
   BiChevronRight,
+  BiCog,
   BiHistory,
   BiImport,
   BiListUl,
   BiMusic,
   BiPlus,
   BiSolidHeart,
+  BiUser,
 } from "react-icons/bi";
 import type { PlaylistInfo } from "../utils/player";
 
@@ -32,6 +35,9 @@ interface MobileLibraryPageProps {
   onSelectPlaylist: (id: string) => void;
   onGoRecentlyPlayed: () => void;
   onGoMostPlayed: () => void;
+  onGoAlbums: () => void;
+  onGoArtists: () => void;
+  onOpenSettings: () => void;
   onImportPlaylist: () => void;
   onCreatePlaylist: () => void;
 }
@@ -73,6 +79,9 @@ export default function MobileLibraryPage({
   onSelectPlaylist,
   onGoRecentlyPlayed,
   onGoMostPlayed,
+  onGoAlbums,
+  onGoArtists,
+  onOpenSettings,
   onImportPlaylist,
   onCreatePlaylist,
 }: MobileLibraryPageProps) {
@@ -99,6 +108,15 @@ export default function MobileLibraryPage({
           >
             <BiPlus />
           </button>
+          <button
+            className="mlib-icon-btn"
+            onClick={onOpenSettings}
+            type="button"
+            title="Settings"
+            aria-label="Settings"
+          >
+            <BiCog />
+          </button>
         </div>
       </div>
 
@@ -120,6 +138,8 @@ export default function MobileLibraryPage({
             onClick={() => onSelectPlaylist(favoritesPlaylist.id)}
           />
         )}
+        <Row icon={<BiAlbum />} label="Albums" onClick={onGoAlbums} />
+        <Row icon={<BiUser />} label="Artists" onClick={onGoArtists} />
         <Row
           icon={<BiHistory />}
           label="Recently Played"

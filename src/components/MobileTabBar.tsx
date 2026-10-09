@@ -21,6 +21,8 @@ interface MobileTabBarProps {
   onHome: () => void;
   onSearch: () => void;
   onLibrary: () => void;
+  /** Shown in place of "Library" while folders sync or files import. */
+  librarySyncLabel: string | null;
 }
 
 function Tab({
@@ -28,9 +30,11 @@ function Tab({
   icon,
   activeIcon,
   active,
+  busy = false,
   onClick,
 }: {
   label: string;
+  busy?: boolean;
   icon: ReactNode;
   activeIcon?: ReactNode;
   active: boolean;
@@ -45,6 +49,7 @@ function Tab({
     >
       <span className="mobile-tab-icon" aria-hidden>
         {active && activeIcon ? activeIcon : icon}
+        {busy && <span className="mobile-tab-busy brand-sync-spinner" />}
       </span>
       <span className="mobile-tab-label">{label}</span>
     </button>
@@ -56,6 +61,7 @@ export default function MobileTabBar({
   onHome,
   onSearch,
   onLibrary,
+  librarySyncLabel,
 }: MobileTabBarProps) {
   return (
     <nav className="mobile-tabbar" aria-label="Main">
@@ -73,9 +79,10 @@ export default function MobileTabBar({
         onClick={onSearch}
       />
       <Tab
-        label="Library"
+        label={librarySyncLabel ?? "Library"}
         icon={<BiLibrary />}
         active={active === "library"}
+        busy={librarySyncLabel !== null}
         onClick={onLibrary}
       />
     </nav>

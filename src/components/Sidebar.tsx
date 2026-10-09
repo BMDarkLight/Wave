@@ -29,6 +29,8 @@ import type { PlaylistInfo } from "../utils/player";
 export type MainView =
   | "home"
   | "library"
+  | "albums"
+  | "artists"
   | "playlist"
   | "recently_played"
   | "most_played"

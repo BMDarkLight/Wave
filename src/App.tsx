@@ -11,14 +11,7 @@
 // The Code for Frontend of Wave is currently completely AI Generated and may contain bugs or rough edges. Please report any issues you encounter at
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import trayTemplate from "../assets/tray-template.svg";
-import {
-  BiX,
-  BiFolderOpen,
-  BiCog,
-  BiSearch,
-  BiChevronRight,
-} from "react-icons/bi";
+import { BiX, BiFolderOpen, BiSearch, BiChevronRight } from "react-icons/bi";
 import type { SourceSettings, SourceTrack } from "./utils/player";
 import {
   addTrackToPlaylistById,
@@ -121,6 +114,10 @@ import MobileNowPlaying from "./components/MobileNowPlaying";
 import MobileSettings from "./components/MobileSettings";
 import MobileTabBar, { type MobileTab } from "./components/MobileTabBar";
 import MobileLibraryPage from "./components/MobileLibraryPage";
+import {
+  MobileAlbumsPage,
+  MobileArtistsPage,
+} from "./components/MobileCollectionPages";
 import "./App.css";
 import "./touch-hover.css";
 
@@ -1304,6 +1301,20 @@ function App() {
     setMainView("library");
   };
 
+  const goAlbums = () => {
+    clearBrowse();
+    closeMainSearch();
+    setMenuTrack(null);
+    setMainView("albums");
+  };
+
+  const goArtists = () => {
+    clearBrowse();
+    closeMainSearch();
+    setMenuTrack(null);
+    setMainView("artists");
+  };
+
   const goRecentlyPlayed = () => {
     clearBrowse();
     closeMainSearch();
@@ -1526,7 +1537,9 @@ function App() {
           ? 1
           : mainView === "playlist" ||
               mainView === "recently_played" ||
-              mainView === "most_played"
+              mainView === "most_played" ||
+              mainView === "albums" ||
+              mainView === "artists"
             ? 2
             : 0,
     goLibrary,
@@ -1885,32 +1898,6 @@ function App() {
       <header
         className={`mobile-topbar${mainSearchOpen ? " search-open" : ""}`}
       >
-        <div className="mobile-topbar-row">
-          <div className="mobile-topbar-title">
-            <img src={trayTemplate} alt="Wave" className="mobile-topbar-logo" />
-            {isScanningFolder || lyricsFetchPath ? (
-              <span className="mobile-topbar-status" role="status">
-                <span className="brand-sync-spinner" aria-hidden />
-                {isScanningFolder
-                  ? folderScanIsSync
-                    ? "Syncing"
-                    : "Importing"
-                  : "Fetching lyrics"}
-              </span>
-            ) : null}
-          </div>
-          <div className="mobile-topbar-actions">
-            <button
-              className="mobile-topbar-btn"
-              onClick={handleOpenMobileSettings}
-              type="button"
-              title="Settings"
-              aria-label="Settings"
-            >
-              <BiCog />
-            </button>
-          </div>
-        </div>
         <div className="mobile-topbar-search" aria-hidden={!mainSearchOpen}>
           <div className="mobile-topbar-search-inner">
             <BiSearch className="library-search-icon" aria-hidden />
@@ -2080,6 +2067,7 @@ function App() {
           onOpenLibrary={() => {
             if (libraryPlaylist) handleSelectPlaylist(libraryPlaylist.id);
           }}
+          onOpenSettings={handleOpenMobileSettings}
         />
       ) : (mainView === "recently_played" || mainView === "most_played") &&
         !mainSearchQuery.trim() ? (
@@ -2103,6 +2091,10 @@ function App() {
             });
           }}
         />
+      ) : mainView === "albums" && !mainSearchQuery.trim() ? (
+        <MobileAlbumsPage onOpenAlbum={openAlbumPage} />
+      ) : mainView === "artists" && !mainSearchQuery.trim() ? (
+        <MobileArtistsPage onOpenArtist={openArtistPage} />
       ) : mainView === "library" && !mainSearchQuery.trim() ? (
         <MobileLibraryPage
           libraryPlaylist={libraryPlaylist}
@@ -2111,6 +2103,9 @@ function App() {
           onSelectPlaylist={handleSelectPlaylist}
           onGoRecentlyPlayed={goRecentlyPlayed}
           onGoMostPlayed={goMostPlayed}
+          onGoAlbums={goAlbums}
+          onGoArtists={goArtists}
+          onOpenSettings={handleOpenMobileSettings}
           onImportPlaylist={() => void handleImportPlaylist()}
           onCreatePlaylist={openCreatePlaylistDialog}
         />
@@ -2462,6 +2457,9 @@ function App() {
         onHome={goHome}
         onSearch={toggleMainSearch}
         onLibrary={goLibrary}
+        librarySyncLabel={
+          isScanningFolder ? (folderScanIsSync ? "Syncing" : "Importing") : null
+        }
       />
 
       {mobilePlayerOpen && currentTrack && (
