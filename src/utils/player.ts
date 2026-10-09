@@ -253,6 +253,29 @@ export const MAX_SPEED = 2;
 export const formatSpeed = (speed: number): string =>
   `${Number(speed.toFixed(2))}x`;
 
+/**
+ * The seek bar waveform for a track: 400 values, 0-255. `null` while it is
+ * being computed (a `waveform-ready` event follows) or when the track cannot
+ * be analysed, such as a stream.
+ */
+export const getWaveform = (path: string): Promise<number[] | null> => {
+  return safeInvoke<number[] | null>("get_waveform", { path });
+};
+
+/** Calls `onReady` with a track's path each time its waveform is computed. */
+export const listenToWaveformReady = async (
+  onReady: (path: string) => void,
+): Promise<() => void> => {
+  await tauriInitialized;
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("waveform-ready", (e) => onReady(e.payload));
+};
+
+/** Loudness of what is playing right now, 0 to 1. */
+export const getPlaybackLevel = (): Promise<number> => {
+  return safeInvoke<number>("get_playback_level");
+};
+
 export const setPlaybackSpeed = (speed: number): Promise<number> => {
   return safeInvoke<number>("set_playback_speed", { speed });
 };

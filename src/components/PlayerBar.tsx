@@ -24,6 +24,7 @@ import {
   BiVolumeMute,
 } from "react-icons/bi";
 import Artwork from "./Artwork";
+import WaveformSeek from "./WaveformSeek";
 import { formatTime } from "../utils/format";
 import { getTrackTitle } from "../utils/track";
 import { formatSpeed } from "../utils/player";
@@ -107,6 +108,22 @@ export default function PlayerBar({
   onToggleDevice: () => void;
   onRefreshOutputDevices: () => void;
 }) {
+  const seekSlider = (
+    <input
+      className="range-slider"
+      type="range"
+      min="0"
+      max={Math.max(displayDuration, 1)}
+      step="1"
+      value={displayPosition}
+      disabled={!playbackState.current_path}
+      onPointerDown={() => document.body.classList.add("is-seeking")}
+      onPointerCancel={() => document.body.classList.remove("is-seeking")}
+      onChange={(event) => onSeekChange(Number(event.target.value))}
+      onPointerUp={(event) => onSeekCommit(Number(event.currentTarget.value))}
+    />
+  );
+
   return (
     <footer
       className={`player-bar${currentTrack && (!mobilePlayerOpenRef.current || mobilePlayerClosing) ? " player-bar-tappable" : ""}`}
@@ -269,21 +286,21 @@ export default function PlayerBar({
 
       <div className="seek-row">
         <span>{formatTime(displayPosition)}</span>
-        <input
-          className="range-slider"
-          type="range"
-          min="0"
-          max={Math.max(displayDuration, 1)}
-          step="1"
-          value={displayPosition}
-          disabled={!playbackState.current_path}
-          onPointerDown={() => document.body.classList.add("is-seeking")}
-          onPointerCancel={() => document.body.classList.remove("is-seeking")}
-          onChange={(event) => onSeekChange(Number(event.target.value))}
-          onPointerUp={(event) =>
-            onSeekCommit(Number(event.currentTarget.value))
-          }
-        />
+        {isMobileLayout() ? (
+          seekSlider
+        ) : (
+          <WaveformSeek
+            path={playbackState.current_path}
+            position={displayPosition}
+            duration={displayDuration}
+            playing={playbackState.is_playing}
+            speed={playbackState.speed}
+            compact
+            onSeekChange={onSeekChange}
+            onSeekCommit={onSeekCommit}
+            fallback={seekSlider}
+          />
+        )}
         <span>{formatTime(displayDuration)}</span>
         {playbackState.speed !== 1 && (
           <button

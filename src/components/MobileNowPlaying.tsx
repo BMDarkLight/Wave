@@ -51,6 +51,7 @@ import type {
 import { useDragDismiss } from "../hooks/useDragDismiss";
 import VirtualizedList from "./VirtualizedList";
 import SleepTimerButton from "./SleepTimerButton";
+import WaveformSeek from "./WaveformSeek";
 import SpeedRow from "./SpeedRow";
 
 const formatTime = (seconds?: number | null) => {
@@ -918,17 +919,30 @@ export default function MobileNowPlaying({
       </div>
 
       <div className="mnp-seek-row">
-        <input
-          className="range-slider"
-          type="range"
-          min="0"
-          max={Math.max(displayDuration, 1)}
-          step="1"
-          value={displayPosition}
-          onPointerDown={() => document.body.classList.add("is-seeking")}
-          onPointerCancel={() => document.body.classList.remove("is-seeking")}
-          onChange={(e) => onSeekChange(Number(e.target.value))}
-          onPointerUp={(e) => onSeekCommit(Number(e.currentTarget.value))}
+        <WaveformSeek
+          path={track.path}
+          position={displayPosition}
+          duration={displayDuration}
+          playing={isPlaying}
+          speed={speed}
+          onSeekChange={onSeekChange}
+          onSeekCommit={onSeekCommit}
+          fallback={
+            <input
+              className="range-slider"
+              type="range"
+              min="0"
+              max={Math.max(displayDuration, 1)}
+              step="1"
+              value={displayPosition}
+              onPointerDown={() => document.body.classList.add("is-seeking")}
+              onPointerCancel={() =>
+                document.body.classList.remove("is-seeking")
+              }
+              onChange={(e) => onSeekChange(Number(e.target.value))}
+              onPointerUp={(e) => onSeekCommit(Number(e.currentTarget.value))}
+            />
+          }
         />
         <div className="mnp-seek-times">
           <span>{formatTime(displayPosition)}</span>

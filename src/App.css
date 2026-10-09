@@ -3378,6 +3378,28 @@ img.queue-thumb {
   cursor: pointer;
 }
 
+.waveform-seek {
+  --waveform-played: var(--text);
+  --waveform-rest: rgba(255, 255, 255, 0.22);
+  display: block;
+  flex: 1;
+  width: 100%;
+  min-width: 80px;
+  height: 40px;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+}
+
+.waveform-seek-compact {
+  height: 28px;
+}
+
+.waveform-seek:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+}
+
 .range-slider::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 999px;
@@ -5572,6 +5594,10 @@ div.album-hero-cover {
 
 .mnp-seek-row .range-slider {
   width: 100%;
+}
+
+.mnp-seek-row .waveform-seek {
+  height: 56px;
 }
 
 .mnp-seek-times {

@@ -99,7 +99,12 @@ export function useDragDismiss({
     if (!enabledRef.current) return;
     if (e.button !== 0) return;
     const target = e.target as HTMLElement | null;
-    if (target?.closest("button, a, input, select, textarea, label")) return;
+    if (
+      target?.closest(
+        "button, a, input, select, textarea, label, [data-no-drag-dismiss]",
+      )
+    )
+      return;
 
     activeRef.current = true;
     movedRef.current = false;
