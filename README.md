@@ -267,6 +267,10 @@ directly — no copying your music into app storage.
 
 - Touch layout with a drawer, a bottom mini-player, and a full **Now Playing**
   sheet you can drag to dismiss.
+- When a song has synced lyrics, tap the cover to read along, or keep watching
+  the cover and Now Playing turns to the lyrics as the first verse starts.
+- **Glass effect** and **Animations** switches in Settings swap the blurred
+  panels for solid ones and make every transition instant, for slower phones.
 - **SAF folder picker** and scanning — grant a folder once, keep your files where
   they are.
 - **Media session** bridge: notification controls, lock screen, Bluetooth, and
