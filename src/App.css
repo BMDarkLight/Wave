@@ -6932,10 +6932,13 @@ div.album-hero-cover {
     padding: 4px 12px 8px 24px;
   }
 
+  /* Same title as Home's greeting: size, spacing, and centred on the
+     44px row its settings button sets. */
   .mlib-header h1 {
     margin: 0;
     font-size: 26px;
-    letter-spacing: -0.04em;
+    line-height: 1.05;
+    letter-spacing: -0.05em;
   }
 
   .mlib-header-actions {
@@ -7317,10 +7320,13 @@ div.album-hero-cover {
     display: contents;
   }
 
+  /* Matches the Home and Library titles: a 44px line puts the text on the
+     same row their header buttons set. */
   .msearch-header h1 {
     margin: 4px 24px 12px;
     font-size: 26px;
-    letter-spacing: -0.04em;
+    line-height: 44px;
+    letter-spacing: -0.05em;
   }
 
   .msearch-field {
