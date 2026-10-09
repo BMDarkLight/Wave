@@ -2483,24 +2483,37 @@ img.queue-thumb {
   color: var(--green-hot);
 }
 
+/* A flex box with a definite height, so a dialog's max-height of 100% means
+   the room left inside the padding and a tall dialog scrolls instead of
+   running off the screen. */
 .modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 120;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.72);
+  background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 
+/* Glass card, the same as the sleep timer popover. */
 .modal-dialog {
   width: min(420px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 22px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #282828;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 24px;
+  background: rgba(40, 40, 40, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 24px 64px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(28px) saturate(1.7);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
 }
 
 .modal-header {
@@ -2546,9 +2559,9 @@ img.queue-thumb {
   width: 100%;
   margin-bottom: 12px;
   padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #121212;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
   color: var(--text);
   outline: none;
 }
@@ -2670,7 +2683,7 @@ img.queue-thumb {
 
 .library-picker-dialog {
   width: min(440px, 100%);
-  max-height: min(560px, 90vh);
+  max-height: min(560px, 100%);
   display: flex;
   flex-direction: column;
 }
@@ -2684,15 +2697,13 @@ img.queue-thumb {
   min-height: 180px;
   max-height: 320px;
   overflow-y: auto;
-  border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg, #121212) 80%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
 }
 
 .metadata-dialog {
   width: min(520px, 100%);
-  max-height: 90vh;
-  overflow-y: auto;
   /* The dialog's own top and bottom padding lives in the two pinned rows
      below, so each one sits flush with the scrollport edge it sticks to. */
   padding: 0 22px;
@@ -2706,8 +2717,10 @@ img.queue-thumb {
   z-index: 1;
   margin: 0 -22px 12px;
   padding: 22px 22px 12px;
-  border-radius: 12px 12px 0 0;
-  background: #282828;
+  border-radius: 24px 24px 0 0;
+  background: rgba(40, 40, 40, 0.72);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 
 .metadata-dialog .modal-actions {
@@ -2716,8 +2729,10 @@ img.queue-thumb {
   z-index: 1;
   margin: 8px -22px 0;
   padding: 14px 22px 22px;
-  border-radius: 0 0 12px 12px;
-  background: #282828;
+  border-radius: 0 0 24px 24px;
+  background: rgba(40, 40, 40, 0.72);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 
 .metadata-cover {
@@ -3370,6 +3385,135 @@ img.queue-thumb {
   min-width: 52px;
   padding: 0 10px;
   border-radius: 999px;
+}
+
+/* Sleep timer popover: a glass card that grows out of the moon button and
+   shrinks back into it. The transform origin is set inline at the moon. */
+.sleep-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 240;
+}
+
+.sleep-popover {
+  position: fixed;
+  z-index: 241;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 24px;
+  color: var(--text);
+  background: rgba(40, 40, 40, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 18px 48px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(28px) saturate(1.7);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+  opacity: 0;
+  transform: scale(0.12);
+  pointer-events: none;
+  transition:
+    transform 0.24s cubic-bezier(0.4, 0, 1, 1),
+    opacity 0.16s ease 0.08s;
+}
+
+.sleep-popover.sleep-popover-open {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition:
+    transform 0.42s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.18s ease;
+}
+
+/* The contents settle in just behind the card so they don't stretch with it. */
+.sleep-popover > * {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.sleep-popover.sleep-popover-open > * {
+  opacity: 1;
+  transition: opacity 0.22s ease 0.1s;
+}
+
+.sleep-popover-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 4px;
+}
+
+.sleep-popover-head > svg {
+  flex-shrink: 0;
+  font-size: 26px;
+}
+
+.sleep-popover-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.sleep-popover-head p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.sleep-popover-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.sleep-popover-grid button,
+.sleep-popover-off {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  transition:
+    background 0.16s ease,
+    transform 0.16s ease;
+}
+
+.sleep-popover-grid button svg,
+.sleep-popover-off svg {
+  font-size: 18px;
+}
+
+.sleep-popover-grid button.current {
+  background: var(--text);
+  color: #111;
+}
+
+.sleep-popover-off {
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sleep-popover-grid button:not(.current):hover,
+  .sleep-popover-off:hover {
+    background: rgba(255, 255, 255, 0.14);
+  }
+}
+
+.sleep-popover-grid button:active,
+.sleep-popover-off:active {
+  transform: scale(0.96);
 }
 
 .repeat-btn.repeat-one {
@@ -4939,14 +5083,12 @@ div.album-hero-cover {
   .modal-dialog {
     width: min(420px, calc(100dvw - 32px));
     max-width: calc(100dvw - 32px);
-    justify-self: center;
   }
 
   /* The editor has far more in it than the other dialogs, so it takes the
      width it can get and sizes its controls for thumbs. */
   .metadata-dialog {
     width: min(520px, calc(100dvw - 32px));
-    max-height: calc(100dvh - 32px);
   }
 
   .metadata-dialog .modal-close-btn {
@@ -6540,6 +6682,12 @@ div.album-hero-cover {
   transition: opacity 0.18s ease;
 }
 
+/* The sleep timer popover fades in place instead of growing. */
+.reduce-motion .sleep-popover,
+.reduce-motion .sleep-popover.sleep-popover-open {
+  transform: none;
+}
+
 /* Cover, lyrics and queue swap with a fade and no drift. */
 .reduce-motion .mnp-layer {
   transform: none;
@@ -7158,41 +7306,46 @@ div.album-hero-cover {
     pointer-events: none;
   }
 
-  /* Search tab: the field sits at the top and stays there while the
-     results scroll beneath it. */
+  /* Search tab: the title scrolls away with the page, and the field stays
+     pinned below the status bar with a frosted background of its own, so
+     nothing paints a box over the page's backdrop. */
   .mobile-search-page {
     overflow-y: auto;
   }
 
   .msearch-header {
-    position: sticky;
-    /* Clear of the status bar once results scroll beneath it. */
-    top: env(safe-area-inset-top, 0px);
-    z-index: 2;
-    padding: 4px 16px 12px;
-    background: linear-gradient(to bottom, #121212 75%, rgba(18, 18, 18, 0));
+    display: contents;
   }
 
   .msearch-header h1 {
-    margin: 0 0 12px 8px;
+    margin: 4px 24px 12px;
     font-size: 26px;
     letter-spacing: -0.04em;
   }
 
   .msearch-field {
+    position: sticky;
+    top: calc(env(safe-area-inset-top, 0px) + 8px);
+    z-index: 2;
     display: flex;
     align-items: center;
     gap: 10px;
     height: 48px;
+    margin: 0 16px 12px;
     padding: 0 8px 0 16px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(38, 38, 38, 0.82);
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  }
+
+  .no-glass .msearch-field {
+    background: #262626;
   }
 
   .msearch-field:focus-within {
     border-color: rgba(255, 255, 255, 0.22);
-    background: rgba(255, 255, 255, 0.11);
   }
 
   .msearch-field .library-search-icon {

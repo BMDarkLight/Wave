@@ -54,3 +54,22 @@ export const liveLift = (level: number, distance: number): number => {
 /** Ease the drawn level toward the measured one: quick up, slow down. */
 export const smoothLevel = (shown: number, measured: number): number =>
   shown + (measured - shown) * (measured > shown ? 0.5 : 0.12);
+
+/** How often a new live reading enters the played side, in ms. */
+export const LIVE_STEP_MS = 50;
+
+/** Live readings kept for the played side, more than any bar count needs. */
+export const LIVE_HISTORY = 1200;
+
+/**
+ * Height of a live bar from a reading, 0 to 1. Music RMS rarely passes 0.3,
+ * so it is stretched, and the curve lifts quiet passages so they still move.
+ */
+export const liveHeight = (level: number): number =>
+  Math.min(1, level * 3) ** 0.7;
+
+/** Ease the played side toward live while playing and back when paused. */
+export const stepLiveMix = (mix: number, playing: boolean): number => {
+  const next = mix + ((playing ? 1 : 0) - mix) * 0.1;
+  return Math.abs(next - (playing ? 1 : 0)) < 0.002 ? (playing ? 1 : 0) : next;
+};

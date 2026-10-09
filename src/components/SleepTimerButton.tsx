@@ -8,9 +8,9 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { BiCheck, BiMoon, BiX } from "react-icons/bi";
-import ContextMenu, { type ContextMenuAnchor } from "./ContextMenu";
 import { formatTime } from "../utils/format";
 import {
   SLEEP_CHOICES,
@@ -27,10 +27,24 @@ function sleepLabel(status: SleepTimerStatus): string | null {
   return null;
 }
 
+/** The line under the popover's title. */
+function sleepSummary(status: SleepTimerStatus): string {
+  if (status.mode === "countdown") return `Pauses in ${sleepLabel(status)}`;
+  if (status.mode === "end_of_track") return "Pauses when this track ends";
+  return "Pause playback after";
+}
+
 function isCurrent(status: SleepTimerStatus, request: SleepRequest): boolean {
   // A countdown is always partway through, so only end-of-track can match.
   return request.mode === "end_of_track" && status.mode === "end_of_track";
 }
+
+/** Gap between the button and the popover above it. */
+const GAP = 10;
+/** The popover never comes closer than this to the screen's sides. */
+const GUTTER = 16;
+/** Matches the close transition in the stylesheet. */
+const CLOSE_MS = 240;
 
 export default function SleepTimerButton({
   status,
@@ -42,26 +56,60 @@ export default function SleepTimerButton({
   /** Button styling of the surrounding controls. */
   className: string;
 }) {
-  const [anchor, setAnchor] = useState<ContextMenuAnchor | null>(null);
+  // The button's rect while the popover is mounted. Kept through the close
+  // so the popover shrinks back into the same spot it grew from.
+  const [origin, setOrigin] = useState<DOMRect | null>(null);
+  const [open, setOpen] = useState(false);
   const label = sleepLabel(status);
   const active = status.mode !== "off";
 
+  useEffect(() => {
+    if (!origin) return;
+    if (open) {
+      const onKey = (event: KeyboardEvent) => {
+        if (event.key === "Escape") setOpen(false);
+      };
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }
+    const timer = window.setTimeout(() => setOrigin(null), CLOSE_MS);
+    return () => window.clearTimeout(timer);
+  }, [origin, open]);
+
+  const show = (rect: DOMRect) => {
+    setOrigin(rect);
+    // Two frames so the closed state paints before it transitions open.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setOpen(true));
+    });
+  };
+
   const choose = (request: SleepRequest) => {
-    setAnchor(null);
+    setOpen(false);
     onSet(request);
   };
+
+  let popoverStyle: CSSProperties | undefined;
+  if (origin) {
+    const width = Math.min(300, window.innerWidth - GUTTER * 2);
+    const centerX = origin.left + origin.width / 2;
+    const left = (window.innerWidth - width) / 2;
+    popoverStyle = {
+      left,
+      width,
+      bottom: window.innerHeight - origin.top + GAP,
+      // Grow out of the middle of the moon, which sits below the box.
+      transformOrigin: `${centerX - left}px calc(100% + ${GAP + origin.height / 2}px)`,
+    };
+  }
 
   return (
     <>
       <button
-        className={`${className} sleep-timer-btn ${active ? "active" : ""}`}
+        className={`${className} sleep-timer-btn ${active || open ? "active" : ""}`}
         onClick={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect();
-          setAnchor({
-            top: rect.bottom + 6,
-            right: window.innerWidth - rect.right,
-            flipAbove: rect.top - 6,
-          });
+          if (open) setOpen(false);
+          else show(event.currentTarget.getBoundingClientRect());
         }}
         type="button"
         title={
@@ -72,36 +120,58 @@ export default function SleepTimerButton({
               : "Sleep timer"
         }
         aria-label="Sleep timer"
-        aria-haspopup="menu"
-        aria-expanded={anchor !== null}
+        aria-haspopup="dialog"
+        aria-expanded={open}
       >
         <BiMoon />
         {label && <span className="sleep-timer-label">{label}</span>}
       </button>
-      {anchor && (
-        <ContextMenu anchor={anchor} onClose={() => setAnchor(null)}>
-          {SLEEP_CHOICES.map(({ label: choiceLabel, request }) => (
-            <button
-              key={choiceLabel}
-              type="button"
-              role="menuitem"
-              onClick={() => choose(request)}
+      {origin &&
+        createPortal(
+          <>
+            <div
+              className="sleep-popover-backdrop"
+              onClick={() => setOpen(false)}
+            />
+            <div
+              className={`sleep-popover${open ? " sleep-popover-open" : ""}`}
+              style={popoverStyle}
+              role="dialog"
+              aria-label="Sleep timer"
             >
-              {isCurrent(status, request) ? <BiCheck /> : <BiMoon />}
-              {choiceLabel}
-            </button>
-          ))}
-          {active && (
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => choose({ mode: "off" })}
-            >
-              <BiX /> Turn off
-            </button>
-          )}
-        </ContextMenu>
-      )}
+              <div className="sleep-popover-head">
+                <BiMoon />
+                <div>
+                  <h3>Sleep timer</h3>
+                  <p>{sleepSummary(status)}</p>
+                </div>
+              </div>
+              <div className="sleep-popover-grid">
+                {SLEEP_CHOICES.map(({ label: choiceLabel, request }) => (
+                  <button
+                    key={choiceLabel}
+                    type="button"
+                    className={isCurrent(status, request) ? "current" : ""}
+                    onClick={() => choose(request)}
+                  >
+                    {isCurrent(status, request) && <BiCheck />}
+                    {choiceLabel}
+                  </button>
+                ))}
+              </div>
+              {active && (
+                <button
+                  type="button"
+                  className="sleep-popover-off"
+                  onClick={() => choose({ mode: "off" })}
+                >
+                  <BiX /> Turn off
+                </button>
+              )}
+            </div>
+          </>,
+          document.body,
+        )}
     </>
   );
 }
