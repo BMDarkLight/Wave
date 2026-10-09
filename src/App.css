@@ -5345,6 +5345,8 @@ div.album-hero-cover {
 }
 
 .mnp-cover {
+  /* Gone by halfway down a drag-to-close. */
+  opacity: calc(1 - 2 * var(--mnp-drag-progress, 0));
   /* Square that grows to the shorter side of the art area. */
   width: min(100cqi, 100cqb);
   height: min(100cqi, 100cqb);

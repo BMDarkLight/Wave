@@ -443,6 +443,11 @@ interface MobileNowPlayingProps {
   waveformEnabled: boolean;
 }
 
+/** Where the mini player and tabs begin, from the top of the screen. */
+const dockTop = () =>
+  document.querySelector(".mobile-dock-glass")?.getBoundingClientRect().top ??
+  window.innerHeight;
+
 export default function MobileNowPlaying({
   track,
   isPlaying,
@@ -553,9 +558,7 @@ export default function MobileNowPlaying({
     enabled: !isPageClosing,
     // The page folds into the mini player, so dragging its top edge down to
     // the bar is as far as it goes; past that the fold would give itself away.
-    maxOffset: () =>
-      document.querySelector(".mobile-dock-glass")?.getBoundingClientRect()
-        .top ?? window.innerHeight,
+    maxOffset: dockTop,
   });
 
   const sheetDismiss = useDragDismiss({
@@ -752,15 +755,20 @@ export default function MobileNowPlaying({
   // Dragging lowers the page's top edge toward the mini player, the same
   // cut the close fold ends on, so letting go or reaching the bar carries
   // straight on into the fold with nothing to jump.
-  // The contents ride down with the edge (`--mnp-drag` in App.css).
+  // The contents ride down with the edge and the cover fades as it goes
+  // (`--mnp-drag` and `--mnp-drag-progress` in App.css).
+  const dragVars = (offset: number) => ({
+    "--mnp-drag": `${offset}px`,
+    "--mnp-drag-progress": Math.min(1, offset / Math.max(1, dockTop())),
+  });
   const pageDragStyle = (
     !isPageClosing && (pageDismiss.dragging || pageDismiss.offset > 0)
       ? {
           clipPath: `inset(${pageDismiss.offset}px 0 0 0 round ${Math.min(16, pageDismiss.offset / 4)}px)`,
-          "--mnp-drag": `${pageDismiss.offset}px`,
+          ...dragVars(pageDismiss.offset),
         }
       : pageDismissing
-        ? { "--mnp-drag": `${dismissOffset}px` }
+        ? dragVars(dismissOffset)
         : undefined
   ) as React.CSSProperties | undefined;
 
