@@ -15,7 +15,7 @@ import trayTemplate from "../assets/tray-template.svg";
 import {
   BiX,
   BiFolderOpen,
-  BiMenu,
+  BiCog,
   BiSearch,
   BiChevronRight,
 } from "react-icons/bi";
@@ -120,6 +120,7 @@ import LibraryTrackList from "./components/LibraryTrackList";
 import MobileNowPlaying from "./components/MobileNowPlaying";
 import MobileSettings from "./components/MobileSettings";
 import MobileTabBar, { type MobileTab } from "./components/MobileTabBar";
+import MobileLibraryPage from "./components/MobileLibraryPage";
 import "./App.css";
 import "./touch-hover.css";
 
@@ -1295,6 +1296,14 @@ function App() {
     setMainView("home");
   };
 
+  const goLibrary = () => {
+    clearBrowse();
+    closeMainSearch();
+    setMenuTrack(null);
+    setMobileNavOpen(false);
+    setMainView("library");
+  };
+
   const goRecentlyPlayed = () => {
     clearBrowse();
     closeMainSearch();
@@ -1311,18 +1320,16 @@ function App() {
     setMainView("most_played");
   };
 
+  // Every list lives under the Library tab, so it stays lit on them too.
   const mobileTab: MobileTab | null = mainSearchOpen
     ? "search"
     : viewingAlbum || viewingArtist
       ? null
       : mainView === "home"
         ? "home"
-        : mainView === "playlist" && selectedPlaylistId === libraryPlaylist?.id
-          ? "library"
-          : mainView === "playlist" &&
-              selectedPlaylistId === favoritesPlaylist?.id
-            ? "favorites"
-            : null;
+        : mainView === "settings"
+          ? null
+          : "library";
 
   // ── Queue operations ───────────────────────────────────────────────────────
 
@@ -1512,6 +1519,18 @@ function App() {
     closeMainSearch,
     browseStackLength: browseStack.length,
     browseBack,
+    libraryDepth:
+      !isMobileLayout() || viewingAlbum || viewingArtist
+        ? 0
+        : mainView === "library"
+          ? 1
+          : mainView === "playlist" ||
+              mainView === "recently_played" ||
+              mainView === "most_played"
+            ? 2
+            : 0,
+    goLibrary,
+    goHome,
   });
 
   const isCurrentTrack = (track: Track) =>
@@ -1867,21 +1886,6 @@ function App() {
         className={`mobile-topbar${mainSearchOpen ? " search-open" : ""}`}
       >
         <div className="mobile-topbar-row">
-          <button
-            className="mobile-topbar-btn"
-            onClick={() => {
-              setShowQueue(false);
-              setShowDeviceList(false);
-              setLyricsPanelTrack(null);
-              closeMainSearch();
-              setMobileNavOpen(true);
-            }}
-            type="button"
-            title="Open playlists"
-            aria-label="Open playlists"
-          >
-            <BiMenu />
-          </button>
           <div className="mobile-topbar-title">
             <img src={trayTemplate} alt="Wave" className="mobile-topbar-logo" />
             {isScanningFolder || lyricsFetchPath ? (
@@ -1894,6 +1898,17 @@ function App() {
                   : "Fetching lyrics"}
               </span>
             ) : null}
+          </div>
+          <div className="mobile-topbar-actions">
+            <button
+              className="mobile-topbar-btn"
+              onClick={handleOpenMobileSettings}
+              type="button"
+              title="Settings"
+              aria-label="Settings"
+            >
+              <BiCog />
+            </button>
           </div>
         </div>
         <div className="mobile-topbar-search" aria-hidden={!mainSearchOpen}>
@@ -2087,6 +2102,17 @@ function App() {
               loadQueueTracks();
             });
           }}
+        />
+      ) : mainView === "library" && !mainSearchQuery.trim() ? (
+        <MobileLibraryPage
+          libraryPlaylist={libraryPlaylist}
+          favoritesPlaylist={favoritesPlaylist}
+          userPlaylists={userPlaylists}
+          onSelectPlaylist={handleSelectPlaylist}
+          onGoRecentlyPlayed={goRecentlyPlayed}
+          onGoMostPlayed={goMostPlayed}
+          onImportPlaylist={() => void handleImportPlaylist()}
+          onCreatePlaylist={openCreatePlaylistDialog}
         />
       ) : mainView === "settings" && !mainSearchQuery.trim() ? (
         <MobileSettings
@@ -2435,12 +2461,7 @@ function App() {
         active={mobileTab}
         onHome={goHome}
         onSearch={toggleMainSearch}
-        onLibrary={() => {
-          if (libraryPlaylist) handleSelectPlaylist(libraryPlaylist.id);
-        }}
-        onFavorites={() => {
-          if (favoritesPlaylist) handleSelectPlaylist(favoritesPlaylist.id);
-        }}
+        onLibrary={goLibrary}
       />
 
       {mobilePlayerOpen && currentTrack && (

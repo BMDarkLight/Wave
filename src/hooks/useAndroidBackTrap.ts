@@ -30,6 +30,8 @@ type OverlaySnapshot = {
   mobileNavOpen: boolean;
   mainSearchOpen: boolean;
   browseDepth: number;
+  /** 2 on a list opened from the Library tab, 1 on the tab, else 0. */
+  libraryDepth: number;
 };
 
 /** Android hardware back-button trap: maintains a synthetic browser-history
@@ -87,6 +89,9 @@ export function useAndroidBackTrap({
   closeMainSearch,
   browseStackLength,
   browseBack,
+  libraryDepth,
+  goLibrary,
+  goHome,
 }: {
   androidHost: boolean;
   androidHostRef: { current: boolean };
@@ -137,6 +142,9 @@ export function useAndroidBackTrap({
   closeMainSearch: () => void;
   browseStackLength: number;
   browseBack: () => void;
+  libraryDepth: number;
+  goLibrary: () => void;
+  goHome: () => void;
 }) {
   const overlaySnapshotRef = useRef<OverlaySnapshot>({
     showFolderSetup,
@@ -158,6 +166,7 @@ export function useAndroidBackTrap({
     mobileNavOpen,
     mainSearchOpen,
     browseDepth: browseStackLength,
+    libraryDepth,
   });
   overlaySnapshotRef.current = {
     showFolderSetup,
@@ -178,6 +187,7 @@ export function useAndroidBackTrap({
     mobileNavOpen,
     mainSearchOpen,
     browseDepth: browseStackLength,
+    libraryDepth,
   };
 
   const countHistoryLayers = (
@@ -202,6 +212,7 @@ export function useAndroidBackTrap({
     if (s.mobileNavOpen) layers++;
     if (s.mainSearchOpen) layers++;
     layers += s.browseDepth;
+    layers += s.libraryDepth;
     return layers;
   };
 
@@ -325,6 +336,14 @@ export function useAndroidBackTrap({
       browseBack();
       return true;
     }
+    // A list opened from the Library tab steps back to the tab, and the
+    // tab steps back to Home, the way Android apps with tabs behave.
+    if (s.libraryDepth > 0) {
+      s.libraryDepth -= 1;
+      if (s.libraryDepth > 0) goLibrary();
+      else goHome();
+      return true;
+    }
     return false;
   };
 
@@ -402,6 +421,7 @@ export function useAndroidBackTrap({
     mobileNavOpen,
     mainSearchOpen,
     browseStackLength,
+    libraryDepth,
     androidHost,
   ]);
 

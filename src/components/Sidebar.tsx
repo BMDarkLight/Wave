@@ -27,7 +27,12 @@ import trayTemplate from "../../assets/tray-template.svg";
 import type { PlaylistInfo } from "../utils/player";
 
 export type MainView =
-  "home" | "playlist" | "recently_played" | "most_played" | "settings";
+  | "home"
+  | "library"
+  | "playlist"
+  | "recently_played"
+  | "most_played"
+  | "settings";
 
 export default function Sidebar({
   isScanningFolder,
@@ -86,7 +91,7 @@ export default function Sidebar({
       </div>
       <div className="sidebar-pins">
         <button
-          className={`sidebar-pin sidebar-pin-tabbed ${!isBrowsing && mainView === "home" ? "active" : ""}`}
+          className={`sidebar-pin ${!isBrowsing && mainView === "home" ? "active" : ""}`}
           onClick={onGoHome}
           type="button"
         >
@@ -97,7 +102,7 @@ export default function Sidebar({
         </button>
         {libraryPlaylist && (
           <button
-            className={`sidebar-pin sidebar-pin-tabbed ${!isBrowsing && mainView === "playlist" && selectedPlaylistId === libraryPlaylist.id ? "active" : ""}`}
+            className={`sidebar-pin ${!isBrowsing && mainView === "playlist" && selectedPlaylistId === libraryPlaylist.id ? "active" : ""}`}
             onClick={() => onSelectPlaylist(libraryPlaylist.id)}
             type="button"
           >
@@ -109,7 +114,7 @@ export default function Sidebar({
         )}
         {favoritesPlaylist && (
           <button
-            className={`sidebar-pin sidebar-pin-tabbed ${!isBrowsing && mainView === "playlist" && selectedPlaylistId === favoritesPlaylist.id ? "active" : ""}`}
+            className={`sidebar-pin ${!isBrowsing && mainView === "playlist" && selectedPlaylistId === favoritesPlaylist.id ? "active" : ""}`}
             onClick={() => onSelectPlaylist(favoritesPlaylist.id)}
             type="button"
           >

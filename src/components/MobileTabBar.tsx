@@ -12,23 +12,15 @@
 // away instead of behind the drawer. Hidden on desktop by the stylesheet.
 
 import type { ReactNode } from "react";
-import {
-  BiHeart,
-  BiHomeAlt2,
-  BiLibrary,
-  BiSearch,
-  BiSolidHeart,
-  BiSolidHome,
-} from "react-icons/bi";
+import { BiHomeAlt2, BiLibrary, BiSearch, BiSolidHome } from "react-icons/bi";
 
-export type MobileTab = "home" | "search" | "library" | "favorites";
+export type MobileTab = "home" | "search" | "library";
 
 interface MobileTabBarProps {
   active: MobileTab | null;
   onHome: () => void;
   onSearch: () => void;
   onLibrary: () => void;
-  onFavorites: () => void;
 }
 
 function Tab({
@@ -64,7 +56,6 @@ export default function MobileTabBar({
   onHome,
   onSearch,
   onLibrary,
-  onFavorites,
 }: MobileTabBarProps) {
   return (
     <nav className="mobile-tabbar" aria-label="Main">
@@ -86,13 +77,6 @@ export default function MobileTabBar({
         icon={<BiLibrary />}
         active={active === "library"}
         onClick={onLibrary}
-      />
-      <Tab
-        label="Favorites"
-        icon={<BiHeart />}
-        activeIcon={<BiSolidHeart />}
-        active={active === "favorites"}
-        onClick={onFavorites}
       />
     </nav>
   );

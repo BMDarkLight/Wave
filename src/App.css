@@ -5039,7 +5039,9 @@ div.album-hero-cover {
     height: var(--mobile-tabbar-height);
     padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
     box-sizing: border-box;
-    background: #0c0c0c;
+    background: rgba(12, 12, 12, 0.78);
+    backdrop-filter: blur(28px) saturate(1.6);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
   }
 
   .mobile-tab {
@@ -6619,6 +6621,7 @@ div.album-hero-cover {
 }
 
 .no-glass .player-bar,
+.no-glass .mobile-tabbar,
 .no-glass .mobile-now-playing,
 .no-glass .mobile-settings-page:not(.mset-embedded) {
   background: #121212;
@@ -6917,69 +6920,125 @@ div.album-hero-cover {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   Navigation drawer on the narrow layout: one solid sheet that stops
-   short of the status and gesture bars instead of floating glass cards.
-   Home, Library and Favorites live in the bottom tabs, so the drawer
-   leaves them out.
+   Library tab on the narrow layout: all songs, favorites, history and
+   playlists in one list.
    ══════════════════════════════════════════════════════════════════════ */
 
 @media (max-width: 900px) {
-  .sidebar {
-    width: min(280px, 78vw);
-    padding: max(12px, env(safe-area-inset-top, 0px)) 12px
-      max(12px, env(safe-area-inset-bottom, 0px));
-    border-radius: 0 16px 16px 0;
-    background: #161616;
+  .mobile-topbar-actions {
+    display: flex;
+    margin-left: auto;
   }
 
-  .sidebar .brand-mark,
-  .sidebar .sidebar-pins,
-  .sidebar .playlist-section,
-  .sidebar-settings-btn {
+  .mobile-library-page {
+    overflow-y: auto;
+  }
+
+  .mlib-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 12px 8px 24px;
+  }
+
+  .mlib-header h1 {
+    margin: 0;
+    font-size: 26px;
+    letter-spacing: -0.04em;
+  }
+
+  .mlib-header-actions {
+    display: flex;
+    gap: 4px;
+  }
+
+  .mlib-icon-btn {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text);
+    font-size: 22px;
+  }
+
+  .mlib-icon-btn:active {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .mlib-section-title {
+    margin: 20px 0 4px;
+    padding: 0 24px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+
+  .mlib-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .mlib-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 64px;
+    padding: 8px 16px 8px 24px;
     border: 0;
     background: transparent;
-    box-shadow: none;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+    color: var(--text);
+    text-align: left;
   }
 
-  .sidebar .brand-mark {
-    justify-content: flex-start;
-    min-height: 56px;
-    padding: 8px 12px;
-  }
-
-  .sidebar .sidebar-pins {
-    margin-top: 0;
-    padding: 4px 0;
-  }
-
-  .sidebar .sidebar-pin-tabbed {
-    display: none;
-  }
-
-  .sidebar .playlist-section-header {
-    padding: 0 0 0 12px;
-  }
-
-  .sidebar .playlist-section {
-    margin-top: 4px;
-    padding: 12px 0 0;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 0;
-  }
-
-  .sidebar-settings-btn {
-    justify-content: flex-start;
-    margin-top: 4px;
-    padding: 14px 12px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 0;
-  }
-
-  .sidebar-settings-btn:hover,
-  .sidebar-settings-btn.active {
+  .mlib-row:active {
     background: rgba(255, 255, 255, 0.06);
-    box-shadow: none;
+  }
+
+  .mlib-row-icon {
+    display: grid;
+    flex-shrink: 0;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    font-size: 22px;
+  }
+
+  .mlib-row-icon-favorites {
+    background: linear-gradient(135deg, #4b2a6b, #1f2f5c);
+  }
+
+  .mlib-row-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .mlib-row-count {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .mlib-row-chevron {
+    flex-shrink: 0;
+    color: var(--muted);
+    font-size: 20px;
+  }
+
+  .mlib-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 24px;
+    color: var(--muted);
   }
 }
