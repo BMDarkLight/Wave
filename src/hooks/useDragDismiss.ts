@@ -16,7 +16,8 @@ import {
 } from "react";
 
 type UseDragDismissOptions = {
-  onDismiss: () => void;
+  /** Receives how far the surface had travelled when it was let go. */
+  onDismiss: (offset: number) => void;
   enabled?: boolean;
   /** Downward travel (px) required to dismiss on release. */
   threshold?: number;
@@ -168,7 +169,7 @@ export function useDragDismiss({
         }
       }
       armDragDismissGhostClickGuard();
-      onDismissRef.current();
+      onDismissRef.current(offsetRef.current);
       requestAnimationFrame(() => {
         offsetRef.current = 0;
         movedRef.current = false;

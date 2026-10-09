@@ -523,6 +523,9 @@ export default function MobileNowPlaying({
   // Local flag so drag-dismiss drops pointer-events in the same frame as the
   // gesture (parent `closing` arrives one render later via React state).
   const [pageDismissing, setPageDismissing] = useState(false);
+  // How far the contents had been dragged when the drag closed the page,
+  // so they stay there while it folds instead of springing back up.
+  const [dismissOffset, setDismissOffset] = useState(0);
   const isPageClosing = closing || pageDismissing;
 
   const closeSheet = () => onMenuOpenChange(false);
@@ -542,7 +545,8 @@ export default function MobileNowPlaying({
   };
 
   const pageDismiss = useDragDismiss({
-    onDismiss: () => {
+    onDismiss: (offset) => {
+      setDismissOffset(offset);
       setPageDismissing(true);
       (onDragClose ?? onClose)();
     },
@@ -748,12 +752,17 @@ export default function MobileNowPlaying({
   // Dragging lowers the page's top edge toward the mini player, the same
   // cut the close fold ends on, so letting go or reaching the bar carries
   // straight on into the fold with nothing to jump.
-  const pageDragStyle =
+  // The contents ride down with the edge (`--mnp-drag` in App.css).
+  const pageDragStyle = (
     !isPageClosing && (pageDismiss.dragging || pageDismiss.offset > 0)
       ? {
           clipPath: `inset(${pageDismiss.offset}px 0 0 0 round ${Math.min(16, pageDismiss.offset / 4)}px)`,
+          "--mnp-drag": `${pageDismiss.offset}px`,
         }
-      : undefined;
+      : pageDismissing
+        ? { "--mnp-drag": `${dismissOffset}px` }
+        : undefined
+  ) as React.CSSProperties | undefined;
 
   const sheetDragStyle =
     sheetOpen && (sheetDismiss.dragging || sheetDismiss.offset > 0)

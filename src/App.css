@@ -5221,6 +5221,12 @@ div.album-hero-cover {
   transition: opacity 0.26s ease 0.1s;
 }
 
+/* While the page is dragged down its contents move with the finger. The
+   separate translate property leaves each child's own transform alone. */
+.mobile-now-playing > :not(.mnp-sheet, .mnp-sheet-backdrop) {
+  translate: 0 var(--mnp-drag, 0px);
+}
+
 .mobile-now-playing.mnp-open {
   clip-path: inset(0 0 0 0 round 0);
   opacity: 1;
