@@ -6494,3 +6494,75 @@ div.album-hero-cover {
     animation-duration: 0.01ms !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Settings → Appearance
+   `no-glass` and `no-motion` sit on <html> (see utils/appearance.ts).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Without the blur, the see-through tints would let busy content show
+   through, so each glass surface gets a solid colour close to how it looked. */
+.no-glass *,
+.no-glass *::before,
+.no-glass *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.no-glass .error-toast {
+  background: #3d1818;
+}
+
+.no-glass .exit-toast,
+.no-glass .loading-indicator,
+.no-glass .eq-panel {
+  background: #181818;
+}
+
+.no-glass .player-bar,
+.no-glass .mobile-now-playing,
+.no-glass .mobile-settings-page:not(.mset-embedded) {
+  background: #121212;
+}
+
+.no-glass .lyrics-close-float,
+.no-glass .page-with-float-back > .page-float-action {
+  background: #1a1a1a;
+}
+
+@media (max-width: 900px) {
+  .no-glass .mobile-topbar {
+    background: #121212;
+  }
+
+  .no-glass .sidebar .brand-mark,
+  .no-glass .sidebar .sidebar-pins,
+  .no-glass .sidebar .playlist-section,
+  .no-glass .sidebar-settings-btn,
+  .no-glass .right-panel .right-panel-content {
+    background: #161616;
+  }
+
+  .no-glass .sidebar-settings-btn:hover {
+    background: #1f1f1f;
+  }
+}
+
+/* Pages, sheets and menus land in place at once. Spinners and the scan bar
+   keep moving because they say something is still working. */
+.no-motion *,
+.no-motion *::before,
+.no-motion *::after {
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
+  scroll-behavior: auto !important;
+}
+
+.no-motion .mini-bars i {
+  animation: none;
+}
+
+/* Same as reduced motion: words still light up as they are sung. */
+.no-motion .lyrics-word {
+  animation-duration: 0.01ms !important;
+}

@@ -1282,6 +1282,22 @@ export const setWaveformSeekEnabled = (enabled: boolean): Promise<void> => {
   return safeInvoke("set_waveform_seek_enabled", { enabled });
 };
 
+export const getGlassEffectsEnabled = (): Promise<boolean> => {
+  return safeInvoke<boolean>("get_glass_effects_enabled");
+};
+
+export const setGlassEffectsEnabled = (enabled: boolean): Promise<void> => {
+  return safeInvoke("set_glass_effects_enabled", { enabled });
+};
+
+export const getAnimationsEnabled = (): Promise<boolean> => {
+  return safeInvoke<boolean>("get_animations_enabled");
+};
+
+export const setAnimationsEnabled = (enabled: boolean): Promise<void> => {
+  return safeInvoke("set_animations_enabled", { enabled });
+};
+
 // ── Audio Output Devices ──────────────────────────────────────────────────────
 
 export const listOutputDevices = (): Promise<string[]> => {

@@ -38,6 +38,7 @@ import {
   BiReset,
   BiVolumeFull,
   BiPulse,
+  BiPalette,
 } from "react-icons/bi";
 import {
   listMediaFolders,
@@ -207,6 +208,10 @@ interface MobileSettingsProps {
   onAutoLyricsDownloadChange: (enabled: boolean) => void;
   waveformSeekEnabled: boolean;
   onWaveformSeekChange: (enabled: boolean) => void;
+  glassEffectsEnabled: boolean;
+  onGlassEffectsChange: (enabled: boolean) => void;
+  animationsEnabled: boolean;
+  onAnimationsChange: (enabled: boolean) => void;
   eqSettings: EqSettings;
   onEqEnabledChange: (enabled: boolean) => void;
   onEqBandChange: (index: number, gain: number) => void;
@@ -246,6 +251,10 @@ export default function MobileSettings({
   onAutoLyricsDownloadChange,
   waveformSeekEnabled,
   onWaveformSeekChange,
+  glassEffectsEnabled,
+  onGlassEffectsChange,
+  animationsEnabled,
+  onAnimationsChange,
   eqSettings,
   onEqEnabledChange,
   onEqBandChange,
@@ -933,6 +942,43 @@ export default function MobileSettings({
                   Show each track's waveform in the seek bar, moving with the
                   music around the playhead. Turn off for a plain slider and no
                   track analysis.
+                </span>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <section className="mset-section">
+          <h2>
+            <BiPalette /> Appearance
+          </h2>
+          <div className="mset-card mset-playback-card">
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={glassEffectsEnabled}
+                onChange={(event) => onGlassEffectsChange(event.target.checked)}
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Glass effect</span>
+                <span className="mset-gapless-hint">
+                  Blur what sits behind bars, panels and sheets. Turn off for
+                  solid backgrounds, which are lighter on slower phones.
+                </span>
+              </span>
+            </label>
+            <div className="mset-playback-divider" role="separator" />
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={animationsEnabled}
+                onChange={(event) => onAnimationsChange(event.target.checked)}
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Animations</span>
+                <span className="mset-gapless-hint">
+                  Slide pages in, fade menus and scroll lyrics smoothly. Turn
+                  off to make every change instant.
                 </span>
               </span>
             </label>

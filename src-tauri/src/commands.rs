@@ -1625,6 +1625,46 @@ pub async fn set_waveform_seek_enabled(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_glass_effects_enabled(
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<bool, String> {
+    let settings = lock_settings(&settings_state)?;
+    Ok(settings.glass_effects_enabled)
+}
+
+#[tauri::command]
+pub async fn set_glass_effects_enabled(
+    enabled: bool,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut settings = lock_settings(&settings_state)?;
+    settings.glass_effects_enabled = enabled;
+    settings.save(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_animations_enabled(
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<bool, String> {
+    let settings = lock_settings(&settings_state)?;
+    Ok(settings.animations_enabled)
+}
+
+#[tauri::command]
+pub async fn set_animations_enabled(
+    enabled: bool,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut settings = lock_settings(&settings_state)?;
+    settings.animations_enabled = enabled;
+    settings.save(&app)?;
+    Ok(())
+}
+
 // ── Library / playlist commands ───────────────────────────────────────────────
 
 #[tauri::command]

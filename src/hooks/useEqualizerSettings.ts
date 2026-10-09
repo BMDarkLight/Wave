@@ -11,13 +11,17 @@
 import { useEffect, useRef, useState } from "react";
 import {
   EQ_PRESETS,
+  getAnimationsEnabled,
   getAutoLyricsDownload,
+  getGlassEffectsEnabled,
   getWaveformSeekEnabled,
   getCrossfadeDuration,
   getEqSettings,
   getGaplessEnabled,
   getVolumeNormalizationEnabled,
+  setAnimationsEnabled,
   setAutoLyricsDownload,
+  setGlassEffectsEnabled,
   setWaveformSeekEnabled,
   setCrossfadeDuration,
   setEqBands,
@@ -26,6 +30,7 @@ import {
   setVolumeNormalizationEnabled,
   type EqSettings,
 } from "../utils/player";
+import { applyAnimations, applyGlassEffects } from "../utils/appearance";
 import { formatInvokeError } from "../utils/errors";
 
 export function useEqualizerSettings(
@@ -45,13 +50,26 @@ export function useEqualizerSettings(
   // Off until the saved value arrives, so a launch never starts analysing a
   // track for someone who turned the waveform off.
   const [waveformSeekEnabled, setWaveformSeekEnabledState] = useState(false);
-  // The seek bar is on screen from the start, so read this one at launch
-  // rather than waiting for the panels that load the rest.
+  const [glassEffectsEnabled, setGlassEffectsEnabledState] = useState(true);
+  const [animationsEnabled, setAnimationsEnabledState] = useState(true);
+  // The seek bar, the glass and the motion are on screen from the start, so
+  // read these at launch rather than waiting for the panels that load the rest.
   useEffect(() => {
     getWaveformSeekEnabled()
       .then(setWaveformSeekEnabledState)
       .catch(() => {});
+    getGlassEffectsEnabled()
+      .then(setGlassEffectsEnabledState)
+      .catch(() => {});
+    getAnimationsEnabled()
+      .then(setAnimationsEnabledState)
+      .catch(() => {});
   }, []);
+  useEffect(
+    () => applyGlassEffects(glassEffectsEnabled),
+    [glassEffectsEnabled],
+  );
+  useEffect(() => applyAnimations(animationsEnabled), [animationsEnabled]);
   const [eqAnchor, setEqAnchor] = useState<{
     bottom: number;
     right: number;
@@ -75,6 +93,8 @@ export function useEqualizerSettings(
       const autoLyrics = await getAutoLyricsDownload();
       setAutoLyricsDownloadState(autoLyrics);
       setWaveformSeekEnabledState(await getWaveformSeekEnabled());
+      setGlassEffectsEnabledState(await getGlassEffectsEnabled());
+      setAnimationsEnabledState(await getAnimationsEnabled());
     } catch (err) {
       console.error("Failed to load EQ settings", err);
     }
@@ -210,6 +230,26 @@ export function useEqualizerSettings(
     }
   };
 
+  const handleGlassEffectsChange = async (enabled: boolean) => {
+    setGlassEffectsEnabledState(enabled);
+    try {
+      await setGlassEffectsEnabled(enabled);
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to update the glass effect"));
+      setGlassEffectsEnabledState(await getGlassEffectsEnabled());
+    }
+  };
+
+  const handleAnimationsChange = async (enabled: boolean) => {
+    setAnimationsEnabledState(enabled);
+    try {
+      await setAnimationsEnabled(enabled);
+    } catch (err) {
+      setError(formatInvokeError(err, "Failed to update animations"));
+      setAnimationsEnabledState(await getAnimationsEnabled());
+    }
+  };
+
   return {
     showEqPanel,
     setShowEqPanel,
@@ -219,6 +259,8 @@ export function useEqualizerSettings(
     volumeNormalizationEnabled,
     autoLyricsDownload,
     waveformSeekEnabled,
+    glassEffectsEnabled,
+    animationsEnabled,
     eqAnchor,
     setEqAnchor,
     volumeIconRef,
@@ -234,5 +276,7 @@ export function useEqualizerSettings(
     handleVolumeNormalizationChange,
     handleAutoLyricsDownloadChange,
     handleWaveformSeekChange,
+    handleGlassEffectsChange,
+    handleAnimationsChange,
   };
 }

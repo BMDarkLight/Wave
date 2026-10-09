@@ -49,6 +49,13 @@ pub struct AppSettings {
     /// around the playhead. Off gives the plain slider and skips analysis.
     #[serde(default = "default_waveform_seek_enabled")]
     pub waveform_seek_enabled: bool,
+    /// Blur what sits behind panels, bars and sheets. Off paints them solid,
+    /// which is cheaper to draw on slower phones.
+    #[serde(default = "default_glass_effects_enabled")]
+    pub glass_effects_enabled: bool,
+    /// Slide, fade and scroll the interface. Off makes every change instant.
+    #[serde(default = "default_animations_enabled")]
+    pub animations_enabled: bool,
     /// Master switch for the remote-source search tier. When off, no provider
     /// is queried and the escalation button never appears, so nothing in the
     /// app reaches the network for music discovery.
@@ -93,6 +100,14 @@ fn default_waveform_seek_enabled() -> bool {
     true
 }
 
+fn default_glass_effects_enabled() -> bool {
+    true
+}
+
+fn default_animations_enabled() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -111,6 +126,8 @@ impl Default for AppSettings {
             auto_lyrics_download: true,
             volume_normalization_enabled: false,
             waveform_seek_enabled: default_waveform_seek_enabled(),
+            glass_effects_enabled: default_glass_effects_enabled(),
+            animations_enabled: default_animations_enabled(),
             outside_sourcing_enabled: default_outside_sourcing_enabled(),
             spotify_client_id: None,
             jamendo_client_id: None,
@@ -222,5 +239,29 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         let loaded: AppSettings = serde_json::from_str(&json).unwrap();
         assert!(!loaded.waveform_seek_enabled);
+    }
+
+    #[test]
+    fn settings_saved_before_the_appearance_switches_keep_them_on() {
+        let mut saved = serde_json::to_value(AppSettings::default()).unwrap();
+        let fields = saved.as_object_mut().unwrap();
+        fields.remove("glass_effects_enabled");
+        fields.remove("animations_enabled");
+        let loaded: AppSettings = serde_json::from_value(saved).unwrap();
+        assert!(loaded.glass_effects_enabled);
+        assert!(loaded.animations_enabled);
+    }
+
+    #[test]
+    fn turning_glass_and_animations_off_survives_a_save() {
+        let settings = AppSettings {
+            glass_effects_enabled: false,
+            animations_enabled: false,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let loaded: AppSettings = serde_json::from_str(&json).unwrap();
+        assert!(!loaded.glass_effects_enabled);
+        assert!(!loaded.animations_enabled);
     }
 }

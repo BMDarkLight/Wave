@@ -20,6 +20,7 @@ import {
   liveLift,
   smoothLevel,
 } from "../utils/waveform";
+import { animationsOff } from "../utils/appearance";
 
 /** Height of a bar at rest before it grows, matching the plain slider. */
 const MIN_BAR = 2;
@@ -241,7 +242,9 @@ function WaveformCanvas({
       const heights = barHeights(now.bins, count);
       const head = fraction * count;
       const hoverHead = hover.current === null ? null : hover.current * count;
-      const shownFor = performance.now() - shownAt.current;
+      const shownFor = animationsOff()
+        ? ENTRANCE_MS
+        : performance.now() - shownAt.current;
       const round = typeof context.roundRect === "function";
 
       for (let i = 0; i < count; i++) {
@@ -274,7 +277,8 @@ function WaveformCanvas({
     const loop = () => {
       draw();
       const settling = shownLevel.current > 0.001;
-      const entering = performance.now() - shownAt.current < ENTRANCE_MS;
+      const entering =
+        !animationsOff() && performance.now() - shownAt.current < ENTRANCE_MS;
       if (frame.current.playing || settling || entering) {
         raf = requestAnimationFrame(loop);
       }
