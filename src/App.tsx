@@ -1880,7 +1880,7 @@ function App() {
 
   return (
     <div
-      className={`app-container${mobileNavOpen ? " nav-open" : ""}${rightPanelOpen || rightPanelClosing ? " panel-open" : ""}${rightPanelClosing ? " panel-closing" : ""}${mainSearchOpen ? " mobile-search-open" : ""}`}
+      className={`app-container${mobileNavOpen ? " nav-open" : ""}${rightPanelOpen || rightPanelClosing ? " panel-open" : ""}${rightPanelClosing ? " panel-closing" : ""}${mainSearchOpen ? " mobile-search-open" : ""}${mobilePlayerOpen && !mobilePlayerClosing ? " now-playing-open" : ""}`}
       style={
         {
           "--sidebar-width": `${sidebarWidth}px`,

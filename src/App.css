@@ -5204,9 +5204,21 @@ div.album-hero-cover {
   pointer-events: none;
   transition:
     clip-path 0.4s cubic-bezier(0.32, 0.72, 0, 1),
-    opacity 0.16s ease,
+    opacity 0.24s ease,
     transform 0.36s cubic-bezier(0.32, 0.72, 0, 1);
   will-change: clip-path;
+}
+
+/* The page's contents fade in a beat after it starts growing and fade out
+   before it folds, so nothing appears or vanishes all at once. */
+.mobile-now-playing > * {
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.mobile-now-playing.mnp-open > * {
+  opacity: 1;
+  transition: opacity 0.26s ease 0.1s;
 }
 
 .mobile-now-playing.mnp-open {
@@ -5220,7 +5232,7 @@ div.album-hero-cover {
   pointer-events: none;
   transition:
     clip-path 0.36s cubic-bezier(0.32, 0.72, 0, 1),
-    opacity 0.14s ease 0.22s,
+    opacity 0.2s ease 0.16s,
     transform 0.36s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
@@ -7156,7 +7168,7 @@ div.album-hero-cover {
   /* Reduce motion: the bar appears in place rather than growing. */
   .reduce-motion .player-bar,
   .reduce-motion .mobile-dock-glass {
-    transition: none;
+    transition: opacity 0.2s ease;
   }
 }
 
@@ -7174,5 +7186,31 @@ div.album-hero-cover {
 
   .mcol-artist-avatar img.is-shown {
     opacity: 1;
+  }
+}
+
+/* While Now Playing is up, the mini player and tabs fade out beneath it and
+   fade back as it folds away, so the two hand over instead of swapping. */
+@media (max-width: 900px) {
+  .player-bar {
+    transition:
+      clip-path 0.36s cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 0.28s ease;
+  }
+
+  .mobile-dock-glass {
+    transition:
+      height 0.36s cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 0.28s ease;
+  }
+
+  .mobile-tabbar {
+    transition: opacity 0.28s ease;
+  }
+
+  .app-container.now-playing-open .player-bar,
+  .app-container.now-playing-open .mobile-tabbar,
+  .app-container.now-playing-open .mobile-dock-glass {
+    opacity: 0;
   }
 }
