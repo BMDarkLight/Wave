@@ -62,6 +62,79 @@ pub fn probe_content_uri(_app: &AppHandle, uri: &str) -> Result<UriProbeResult, 
         cover_mime: Option<String>,
     }
 
+    fn call_probe(
+        env: &mut jni::JNIEnv<'_>,
+        activity_obj: &JObject<'_>,
+        trimmed: &str,
+    ) -> Result<String, String> {
+        let loader = env
+            .call_method(
+                activity_obj,
+                "getClassLoader",
+                "()Ljava/lang/ClassLoader;",
+                &[],
+            )
+            .map_err(|e| format!("getClassLoader: {e}"))?
+            .l()
+            .map_err(|e| format!("getClassLoader value: {e}"))?;
+        if loader.is_null() {
+            return Err("MediaMetadataProbe: ClassLoader is null".into());
+        }
+
+        let class_name = env
+            .new_string("app.bmdarklight.wave.MediaMetadataProbe")
+            .map_err(|e| format!("class name: {e}"))?;
+        let class_obj = env
+            .call_method(
+                &loader,
+                "loadClass",
+                "(Ljava/lang/String;)Ljava/lang/Class;",
+                &[(&class_name).into()],
+            )
+            .map_err(|e| format!("loadClass: {e}"))?
+            .l()
+            .map_err(|e| format!("loadClass value: {e}"))?;
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+            return Err("MediaMetadataProbe class missing from APK".into());
+        }
+        if class_obj.is_null() {
+            return Err("MediaMetadataProbe class is null".into());
+        }
+        let class = jni::objects::JClass::from(class_obj);
+
+        let uri_j = env
+            .new_string(trimmed)
+            .map_err(|e| format!("uri string: {e}"))?;
+        let result = env
+            .call_static_method(
+                &class,
+                "probe",
+                "(Landroid/app/Activity;Ljava/lang/String;)Ljava/lang/String;",
+                &[JValue::Object(activity_obj), JValue::Object(&uri_j)],
+            )
+            .map_err(|e| format!("probe: {e}"))?;
+
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+            return Err("MediaMetadataProbe.probe threw".into());
+        }
+
+        let json_obj = result.l().map_err(|e| format!("probe result: {e}"))?;
+        if json_obj.is_null() {
+            return Err("MediaMetadataProbe.probe returned null".into());
+        }
+        let json_j: JString = json_obj.into();
+        let json = env
+            .get_string(&json_j)
+            .map_err(|e| format!("probe json: {e}"))?
+            .to_string_lossy()
+            .into_owned();
+        Ok(json)
+    }
+
     let trimmed = uri.trim();
     if trimmed.is_empty() {
         return Err("MediaMetadataProbe: URI is empty".into());
@@ -86,72 +159,15 @@ pub fn probe_content_uri(_app: &AppHandle, uri: &str) -> Result<UriProbeResult, 
         .attach_current_thread()
         .map_err(|e| format!("MediaMetadataProbe: attach: {e}"))?;
     let activity_obj = unsafe { JObject::from_raw(activity as *mut _) };
-
-    let loader = env
-        .call_method(
-            &activity_obj,
-            "getClassLoader",
-            "()Ljava/lang/ClassLoader;",
-            &[],
-        )
-        .map_err(|e| format!("getClassLoader: {e}"))?
-        .l()
-        .map_err(|e| format!("getClassLoader value: {e}"))?;
-    if loader.is_null() {
-        return Err("MediaMetadataProbe: ClassLoader is null".into());
-    }
-
-    let class_name = env
-        .new_string("app.bmdarklight.wave.MediaMetadataProbe")
-        .map_err(|e| format!("class name: {e}"))?;
-    let class_obj = env
-        .call_method(
-            &loader,
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
-            &[(&class_name).into()],
-        )
-        .map_err(|e| format!("loadClass: {e}"))?
-        .l()
-        .map_err(|e| format!("loadClass value: {e}"))?;
-    if env.exception_check().unwrap_or(false) {
-        let _ = env.exception_describe();
-        let _ = env.exception_clear();
-        return Err("MediaMetadataProbe class missing from APK".into());
-    }
-    if class_obj.is_null() {
-        return Err("MediaMetadataProbe class is null".into());
-    }
-    let class = jni::objects::JClass::from(class_obj);
-
-    let uri_j = env
-        .new_string(trimmed)
-        .map_err(|e| format!("uri string: {e}"))?;
-    let result = env
-        .call_static_method(
-            &class,
-            "probe",
-            "(Landroid/app/Activity;Ljava/lang/String;)Ljava/lang/String;",
-            &[JValue::Object(&activity_obj), JValue::Object(&uri_j)],
-        )
-        .map_err(|e| format!("probe: {e}"))?;
-
-    if env.exception_check().unwrap_or(false) {
-        let _ = env.exception_describe();
-        let _ = env.exception_clear();
-        return Err("MediaMetadataProbe.probe threw".into());
-    }
-
-    let json_obj = result.l().map_err(|e| format!("probe result: {e}"))?;
-    if json_obj.is_null() {
-        return Err("MediaMetadataProbe.probe returned null".into());
-    }
-    let json_j: JString = json_obj.into();
+    // ensure_jni_thread_attached keeps this thread attached for good, so the
+    // local refs below (the result string carries the cover art as base64)
+    // are never freed unless a frame pops. Without one each probe leaks its
+    // whole result and a library scan runs the app out of memory.
     let json = env
-        .get_string(&json_j)
-        .map_err(|e| format!("probe json: {e}"))?
-        .to_string_lossy()
-        .into_owned();
+        .with_local_frame(16, |env| -> jni::errors::Result<Result<String, String>> {
+            Ok(call_probe(env, &activity_obj, trimmed))
+        })
+        .map_err(|e| format!("MediaMetadataProbe: local frame: {e}"))??;
 
     let parsed: ProbeJson =
         serde_json::from_str(&json).map_err(|e| format!("probe JSON parse: {e}"))?;

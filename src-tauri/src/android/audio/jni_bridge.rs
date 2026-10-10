@@ -42,7 +42,12 @@ impl ExoHandle {
             .vm
             .attach_current_thread()
             .map_err(|e| format!("AttachCurrentThread: {e}"))?;
-        f(&mut env)
+        // This thread stays permanently JNI-attached, so local refs made in
+        // `f` are only freed when this frame pops.
+        env.with_local_frame(16, |env| -> jni::errors::Result<Result<R, String>> {
+            Ok(f(env))
+        })
+        .map_err(|e| format!("local frame: {e}"))?
     }
 
     fn call_void(&self, method: &str, sig: &str, args: &[JValue]) -> Result<(), String> {
