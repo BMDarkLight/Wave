@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { BiArrowBack, BiEditAlt } from "react-icons/bi";
+import { BiChevronLeft, BiEditAlt } from "react-icons/bi";
 import {
   getAlbumTracks,
   getTrackFullCover,
@@ -143,7 +143,7 @@ export default function AlbumPage({
 
   if (loading) {
     return (
-      <div className="main-content page-with-float-back">
+      <div className="main-content page-with-float-back playlist-page playlist-page-ranked">
         <button
           className="page-back-btn"
           onClick={onBack}
@@ -151,7 +151,7 @@ export default function AlbumPage({
           title="Back"
           aria-label="Back"
         >
-          <BiArrowBack />
+          <BiChevronLeft />
         </button>
         <div className="empty-state">
           <div className="empty-icon">
@@ -164,7 +164,9 @@ export default function AlbumPage({
   }
 
   return (
-    <div className="main-content page-with-float-back">
+    // Shares the playlist pages' look on the phone layout; the ranked
+    // variant keeps the track numbers.
+    <div className="main-content page-with-float-back playlist-page playlist-page-ranked">
       <button
         className="page-back-btn"
         onClick={onBack}
@@ -172,7 +174,7 @@ export default function AlbumPage({
         title="Back"
         aria-label="Back"
       >
-        <BiArrowBack />
+        <BiChevronLeft />
       </button>
       {editableTracks.length > 0 && (
         <button
@@ -205,7 +207,8 @@ export default function AlbumPage({
             </button>
             {year && <span>· {year}</span>}
             <span>
-              · {tracks.length} songs, about {totalMin} min
+              · {tracks.length} song{tracks.length !== 1 ? "s" : ""}, about{" "}
+              {totalMin} min
             </span>
           </div>
           {editableTracks.length > 0 && (

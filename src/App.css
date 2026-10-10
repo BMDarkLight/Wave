@@ -6747,6 +6747,103 @@ div.album-hero-cover {
     transform: none;
   }
 
+  /* Album and artist pages: the back arrow and the pen are the same plain
+     header icons as the other Library pages, in the same spot, with the pen
+     on the right like the other pages' actions. */
+  .playlist-page.page-with-float-back > .page-back-btn,
+  .playlist-page.page-with-float-back > .page-float-action {
+    top: calc(env(safe-area-inset-top, 0px) + 16px);
+    left: 8px;
+    width: 44px;
+    height: 44px;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    font-size: 22px;
+  }
+
+  .playlist-page.page-with-float-back > .page-float-action {
+    left: auto;
+    right: 12px;
+  }
+
+  .playlist-page.page-with-float-back > .page-back-btn:active,
+  .playlist-page.page-with-float-back > .page-float-action:active {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  /* The artist's name sits beside the back arrow like the other titles,
+     with its counts under it. */
+  .playlist-page .artist-hero {
+    padding: 4px 12px 8px 54px;
+  }
+
+  .playlist-page .artist-hero-title {
+    margin: 0;
+    font-size: 26px;
+    line-height: 44px;
+    letter-spacing: -0.05em;
+  }
+
+  .playlist-page .artist-hero-meta {
+    font-weight: 600;
+  }
+
+  /* Section headings match the Library tab's. */
+  .playlist-page .artist-section {
+    padding: 0 24px 20px;
+  }
+
+  .playlist-page .artist-section-title {
+    margin: 12px 0 10px;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .playlist-page .artist-section-title svg {
+    font-size: 18px;
+  }
+
+  .playlist-page .artist-songs-list {
+    margin-left: -24px;
+    margin-right: -24px;
+  }
+
+  /* The artist's albums lay out like the Albums page. */
+  .playlist-page .artist-album-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 14px;
+  }
+
+  .playlist-page .artist-album-card {
+    gap: 4px;
+  }
+
+  .playlist-page .artist-album-card:hover {
+    transform: none;
+  }
+
+  .playlist-page .artist-album-card-cover {
+    margin-bottom: 4px;
+    border-radius: 8px;
+    box-shadow: none;
+  }
+
+  .playlist-page .artist-album-card-name {
+    font-weight: 700;
+  }
+
+  .playlist-page .artist-album-card-meta {
+    font-weight: 600;
+  }
+
+  /* The album's cover heads the page, so its info starts below the icons. */
+  .playlist-page .album-hero-cover {
+    border-radius: 8px;
+  }
+
   .playlist-page .track-list-header {
     display: none;
   }
@@ -6770,11 +6867,13 @@ div.album-hero-cover {
     --track-grid: 24px minmax(0, 1fr) auto auto !important;
   }
 
-  .playlist-page .track-item .track-col-index {
+  /* Specific enough to beat the narrow screens' rule that brings numbers
+     back for compact lists. */
+  .playlist-page .track-list .track-item .track-col-index {
     display: none;
   }
 
-  .playlist-page-ranked .track-item .track-col-index {
+  .playlist-page-ranked .track-list .track-item .track-col-index {
     display: grid;
     color: var(--muted);
     font-size: 14px;
@@ -6881,6 +6980,13 @@ div.album-hero-cover {
 .no-glass .lyrics-close-float,
 .no-glass .page-with-float-back > .page-float-action {
   background: #1a1a1a;
+}
+
+@media (max-width: 900px) {
+  /* The list pages' header icons have no fill to make solid. */
+  .no-glass .playlist-page.page-with-float-back > .page-float-action {
+    background: transparent;
+  }
 }
 
 /* Dialogs, menus and the sleep timer card share one solid colour. The edit dialog's

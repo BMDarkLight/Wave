@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { BiArrowBack, BiChevronDown, BiChevronRight } from "react-icons/bi";
+import { BiChevronDown, BiChevronLeft, BiChevronRight } from "react-icons/bi";
 import {
   getArtistTracks,
   getArtistAlbums,
@@ -169,7 +169,7 @@ export default function ArtistPage({
 
   if (loading) {
     return (
-      <div className="main-content page-with-float-back">
+      <div className="main-content page-with-float-back playlist-page">
         <button
           className="page-back-btn"
           onClick={onBack}
@@ -177,7 +177,7 @@ export default function ArtistPage({
           title="Back"
           aria-label="Back"
         >
-          <BiArrowBack />
+          <BiChevronLeft />
         </button>
         <div className="empty-state">
           <div className="empty-icon">
@@ -190,7 +190,8 @@ export default function ArtistPage({
   }
 
   return (
-    <div className="main-content page-with-float-back">
+    // Shares the playlist pages' look on the phone layout.
+    <div className="main-content page-with-float-back playlist-page">
       <button
         className="page-back-btn"
         onClick={onBack}
@@ -198,7 +199,7 @@ export default function ArtistPage({
         title="Back"
         aria-label="Back"
       >
-        <BiArrowBack />
+        <BiChevronLeft />
       </button>
 
       {/* Artist hero */}
@@ -304,13 +305,25 @@ export default function ArtistPage({
                         )}
                       </div>
                       <div className="track-title-cell">
-                        <Artwork
-                          track={track}
-                          fallback={getTrackTitle(track)
-                            .slice(0, 1)
-                            .toUpperCase()}
-                          className="track-thumb"
-                        />
+                        <span className="track-thumb-wrap">
+                          <Artwork
+                            track={track}
+                            fallback={getTrackTitle(track)
+                              .slice(0, 1)
+                              .toUpperCase()}
+                            className="track-thumb"
+                          />
+                          {isCurrentTrack(track) &&
+                            playbackState.is_playing && (
+                              <span className="track-thumb-playing" aria-hidden>
+                                <span className="mini-bars">
+                                  <i />
+                                  <i />
+                                  <i />
+                                </span>
+                              </span>
+                            )}
+                        </span>
                         <div>
                           <div className="track-name">
                             {getTrackTitle(track)}
