@@ -177,7 +177,7 @@ function App() {
     viewingArtist,
     openArtistPage,
     openAlbumPage,
-    pushAlbumPage,
+    replaceBrowsePage,
     browseBack,
     clearBrowse,
     showClearConfirm,
@@ -1422,14 +1422,16 @@ function App() {
     // Renaming an album or an artist moves the page you are standing on, so
     // follow it rather than leaving an empty one behind.
     if (viewingAlbum && (edit.album || edit.album_artist !== undefined)) {
-      openAlbumPage(
-        edit.album || viewingAlbum.name,
-        edit.album_artist === undefined
-          ? viewingAlbum.albumArtist
-          : edit.album_artist || null,
-      );
+      replaceBrowsePage({
+        kind: "album",
+        name: edit.album || viewingAlbum.name,
+        albumArtist:
+          edit.album_artist === undefined
+            ? viewingAlbum.albumArtist
+            : edit.album_artist || null,
+      });
     } else if (viewingArtist && edit.artist) {
-      openArtistPage(edit.artist);
+      replaceBrowsePage({ kind: "artist", name: edit.artist });
     } else {
       setBrowseRefresh((count) => count + 1);
     }
@@ -2043,7 +2045,7 @@ function App() {
           }}
           onAlbumClick={(name, albumArtist) => {
             // Keep artist underneath so hardware/UI back returns to it.
-            pushAlbumPage(name, albumArtist);
+            openAlbumPage(name, albumArtist);
           }}
           onOpenTrackMenu={openTrackContextMenu}
           onCloseTrackMenu={closeTrackContextMenu}

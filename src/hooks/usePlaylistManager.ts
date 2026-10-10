@@ -35,9 +35,17 @@ import { LIBRARY_PLAYLIST_NAME, isLibraryPlaylistName } from "../utils/track";
 import type { MainView } from "../components/Sidebar";
 import type { PlaylistDialogState } from "../components/dialogs/CreatePlaylistDialog";
 
-type BrowsePage =
+export type BrowsePage =
   | { kind: "artist"; name: string }
   | { kind: "album"; name: string; albumArtist: string | null };
+
+/** Album and artist pages kept for back; older ones fall off the bottom. */
+const MAX_BROWSE_DEPTH = 50;
+
+const samePage = (a: BrowsePage, b: BrowsePage) =>
+  a.kind === b.kind &&
+  a.name === b.name &&
+  (a.kind !== "album" || b.kind !== "album" || a.albumArtist === b.albumArtist);
 
 /** Playlist CRUD (create/rename/delete/clear/export/import), the create/rename
  * dialog, and the album/artist browse stack. Navigation-level orchestration
@@ -81,14 +89,25 @@ export function usePlaylistManager({
       : null;
   const viewingArtist = browseTop?.kind === "artist" ? browseTop.name : null;
 
+  // Each album or artist opened goes on top of the stack, so back walks
+  // through them in reverse however deep they were stacked. The tabs and
+  // the Library rows clear the stack first, so those start fresh.
+  const pushBrowsePage = (page: BrowsePage) => {
+    setBrowseStack((stack) => {
+      const top = stack[stack.length - 1];
+      if (top && samePage(top, page)) return stack;
+      return [...stack, page].slice(-MAX_BROWSE_DEPTH);
+    });
+  };
   const openArtistPage = (name: string) => {
-    setBrowseStack([{ kind: "artist", name }]);
+    pushBrowsePage({ kind: "artist", name });
   };
   const openAlbumPage = (name: string, albumArtist: string | null) => {
-    setBrowseStack([{ kind: "album", name, albumArtist }]);
+    pushBrowsePage({ kind: "album", name, albumArtist });
   };
-  const pushAlbumPage = (name: string, albumArtist: string | null) => {
-    setBrowseStack((stack) => [...stack, { kind: "album", name, albumArtist }]);
+  /** Swap the page on top, for when it was renamed while open. */
+  const replaceBrowsePage = (page: BrowsePage) => {
+    setBrowseStack((stack) => [...stack.slice(0, -1), page]);
   };
   const browseBack = () => {
     setBrowseStack((stack) => stack.slice(0, -1));
@@ -318,7 +337,7 @@ export function usePlaylistManager({
     viewingArtist,
     openArtistPage,
     openAlbumPage,
-    pushAlbumPage,
+    replaceBrowsePage,
     browseBack,
     clearBrowse,
     showClearConfirm,

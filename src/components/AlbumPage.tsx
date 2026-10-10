@@ -144,7 +144,13 @@ export default function AlbumPage({
   if (loading) {
     return (
       <div className="main-content page-with-float-back">
-        <button className="page-back-btn" onClick={onBack} type="button">
+        <button
+          className="page-back-btn"
+          onClick={onBack}
+          type="button"
+          title="Back"
+          aria-label="Back"
+        >
           <BiArrowBack />
         </button>
         <div className="empty-state">
@@ -159,7 +165,13 @@ export default function AlbumPage({
 
   return (
     <div className="main-content page-with-float-back">
-      <button className="page-back-btn" onClick={onBack} type="button">
+      <button
+        className="page-back-btn"
+        onClick={onBack}
+        type="button"
+        title="Back"
+        aria-label="Back"
+      >
         <BiArrowBack />
       </button>
       {editableTracks.length > 0 && (

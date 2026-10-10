@@ -306,22 +306,21 @@ export function useAndroidBackTrap({
     }
     // Settings is a sibling overlay to Now Playing — close it before the player
     // so a lone Settings page always pops first.
+    // A press while Settings or Now Playing is still sliding away finishes
+    // that close at once and then goes on to the next layer, so quick
+    // presses each take a step instead of one being spent on the animation.
     if (mobileSettingsClosingRef.current) {
       s.mobileSettingsOpen = false;
       forceCloseMobileSettings();
-      return true;
     }
     if (s.mobileSettingsOpen) {
       s.mobileSettingsOpen = false;
       handleCloseMobileSettings();
       return true;
     }
-    // During the close animation snapshot already treats NP as gone; a second
-    // back should force-unmount instead of falling through to exit toast.
     if (mobilePlayerClosingRef.current) {
       s.mobilePlayerOpen = false;
       forceCloseMobilePlayer();
-      return true;
     }
     if (s.mobilePlayerOpen) {
       s.mobilePlayerOpen = false;
@@ -391,7 +390,14 @@ export function useAndroidBackTrap({
   // Grow with pushState; shrink with history.go when UI dismisses overlays
   // without a hardware back (drag/chevron), so orphan entries don't skip the
   // double-back-to-exit toast.
-  useLayoutEffect(() => {
+  //
+  // history.go is asynchronous, so nothing else may touch history until its
+  // popstate arrives. A pushState issued in between (one layer closing as
+  // another opens a render later) lands before the traversal and the count
+  // drifts one entry off, until a later back leaves the app with no prompt.
+  // So while a go is pending this waits, and the popstate runs it again.
+  const reconcileHistory = () => {
+    if (ignorePopCountRef.current > 0) return;
     const target = targetTrapDepthRef.current();
 
     while (trapDepthRef.current < target) {
@@ -406,7 +412,12 @@ export function useAndroidBackTrap({
       trapDepthRef.current = target;
       window.history.go(-excess);
     }
+  };
+  const reconcileHistoryRef = useRef(reconcileHistory);
+  reconcileHistoryRef.current = reconcileHistory;
 
+  useLayoutEffect(() => {
+    reconcileHistoryRef.current();
     if (countHistoryLayers() > 0) {
       clearExitPrompt();
     }
@@ -440,6 +451,8 @@ export function useAndroidBackTrap({
     const onPopState = () => {
       if (ignorePopCountRef.current > 0) {
         ignorePopCountRef.current -= 1;
+        // Catch up on any layers that opened while the traversal was pending.
+        reconcileHistoryRef.current();
         return;
       }
 
