@@ -754,7 +754,7 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
                 Some(v) => v,
                 None => !state.player.queue.is_shuffled(),
             };
-            state.player.queue.set_shuffle(on);
+            state.player.set_shuffle(on);
             DaemonResponse::ok_msg(format!("Shuffle {}.", if on { "on" } else { "off" }))
         }
         DaemonRequest::QueueRepeat { mode } => {

@@ -342,27 +342,33 @@ pub fn exo_set_gapless_enabled(enabled: bool) -> Result<(), String> {
     with_player(|p| p.call_void("setGaplessEnabled", "(Z)V", &[JValue::Bool(enabled as u8)]))
 }
 
+fn new_uri_array<'local>(
+    env: &mut JNIEnv<'local>,
+    uris: &[String],
+) -> Result<jni::objects::JObjectArray<'local>, String> {
+    let string_class = env
+        .find_class("java/lang/String")
+        .map_err(|e| format!("String class: {e}"))?;
+    let array = env
+        .new_object_array(uris.len() as i32, string_class, JObject::null())
+        .map_err(|e| format!("new_object_array: {e}"))?;
+    for (i, uri) in uris.iter().enumerate() {
+        let j_uri = env
+            .new_string(uri)
+            .map_err(|e| format!("uri string: {e}"))?;
+        env.set_object_array_element(&array, i as i32, &j_uri)
+            .map_err(|e| format!("set_object_array_element: {e}"))?;
+        // Freed per track so a large queue cannot overflow the local
+        // reference table before the frame pops.
+        let _ = env.delete_local_ref(j_uri);
+    }
+    Ok(array)
+}
+
 pub fn exo_play_media_items(uris: &[String], start_index: usize) -> Result<(), String> {
     with_player(|p| {
         p.with_env(|env| {
-            let string_class = env
-                .find_class("java/lang/String")
-                .map_err(|e| format!("String class: {e}"))?;
-            let array = env
-                .new_object_array(uris.len() as i32, string_class, JObject::null())
-                .map_err(|e| format!("new_object_array: {e}"))?;
-            for (i, uri) in uris.iter().enumerate() {
-                let j_uri = env
-                    .new_string(uri)
-                    .map_err(|e| format!("uri string: {e}"))?;
-                env.set_object_array_element(&array, i as i32, &j_uri)
-                    .map_err(|e| format!("set_object_array_element: {e}"))?;
-                // This thread stays permanently JNI-attached, so nothing else
-                // frees these per-track local refs. Without this, playing a
-                // large queue/playlist gapless risks a local reference table
-                // overflow crash.
-                let _ = env.delete_local_ref(j_uri);
-            }
+            let array = new_uri_array(env, uris)?;
             env.call_method(
                 p.instance.as_obj(),
                 "playMediaItems",
@@ -376,6 +382,33 @@ pub fn exo_play_media_items(uris: &[String], start_index: usize) -> Result<(), S
                 return Err("playMediaItems threw".into());
             }
             Ok(())
+        })
+    })
+}
+
+/// Replace ExoPlayer's items after the playing one. Returns the playing
+/// item's index, or `None` when ExoPlayer has no playlist.
+pub fn exo_replace_upcoming_media_items(uris: &[String]) -> Result<Option<usize>, String> {
+    with_player(|p| {
+        p.with_env(|env| {
+            let array = new_uri_array(env, uris)?;
+            let index = env
+                .call_method(
+                    p.instance.as_obj(),
+                    "replaceUpcomingMediaItems",
+                    "([Ljava/lang/String;)I",
+                    &[JValue::Object(&array)],
+                )
+                .map_err(|e| format!("replaceUpcomingMediaItems: {e}"))?;
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+                return Err("replaceUpcomingMediaItems threw".into());
+            }
+            let index = index
+                .i()
+                .map_err(|e| format!("replaceUpcomingMediaItems: {e}"))?;
+            Ok(usize::try_from(index).ok())
         })
     })
 }

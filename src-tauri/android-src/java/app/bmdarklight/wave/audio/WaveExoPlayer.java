@@ -432,6 +432,36 @@ public final class WaveExoPlayer {
         });
     }
 
+    /**
+     * Swap every item after the playing one for {@code uriStrings}, leaving the
+     * current track untouched. Returns the playing item's index, or -1 when
+     * there is no playlist to change.
+     */
+    public int replaceUpcomingMediaItems(String[] uriStrings) {
+        final int[] result = {-1};
+        runOnMainBlocking(() -> {
+            if (player == null || player.getMediaItemCount() == 0) {
+                return;
+            }
+            int current = player.getCurrentMediaItemIndex();
+            int count = player.getMediaItemCount();
+            if (current + 1 < count) {
+                player.removeMediaItems(current + 1, count);
+            }
+            java.util.ArrayList<MediaItem> items = new java.util.ArrayList<>();
+            if (uriStrings != null) {
+                for (String uriString : uriStrings) {
+                    if (uriString != null && !uriString.isEmpty()) {
+                        items.add(MediaItem.fromUri(Uri.parse(normalizeUri(uriString))));
+                    }
+                }
+            }
+            player.addMediaItems(items);
+            result[0] = current;
+        });
+        return result[0];
+    }
+
     public void setCrossfadeDuration(float seconds) {
         crossfadeDurationSec = Math.max(0f, Math.min(8f, seconds));
     }

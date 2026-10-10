@@ -976,7 +976,7 @@ pub(crate) fn handle_native_media_action(
         "shuffle" => {
             with_app_player(app, |player| {
                 let next = !player.queue.is_shuffled();
-                player.queue.set_shuffle(next);
+                player.set_shuffle(next);
                 Ok(())
             })?;
             let bridge = app.state::<MediaBridgeState>();
@@ -1976,7 +1976,7 @@ pub async fn set_shuffle(
     state: tauri::State<'_, PlayerState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    lock_player(&state)?.queue.set_shuffle(enabled);
+    lock_player(&state)?.set_shuffle(enabled);
     let bridge = app.state::<MediaBridgeState>();
     sync_bridge_playback_mode(&app, &bridge);
     Ok(())

@@ -94,11 +94,17 @@ pub struct Queue {
 }
 
 impl Queue {
+    /// Replace the queue. Shuffle stays on if it was on, with a fresh order
+    /// for the new tracks.
     pub fn set_tracks(&mut self, tracks: Vec<String>) {
+        let shuffled = self.is_shuffled();
         self.tracks = tracks;
         self.current_index = None;
         self.shuffle_order = None;
         self.shuffle_pos = 0;
+        if shuffled {
+            self.rebuild_shuffle_order();
+        }
     }
 
     /// Rebuild the Fisher-Yates shuffle order when shuffle is enabled.
@@ -144,10 +150,18 @@ impl Queue {
         if index >= self.tracks.len() {
             return None;
         }
+        let fresh = self.current_index.is_none();
         self.current_index = Some(index);
         if let Some(ref mut order) = self.shuffle_order {
             if let Some(pos) = order.iter().position(|&v| v == index) {
-                self.shuffle_pos = pos;
+                if fresh {
+                    // Starting a new queue on this track: it opens the shuffle
+                    // instead of skipping every track ordered before it.
+                    order.swap(0, pos);
+                    self.shuffle_pos = 0;
+                } else {
+                    self.shuffle_pos = pos;
+                }
             }
         }
         self.tracks.get(index).map(String::as_str)
@@ -1189,6 +1203,32 @@ impl AudioPlayer {
             return;
         }
         let _ = crate::android::audio::exo_set_upcoming_uri(None);
+    }
+
+    /// ExoPlayer holds the gapless playlist it was given at play time. Hand it
+    /// the queue's current upcoming order so shuffle toggles and queue edits
+    /// change what plays next.
+    #[cfg(target_os = "android")]
+    fn resync_android_gapless(&mut self) {
+        if self.android_gapless_playlist.len() <= 1 {
+            return;
+        }
+        // Catch up on an auto-advance first so the queue is on the track
+        // ExoPlayer is actually playing.
+        self.check_android_gapless_handoff();
+        let mut upcoming = self.queue.paths_from_current_forward(&self.repeat);
+        if upcoming.is_empty() {
+            return;
+        }
+        upcoming.remove(0);
+        match crate::android::audio::exo_replace_upcoming_media_items(&upcoming) {
+            Ok(Some(current)) => {
+                self.android_gapless_playlist.truncate(current + 1);
+                self.android_gapless_playlist.extend(upcoming);
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("Could not update the gapless playlist: {e}"),
+        }
     }
 
     #[cfg(target_os = "android")]
@@ -2302,12 +2342,22 @@ impl AudioPlayer {
 
     // ── Queue manipulation ───────────────────────────────────────────────────
 
+    pub fn set_shuffle(&mut self, enabled: bool) {
+        self.queue.set_shuffle(enabled);
+        #[cfg(target_os = "android")]
+        self.resync_android_gapless();
+    }
+
     pub fn enqueue(&mut self, path: &str) {
         self.queue.enqueue(path.to_string());
+        #[cfg(target_os = "android")]
+        self.resync_android_gapless();
     }
 
     pub fn insert_next(&mut self, path: &str) {
         self.queue.insert_next(path.to_string());
+        #[cfg(target_os = "android")]
+        self.resync_android_gapless();
     }
 
     /// Remove a queue entry. Removing the track that is playing moves on to
@@ -2325,16 +2375,26 @@ impl AudioPlayer {
             } else {
                 let _ = self.stop();
             }
+        } else {
+            #[cfg(target_os = "android")]
+            self.resync_android_gapless();
         }
         Some(removed)
     }
 
     pub fn move_queue_track(&mut self, from: usize, to: usize) -> bool {
-        self.queue.move_track(from, to)
+        let moved = self.queue.move_track(from, to);
+        #[cfg(target_os = "android")]
+        if moved {
+            self.resync_android_gapless();
+        }
+        moved
     }
 
     pub fn clear_upcoming(&mut self) {
         self.queue.clear_upcoming();
+        #[cfg(target_os = "android")]
+        self.resync_android_gapless();
     }
 
     pub fn jump_to_queue_index(&mut self, index: usize) -> Result<Option<String>, AudioError> {
@@ -2359,7 +2419,7 @@ mod tests {
     // ── set_tracks ───────────────────────────────────────────────────────
 
     #[test]
-    fn set_tracks_resets_current_index_and_shuffle_state() {
+    fn set_tracks_resets_current_index_and_keeps_shuffle_on() {
         let mut queue = queue_of(&["a", "b", "c"]);
         queue.jump(2);
         queue.set_shuffle(true);
@@ -2368,9 +2428,36 @@ mod tests {
 
         queue.set_tracks(vec!["x".to_string(), "y".to_string()]);
         assert_eq!(queue.current_index(), None);
-        assert!(!queue.is_shuffled());
+        assert!(queue.is_shuffled());
         assert_eq!(queue.shuffle_pos, 0);
+        let mut order = queue.shuffle_order.clone().unwrap();
+        order.sort_unstable();
+        assert_eq!(order, vec![0, 1]);
         assert_eq!(queue.tracks(), &["x".to_string(), "y".to_string()]);
+    }
+
+    #[test]
+    fn set_tracks_leaves_an_unshuffled_queue_unshuffled() {
+        let mut queue = queue_of(&["a", "b"]);
+        queue.set_tracks(vec!["x".to_string(), "y".to_string()]);
+        assert!(!queue.is_shuffled());
+    }
+
+    #[test]
+    fn a_new_shuffled_queue_plays_every_track_from_the_one_picked() {
+        let paths: Vec<String> = (0..20).map(|i| i.to_string()).collect();
+        let mut queue = queue_of(&["a"]);
+        queue.set_shuffle(true);
+        queue.set_tracks(paths);
+        queue.jump(7);
+        assert_eq!(queue.shuffle_order.as_ref().unwrap()[0], 7);
+
+        let mut played = vec![7];
+        while queue.next(&RepeatMode::Off).is_some() {
+            played.push(queue.current_index().unwrap());
+        }
+        played.sort_unstable();
+        assert_eq!(played, (0..20).collect::<Vec<_>>());
     }
 
     // ── jump ─────────────────────────────────────────────────────────────
