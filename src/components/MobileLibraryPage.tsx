@@ -24,6 +24,7 @@ import {
   BiMusic,
   BiPlus,
   BiSolidHeart,
+  BiSync,
   BiUser,
 } from "react-icons/bi";
 import type { PlaylistInfo } from "../utils/player";
@@ -47,12 +48,15 @@ function Row({
   tone,
   label,
   count,
+  synced = false,
   onClick,
 }: {
   icon: ReactNode;
   tone?: "favorites";
   label: string;
   count?: number;
+  /** Kept in step with a music folder. */
+  synced?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -63,7 +67,16 @@ function Row({
       >
         {icon}
       </span>
-      <span className="mlib-row-label">{label}</span>
+      <span className="mlib-row-label-wrap">
+        <span className="mlib-row-label">{label}</span>
+        {synced && (
+          <BiSync
+            className="mlib-row-sync"
+            title="Synced with a folder"
+            aria-label="Synced with a folder"
+          />
+        )}
+      </span>
       {count !== undefined && (
         <span className="mlib-row-count">{count.toLocaleString()}</span>
       )}
@@ -172,6 +185,7 @@ export default function MobileLibraryPage({
               icon={<BiListUl />}
               label={playlist.name}
               count={playlist.track_count}
+              synced={!!playlist.sync_folder}
               onClick={() => onSelectPlaylist(playlist.id)}
             />
           ))

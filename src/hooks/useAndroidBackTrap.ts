@@ -10,6 +10,11 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { exitApp } from "../utils/player";
+import {
+  closeTopBackLayer,
+  openBackLayers,
+  useBackLayersVersion,
+} from "../utils/backLayers";
 
 type OverlaySnapshot = {
   showFolderSetup: boolean;
@@ -193,7 +198,7 @@ export function useAndroidBackTrap({
   const countHistoryLayers = (
     s: OverlaySnapshot = overlaySnapshotRef.current,
   ) => {
-    let layers = 0;
+    let layers = openBackLayers("popup") + openBackLayers("page");
     if (s.showFolderSetup) layers++;
     if (s.menuTrackPath) layers++;
     if (s.queueMenuIndex != null) layers++;
@@ -227,6 +232,8 @@ export function useAndroidBackTrap({
   // (before React re-renders) still sees the updated stack.
   const closeTopOverlay = (): boolean => {
     const s = overlaySnapshotRef.current;
+    // Menus, cards and dialogs that keep their own state sit over everything.
+    if (closeTopBackLayer("popup")) return true;
     if (s.showFolderSetup) {
       s.showFolderSetup = false;
       void skipFolderSetup();
@@ -331,6 +338,8 @@ export function useAndroidBackTrap({
       closeMainSearch();
       return true;
     }
+    // A page's own search field closes before back leaves the page.
+    if (closeTopBackLayer("page")) return true;
     if (s.browseDepth > 0) {
       s.browseDepth -= 1;
       browseBack();
@@ -347,6 +356,7 @@ export function useAndroidBackTrap({
     return false;
   };
 
+  const backLayersVersion = useBackLayersVersion();
   const trapDepthRef = useRef(0);
   const ignorePopCountRef = useRef(0);
   const exitPressAtRef = useRef(0);
@@ -422,6 +432,7 @@ export function useAndroidBackTrap({
     mainSearchOpen,
     browseStackLength,
     libraryDepth,
+    backLayersVersion,
     androidHost,
   ]);
 

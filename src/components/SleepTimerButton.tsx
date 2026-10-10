@@ -11,6 +11,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { BiCheck, BiMoon, BiX } from "react-icons/bi";
+import { useBackLayer } from "../utils/backLayers";
 import { formatTime } from "../utils/format";
 import {
   SLEEP_CHOICES,
@@ -62,6 +63,7 @@ export default function SleepTimerButton({
   const [open, setOpen] = useState(false);
   const label = sleepLabel(status);
   const active = status.mode !== "off";
+  useBackLayer(open, () => setOpen(false));
 
   useEffect(() => {
     if (!origin) return;

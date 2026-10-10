@@ -8,8 +8,8 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { useEffect, useState } from "react";
-import { BiMusic } from "react-icons/bi";
+import { useEffect, useMemo, useState } from "react";
+import { BiChevronLeft, BiMusic, BiSearch } from "react-icons/bi";
 import {
   getMostPlayed,
   getRecentlyPlayed,
@@ -17,7 +17,9 @@ import {
   resolveCoverSrc,
 } from "../utils/player";
 import type { PlaybackState, Track } from "../utils/player";
+import { matchesQuery } from "../utils/track";
 import type { ContextMenuAnchor } from "./ContextMenu";
+import MobileFilterField from "./MobileFilterField";
 import TrackMenuButton from "./TrackMenuButton";
 import VirtualizedList from "./VirtualizedList";
 
@@ -84,6 +86,8 @@ interface PlayedTracksPageProps {
   onCloseTrackMenu: () => void;
   menuTrackPath: string | null;
   playbackState: PlaybackState;
+  /** Back to the Library tab. Only shown on the phone layout. */
+  onBack: () => void;
 }
 
 export default function PlayedTracksPage({
@@ -93,6 +97,7 @@ export default function PlayedTracksPage({
   onCloseTrackMenu,
   menuTrackPath,
   playbackState,
+  onBack,
 }: PlayedTracksPageProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(true);
@@ -135,9 +140,29 @@ export default function PlayedTracksPage({
     };
   }, [mode]);
 
+  // The phone layout's search narrows the list in place. Each shown row
+  // keeps its rank in the full list.
+  const [filtering, setFiltering] = useState(false);
+  const [filter, setFilter] = useState("");
+  const shownRows = useMemo(() => {
+    const rows = tracks.map((track, index) => ({ track, index }));
+    if (!filter.trim()) return rows;
+    return rows.filter(({ track }) =>
+      matchesQuery(filter, getTrackTitle(track), track.artist, track.album),
+    );
+  }, [tracks, filter]);
+  const closeFilter = () => {
+    setFilter("");
+    setFiltering(false);
+  };
+
+  const pageClass = `main-content playlist-page${
+    mode === "most_played" ? " playlist-page-ranked" : ""
+  }`;
+
   if (loading) {
     return (
-      <main className="main-content">
+      <main className={pageClass}>
         <div className="empty-state">
           <div className="empty-icon">
             <span className="import-spinner" />
@@ -149,16 +174,54 @@ export default function PlayedTracksPage({
   }
 
   return (
-    <main className="main-content">
+    <main className={pageClass}>
       <div className="hero-copy">
         <div className="hero-top">
+          <button
+            className="mlib-icon-btn playlist-back-btn"
+            onClick={onBack}
+            type="button"
+            title="Back"
+            aria-label="Back to library"
+          >
+            <BiChevronLeft />
+          </button>
           <h1>{title}</h1>
+          {tracks.length > 0 && (
+            <div className="hero-actions">
+              <button
+                className={`btn-secondary playlist-filter-btn${filtering ? " active" : ""}`}
+                onClick={() => (filtering ? closeFilter() : setFiltering(true))}
+                type="button"
+                title={`Search ${title.toLowerCase()}`}
+                aria-label={`Search ${title.toLowerCase()}`}
+                aria-expanded={filtering}
+              >
+                <BiSearch />
+              </button>
+            </div>
+          )}
         </div>
-        <p>{subtitle}</p>
+        <p>
+          {filter.trim()
+            ? `${shownRows.length} of ${tracks.length} songs`
+            : subtitle}
+        </p>
       </div>
 
+      <MobileFilterField
+        open={filtering}
+        label={`Search ${title.toLowerCase()}`}
+        placeholder="Songs, artists or albums"
+        query={filter}
+        onQueryChange={setFilter}
+        onClose={closeFilter}
+      />
+
       <section className="playlist-container">
-        {tracks.length === 0 ? (
+        {tracks.length > 0 && shownRows.length === 0 ? (
+          <p className="mcol-status">Nothing matches “{filter.trim()}”</p>
+        ) : tracks.length === 0 ? (
           <div className="empty-state">
             <div className="empty-icon">
               <BiMusic />
@@ -185,13 +248,14 @@ export default function PlayedTracksPage({
               </div>
             </div>
             <VirtualizedList
-              count={tracks.length}
+              count={shownRows.length}
               estimateSize={58}
               className="track-list-virtual"
             >
-              {(i) => {
-                const track = tracks[i];
-                if (!track) return null;
+              {(row) => {
+                const shownRow = shownRows[row];
+                if (!shownRow) return null;
+                const { track, index: i } = shownRow;
                 const isCurrent = playbackState.current_path === track.path;
                 return (
                   <div
@@ -220,7 +284,18 @@ export default function PlayedTracksPage({
                       )}
                     </div>
                     <div className="track-title-cell">
-                      <Artwork track={track} className="track-thumb" />
+                      <span className="track-thumb-wrap">
+                        <Artwork track={track} className="track-thumb" />
+                        {isCurrent && playbackState.is_playing && (
+                          <span className="track-thumb-playing" aria-hidden>
+                            <span className="mini-bars">
+                              <i />
+                              <i />
+                              <i />
+                            </span>
+                          </span>
+                        )}
+                      </span>
                       <div>
                         <div className="track-name">{getTrackTitle(track)}</div>
                         <div className="track-meta">

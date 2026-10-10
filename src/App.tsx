@@ -96,11 +96,13 @@ import PlayedTracksPage from "./components/PlayedTracksPage";
 import Artwork from "./components/Artwork";
 import ClearPlaylistDialog from "./components/dialogs/ClearPlaylistDialog";
 import DeletePlaylistDialog from "./components/dialogs/DeletePlaylistDialog";
+import RemoveFromLibraryDialog from "./components/dialogs/RemoveFromLibraryDialog";
 import AddToPlaylistDialog from "./components/dialogs/AddToPlaylistDialog";
 import AddFromLibraryDialog from "./components/dialogs/AddFromLibraryDialog";
 import CreatePlaylistDialog from "./components/dialogs/CreatePlaylistDialog";
 import EditMetadataDialog from "./components/dialogs/EditMetadataDialog";
 import TrackContextMenu from "./components/TrackContextMenu";
+import TrackMenuButton from "./components/TrackMenuButton";
 import QueueContextMenu from "./components/QueueContextMenu";
 import AddTrackMenu from "./components/AddTrackMenu";
 import StatusToasts from "./components/StatusToasts";
@@ -369,6 +371,12 @@ function App() {
   // Album and artist pages read the library themselves, so they need a nudge
   // once an edit lands.
   const [browseRefresh, setBrowseRefresh] = useState(0);
+  // The song waiting on "Remove from library?". Kept here because the menu
+  // that asked has already closed.
+  const [removeFromLibraryTrack, setRemoveFromLibraryTrack] = useState<{
+    path: string;
+    title: string;
+  } | null>(null);
 
   // Sort state — cycles asc → desc → off on repeated header clicks
   const [sortColumn, setSortColumn] = useState<"index" | "title" | "album">(
@@ -1647,6 +1655,18 @@ function App() {
     openAlbumPage(name, albumArtist);
   };
 
+  const playSearchHit = (path: string) => {
+    const paths = displayedMainSearchHits.map((h) => h.track.path);
+    const index = Math.max(
+      0,
+      paths.findIndex((p) => p === path),
+    );
+    void playTracks(paths, index).then(() => {
+      updatePlaybackState();
+      loadQueueTracks();
+    });
+  };
+
   const mainSearchResultsPanel = (
     <div className="search-results">
       {mainSearchLoading && mainSearchResultCount === 0 ? (
@@ -1791,22 +1811,19 @@ function App() {
                 (f) => f in MATCH_FIELD_LABEL,
               );
               return (
-                <button
+                // A div acting as the button, since it holds the menu button.
+                <div
                   key={track.id}
-                  type="button"
-                  className={`search-hit ${isCurrentTrack(track) ? "active" : ""}`}
-                  onClick={() => {
-                    const paths = displayedMainSearchHits.map(
-                      (h) => h.track.path,
-                    );
-                    const index = Math.max(
-                      0,
-                      paths.findIndex((p) => p === track.path),
-                    );
-                    void playTracks(paths, index).then(() => {
-                      updatePlaybackState();
-                      loadQueueTracks();
-                    });
+                  role="button"
+                  tabIndex={0}
+                  className={`search-hit search-hit-track ${isCurrentTrack(track) ? "active" : ""}`}
+                  onClick={() => playSearchHit(track.path)}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget) return;
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      playSearchHit(track.path);
+                    }
                   }}
                   onContextMenu={(event) => {
                     event.preventDefault();
@@ -1855,7 +1872,13 @@ function App() {
                   <div className="search-hit-duration">
                     {formatTime(track.duration_seconds)}
                   </div>
-                </button>
+                  <TrackMenuButton
+                    track={track}
+                    isOpen={menuTrackPath === track.path}
+                    onOpen={openTrackContextMenu}
+                    onClose={closeTrackContextMenu}
+                  />
+                </div>
               );
             })}
           </div>
@@ -2058,6 +2081,7 @@ function App() {
         !mainSearchQuery.trim() ? (
         <PlayedTracksPage
           mode={mainView}
+          onBack={goLibrary}
           playbackState={playbackState}
           onOpenTrackMenu={openTrackContextMenu}
           onCloseTrackMenu={closeTrackContextMenu}
@@ -2077,9 +2101,9 @@ function App() {
           }}
         />
       ) : mainView === "albums" && !mainSearchQuery.trim() ? (
-        <MobileAlbumsPage onOpenAlbum={openAlbumPage} />
+        <MobileAlbumsPage onOpenAlbum={openAlbumPage} onBack={goLibrary} />
       ) : mainView === "artists" && !mainSearchQuery.trim() ? (
-        <MobileArtistsPage onOpenArtist={openArtistPage} />
+        <MobileArtistsPage onOpenArtist={openArtistPage} onBack={goLibrary} />
       ) : mainView === "library" && !mainSearchQuery.trim() ? (
         <MobileLibraryPage
           libraryPlaylist={libraryPlaylist}
@@ -2150,6 +2174,8 @@ function App() {
         />
       ) : (
         <LibraryTrackList
+          // A new playlist is a new page: it fades in and starts at the top.
+          key={selectedPlaylistId ?? "library"}
           mainSearchQuery={mainSearchQuery}
           onMainSearchQueryChange={setMainSearchQuery}
           mainSearchOpen={mainSearchOpen}
@@ -2188,6 +2214,10 @@ function App() {
           }}
           onAddTrack={() => void handleAddTrack(false)}
           onClearPlaylist={handleClearPlaylist}
+          onRenamePlaylist={openRenamePlaylistDialog}
+          onExportPlaylist={handleExportPlaylistById}
+          onDeletePlaylist={handleDeletePlaylist}
+          onBack={goLibrary}
           onSort={handleSort}
           onResizeAlbumColumn={handleAlbumColResizeStart}
           onSyncPlaylist={(id) => void handleSyncPlaylistFolder(id)}
@@ -2198,7 +2228,13 @@ function App() {
           onOpenTrackContextMenu={openTrackContextMenu}
           onCloseTrackMenu={closeTrackContextMenu}
           onRemoveFromPlaylist={(path) => void handleRemoveFromPlaylist(path)}
-          onRemoveFromLibrary={(path) => void handleRemoveFromLibrary(path)}
+          onRemoveFromLibrary={(path) => {
+            const track = playlist.find((t) => t.path === path);
+            setRemoveFromLibraryTrack({
+              path,
+              title: track ? getTrackTitle(track) : "This song",
+            });
+          }}
           onToggleFavorite={handleToggleFavorite}
         />
       )}
@@ -2307,11 +2343,12 @@ function App() {
               onRemoveFromPlaylist={(path) =>
                 void handleRemoveFromPlaylist(path)
               }
-              onRemoveFromLibrary={(path) => {
-                void handleRemoveFromLibrary(path).then(() =>
-                  setBrowseRefresh((count) => count + 1),
-                );
-              }}
+              onRemoveFromLibrary={(path) =>
+                setRemoveFromLibraryTrack({
+                  path,
+                  title: getTrackTitle(menuTrack),
+                })
+              }
             />
           );
         })()}
@@ -2365,11 +2402,34 @@ function App() {
         />
       )}
 
+      {removeFromLibraryTrack && (
+        <RemoveFromLibraryDialog
+          title={removeFromLibraryTrack.title}
+          onCancel={() => setRemoveFromLibraryTrack(null)}
+          onConfirm={() => {
+            const { path } = removeFromLibraryTrack;
+            setRemoveFromLibraryTrack(null);
+            void handleRemoveFromLibrary(path).then(() =>
+              setBrowseRefresh((count) => count + 1),
+            );
+          }}
+        />
+      )}
+
       {deletePlaylistConfirm && (
         <DeletePlaylistDialog
           name={deletePlaylistConfirm.name}
           onCancel={() => setDeletePlaylistConfirm(null)}
-          onConfirm={confirmDeletePlaylist}
+          onConfirm={() => {
+            // On a phone the deleted playlist was the page on screen, so go
+            // back to the library it was opened from.
+            const leaving =
+              isMobileLayout() &&
+              mainView === "playlist" &&
+              deletePlaylistConfirm.id === selectedPlaylistId;
+            void confirmDeletePlaylist();
+            if (leaving) goLibrary();
+          }}
         />
       )}
 

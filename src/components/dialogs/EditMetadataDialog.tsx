@@ -17,6 +17,7 @@ import {
   selectCoverImage,
 } from "../../utils/player";
 import type { TagEdit, Track } from "../../utils/player";
+import { useBackLayer } from "../../utils/backLayers";
 
 /** Fields the dialog edits, in the order they appear. */
 const FIELDS = [
@@ -91,6 +92,7 @@ export default function EditMetadataDialog({
   /** Re-runs the folder picker so a read-only grant can be upgraded. */
   onGrantWriteAccess?: () => void;
 }) {
+  useBackLayer(true, onClose);
   const shared = useMemo(() => sharedValues(tracks), [tracks]);
   const [values, setValues] = useState<Record<Field, string>>(() => {
     const initial = {} as Record<Field, string>;

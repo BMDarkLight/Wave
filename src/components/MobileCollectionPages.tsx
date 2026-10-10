@@ -19,8 +19,10 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { BiChevronRight } from "react-icons/bi";
+import { BiChevronLeft, BiChevronRight, BiSearch } from "react-icons/bi";
+import MobileFilterField from "./MobileFilterField";
 import { lessMotion } from "../utils/appearance";
+import { matchesQuery } from "../utils/track";
 import {
   getTrackFullCover,
   listAlbums,
@@ -169,28 +171,80 @@ function ArtistAvatar({
 function CollectionShell({
   title,
   count,
+  shown,
   loading,
   empty,
+  searchPlaceholder,
+  query,
+  onQueryChange,
+  onBack,
   children,
 }: {
   title: string;
+  /** Everything in the collection. */
   count: number;
+  /** What is left after the search. */
+  shown: number;
   loading: boolean;
   empty: string;
+  searchPlaceholder: string;
+  query: string;
+  onQueryChange: (query: string) => void;
+  onBack: () => void;
   children: ReactNode;
 }) {
+  const [searching, setSearching] = useState(false);
+
+  const closeSearch = () => {
+    onQueryChange("");
+    setSearching(false);
+  };
+
   return (
     <main className="main-content mobile-library-page">
-      <div className="mlib-header">
+      <div className="mlib-header mcol-header">
+        <button
+          className="mlib-icon-btn"
+          onClick={onBack}
+          type="button"
+          title="Back"
+          aria-label="Back to library"
+        >
+          <BiChevronLeft />
+        </button>
         <h1>{title}</h1>
         {!loading && count > 0 && (
-          <span className="mcol-count">{count.toLocaleString()}</span>
+          <span className="mcol-count">
+            {query.trim()
+              ? `${shown.toLocaleString()} of ${count.toLocaleString()}`
+              : count.toLocaleString()}
+          </span>
         )}
+        <button
+          className={`mlib-icon-btn mcol-search-btn${searching ? " active" : ""}`}
+          onClick={() => (searching ? closeSearch() : setSearching(true))}
+          type="button"
+          title={`Search ${title.toLowerCase()}`}
+          aria-label={`Search ${title.toLowerCase()}`}
+          aria-expanded={searching}
+        >
+          <BiSearch />
+        </button>
       </div>
+      <MobileFilterField
+        open={searching}
+        label={`Search ${title.toLowerCase()}`}
+        placeholder={searchPlaceholder}
+        query={query}
+        onQueryChange={onQueryChange}
+        onClose={closeSearch}
+      />
       {loading ? (
         <p className="mcol-status">Loading…</p>
       ) : count === 0 ? (
         <p className="mcol-status">{empty}</p>
+      ) : shown === 0 ? (
+        <p className="mcol-status">Nothing matches “{query.trim()}”</p>
       ) : (
         children
       )}
@@ -200,11 +254,21 @@ function CollectionShell({
 
 export function MobileAlbumsPage({
   onOpenAlbum,
+  onBack,
 }: {
   onOpenAlbum: (album: string, albumArtist: string | null) => void;
+  onBack: () => void;
 }) {
   const [albums, setAlbums] = useState<AlbumSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const shown = useMemo(
+    () =>
+      albums.filter((album) =>
+        matchesQuery(query, album.name, album.album_artist, album.artist),
+      ),
+    [albums, query],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -226,11 +290,16 @@ export function MobileAlbumsPage({
     <CollectionShell
       title="Albums"
       count={albums.length}
+      shown={shown.length}
       loading={loading}
       empty="No albums yet"
+      searchPlaceholder="Albums or artists"
+      query={query}
+      onQueryChange={setQuery}
+      onBack={onBack}
     >
       <div className="mcol-album-grid">
-        {albums.map((album) => (
+        {shown.map((album) => (
           <button
             key={`${album.name}-${album.album_artist ?? ""}`}
             className="mcol-album"
@@ -251,12 +320,19 @@ export function MobileAlbumsPage({
 
 export function MobileArtistsPage({
   onOpenArtist,
+  onBack,
 }: {
   onOpenArtist: (artist: string) => void;
+  onBack: () => void;
 }) {
   const [artists, setArtists] = useState<ArtistSummary[]>([]);
   const [albums, setAlbums] = useState<AlbumSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const shown = useMemo(
+    () => artists.filter((artist) => matchesQuery(query, artist.name)),
+    [artists, query],
+  );
 
   useEffect(() => {
     listAlbums()
@@ -301,11 +377,16 @@ export function MobileArtistsPage({
     <CollectionShell
       title="Artists"
       count={artists.length}
+      shown={shown.length}
       loading={loading}
       empty="No artists yet"
+      searchPlaceholder="Artists"
+      query={query}
+      onQueryChange={setQuery}
+      onBack={onBack}
     >
       <div className="mlib-list">
-        {artists.map((artist, index) => (
+        {shown.map((artist, index) => (
           <button
             key={artist.name}
             className="mlib-row"

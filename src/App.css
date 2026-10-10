@@ -636,6 +636,13 @@ img.track-thumb {
   min-width: 0;
 }
 
+/* Desktop has the sidebar for getting back and its own search, so the
+   phone layout's back arrow and list search only show there. */
+.playlist-back-btn,
+.playlist-filter-btn {
+  display: none;
+}
+
 .hero-copy p:not(.eyebrow) {
   color: rgba(255, 255, 255, 0.8);
   font-weight: 600;
@@ -1432,6 +1439,22 @@ input[type="search"]::-webkit-search-decoration {
   font-variant-numeric: tabular-nums;
 }
 
+/* Song results end with the same menu button as the song lists, always
+   shown like the album and history lists rather than only on hover. */
+.search-hit.search-hit-track {
+  grid-template-columns: 48px minmax(0, 1fr) auto auto;
+}
+
+.search-hit .track-actions-cell {
+  position: static;
+}
+
+.search-hit .track-actions-hover {
+  position: static;
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* One credential, stated as plainly as possible: name on the left, field on
    the right. Matches the label/value rhythm the rest of the page already uses,
    so the section reads as two settings rather than a provider directory. */
@@ -2179,6 +2202,17 @@ input[type="search"]::-webkit-search-decoration {
   overflow: hidden;
 }
 
+.track-thumb-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+/* Bars over the cover of the song playing. Desktop shows them in the number
+   column instead, so they only appear where that column is hidden. */
+.track-thumb-playing {
+  display: none;
+}
+
 .track-thumb {
   flex: 0 0 auto;
   width: 42px;
@@ -2265,16 +2299,48 @@ input[type="search"]::-webkit-search-decoration {
   display: inline-flex;
 }
 
+/* Every menu shares the sleep timer card's glass and grows out of the point
+   it was opened from (the origin is set inline). Without the glass effect
+   the shared rule further down makes it solid. */
+.context-menu {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: rgba(40, 40, 40, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 18px 48px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(28px) saturate(1.7);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+  opacity: 0;
+  transform: scale(0.85);
+  transition:
+    transform 0.18s cubic-bezier(0.4, 0, 1, 1),
+    opacity 0.14s ease 0.04s;
+}
+
+.context-menu.context-menu-open {
+  opacity: 1;
+  transform: none;
+  transition:
+    transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.16s ease;
+}
+
+/* The copy left behind to play the close. */
+.context-menu-ghost {
+  pointer-events: none;
+}
+
+.reduce-motion .context-menu {
+  transform: none;
+}
+
 .add-track-menu {
   z-index: 220;
   display: grid;
   gap: 2px;
   min-width: 160px;
   padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #282828;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
 .add-track-menu button {
@@ -2283,7 +2349,7 @@ input[type="search"]::-webkit-search-decoration {
   gap: 8px;
   padding: 10px 12px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 10px;
   background: transparent;
   color: var(--text);
   font-size: 14px;
@@ -2312,10 +2378,6 @@ input[type="search"]::-webkit-search-decoration {
   max-height: min(70vh, calc(100vh - 120px));
   overflow-y: auto;
   padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #282828;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
 .track-context-menu button {
@@ -2326,7 +2388,7 @@ input[type="search"]::-webkit-search-decoration {
   min-height: 40px;
   padding: 9px 12px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 10px;
   background: transparent;
   color: var(--text);
   font-size: 14px;
@@ -6589,6 +6651,202 @@ div.album-hero-cover {
   }
 }
 
+/* Playlist, Recently Played and Most Played pages on the phone layout take
+   the look of the other Library pages: back arrow, the same title and
+   count, plain icon buttons, and rows like the Library and Search lists
+   instead of the desktop table. */
+@media (max-width: 900px) {
+  .playlist-page > .hero-copy {
+    padding: 4px 12px 0 8px;
+  }
+
+  .playlist-page .hero-top {
+    gap: 2px;
+    margin-bottom: 0;
+  }
+
+  .playlist-page .playlist-back-btn {
+    display: grid;
+    flex-shrink: 0;
+  }
+
+  .playlist-page .playlist-filter-btn {
+    display: grid;
+    place-items: center;
+  }
+
+  .playlist-page .hero-top h1 {
+    font-size: 26px;
+    line-height: 44px;
+    letter-spacing: -0.05em;
+  }
+
+  .playlist-page .hero-actions {
+    gap: 4px;
+  }
+
+  /* Tapping a song plays from there, so the big button isn't needed. */
+  .playlist-page .big-play {
+    display: none;
+  }
+
+  .playlist-page .hero-actions .btn-secondary,
+  .playlist-page .hero-actions .btn-ghost {
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text);
+    font-size: 22px;
+  }
+
+  .playlist-page .hero-actions .btn-secondary:active,
+  .playlist-page .hero-actions .btn-ghost:active,
+  .playlist-page .playlist-filter-btn.active {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  /* The count sits under the title, lined up with its first letter. */
+  .playlist-page .hero-copy > p {
+    margin: 0 0 8px;
+    padding-left: 46px;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  /* The search field under a Library page's header grows out of the search
+     button's corner and fades in. Only opacity and transform change, so the
+     list below is laid out once rather than on every frame, and the field
+     skips the blur, which is costly to redraw while it scales. */
+  .mobile-filter-field.msearch-field {
+    background: #262626;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    opacity: 0;
+    transform: scale(0.85);
+    transform-origin: top right;
+    transition:
+      transform 0.24s cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 0.16s ease;
+    will-change: transform, opacity;
+  }
+
+  /* A little air between the header and the field. */
+  .mobile-filter-wrap {
+    padding-top: 6px;
+  }
+
+  .mobile-filter-wrap.is-open .mobile-filter-field {
+    opacity: 1;
+    transform: none;
+  }
+
+  .reduce-motion .mobile-filter-field.msearch-field {
+    transform: none;
+  }
+
+  .playlist-page .track-list-header {
+    display: none;
+  }
+
+  /* A synced playlist shows its sync icon beside its name in the Library
+     list instead, so the note under the title goes. */
+  .playlist-page .playlist-synced-note {
+    display: none;
+  }
+
+  .playlist-page .track-list {
+    background: transparent;
+  }
+
+  .playlist-page .track-list.track-list,
+  .playlist-page .track-list.track-list-compact {
+    --track-grid: minmax(0, 1fr) auto auto !important;
+  }
+
+  .playlist-page-ranked .track-list.track-list-compact {
+    --track-grid: 24px minmax(0, 1fr) auto auto !important;
+  }
+
+  .playlist-page .track-item .track-col-index {
+    display: none;
+  }
+
+  .playlist-page-ranked .track-item .track-col-index {
+    display: grid;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .playlist-page .track-item {
+    column-gap: 12px;
+    min-height: 64px;
+    padding: 8px 12px 8px 24px;
+    border-bottom: 0;
+  }
+
+  /* Like the Library rows: no highlight that stays behind after a tap, only
+     while pressing. The playing song is marked by the bars on its cover. */
+  .playlist-page .track-item:hover,
+  .playlist-page .track-item.active {
+    background: transparent;
+  }
+
+  .playlist-page .track-item:active {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .playlist-page:not(.playlist-page-ranked) .track-thumb-playing {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .playlist-page .track-item .track-title-cell {
+    gap: 14px;
+  }
+
+  .playlist-page .track-thumb {
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+  }
+
+  .playlist-page .track-name {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .playlist-page .track-meta {
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .playlist-page .track-duration {
+    color: var(--muted);
+    font-size: 13px;
+  }
+}
+
+/* Every page fades in as it replaces the one before, on the phone and the
+   desktop layout alike. Only opacity changes, so nothing moves. */
+@keyframes page-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.main-content {
+  animation: page-fade-in 0.22s ease;
+}
+
 /* ══════════════════════════════════════════════════════════════════════
    Settings → Appearance
    `no-glass` and `no-motion` sit on <html> (see utils/appearance.ts).
@@ -6625,6 +6883,16 @@ div.album-hero-cover {
   background: #1a1a1a;
 }
 
+/* Dialogs, menus and the sleep timer card share one solid colour. The edit dialog's
+   pinned title and buttons take the same colour so they don't show as bands. */
+.no-glass .modal-dialog,
+.no-glass .metadata-dialog .modal-header,
+.no-glass .metadata-dialog .modal-actions,
+.no-glass .sleep-popover,
+.no-glass .context-menu {
+  background: #282828;
+}
+
 @media (max-width: 900px) {
   .no-glass .sidebar .brand-mark,
   .no-glass .sidebar .sidebar-pins,
@@ -6641,6 +6909,10 @@ div.album-hero-cover {
 
 /* Pages, sheets and menus land in place at once. Spinners and the scan bar
    keep moving because they say something is still working. */
+.no-motion .main-content {
+  animation: none;
+}
+
 .no-motion *,
 .no-motion *::before,
 .no-motion *::after {
@@ -7015,6 +7287,26 @@ div.album-hero-cover {
     font-weight: 600;
   }
 
+  /* Name and the sync icon together; the name gives way first so the icon
+     always shows beside it. */
+  .mlib-row-label-wrap {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .mlib-row-label-wrap .mlib-row-label {
+    flex: 0 1 auto;
+  }
+
+  .mlib-row-sync {
+    flex-shrink: 0;
+    color: var(--muted);
+    font-size: 16px;
+  }
+
   .mlib-row-count {
     color: var(--muted);
     font-size: 13px;
@@ -7056,11 +7348,29 @@ div.album-hero-cover {
     right: -8px;
   }
 
+  /* Back arrow, title and count on the left, search on the right. The arrow
+     takes the place of the left padding so the title sits close to it. */
+  .mcol-header {
+    justify-content: flex-start;
+    gap: 2px;
+    padding-left: 8px;
+  }
+
+  .mcol-search-btn {
+    margin-left: auto;
+  }
+
+  .mcol-search-btn.active {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
   .mcol-count {
-    padding-right: 12px;
+    padding-left: 8px;
     color: var(--muted);
     font-size: 14px;
     font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   .mcol-status {
@@ -7293,9 +7603,10 @@ div.album-hero-cover {
     pointer-events: none;
   }
 
-  /* Search tab: the title scrolls away with the page, and the field stays
-     pinned below the status bar with a frosted background of its own, so
-     nothing paints a box over the page's backdrop. */
+  /* Search tab: the title scrolls away with the page and the field rides up
+     with it until it reaches the top, then stays pinned below the status bar
+     while the results scroll under it. The field keeps a frosted background
+     of its own, so nothing paints a box over the page's backdrop. */
   .mobile-search-page {
     overflow-y: auto;
   }
@@ -7306,6 +7617,15 @@ div.album-hero-cover {
 
   /* Matches the Home and Library titles: a 44px line puts the text on
      their 44px row. */
+  /* Sticky offsets count from inside the page's top padding, which already
+     clears the status bar (safe area + 12px). Pulling back 4px leaves the
+     field pinned 8px below the status bar, not a second safe area lower. */
+  .msearch-header .msearch-field {
+    position: sticky;
+    top: -4px;
+    z-index: 2;
+  }
+
   .msearch-header h1 {
     margin: 4px 24px 12px;
     font-size: 26px;
@@ -7314,9 +7634,6 @@ div.album-hero-cover {
   }
 
   .msearch-field {
-    position: sticky;
-    top: calc(env(safe-area-inset-top, 0px) + 8px);
-    z-index: 2;
     display: flex;
     align-items: center;
     gap: 10px;

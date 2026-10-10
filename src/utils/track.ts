@@ -12,6 +12,22 @@ import { getFileName, type PlaybackState, type Track } from "./player";
 
 export const LIBRARY_PLAYLIST_NAME = "Library";
 
+/**
+ * True when `fields` together contain every word of `query`, ignoring case,
+ * so the words can come in any order and from different fields.
+ */
+export const matchesQuery = (
+  query: string,
+  ...fields: (string | null | undefined)[]
+): boolean => {
+  const haystack = fields.filter(Boolean).join(" ").toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((word) => haystack.includes(word));
+};
+
 export const isLibraryPlaylistName = (name?: string | null) =>
   name === LIBRARY_PLAYLIST_NAME || name === "All Local Files";
 

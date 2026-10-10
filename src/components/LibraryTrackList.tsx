@@ -8,10 +8,20 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import type { CSSProperties, ReactNode, RefObject } from "react";
+import {
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   BiAlignLeft,
+  BiChevronLeft,
   BiDotsHorizontalRounded,
+  BiEditAlt,
+  BiEraser,
+  BiExport,
   BiHeart,
   BiImage,
   BiMinus,
@@ -27,12 +37,15 @@ import {
 } from "react-icons/bi";
 import Artwork from "./Artwork";
 import VirtualizedList from "./VirtualizedList";
-import type { ContextMenuAnchor } from "./ContextMenu";
+import ContextMenu, { type ContextMenuAnchor } from "./ContextMenu";
+import MobileFilterField from "./MobileFilterField";
+import { useBackLayer } from "../utils/backLayers";
 import { formatTime } from "../utils/format";
 import {
   LIBRARY_PLAYLIST_NAME,
   getTrackTitle,
   isLibraryPlaylistName,
+  matchesQuery,
 } from "../utils/track";
 import type { PlaybackState, PlaylistInfo, Track } from "../utils/player";
 
@@ -72,6 +85,10 @@ export default function LibraryTrackList({
   onOpenAddTrackMenu,
   onAddTrack,
   onClearPlaylist,
+  onRenamePlaylist,
+  onExportPlaylist,
+  onDeletePlaylist,
+  onBack,
   onSort,
   onResizeAlbumColumn,
   onSyncPlaylist,
@@ -117,6 +134,11 @@ export default function LibraryTrackList({
   onOpenAddTrackMenu: () => void;
   onAddTrack: () => void;
   onClearPlaylist: () => void;
+  onRenamePlaylist: (id: string, currentName: string) => void;
+  onExportPlaylist: (id: string, name: string) => void;
+  onDeletePlaylist: (id: string) => void;
+  /** Back to the Library tab. Only shown on the phone layout. */
+  onBack: () => void;
   onSort: (column: SortColumn) => void;
   onResizeAlbumColumn: (event: React.MouseEvent) => void;
   onSyncPlaylist: (playlistId: string) => void;
@@ -130,10 +152,53 @@ export default function LibraryTrackList({
   onRemoveFromLibrary: (path: string) => void;
   onToggleFavorite: (path: string) => void;
 }) {
+  const [playlistMenu, setPlaylistMenu] = useState<ContextMenuAnchor | null>(
+    null,
+  );
+  useBackLayer(playlistMenu !== null, () => setPlaylistMenu(null));
+  // Library and Favorites are built in; only playlists the user made can be
+  // renamed, exported or deleted from here.
+  const ownPlaylist =
+    selectedPlaylist &&
+    !isLibraryPlaylistName(selectedPlaylist.name) &&
+    selectedPlaylist.name !== "Favorites"
+      ? selectedPlaylist
+      : null;
+  const canClear = playlist.length > 0 && !ownPlaylist?.sync_folder;
+  const fromMenu = (action: () => void) => () => {
+    setPlaylistMenu(null);
+    action();
+  };
+
+  // The phone layout's search narrows the list in place. Each shown row
+  // keeps its position in the full list so playing it starts from there.
+  const [filtering, setFiltering] = useState(false);
+  const [filter, setFilter] = useState("");
+  const shownRows = useMemo(() => {
+    const rows = sortedPlaylist.map((track, index) => ({ track, index }));
+    if (!filter.trim()) return rows;
+    return rows.filter(({ track }) =>
+      matchesQuery(filter, getTrackTitle(track), track.artist, track.album),
+    );
+  }, [sortedPlaylist, filter]);
+  const closeFilter = () => {
+    setFilter("");
+    setFiltering(false);
+  };
+
   return (
-    <main className="main-content">
+    <main className="main-content playlist-page">
       <div className="hero-copy">
         <div className="hero-top">
+          <button
+            className="mlib-icon-btn playlist-back-btn"
+            onClick={onBack}
+            type="button"
+            title="Back"
+            aria-label="Back to library"
+          >
+            <BiChevronLeft />
+          </button>
           <h1>
             {mainSearchQuery.trim()
               ? "Search"
@@ -233,26 +298,89 @@ export default function LibraryTrackList({
                 </div>
               )}
             </div>
-            {!mainSearchQuery.trim() &&
-              playlist.length > 0 &&
-              !isLibraryPlaylistName(selectedPlaylist?.name) &&
-              selectedPlaylist?.name !== "Favorites" &&
-              !selectedPlaylist?.sync_folder && (
+            {!mainSearchQuery.trim() && playlist.length > 0 && (
+              <button
+                className={`btn-secondary playlist-filter-btn${filtering ? " active" : ""}`}
+                onClick={() => (filtering ? closeFilter() : setFiltering(true))}
+                type="button"
+                title="Search this playlist"
+                aria-label="Search this playlist"
+                aria-expanded={filtering}
+              >
+                <BiSearch />
+              </button>
+            )}
+            {!mainSearchQuery.trim() && ownPlaylist && (
+              <button
+                className="btn-secondary"
+                onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  setPlaylistMenu({
+                    top: rect.bottom + 6,
+                    left: rect.left,
+                    flipAbove: rect.top - 6,
+                  });
+                }}
+                type="button"
+                title="Playlist options"
+                aria-label="Playlist options"
+                aria-haspopup="menu"
+                aria-expanded={playlistMenu !== null}
+              >
+                <BiDotsHorizontalRounded />
+              </button>
+            )}
+            {playlistMenu && ownPlaylist && (
+              <ContextMenu
+                anchor={playlistMenu}
+                onClose={() => setPlaylistMenu(null)}
+              >
                 <button
-                  className="btn-ghost"
-                  onClick={onClearPlaylist}
                   type="button"
+                  role="menuitem"
+                  onClick={fromMenu(() =>
+                    onRenamePlaylist(ownPlaylist.id, ownPlaylist.name),
+                  )}
                 >
-                  Clear
+                  <BiEditAlt /> Rename
                 </button>
-              )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={fromMenu(() =>
+                    onExportPlaylist(ownPlaylist.id, ownPlaylist.name),
+                  )}
+                >
+                  <BiExport /> Export
+                </button>
+                {canClear && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={fromMenu(onClearPlaylist)}
+                  >
+                    <BiEraser /> Clear
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="delete-action"
+                  onClick={fromMenu(() => onDeletePlaylist(ownPlaylist.id))}
+                >
+                  <BiTrash /> Delete
+                </button>
+              </ContextMenu>
+            )}
           </div>
         </div>
         <p>
           {mainSearchQuery.trim()
             ? mainSearchResultsSubtitle
             : playlist.length
-              ? `${playlist.length} tracks in this playlist`
+              ? filter.trim()
+                ? `${shownRows.length} of ${playlist.length} tracks`
+                : `${playlist.length} tracks in this playlist`
               : isLoadingPlaylist
                 ? "Loading tracks…"
                 : "No tracks in this playlist"}
@@ -268,7 +396,7 @@ export default function LibraryTrackList({
               </span>
             </>
           ) : !mainSearchQuery.trim() && selectedPlaylist?.sync_folder ? (
-            <>
+            <span className="playlist-synced-note">
               {" · "}
               <span
                 className="playlist-sync-badge"
@@ -278,10 +406,19 @@ export default function LibraryTrackList({
               >
                 <BiSync /> Synced folder
               </span>
-            </>
+            </span>
           ) : null}
         </p>
       </div>
+
+      <MobileFilterField
+        open={filtering && !mainSearchQuery.trim()}
+        label="Search this playlist"
+        placeholder="Songs, artists or albums"
+        query={filter}
+        onQueryChange={setFilter}
+        onClose={closeFilter}
+      />
 
       <section className="playlist-container">
         {mainSearchQuery.trim() ? (
@@ -307,6 +444,8 @@ export default function LibraryTrackList({
               Your songs will appear here as they are added.
             </p>
           </div>
+        ) : playlist.length > 0 && shownRows.length === 0 ? (
+          <p className="mcol-status">Nothing matches “{filter.trim()}”</p>
         ) : playlist.length === 0 ? (
           <div className="empty-state">
             <div className="empty-icon">
@@ -381,17 +520,14 @@ export default function LibraryTrackList({
               </div>
             </div>
             <VirtualizedList
-              count={sortedPlaylist.length}
-              estimateSize={
-                typeof window !== "undefined" && window.innerWidth <= 900
-                  ? 58
-                  : 64
-              }
+              count={shownRows.length}
+              estimateSize={64}
               className="track-list-virtual"
             >
-              {(index) => {
-                const track = sortedPlaylist[index];
-                if (!track) return null;
+              {(row) => {
+                const shownRow = shownRows[row];
+                if (!shownRow) return null;
+                const { track, index } = shownRow;
                 return (
                   <div
                     key={track.id}
@@ -419,13 +555,24 @@ export default function LibraryTrackList({
                       )}
                     </div>
                     <div className="track-title-cell">
-                      <Artwork
-                        track={track}
-                        fallback={getTrackTitle(track)
-                          .slice(0, 1)
-                          .toUpperCase()}
-                        className="track-thumb"
-                      />
+                      <span className="track-thumb-wrap">
+                        <Artwork
+                          track={track}
+                          fallback={getTrackTitle(track)
+                            .slice(0, 1)
+                            .toUpperCase()}
+                          className="track-thumb"
+                        />
+                        {isCurrentTrack(track) && playbackState.is_playing && (
+                          <span className="track-thumb-playing" aria-hidden>
+                            <span className="mini-bars">
+                              <i />
+                              <i />
+                              <i />
+                            </span>
+                          </span>
+                        )}
+                      </span>
                       <div>
                         <div className="track-name">{getTrackTitle(track)}</div>
                         <div className="track-meta">
