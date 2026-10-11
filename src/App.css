@@ -3169,7 +3169,7 @@ img.queue-thumb {
   overflow-wrap: break-word;
   transition:
     color 0.2s ease,
-    font-size 0.2s ease;
+    text-shadow 0.3s ease;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -3183,10 +3183,11 @@ img.queue-thumb {
   opacity: 1;
 }
 
+/* The current line turns white with a soft glow. It keeps its size and
+   weight, so it never grows or re-wraps and the lines below stay put. */
 .lyrics-line.active {
   color: #fff;
-  font-weight: 800;
-  font-size: 17px;
+  text-shadow: 0 0 14px rgba(255, 255, 255, 0.35);
 }
 
 .drag-handle {
@@ -5546,15 +5547,12 @@ div.album-hero-cover {
   hyphens: none;
   transition:
     color 0.2s ease,
-    font-size 0.2s ease;
+    text-shadow 0.3s ease;
 }
 
 .mnp-lyrics-scroll .lyrics-line.active {
   color: #fff;
-  font-size: 22px;
-  font-weight: 800;
-  /* Avoid transform: scale() — it paints past the box and clips under
-     overflow-x: hidden instead of reflowing/wrapping the larger text. */
+  text-shadow: 0 0 16px rgba(255, 255, 255, 0.4);
   transform: none;
 }
 
@@ -5592,18 +5590,33 @@ div.album-hero-cover {
   font-size: 12px;
 }
 
+/* "Up next" reads like the Library tab's section headings. */
 .mnp-queue-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
-  padding: 2px 2px 8px;
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  margin-bottom: 4px;
+  padding: 2px 2px 6px 4px;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--muted);
+}
+
+/* The bottom edge of the queue fades out. The padding under the list is a
+   little taller than the fade, so the last song scrolls fully clear of it. */
+.mnp-queue-scroll.mnp-layer-active {
+  padding-bottom: 76px;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 calc(100% - 64px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    #000 calc(100% - 64px),
+    transparent 100%
+  );
 }
 
 .mnp-queue-list {
@@ -5612,17 +5625,100 @@ div.album-hero-cover {
   overflow-x: hidden;
 }
 
+/* Rows match the Library lists: a rounded 48px cover, the same text sizes,
+   and no band behind the playing song, which gets bars on its cover. */
 .mnp-queue-scroll .queue-item.mnp-queue-item {
   position: relative;
   display: grid;
-  grid-template-columns: 28px 42px minmax(0, 1fr) 36px;
-  gap: 8px;
+  grid-template-columns: 28px 48px minmax(0, 1fr) 36px;
+  gap: 12px;
   align-items: center;
   width: 100%;
   max-width: 100%;
+  min-height: 64px;
   padding: 8px 4px;
+  border-radius: 12px;
   overflow: hidden;
   box-sizing: border-box;
+  background: transparent;
+  -webkit-touch-callout: none;
+  user-select: none;
+  transition:
+    transform 0.22s cubic-bezier(0.32, 0.72, 0, 1),
+    background 0.16s ease;
+}
+
+.mnp-queue-scroll .queue-item.mnp-queue-item:hover,
+.mnp-queue-scroll .queue-item.mnp-queue-item.active {
+  background: transparent;
+}
+
+.mnp-queue-scroll .queue-item.mnp-queue-item:active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mnp-queue-scroll .queue-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+}
+
+/* Songs without art show their initial on a tile, like the other lists. */
+.mnp-queue-scroll div.queue-thumb {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #333, #181818 65%, #0b0b0b);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.mnp-queue-header .btn-ghost {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+.mnp-queue-thumb-wrap {
+  position: relative;
+  display: block;
+  width: 48px;
+  height: 48px;
+}
+
+/* On a cover the bars sit centred and pulse from their middles, rather
+   than standing on a baseline as they do in the number column. */
+.track-thumb-playing .mini-bars,
+.mnp-queue-playing .mini-bars {
+  align-items: center;
+}
+
+.mnp-queue-playing {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.mnp-queue-scroll .queue-item-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.mnp-queue-scroll .queue-item-artist {
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+/* Held down: the row presses in slowly over the hold, so it is clear the
+   hold is working before it lifts out. */
+.mnp-queue-item.is-holding {
+  background: rgba(255, 255, 255, 0.08) !important;
+  transform: scale(0.97);
+  transition:
+    transform 2s cubic-bezier(0.2, 0, 0.2, 1),
+    background 0.3s ease;
 }
 
 .mnp-queue-scroll .queue-item-info {
@@ -5672,18 +5768,30 @@ div.album-hero-cover {
   color: rgba(255, 255, 255, 0.7);
 }
 
+/* Lifted: the row follows the finger (its transform is set as it moves)
+   on a raised card, over the rows sliding aside beneath it. */
 .mnp-queue-item.is-dragging {
-  opacity: 0.45;
-  background: rgba(255, 255, 255, 0.06);
+  z-index: 2;
+  background: #2a2a2a !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  transition:
+    box-shadow 0.2s ease,
+    background 0.2s ease;
 }
 
-.mnp-queue-item.drop-target {
-  box-shadow: inset 0 2px 0 0 rgba(255, 255, 255, 0.55);
+/* The virtual list's row wrappers stack in order, so the lifted row's
+   wrapper is raised to keep it above the rows it passes. */
+.mnp-queue-list > div:has(> .is-dragging) {
+  z-index: 3;
 }
 
 .mnp-queue-scroll.is-reordering {
   user-select: none;
   touch-action: none;
+}
+
+.mnp-queue-scroll.is-settling .mnp-queue-item {
+  transition: none !important;
 }
 
 .mnp-meta {

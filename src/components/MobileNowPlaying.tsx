@@ -448,6 +448,11 @@ const dockTop = () =>
   document.querySelector(".mobile-dock-glass")?.getBoundingClientRect().top ??
   window.innerHeight;
 
+/** How long a queue row is held before it lifts out to be dragged. */
+const HOLD_TO_DRAG_MS = 2000;
+/** How far a finger may drift during that hold and still count as held. */
+const HOLD_SLOP_PX = 12;
+
 export default function MobileNowPlaying({
   track,
   isPlaying,
@@ -519,10 +524,44 @@ export default function MobileNowPlaying({
   );
   const activeLineRef = useRef<HTMLButtonElement>(null);
   const queueListRef = useRef<HTMLDivElement>(null);
+  // Queue reordering. `dragIndex` is the row being moved and `overIndex`
+  // where it would land; the rows between slide aside to open the gap.
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
-  const dragIndexRef = useRef<number | null>(null);
+  const dragRef = useRef<{
+    from: number;
+    over: number;
+    startY: number;
+    startScroll: number;
+    /** Where the row sat on screen when it was lifted. */
+    startTop: number;
+    rowHeight: number;
+    el: HTMLElement;
+  } | null>(null);
   const dragMovedRef = useRef(false);
+  // A row being held, before the hold turns into a drag.
+  const holdRef = useRef<{
+    timer: number;
+    index: number;
+    startX: number;
+    startY: number;
+    lastY: number;
+    pointerId: number;
+    el: HTMLElement;
+  } | null>(null);
+  const [holdingIndex, setHoldingIndex] = useState<number | null>(null);
+  // Turns the row transitions off for the frame the new order lands, so
+  // nothing slides back from its gap position.
+  const [queueSettling, setQueueSettling] = useState(false);
+  // The order shown right after a drop, until the new queue comes back.
+  const [droppedOrder, setDroppedOrder] = useState<{
+    base: Track[];
+    order: Track[];
+  } | null>(null);
+  const shownQueue =
+    droppedOrder && droppedOrder.base === queueTracks
+      ? droppedOrder.order
+      : queueTracks;
   const [sheetMounted, setSheetMounted] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   // Local flag so drag-dismiss drops pointer-events in the same frame as the
@@ -693,25 +732,6 @@ export default function MobileNowPlaying({
   const title = getTrackTitle(track);
   const coverLetters = title.slice(0, 2).toUpperCase();
 
-  const resolveQueueDropIndex = (clientY: number) => {
-    const list = queueListRef.current;
-    if (!list) return null;
-    const items = [...list.querySelectorAll<HTMLElement>("[data-queue-index]")];
-    if (items.length === 0) return null;
-    let best = 0;
-    let bestDist = Number.POSITIVE_INFINITY;
-    for (const el of items) {
-      const rect = el.getBoundingClientRect();
-      const mid = rect.top + rect.height / 2;
-      const dist = Math.abs(clientY - mid);
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = Number(el.dataset.queueIndex);
-      }
-    }
-    return best;
-  };
-
   const autoScrollQueueWhileDragging = (clientY: number) => {
     const scroll = queueListRef.current;
     if (!scroll) return;
@@ -724,22 +744,171 @@ export default function MobileNowPlaying({
     }
   };
 
-  const endQueueDrag = (clientY?: number) => {
-    const from = dragIndexRef.current;
-    if (from == null) return;
-    const target = clientY != null ? resolveQueueDropIndex(clientY) : overIndex;
-    dragIndexRef.current = null;
-    setDragIndex(null);
-    setOverIndex(null);
-    if (
-      target != null &&
-      from !== target &&
-      target >= 0 &&
-      target < queueTracks.length
-    ) {
-      onReorderQueue(from, target);
+  const cancelQueueHold = () => {
+    const hold = holdRef.current;
+    if (!hold) return;
+    window.clearTimeout(hold.timer);
+    holdRef.current = null;
+    setHoldingIndex(null);
+  };
+
+  /** Lift row `index` so it follows the finger. */
+  const startQueueDrag = (
+    index: number,
+    el: HTMLElement,
+    clientY: number,
+    pointerId: number,
+  ) => {
+    cancelQueueHold();
+    try {
+      el.setPointerCapture(pointerId);
+    } catch {
+      // The pointer is already gone; the drag still ends on pointerup.
+    }
+    dragRef.current = {
+      from: index,
+      over: index,
+      startY: clientY,
+      startScroll: queueListRef.current?.scrollTop ?? 0,
+      startTop: el.getBoundingClientRect().top,
+      rowHeight: el.offsetHeight || 64,
+      el,
+    };
+    dragMovedRef.current = true;
+    setDragIndex(index);
+    setOverIndex(index);
+    navigator.vibrate?.(12);
+  };
+
+  const moveQueueDrag = (clientY: number) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    autoScrollQueueWhileDragging(clientY);
+    const scroll = queueListRef.current;
+    const scrolled = (scroll?.scrollTop ?? 0) - drag.startScroll;
+    let offset = clientY - drag.startY + scrolled;
+    // The lifted row stays in the queue: no higher than the first slot or
+    // lower than the last, and never out of the queue's visible area into
+    // the header or the controls.
+    offset = Math.min(
+      (shownQueue.length - 1 - drag.from) * drag.rowHeight,
+      Math.max(-drag.from * drag.rowHeight, offset),
+    );
+    if (scroll) {
+      const box = scroll.getBoundingClientRect();
+      const restingTop = drag.startTop - scrolled;
+      offset = Math.min(
+        box.bottom - drag.rowHeight - restingTop,
+        Math.max(box.top - restingTop, offset),
+      );
+    }
+    // Set directly so the lifted row keeps up with the finger without a
+    // render on every move. It is not scaled up, which would clip it at
+    // the queue's edges; the raised card and shadow mark it instead.
+    drag.el.style.transform = `translateY(${offset}px)`;
+    const over = Math.min(
+      shownQueue.length - 1,
+      Math.max(0, drag.from + Math.round(offset / drag.rowHeight)),
+    );
+    if (over !== drag.over) {
+      drag.over = over;
+      setOverIndex(over);
     }
   };
+
+  const endQueueDrag = (commit: boolean) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    // The lifted row's offset is left for React to clear in the same render
+    // that lands the new order, so it never snaps back to its old slot for a
+    // frame first. The slides are switched off so nothing moves twice.
+    setQueueSettling(true);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => setQueueSettling(false)),
+    );
+    setDragIndex(null);
+    setOverIndex(null);
+    if (commit && drag.over !== drag.from) {
+      const order = [...shownQueue];
+      const [moved] = order.splice(drag.from, 1);
+      order.splice(drag.over, 0, moved);
+      setDroppedOrder({ base: queueTracks, order });
+      onReorderQueue(drag.from, drag.over);
+    }
+  };
+
+  /** How far row `index` steps aside to open the gap for the lifted row. */
+  const queueShift = (index: number): number => {
+    const drag = dragRef.current;
+    if (dragIndex == null || overIndex == null || !drag) return 0;
+    if (index === dragIndex) return 0;
+    if (dragIndex < overIndex && index > dragIndex && index <= overIndex) {
+      return -drag.rowHeight;
+    }
+    if (dragIndex > overIndex && index >= overIndex && index < dragIndex) {
+      return drag.rowHeight;
+    }
+    return 0;
+  };
+
+  // The touch listeners below are set up once, so they reach the latest
+  // handlers through a ref.
+  const queueGesture = useRef({ moveQueueDrag, endQueueDrag, cancelQueueHold });
+  queueGesture.current = { moveQueueDrag, endQueueDrag, cancelQueueHold };
+
+  // Touch backs up the pointer events. A long press can make the browser
+  // cancel the pointer while the finger stays down, so the hold and the drag
+  // also follow the plain touch events, which keep coming until the finger
+  // lifts. A held or lifted row must not scroll the list either, and pointer
+  // events alone cannot stop a scroll once a touch has begun, so touchmove
+  // is non-passive.
+  useEffect(() => {
+    const list = queueListRef.current;
+    if (!list) return;
+    const onTouchMove = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (dragRef.current) {
+        if (event.cancelable) event.preventDefault();
+        if (touch) queueGesture.current.moveQueueDrag(touch.clientY);
+        return;
+      }
+      const hold = holdRef.current;
+      if (hold && touch) {
+        hold.lastY = touch.clientY;
+        if (
+          Math.hypot(touch.clientX - hold.startX, touch.clientY - hold.startY) >
+          HOLD_SLOP_PX
+        ) {
+          queueGesture.current.cancelQueueHold();
+        }
+      }
+    };
+    const onTouchEnd = () => {
+      queueGesture.current.cancelQueueHold();
+      queueGesture.current.endQueueDrag(true);
+    };
+    const onTouchCancel = () => {
+      queueGesture.current.cancelQueueHold();
+      queueGesture.current.endQueueDrag(false);
+    };
+    // A held row the list starts scrolling under was a scroll after all.
+    const onScroll = () => {
+      if (!dragRef.current) queueGesture.current.cancelQueueHold();
+    };
+    list.addEventListener("touchmove", onTouchMove, { passive: false });
+    list.addEventListener("touchend", onTouchEnd);
+    list.addEventListener("touchcancel", onTouchCancel);
+    list.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      list.removeEventListener("touchmove", onTouchMove);
+      list.removeEventListener("touchend", onTouchEnd);
+      list.removeEventListener("touchcancel", onTouchCancel);
+      list.removeEventListener("scroll", onScroll);
+    };
+  }, []);
+
+  useEffect(() => () => cancelQueueHold(), []);
 
   const bassGain = readBassGain(eqSettings.bands);
   const trebleGain = readTrebleGain(eqSettings.bands);
@@ -871,11 +1040,11 @@ export default function MobileNowPlaying({
 
         <div
           ref={queueListRef}
-          className={`mnp-layer mnp-queue-scroll ${view === "queue" ? "mnp-layer-active" : ""}${dragIndex != null ? " is-reordering" : ""}`}
+          className={`mnp-layer mnp-queue-scroll ${view === "queue" ? "mnp-layer-active" : ""}${dragIndex != null ? " is-reordering" : ""}${queueSettling ? " is-settling" : ""}`}
         >
           <div className="mnp-queue-header">
             <span>Up Next</span>
-            {queueTracks.length > 0 && (
+            {shownQueue.length > 0 && (
               <button
                 className="btn-ghost btn-sm"
                 onClick={onClearQueue}
@@ -885,26 +1054,85 @@ export default function MobileNowPlaying({
               </button>
             )}
           </div>
-          {queueTracks.length === 0 ? (
+          {shownQueue.length === 0 ? (
             <div className="queue-empty">
               <p>Queue is empty</p>
               <span>Add tracks with "Play Next" or "Add to Queue"</span>
             </div>
           ) : (
             <VirtualizedList
-              count={queueTracks.length}
+              count={shownQueue.length}
               estimateSize={58}
               overscan={12}
               scrollSelector=".mnp-queue-scroll"
               className="mnp-queue-list"
             >
               {(index) => {
-                const qTrack = queueTracks[index];
+                const qTrack = shownQueue[index];
                 if (!qTrack) return null;
+                const isCurrent = queueCurrentIndex === index;
+                const shift = queueShift(index);
                 return (
                   <div
                     data-queue-index={index}
-                    className={`queue-item mnp-queue-item${queueCurrentIndex === index ? " active" : ""}${dragIndex === index ? " is-dragging" : ""}${overIndex === index && dragIndex != null && dragIndex !== index ? " drop-target" : ""}`}
+                    className={`queue-item mnp-queue-item${isCurrent ? " active" : ""}${dragIndex === index ? " is-dragging" : ""}${holdingIndex === index ? " is-holding" : ""}`}
+                    // The lifted row is moved by hand, so React leaves it be.
+                    style={
+                      dragIndex === index
+                        ? undefined
+                        : { transform: shift ? `translateY(${shift}px)` : "" }
+                    }
+                    onContextMenu={(e) => e.preventDefault()}
+                    onPointerDown={(e) => {
+                      if (dragRef.current || e.button > 0) return;
+                      dragMovedRef.current = false;
+                      const el = e.currentTarget;
+                      const pointerId = e.pointerId;
+                      const hold = {
+                        timer: 0,
+                        index,
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        lastY: e.clientY,
+                        pointerId,
+                        el,
+                      };
+                      hold.timer = window.setTimeout(() => {
+                        if (holdRef.current !== hold) return;
+                        startQueueDrag(index, el, hold.lastY, pointerId);
+                      }, HOLD_TO_DRAG_MS);
+                      holdRef.current = hold;
+                      setHoldingIndex(index);
+                    }}
+                    onPointerMove={(e) => {
+                      if (dragRef.current) {
+                        moveQueueDrag(e.clientY);
+                        return;
+                      }
+                      const hold = holdRef.current;
+                      if (!hold || hold.pointerId !== e.pointerId) return;
+                      hold.lastY = e.clientY;
+                      // Moving before the hold completes is a scroll.
+                      if (
+                        Math.hypot(
+                          e.clientX - hold.startX,
+                          e.clientY - hold.startY,
+                        ) > HOLD_SLOP_PX
+                      ) {
+                        cancelQueueHold();
+                      }
+                    }}
+                    onPointerUp={() => {
+                      cancelQueueHold();
+                      endQueueDrag(true);
+                    }}
+                    onPointerCancel={(e) => {
+                      // A touch carries on through its touch events, which
+                      // end it when the finger lifts.
+                      if (e.pointerType === "touch") return;
+                      cancelQueueHold();
+                      endQueueDrag(false);
+                    }}
                     onClick={() => {
                       if (dragMovedRef.current) {
                         dragMovedRef.current = false;
@@ -922,32 +1150,35 @@ export default function MobileNowPlaying({
                       onPointerDown={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        dragMovedRef.current = false;
-                        dragIndexRef.current = index;
-                        setDragIndex(index);
-                        setOverIndex(index);
-                        e.currentTarget.setPointerCapture(e.pointerId);
+                        const row =
+                          e.currentTarget.closest<HTMLElement>(
+                            ".mnp-queue-item",
+                          );
+                        if (row) {
+                          startQueueDrag(index, row, e.clientY, e.pointerId);
+                        }
                       }}
-                      onPointerMove={(e) => {
-                        if (dragIndexRef.current == null) return;
-                        dragMovedRef.current = true;
-                        autoScrollQueueWhileDragging(e.clientY);
-                        const next = resolveQueueDropIndex(e.clientY);
-                        if (next != null) setOverIndex(next);
-                      }}
-                      onPointerUp={(e) => {
-                        e.stopPropagation();
-                        endQueueDrag(e.clientY);
-                      }}
-                      onPointerCancel={() => endQueueDrag()}
                     >
                       <BiGridVertical />
                     </button>
-                    <Artwork
-                      track={qTrack}
-                      fallback={getTrackTitle(qTrack).slice(0, 1).toUpperCase()}
-                      className="queue-thumb"
-                    />
+                    <span className="mnp-queue-thumb-wrap">
+                      <Artwork
+                        track={qTrack}
+                        fallback={getTrackTitle(qTrack)
+                          .slice(0, 1)
+                          .toUpperCase()}
+                        className="queue-thumb"
+                      />
+                      {isCurrent && isPlaying && (
+                        <span className="mnp-queue-playing" aria-hidden>
+                          <span className="mini-bars">
+                            <i />
+                            <i />
+                            <i />
+                          </span>
+                        </span>
+                      )}
+                    </span>
                     <div className="queue-item-info">
                       <div className="queue-item-name">
                         {getTrackTitle(qTrack)}
@@ -957,11 +1188,13 @@ export default function MobileNowPlaying({
                     <div className="queue-item-actions">
                       <button
                         className="queue-item-remove"
+                        onPointerDown={(e) => e.stopPropagation()}
                         onClick={(e) => {
                           e.stopPropagation();
                           onRemoveFromQueue(index);
                         }}
                         title="Remove from queue"
+                        aria-label="Remove from queue"
                         type="button"
                       >
                         <BiX />
