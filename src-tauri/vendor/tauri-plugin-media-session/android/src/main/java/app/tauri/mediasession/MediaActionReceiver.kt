@@ -6,17 +6,22 @@ import android.content.Intent
 import android.util.Log
 
 /**
- * Manifest-declared receiver for notification media button taps.
- *
- * Using an explicit-intent receiver (declared in the manifest) is the most
- * reliable way to handle notification action buttons across all API levels.
- * Runtime-registered receivers can miss broadcasts from PendingIntents fired
- * by the system notification framework.
+ * Manifest-declared receiver for the notification buttons and its dismiss
+ * intent. An explicit receiver is the reliable way to get these broadcasts on
+ * every API level.
  */
 class MediaActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.getStringExtra(EXTRA_ACTION) ?: return
         Log.d(TAG, "onReceive: action=\"$action\"")
+        MediaSessionState.init(context)
+
+        if (!MediaSessionState.hasMedia) {
+            // Left over from a process that has since died, so its buttons can
+            // no longer reach a player. Clear it instead of leaving dead controls.
+            MediaSessionCleanupService.cancel(context)
+            return
+        }
         MediaSessionPlugin.handleMediaAction(action)
     }
 

@@ -154,10 +154,21 @@ struct MediaBridge {
 
 #[cfg(target_os = "android")]
 struct MediaBridge {
-    app: AppHandle,
     cover_art_cache: cover_art::Cache,
+    /// Last track metadata, resent when playback resumes after the
+    /// notification was dismissed.
+    last_meta: Option<TrackMetadata>,
+    cleared: bool,
+    speed: f64,
     last_playing: Option<bool>,
+    last_position: f64,
+    last_sent: Option<std::time::Instant>,
 }
+
+/// Position reports within this many seconds of where the session already
+/// extrapolates are not worth a JNI round trip.
+#[cfg(target_os = "android")]
+const ANDROID_DRIFT_TOLERANCE_SECS: f64 = 1.0;
 
 #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
 struct MediaBridge {
@@ -179,17 +190,17 @@ impl MediaBridge {
 
         #[cfg(target_os = "android")]
         {
-            use tauri_plugin_media_session::MediaSessionExt;
-
-            // Request POST_NOTIFICATIONS early so the first play can show the shade.
-            if let Err(error) = app.media_session().initialize() {
-                tracing::warn!("Android media session initialize: {error}");
-            }
-
+            // The session itself is driven over JNI (see android::media_bridge);
+            // the plugin asks for POST_NOTIFICATIONS when its WebView loads.
+            let _ = app;
             Ok(Self {
-                app: app.clone(),
                 cover_art_cache: cover_art::Cache::new(),
+                last_meta: None,
+                cleared: false,
+                speed: 1.0,
                 last_playing: None,
+                last_position: 0.0,
+                last_sent: None,
             })
         }
 
@@ -263,25 +274,30 @@ impl MediaBridge {
 
         #[cfg(target_os = "android")]
         {
-            use tauri_plugin_media_session::{MediaSessionExt, MediaState};
-
-            let artwork_url = self.cover_art_cache.resolve_artwork_url(
-                crate::cover_art::prefer_media_artwork_url(meta.cover_url.as_deref()).as_deref(),
-            );
-
-            if let Err(error) = self.app.media_session().update_state(MediaState {
-                title: meta.title.clone(),
-                artist: meta.artist.clone(),
-                album: meta.album.clone(),
-                artwork_url,
-                duration: meta.duration_seconds,
-                can_prev: Some(true),
-                can_next: Some(true),
-                can_seek: Some(true),
-                ..Default::default()
-            }) {
-                tracing::warn!("Failed to update Android media session metadata: {error}");
+            // Always send artworkUrl, empty when there is no cover, so a track
+            // without art does not inherit the previous track's.
+            let artwork_url = self
+                .cover_art_cache
+                .resolve_artwork_url(
+                    crate::cover_art::prefer_media_artwork_url(meta.cover_url.as_deref())
+                        .as_deref(),
+                )
+                .unwrap_or_default();
+            let mut state = serde_json::json!({
+                "title": meta.title.clone().unwrap_or_default(),
+                "artist": meta.artist.clone().unwrap_or_default(),
+                "album": meta.album.clone().unwrap_or_default(),
+                "artworkUrl": artwork_url,
+                "canPrev": true,
+                "canNext": true,
+                "canSeek": true,
+            });
+            if let Some(duration) = meta.duration_seconds.filter(|d| d.is_finite()) {
+                state["duration"] = duration.into();
             }
+            crate::android::media_bridge::session_update(&state.to_string());
+            self.last_meta = Some(meta.clone());
+            self.cleared = false;
         }
 
         #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
@@ -311,15 +327,11 @@ impl MediaBridge {
     fn set_playback_mode(&mut self, shuffle_enabled: bool, repeat_mode: &str) {
         #[cfg(target_os = "android")]
         {
-            use tauri_plugin_media_session::{MediaSessionExt, MediaState};
-
-            if let Err(error) = self.app.media_session().update_state(MediaState {
-                shuffle_enabled: Some(shuffle_enabled),
-                repeat_mode: Some(repeat_mode.to_string()),
-                ..Default::default()
-            }) {
-                tracing::debug!("Android media playback-mode update skipped: {error}");
-            }
+            let state = serde_json::json!({
+                "shuffleEnabled": shuffle_enabled,
+                "repeatMode": repeat_mode,
+            });
+            crate::android::media_bridge::session_update(&state.to_string());
         }
     }
 
@@ -335,22 +347,7 @@ impl MediaBridge {
         }
 
         #[cfg(target_os = "android")]
-        {
-            use tauri_plugin_media_session::{MediaSessionExt, MediaState};
-
-            self.last_playing = Some(true);
-            if let Err(error) = self.app.media_session().update_state(MediaState {
-                is_playing: Some(true),
-                position: Some(position_secs),
-                playback_speed: Some(1.0),
-                can_prev: Some(true),
-                can_next: Some(true),
-                can_seek: Some(true),
-                ..Default::default()
-            }) {
-                tracing::warn!("Failed to set Android media session playing: {error}");
-            }
-        }
+        self.android_set_playback(true, position_secs);
 
         #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
         {
@@ -369,22 +366,7 @@ impl MediaBridge {
         }
 
         #[cfg(target_os = "android")]
-        {
-            use tauri_plugin_media_session::{MediaSessionExt, MediaState};
-
-            self.last_playing = Some(false);
-            if let Err(error) = self.app.media_session().update_state(MediaState {
-                is_playing: Some(false),
-                position: Some(position_secs),
-                playback_speed: Some(1.0),
-                can_prev: Some(true),
-                can_next: Some(true),
-                can_seek: Some(true),
-                ..Default::default()
-            }) {
-                tracing::warn!("Failed to set Android media session paused: {error}");
-            }
-        }
+        self.android_set_playback(false, position_secs);
 
         #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
         {
@@ -404,12 +386,10 @@ impl MediaBridge {
 
         #[cfg(target_os = "android")]
         {
-            use tauri_plugin_media_session::MediaSessionExt;
-
             self.last_playing = None;
-            if let Err(error) = self.app.media_session().clear() {
-                tracing::warn!("Failed to clear Android media session: {error}");
-            }
+            self.last_sent = None;
+            self.cleared = true;
+            crate::android::media_bridge::session_clear();
         }
 
         #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
@@ -422,25 +402,20 @@ impl MediaBridge {
     fn update_position(&mut self, position_secs: f64, playing: bool) {
         #[cfg(target_os = "android")]
         {
-            use tauri_plugin_media_session::{MediaSessionExt, TimelineUpdate};
-
-            // Avoid rebuilding the notification on every UI poll tick.
             if self.last_playing != Some(playing) {
-                if playing {
-                    self.set_playing(position_secs);
-                } else {
-                    self.set_paused(position_secs);
-                }
+                self.android_set_playback(playing, position_secs);
                 return;
             }
-
-            if let Err(error) = self.app.media_session().update_timeline(TimelineUpdate {
-                position: Some(position_secs),
-                ..Default::default()
-            }) {
-                // Session may not exist yet (before first update_state).
-                tracing::debug!("Android media timeline update skipped: {error}");
+            // The session extrapolates position on its own. Only correct it
+            // when it has drifted, e.g. after a seek from the UI.
+            if (position_secs - self.android_expected_position()).abs()
+                < ANDROID_DRIFT_TOLERANCE_SECS
+            {
+                return;
             }
+            crate::android::media_bridge::session_timeline(Some(position_secs), None, None);
+            self.last_position = position_secs;
+            self.last_sent = Some(std::time::Instant::now());
             return;
         }
 
@@ -449,6 +424,47 @@ impl MediaBridge {
             self.set_playing(position_secs);
         } else {
             self.set_paused(position_secs);
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+impl MediaBridge {
+    fn android_set_playback(&mut self, playing: bool, position_secs: f64) {
+        // After the notification was dismissed the session holds no track;
+        // bring it back before resuming.
+        if self.cleared {
+            if let Some(meta) = self.last_meta.clone() {
+                self.set_metadata(&meta);
+            }
+        }
+        let state = serde_json::json!({
+            "isPlaying": playing,
+            "position": position_secs,
+            "playbackSpeed": self.speed,
+        });
+        crate::android::media_bridge::session_update(&state.to_string());
+        self.last_playing = Some(playing);
+        self.last_position = position_secs;
+        self.last_sent = Some(std::time::Instant::now());
+    }
+
+    fn android_expected_position(&self) -> f64 {
+        match (self.last_playing, self.last_sent) {
+            (Some(true), Some(at)) => self.last_position + at.elapsed().as_secs_f64() * self.speed,
+            _ => self.last_position,
+        }
+    }
+
+    fn set_speed(&mut self, speed: f64, position_secs: f64) {
+        if !speed.is_finite() || speed <= 0.0 {
+            return;
+        }
+        self.speed = speed;
+        if self.last_playing.is_some() {
+            crate::android::media_bridge::session_timeline(Some(position_secs), None, Some(speed));
+            self.last_position = position_secs;
+            self.last_sent = Some(std::time::Instant::now());
         }
     }
 }
@@ -604,6 +620,16 @@ impl MediaBridgeState {
 
     pub fn update_position(&self, position_secs: f64, playing: bool) {
         self.run_on_ui_thread(move |bridge| bridge.update_position(position_secs, playing));
+    }
+
+    /// Tell the OS session about a playback speed change so its scrubber
+    /// moves at the right rate. Only Android's session tracks speed.
+    #[allow(unused_variables)]
+    pub fn set_speed(&self, speed: f64, position_secs: f64, playing: bool) {
+        #[cfg(target_os = "android")]
+        self.run_on_ui_thread(move |bridge| bridge.set_speed(speed, position_secs));
+        #[cfg(not(target_os = "android"))]
+        self.update_position(position_secs, playing);
     }
 }
 

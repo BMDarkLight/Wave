@@ -7,7 +7,7 @@
 -keep class app.bmdarklight.wave.FolderPickerCallback$* { *; }
 -keep class app.bmdarklight.wave.SafMediaScanner { *; }
 -keepclassmembers class app.bmdarklight.wave.SafMediaScanner {
-    public static java.lang.String[] listAudioFiles(android.app.Activity, java.lang.String);
+    public static java.lang.String[] listAudioFiles(android.content.Context, java.lang.String);
 }
 -keep class app.bmdarklight.wave.CrashReporter { *; }
 -keepclassmembers class app.bmdarklight.wave.CrashReporter {
@@ -22,12 +22,15 @@
 -keep class app.bmdarklight.wave.MediaNativeBridge { *; }
 -keepclassmembers class app.bmdarklight.wave.MediaNativeBridge {
     public static void dispatch(java.lang.String);
-    public static void syncSession(double, boolean);
+    public static void attach(android.content.Context);
+    public static void updateSession(java.lang.String);
+    public static void updateTimeline(double, double, double);
+    public static void clearSession();
     private static native void nativeOnMediaAction(java.lang.String);
 }
 -keep class app.bmdarklight.wave.MediaMetadataProbe { *; }
 -keepclassmembers class app.bmdarklight.wave.MediaMetadataProbe {
-    public static java.lang.String probe(android.app.Activity, java.lang.String);
+    public static java.lang.String probe(android.content.Context, java.lang.String);
 }
 -keep class app.bmdarklight.wave.audio.WaveExoPlayer { *; }
 -keep class app.bmdarklight.wave.audio.PeakAnalyzer { *; }

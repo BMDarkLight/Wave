@@ -1,7 +1,7 @@
 package app.bmdarklight.wave;
 
-import android.app.Activity;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.DocumentsContract;
@@ -47,12 +47,12 @@ public final class SafMediaScanner {
      */
     @Keep
     public static String[] listAudioFiles(
-        @Nullable Activity activity,
+        @Nullable Context context,
         @Nullable String treeUriString
     ) {
         ArrayList<String> out = new ArrayList<>();
-        if (activity == null) {
-            throw new IllegalStateException("SAF scan: Activity is null");
+        if (context == null) {
+            throw new IllegalStateException("SAF scan: Context is null");
         }
         if (treeUriString == null || treeUriString.trim().isEmpty()) {
             throw new IllegalArgumentException("SAF scan: tree URI is empty");
@@ -73,7 +73,7 @@ public final class SafMediaScanner {
                 "SAF scan: not a tree URI: " + treeUriString, e);
         }
 
-        ContentResolver resolver = activity.getContentResolver();
+        ContentResolver resolver = context.getContentResolver();
         walk(resolver, treeUri, treeDocId, out);
         Log.d(TAG, "Listed " + out.size() + " audio file(s) under " + treeUriString);
         return out.toArray(new String[0]);

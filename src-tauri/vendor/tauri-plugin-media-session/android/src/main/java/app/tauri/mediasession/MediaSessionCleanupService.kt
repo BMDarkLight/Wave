@@ -1,14 +1,11 @@
 package app.tauri.mediasession
 
+import android.annotation.SuppressLint
 import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.Service
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.media.AudioManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -16,288 +13,241 @@ import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 
 /**
- * Foreground service that keeps the process alive while media is actively playing.
+ * Foreground service that keeps the process alive for playback.
  *
- * Acquired on play, released on stop/clear/task-removed:
- * - Foreground service: prevents process kill and network throttling
- * - PARTIAL_WAKE_LOCK: keeps CPU alive so native playback / tick can run between tracks
- * - AUDIO_BECOMING_NOISY receiver: pauses when headphones are unplugged
+ * - Playing: in the foreground with a partial wake lock, so the engine keeps
+ *   running and can move to the next track with the screen off.
+ * - Paused: stays in the foreground for [PAUSED_FOREGROUND_MS] (the same window
+ *   Media3 uses). Resuming inside it never needs a fresh foreground start,
+ *   which Android 12+ may refuse while the app is in the background. After
+ *   that it leaves the foreground but keeps the notification, which becomes
+ *   dismissable.
+ * - Task swiped away: playback keeps going if something is playing; otherwise
+ *   the service and notification go away with the app.
  *
- * Important lifecycle rules (Android 8–14):
- * - Never cold-start this service while paused — mediaPlayback FGS without active
- *   playback is rejected / unstable and was crashing Wave on cold launch.
- * - Always call startForeground() before stopSelf() if we were started via
- *   startForegroundService(), or the whole process is killed.
- * - Prefer START_NOT_STICKY so a dead process is not sticky-restarted into a
- *   no-notification crash loop.
+ * Only ever driven from the main thread by [MediaSessionState].
  */
 class MediaSessionCleanupService : Service() {
 
     companion object {
         private const val TAG = "plugin/media-session"
-        private const val ACTION_INIT = "app.tauri.mediasession.ACTION_INIT"
-        internal const val NOTIFICATION_ID = 9401
+        private const val PAUSED_FOREGROUND_MS = 10 * 60 * 1000L
+        private const val WAKE_LOCK_TIMEOUT_MS = 6 * 60 * 60 * 1000L
 
-        @Volatile internal var instance: MediaSessionCleanupService? = null
-        @Volatile internal var pendingNotification: Notification? = null
+        @Volatile
+        internal var instance: MediaSessionCleanupService? = null
 
-        /**
-         * Start (or update) the foreground service with the given notification.
-         *
-         * - If the FGS is already running: always update the notification (play
-         *   or pause) so pause does not tear down the shade card.
-         * - Cold-start only while playback is active — starting mediaPlayback FGS
-         *   for a paused/restored track on launch was crashing the process.
-         */
-        fun start(context: Context, notification: Notification) {
-            if (!MediaSessionState.sessionActive) {
-                Log.d(TAG, "start: session inactive, ignoring")
-                return
-            }
-            pendingNotification = notification
+        private var pending: Notification? = null
+        private var startRequested = false
+
+        // True while one of our notifications is on screen.
+        private var notificationShown = false
+
+        /** Show [notification], starting or updating the service as needed. */
+        internal fun publish(context: Context, notification: Notification, playing: Boolean) {
             val svc = instance
             if (svc != null) {
-                try {
-                    svc.ensureForeground(notification)
-                } catch (t: Throwable) {
-                    Log.e(TAG, "ensureForeground failed: ${t.message}")
-                    recordHostError(context, "MediaSessionCleanupService.ensureForeground", t)
-                }
+                svc.apply(notification, playing)
                 return
             }
-            if (!MediaSessionState.isPlaying && !MediaSessionPlugin.isPlaybackActive()) {
-                Log.d(TAG, "start: deferred until playback is active")
+            pending = notification
+            if (startRequested) return
+            if (!playing) {
+                // A paused track with no service (say, the queue restored on
+                // launch): only refresh a notification that is already up.
+                if (notificationShown) notify(context, notification)
                 return
             }
             try {
-                val appCtx = context.applicationContext
-                appCtx.startForegroundService(
-                    Intent(appCtx, MediaSessionCleanupService::class.java)
-                        .setAction(ACTION_INIT)
+                ContextCompat.startForegroundService(
+                    context,
+                    Intent(context, MediaSessionCleanupService::class.java)
                 )
+                startRequested = true
             } catch (t: Throwable) {
-                Log.e(TAG, "startForegroundService failed: ${t.message}")
-                recordHostError(context, "MediaSessionCleanupService.startForegroundService", t)
+                // Background start refused (Android 12+). Playback still runs;
+                // show the controls without the foreground guarantee.
+                Log.w(TAG, "startForegroundService refused: ${t.message}")
+                MediaSessionState.recordHostError("MediaSessionCleanupService.start", t)
+                notify(context, notification)
             }
         }
 
-        private fun recordHostError(context: Context, where: String, error: Throwable) {
+        internal fun stop(context: Context) {
+            pending = null
+            startRequested = false
+            instance?.shutDown()
+            cancel(context)
+        }
+
+        @SuppressLint("MissingPermission")
+        private fun notify(context: Context, notification: Notification) {
             try {
-                Class.forName("app.bmdarklight.wave.CrashReporter")
-                    .getMethod(
-                        "recordError",
-                        Context::class.java,
-                        String::class.java,
-                        Throwable::class.java
-                    )
-                    .invoke(null, context, where, error)
+                NotificationManagerCompat.from(context)
+                    .notify(MediaSessionState.NOTIFICATION_ID, notification)
+                notificationShown = true
+            } catch (t: Throwable) {
+                // POST_NOTIFICATIONS denied: nothing to show, playback is fine.
+                Log.w(TAG, "notify failed: ${t.message}")
+            }
+        }
+
+        internal fun cancel(context: Context) {
+            notificationShown = false
+            try {
+                NotificationManagerCompat.from(context).cancel(MediaSessionState.NOTIFICATION_ID)
             } catch (_: Throwable) {
             }
         }
-
-        fun stop() {
-            instance?.handleStop()
-        }
     }
 
+    private val handler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
-    private var noisyReceiver: BroadcastReceiver? = null
-    private var foregroundStarted = false
-    private val keepaliveHandler = Handler(Looper.getMainLooper())
-    private val keepaliveIntervalMs = 15_000L
-    private val keepaliveRunnable = object : Runnable {
-        override fun run() {
-            if (!MediaSessionState.sessionActive) return
-            if (MediaSessionPlugin.isPlaybackActive() && MediaSessionState.hasActiveMedia()) {
-                MediaSessionState.refreshForeground(applicationContext, advancePosition = true)
-            }
-            if (MediaSessionState.sessionActive && foregroundStarted) {
-                keepaliveHandler.postDelayed(this, keepaliveIntervalMs)
-            }
-        }
+    private var inForeground = false
+    private var everForeground = false
+
+    private val leaveForeground = Runnable {
+        if (MediaSessionState.playing || !inForeground) return@Runnable
+        Log.d(TAG, "paused for a while, leaving the foreground")
+        stopForegroundCompat(removeNotification = false)
+        // Repost so the notification picks up its dismissable flags.
+        MediaSessionState.republish()
     }
 
     override fun onCreate() {
         super.onCreate()
         instance = this
-        Log.d(TAG, "onCreate")
+        MediaSessionState.init(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        try {
-            var notification = pendingNotification
-            if (notification == null
-                && MediaSessionState.sessionActive
-                && MediaSessionState.isPlaying
-                && MediaSessionState.hasActiveMedia()
-            ) {
-                Log.w(TAG, "onStartCommand: rebuilding notification for active playback")
-                try {
-                    MediaSessionState.refreshForeground(applicationContext, advancePosition = true)
-                } catch (t: Throwable) {
-                    Log.e(TAG, "rebuild notification failed: ${t.message}")
-                }
-                notification = pendingNotification
-            }
-
-            if (notification == null) {
-                Log.w(TAG, "onStartCommand: no media — shutting down safely")
-                shutDownGracefully()
-                return START_NOT_STICKY
-            }
-
-            ensureForeground(notification)
-            acquireWakeLock()
-            registerNoisyReceiver()
-            keepaliveHandler.removeCallbacks(keepaliveRunnable)
-            keepaliveHandler.postDelayed(keepaliveRunnable, keepaliveIntervalMs)
-            Log.d(TAG, "Foreground started, locks acquired")
-        } catch (t: Throwable) {
-            Log.e(TAG, "onStartCommand crashed: ${t.message}", t)
-            try {
-                shutDownGracefully()
-            } catch (t2: Throwable) {
-                Log.e(TAG, "shutdown after crash failed: ${t2.message}")
-                try {
-                    stopSelf()
-                } catch (_: Throwable) {
-                }
-            }
+        startRequested = false
+        val notification = pending
+        if (notification == null || !MediaSessionState.hasMedia) {
+            // Started with nothing to show (a stop raced the start). Android
+            // still requires one startForeground call or it kills the process.
+            Log.d(TAG, "started without media, shutting down")
+            shutDown()
+            return START_NOT_STICKY
         }
-        // Never START_STICKY — sticky restarts without a notification kill the
-        // process on the next cold open (ForegroundServiceDidNotStartInTime).
+        apply(notification, MediaSessionState.playing)
+        // Never sticky: a restart without the app's runtime has nothing to play.
         return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.d(TAG, "onTaskRemoved — stopping playback")
-        keepaliveHandler.removeCallbacks(keepaliveRunnable)
-        pendingNotification = null
-        try {
-            MediaSessionPlugin.forceCleanup(applicationContext)
-        } catch (t: Throwable) {
-            Log.e(TAG, "forceCleanup failed: ${t.message}")
+        if (MediaSessionState.playing || MediaSessionPlugin.isPlaybackActive()) {
+            Log.d(TAG, "task removed while playing, playback continues")
+            return
         }
-        shutDownGracefully()
+        // Paused: the app is going away with the task. Leave the queue alone
+        // so it restores on the next launch, just take the controls down.
+        Log.d(TAG, "task removed while paused, shutting down")
+        pending = null
+        shutDown()
+        cancel(this)
     }
 
     override fun onDestroy() {
-        Log.d(TAG, "onDestroy")
-        keepaliveHandler.removeCallbacks(keepaliveRunnable)
+        handler.removeCallbacks(leaveForeground)
+        releaseWakeLock()
         instance = null
-        releaseResources()
-        // Keep the transport notification while a session still has media —
-        // pause must not wipe the shade card when the service is torn down.
-        if (!MediaSessionState.sessionActive || !MediaSessionState.hasActiveMedia()) {
-            try {
-                MediaSessionPlugin.cancelNotificationArtifactsOnly(applicationContext)
-            } catch (_: Throwable) {
-            }
-        }
+        if (!MediaSessionState.hasMedia) cancel(this)
         super.onDestroy()
     }
 
-    internal fun postNotification(notification: Notification) {
-        ensureForeground(notification)
+    internal fun apply(notification: Notification, playing: Boolean) {
+        pending = notification
+        if (playing) {
+            handler.removeCallbacks(leaveForeground)
+            enterForeground(notification)
+            acquireWakeLock()
+            return
+        }
+
+        releaseWakeLock()
+        if (!everForeground) {
+            // startForegroundService() must be answered with startForeground().
+            enterForeground(notification)
+        } else {
+            notify(this, notification)
+        }
+        if (inForeground) {
+            handler.removeCallbacks(leaveForeground)
+            handler.postDelayed(leaveForeground, PAUSED_FOREGROUND_MS)
+        }
     }
 
-    internal fun cancelKeepalive() {
-        keepaliveHandler.removeCallbacks(keepaliveRunnable)
-    }
-
-    private fun ensureForeground(notification: Notification) {
-        pendingNotification = notification
-        var started = false
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            try {
+    private fun enterForeground(notification: Notification) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
-                    NOTIFICATION_ID,
+                    MediaSessionState.NOTIFICATION_ID,
                     notification,
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
                 )
-                started = true
-            } catch (t: Throwable) {
-                Log.w(TAG, "startForeground(mediaPlayback) failed: ${t.message}")
+            } else {
+                startForeground(MediaSessionState.NOTIFICATION_ID, notification)
             }
-        }
-        if (!started) {
-            @Suppress("DEPRECATION")
-            startForeground(NOTIFICATION_ID, notification)
-        }
-        foregroundStarted = true
-        try {
-            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            nm.notify(NOTIFICATION_ID, notification)
+            inForeground = true
+            everForeground = true
+            notificationShown = true
         } catch (t: Throwable) {
-            Log.w(TAG, "notify failed: ${t.message}")
+            // ForegroundServiceStartNotAllowedException: resumed from the
+            // background after the paused window ran out. Keep the controls
+            // visible; the next resume from the app or notification recovers.
+            Log.w(TAG, "startForeground refused: ${t.message}")
+            MediaSessionState.recordHostError("MediaSessionCleanupService.startForeground", t)
+            notify(this, notification)
         }
     }
 
-    private fun shutDownGracefully() {
-        try {
-            if (!foregroundStarted) {
-                ensureForeground(buildPlaceholderNotification())
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "placeholder startForeground failed: ${t.message}")
-        }
+    private fun stopForegroundCompat(removeNotification: Boolean) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopForeground(
+                    if (removeNotification) STOP_FOREGROUND_REMOVE else STOP_FOREGROUND_DETACH
+                )
             } else {
                 @Suppress("DEPRECATION")
-                stopForeground(true)
+                stopForeground(removeNotification)
             }
         } catch (_: Throwable) {
         }
-        foregroundStarted = false
-        releaseResources()
+        inForeground = false
+        releaseWakeLock()
+    }
+
+    internal fun shutDown() {
+        handler.removeCallbacks(leaveForeground)
+        if (!everForeground) {
+            try {
+                enterForeground(placeholderNotification())
+            } catch (_: Throwable) {
+            }
+        }
+        stopForegroundCompat(removeNotification = true)
         try {
             stopSelf()
         } catch (_: Throwable) {
         }
     }
 
-    private fun buildPlaceholderNotification(): Notification {
-        val channelId = "${packageName}.media"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = getSystemService(NotificationManager::class.java)
-            if (manager?.getNotificationChannel(channelId) == null) {
-                manager?.createNotificationChannel(
-                    NotificationChannel(
-                        channelId,
-                        "Media playback",
-                        NotificationManager.IMPORTANCE_LOW
-                    ).apply { description = "Media playback controls" }
-                )
-            }
-        }
-        return NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("Wave")
-            .setContentText("Stopping…")
+    private fun placeholderNotification(): Notification {
+        MediaSessionState.ensureChannel(this)
+        return NotificationCompat.Builder(this, MediaSessionState.channelId(this))
+            .setSmallIcon(MediaSessionState.smallIcon(this))
+            .setContentTitle(applicationInfo.loadLabel(packageManager))
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
-            .setOnlyAlertOnce(true)
-            .setShowWhen(false)
             .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setShowWhen(false)
             .build()
-    }
-
-    private fun handleStop() {
-        keepaliveHandler.removeCallbacks(keepaliveRunnable)
-        pendingNotification = null
-        shutDownGracefully()
-    }
-
-    private fun releaseResources() {
-        unregisterNoisyReceiver()
-        releaseWakeLock()
     }
 
     private fun acquireWakeLock() {
@@ -306,11 +256,13 @@ class MediaSessionCleanupService : Service() {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
-                "app.tauri.mediasession:PlaybackWakeLock"
-            ).apply { acquire(24 * 60 * 60 * 1000L) }
-            Log.d(TAG, "WakeLock acquired")
+                "app.tauri.mediasession:Playback"
+            ).apply {
+                setReferenceCounted(false)
+                acquire(WAKE_LOCK_TIMEOUT_MS)
+            }
         } catch (t: Throwable) {
-            Log.w(TAG, "WakeLock failed: ${t.message}")
+            Log.w(TAG, "wake lock failed: ${t.message}")
         }
     }
 
@@ -320,37 +272,5 @@ class MediaSessionCleanupService : Service() {
         } catch (_: Throwable) {
         }
         wakeLock = null
-    }
-
-    private fun registerNoisyReceiver() {
-        if (noisyReceiver != null) return
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent?) {
-                if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-                    Log.d(TAG, "Audio becoming noisy — pausing")
-                    MediaSessionPlugin.handleMediaAction("pause")
-                }
-            }
-        }
-        val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
-        // API 33+ requires an export flag; missing it crashes the process.
-        ContextCompat.registerReceiver(
-            this,
-            receiver,
-            filter,
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
-        noisyReceiver = receiver
-        Log.d(TAG, "Noisy receiver registered")
-    }
-
-    private fun unregisterNoisyReceiver() {
-        noisyReceiver?.let {
-            try {
-                unregisterReceiver(it)
-            } catch (_: Exception) {
-            }
-            noisyReceiver = null
-        }
     }
 }

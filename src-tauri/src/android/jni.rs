@@ -81,16 +81,68 @@ fn try_seed_ndk_context() -> bool {
         return false;
     }
 
-    // tao already holds a GlobalRef on the activity; the raw jobject stays
-    // valid for the lifetime of the main activity.
+    // Seed with the Application context, not the Activity. Tao drops its
+    // reference to the Activity when it is destroyed, and playback carries on
+    // after that (task swiped away while playing). An Activity pointer stored
+    // here would then dangle, while the Application lives as long as the
+    // process. Code that needs a real Activity asks tao for the live one.
+    let Some(app_context) = (unsafe { application_context(ctx.java_vm, ctx.context_jobject) })
+    else {
+        tracing::warn!("could not resolve the Application context yet");
+        return false;
+    };
     unsafe {
-        ndk_context::initialize_android_context(ctx.java_vm, ctx.context_jobject);
+        ndk_context::initialize_android_context(ctx.java_vm, app_context);
     }
 
     VM_PTR.store(ctx.java_vm as *mut jni::sys::JavaVM, Ordering::Release);
     NDK_READY.store(true, Ordering::Release);
-    tracing::info!("ndk_context seeded from tao main activity");
+    tracing::info!("ndk_context seeded with the Application context");
     true
+}
+
+/// A process-lifetime global reference to `activity.getApplicationContext()`.
+/// The reference is leaked on purpose so the pointer never goes stale.
+#[cfg(target_os = "android")]
+unsafe fn application_context(
+    vm: *mut std::ffi::c_void,
+    activity: *mut std::ffi::c_void,
+) -> Option<*mut std::ffi::c_void> {
+    let vm = jni::JavaVM::from_raw(vm as *mut jni::sys::JavaVM).ok()?;
+    let mut env = vm.attach_current_thread_permanently().ok()?;
+    let activity = jni::objects::JObject::from_raw(activity as jni::sys::jobject);
+    let app = env
+        .call_method(
+            &activity,
+            "getApplicationContext",
+            "()Landroid/content/Context;",
+            &[],
+        )
+        .and_then(|v| v.l());
+    let app = match app {
+        Ok(app) if !app.is_null() => app,
+        _ => {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            return None;
+        }
+    };
+    let global = env.new_global_ref(app).ok()?;
+    let raw = global.as_obj().as_raw() as *mut std::ffi::c_void;
+    std::mem::forget(global);
+    Some(raw)
+}
+
+/// The Activity currently on screen, for calls that need a real Activity
+/// (fragments, activity results). `None` while the app has no UI.
+#[cfg(target_os = "android")]
+pub(crate) fn live_activity() -> Option<(*mut std::ffi::c_void, *mut std::ffi::c_void)> {
+    let ctx = tauri::tao::platform::android::prelude::main_android_context()?;
+    if ctx.java_vm.is_null() || ctx.context_jobject.is_null() {
+        return None;
+    }
+    Some((ctx.java_vm, ctx.context_jobject))
 }
 
 /// Attach the current thread to the JVM and ensure `ndk_context` is populated

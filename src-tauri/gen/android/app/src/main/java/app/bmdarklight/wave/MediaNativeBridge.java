@@ -1,17 +1,22 @@
 package app.bmdarklight.wave;
 
+import android.content.Context;
 import android.util.Log;
 
 import androidx.annotation.Keep;
 
-import app.tauri.mediasession.MediaSessionPlugin;
+import app.tauri.mediasession.MediaSessionBridge;
 
 /**
- * JNI bridge so media notification / audio-focus / headset events can control
- * the Rust audio engine without going through the WebView.
+ * JNI bridge between the Rust engine and the Android media session.
  *
- * When the app is backgrounded, Android may freeze the WebView — JS media
- * handlers then never run. Native dispatch keeps play/pause/next working.
+ * Inbound: notification, Bluetooth, headset and audio-focus events reach the
+ * engine through {@link #dispatch} without going through the WebView, which
+ * Android freezes in the background (or destroys when the task is swiped).
+ *
+ * Outbound: the engine pushes now-playing state into the session with
+ * {@link #updateSession}, {@link #updateTimeline} and {@link #clearSession}.
+ * These do not need an Activity, unlike Tauri plugin commands.
  */
 @Keep
 public final class MediaNativeBridge {
@@ -19,7 +24,7 @@ public final class MediaNativeBridge {
 
     private MediaNativeBridge() {}
 
-    /** Called from the media-session plugin (via reflection). */
+    /** Called from the media-session plugin (via reflection) and the player. */
     public static void dispatch(String action) {
         if (action == null || action.isEmpty()) return;
         try {
@@ -31,12 +36,36 @@ public final class MediaNativeBridge {
         }
     }
 
-    /** Called from Rust while the WebView is frozen in the background. */
-    public static void syncSession(double positionSec, boolean playing) {
+    public static void attach(Context context) {
         try {
-            MediaSessionPlugin.syncSessionFromBackground(positionSec, playing);
+            MediaSessionBridge.init(context);
         } catch (Throwable t) {
-            Log.w(TAG, "syncSession failed: " + t.getMessage());
+            Log.w(TAG, "attach failed: " + t.getMessage());
+        }
+    }
+
+    public static void updateSession(String json) {
+        try {
+            MediaSessionBridge.update(json);
+        } catch (Throwable t) {
+            Log.w(TAG, "updateSession failed: " + t.getMessage());
+        }
+    }
+
+    /** NaN means "unchanged" for any argument. */
+    public static void updateTimeline(double positionSec, double durationSec, double speed) {
+        try {
+            MediaSessionBridge.timeline(positionSec, durationSec, speed);
+        } catch (Throwable t) {
+            Log.w(TAG, "updateTimeline failed: " + t.getMessage());
+        }
+    }
+
+    public static void clearSession() {
+        try {
+            MediaSessionBridge.clear();
+        } catch (Throwable t) {
+            Log.w(TAG, "clearSession failed: " + t.getMessage());
         }
     }
 

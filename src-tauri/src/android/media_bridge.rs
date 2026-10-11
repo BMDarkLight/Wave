@@ -6,21 +6,27 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
-//! Android native media-action bridge.
+//! Android native media bridge, both directions.
 //!
-//! The media-session plugin dispatches play/pause/next/… into
-//! `MediaNativeBridge.dispatch`, which calls this module over JNI.
-//! Actions are applied on a dedicated worker thread immediately so transport
-//! stays responsive when the WebView is frozen in the background.
+//! Inbound: the media session, notification, Bluetooth and the player itself
+//! dispatch play/pause/next/... into `MediaNativeBridge.dispatch`, which calls
+//! this module over JNI. Actions are applied on a dedicated worker thread so
+//! transport stays responsive when the WebView is frozen in the background.
+//!
+//! Outbound: [`session_update`], [`session_timeline`] and [`session_clear`]
+//! push now-playing state into the session through static Java methods. They
+//! deliberately avoid Tauri plugin commands, which dispatch through the
+//! Activity and panic once it has been destroyed, the very case background
+//! playback has to survive.
 
 #![cfg(target_os = "android")]
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use jni::objects::{JClass, JObject, JString};
+use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use jni::{JNIEnv, JavaVM, NativeMethod};
 use tauri::AppHandle;
 
@@ -37,6 +43,9 @@ static PENDING: Mutex<PendingQueue> = Mutex::new(PendingQueue {
 static PENDING_CV: Condvar = Condvar::new();
 static NATIVES_READY: AtomicBool = AtomicBool::new(false);
 static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
+/// `MediaNativeBridge`, loaded once through the app class loader. Worker
+/// threads cannot find app classes with `FindClass`, so it is cached.
+static BRIDGE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
 
 /// Queue a media action from the JNI callback (any thread) and wake the worker.
 pub fn push_action(action: String) {
@@ -166,8 +175,108 @@ fn try_install() {
         return;
     }
 
+    if BRIDGE_CLASS.get().is_none() {
+        match env.new_global_ref(&class) {
+            Ok(global) => {
+                let _ = BRIDGE_CLASS.set(global);
+            }
+            Err(e) => tracing::warn!("MediaNativeBridge global ref failed: {e}"),
+        }
+    }
+    // The session needs a context before the first update; CrashInitProvider
+    // normally provides it at process start, this covers anything that skips it.
+    if env
+        .call_static_method(
+            &class,
+            "attach",
+            "(Landroid/content/Context;)V",
+            &[JValue::Object(&activity)],
+        )
+        .is_err()
+    {
+        clear_exception(&mut env);
+    }
+
     NATIVES_READY.store(true, Ordering::Release);
     tracing::info!("MediaNativeBridge natives registered");
+}
+
+/// Apply a state change to the media session. `json` uses the field names of
+/// the Kotlin `MediaUpdate`; missing fields keep their previous value.
+pub fn session_update(json: &str) {
+    call_bridge(|env, class| {
+        let json = env.new_string(json)?;
+        env.call_static_method(
+            class,
+            "updateSession",
+            "(Ljava/lang/String;)V",
+            &[JValue::Object(&json)],
+        )?;
+        Ok(())
+    });
+}
+
+/// Timeline-only update. `None` leaves a value unchanged.
+pub fn session_timeline(position: Option<f64>, duration: Option<f64>, speed: Option<f64>) {
+    call_bridge(|env, class| {
+        env.call_static_method(
+            class,
+            "updateTimeline",
+            "(DDD)V",
+            &[
+                JValue::Double(position.unwrap_or(f64::NAN)),
+                JValue::Double(duration.unwrap_or(f64::NAN)),
+                JValue::Double(speed.unwrap_or(f64::NAN)),
+            ],
+        )?;
+        Ok(())
+    });
+}
+
+/// Take down the session's notification and foreground service.
+pub fn session_clear() {
+    call_bridge(|env, class| {
+        env.call_static_method(class, "clearSession", "()V", &[])?;
+        Ok(())
+    });
+}
+
+fn call_bridge<F>(f: F)
+where
+    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JClass<'local>) -> jni::errors::Result<()>,
+{
+    if BRIDGE_CLASS.get().is_none() {
+        try_install();
+    }
+    let Some(class) = BRIDGE_CLASS.get() else {
+        tracing::debug!("MediaNativeBridge not loaded yet, media session update dropped");
+        return;
+    };
+    let Ok(ctx) = std::panic::catch_unwind(ndk_context::android_context) else {
+        return;
+    };
+    let Ok(vm) = (unsafe { JavaVM::from_raw(ctx.vm() as *mut _) }) else {
+        return;
+    };
+    let Ok(mut env) = vm.attach_current_thread_permanently() else {
+        return;
+    };
+    // This thread stays attached, so free the call's local refs right away.
+    let result = env.with_local_frame(8, |env| -> jni::errors::Result<()> {
+        let class: &JClass = class.as_obj().into();
+        f(env, class)
+    });
+    if let Err(e) = result {
+        tracing::warn!("MediaNativeBridge call failed: {e}");
+        clear_exception(&mut env);
+    }
+}
+
+fn clear_exception(env: &mut JNIEnv) {
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_describe();
+        let _ = env.exception_clear();
+    }
 }
 
 fn load_app_class<'local>(

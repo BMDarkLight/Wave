@@ -24,7 +24,6 @@ pub struct FolderPickerResult {
 pub fn pick_folder(_app: &AppHandle) -> Result<FolderPickerResult, String> {
     use jni::objects::{JObject, JString, JThrowable, JValue, JValueOwned};
     use jni::JavaVM;
-    use ndk_context::android_context;
 
     fn jstring_to_owned(env: &mut jni::JNIEnv<'_>, obj: JObject<'_>) -> Option<String> {
         if obj.is_null() {
@@ -123,13 +122,12 @@ pub fn pick_folder(_app: &AppHandle) -> Result<FolderPickerResult, String> {
         }
     }
 
-    let ctx = android_context();
-    let vm = unsafe { JavaVM::from_raw(ctx.vm() as *mut _) }
+    // The picker hosts a fragment, so it needs the Activity on screen rather
+    // than the process-wide context.
+    let (vm_ptr, activity) = crate::android::jni::live_activity()
+        .ok_or_else(|| "Folder picker: no Android Activity is open".to_string())?;
+    let vm = unsafe { JavaVM::from_raw(vm_ptr as *mut _) }
         .map_err(|e| format!("Folder picker: failed to get JavaVM: {e}"))?;
-    let activity = ctx.context();
-    if activity.is_null() {
-        return Err("Folder picker: Android Activity context is null".into());
-    }
 
     let mut env = vm
         .attach_current_thread()

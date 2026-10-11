@@ -111,7 +111,7 @@ pub fn probe_content_uri(_app: &AppHandle, uri: &str) -> Result<UriProbeResult, 
             .call_static_method(
                 &class,
                 "probe",
-                "(Landroid/app/Activity;Ljava/lang/String;)Ljava/lang/String;",
+                "(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;",
                 &[JValue::Object(activity_obj), JValue::Object(&uri_j)],
             )
             .map_err(|e| format!("probe: {e}"))?;
@@ -152,7 +152,7 @@ pub fn probe_content_uri(_app: &AppHandle, uri: &str) -> Result<UriProbeResult, 
         .map_err(|e| format!("MediaMetadataProbe: JavaVM: {e}"))?;
     let activity = ctx.context();
     if activity.is_null() {
-        return Err("MediaMetadataProbe: Activity is null".into());
+        return Err("MediaMetadataProbe: Android context is null".into());
     }
 
     let mut env = vm

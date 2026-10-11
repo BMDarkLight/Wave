@@ -1,7 +1,7 @@
 package app.bmdarklight.wave;
 
-import android.app.Activity;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.database.Cursor;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
@@ -29,9 +29,9 @@ public final class MediaMetadataProbe {
      * @return JSON object string with metadata fields (never null)
      */
     @Keep
-    public static String probe(@Nullable Activity activity, @Nullable String uriString) {
-        if (activity == null) {
-            throw new IllegalStateException("MediaMetadataProbe: Activity is null");
+    public static String probe(@Nullable Context context, @Nullable String uriString) {
+        if (context == null) {
+            throw new IllegalStateException("MediaMetadataProbe: Context is null");
         }
         if (uriString == null || uriString.trim().isEmpty()) {
             throw new IllegalArgumentException("MediaMetadataProbe: URI is empty");
@@ -43,13 +43,13 @@ public final class MediaMetadataProbe {
                 "MediaMetadataProbe: expected content:// URI, got: " + uriString);
         }
 
-        ContentResolver resolver = activity.getContentResolver();
+        ContentResolver resolver = context.getContentResolver();
         String displayName = queryDisplayName(resolver, uri);
         long fileSize = queryFileSize(resolver, uri);
 
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         try {
-            retriever.setDataSource(activity, uri);
+            retriever.setDataSource(context, uri);
 
             JSONObject out = new JSONObject();
             out.put("title", emptyToNull(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)));

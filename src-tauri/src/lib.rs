@@ -351,6 +351,10 @@ pub fn run() {
             commands::get_listening_stats,
             commands::get_home_suggestions,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            #[cfg(target_os = "android")]
+            android::lifecycle::on_run_event(_app, &_event);
+        });
 }

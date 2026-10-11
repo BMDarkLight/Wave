@@ -213,6 +213,12 @@ jobs:
           cp -R "$RES_SRC"/. "$RES_DEST"/
           echo "Applied Wave launcher icons into $RES_DEST"
 
+          # ── App resources (status bar / media notification icon) ────────
+          # Without drawable/ic_notification the media notification falls
+          # back to the template's ic_launcher_foreground, the Android robot.
+          cp -R src-tauri/android-src/res/. "$RES_DEST"/
+          echo "Applied Wave Android resources into $RES_DEST"
+
           # ── Manifest: permissions + portrait lock ───────────────────────
           python3 - "$MANIFEST" <<'PY'
           from pathlib import Path

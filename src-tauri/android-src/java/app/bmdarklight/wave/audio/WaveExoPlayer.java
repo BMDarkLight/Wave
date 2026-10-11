@@ -132,72 +132,126 @@ public final class WaveExoPlayer {
         if (player != null) {
             return;
         }
-        player = new ExoPlayer.Builder(appContext, meteredRenderers())
-                .setAudioAttributes(buildAudioAttributes(), /* handleAudioFocus= */ true)
-                .setHandleAudioBecomingNoisy(true)
-                .build();
-        player.setPlaybackParameters(new PlaybackParameters(playbackSpeed));
-
-        player.addListener(new Player.Listener() {
-            @Override
-            public void onPlaybackStateChanged(int playbackState) {
-                if (!crossfadeActive) {
-                    ended = playbackState == Player.STATE_ENDED;
-                }
-                refreshCacheFromPlayer();
-                syncPositionTicker();
-            }
-
-            @Override
-            public void onIsPlayingChanged(boolean isPlaying) {
-                playingCached = isPlaying || (crossfadePlayer != null && crossfadePlayer.isPlaying());
-                refreshCacheFromPlayer();
-                syncPositionTicker();
-            }
-
-            @Override
-            public void onPlayerError(PlaybackException error) {
-                Log.e(TAG, "Playback error: " + error.getMessage());
-                ended = true;
-                playingCached = false;
-                cancelCrossfadeInternal();
-                stopPositionTicker();
-            }
-
-            @Override
-            public void onMediaItemTransition(MediaItem mediaItem, int reason) {
-                attachEqualizerForPlayer(player, /* crossfade= */ false);
-                if (!gaplessEnabled || crossfadeActive || player == null) {
-                    return;
-                }
-                int index = player.getCurrentMediaItemIndex();
-                if (index != lastReportedMediaIndex) {
-                    lastReportedMediaIndex = index;
-                    pendingMediaIndexChange = index;
-                }
-            }
-
-            @Override
-            public void onAudioSessionIdChanged(int audioSessionId) {
-                attachEqualizerForPlayer(player, /* crossfade= */ false);
-            }
-        });
+        player = buildPlayer(/* primary= */ true);
         attachEqualizerForPlayer(player, /* crossfade= */ false);
+    }
+
+    /**
+     * The primary player owns audio focus and the becoming-noisy pause. The
+     * crossfade player only ever plays the incoming track during a fade; the
+     * two swap roles when a fade completes (see {@link #completeCrossfade}).
+     */
+    private ExoPlayer buildPlayer(boolean primary) {
+        ExoPlayer built = new ExoPlayer.Builder(appContext, meteredRenderers())
+                .setAudioAttributes(buildAudioAttributes(), /* handleAudioFocus= */ primary)
+                .setHandleAudioBecomingNoisy(primary)
+                // Keep the CPU up while decoding with the screen off.
+                .setWakeMode(C.WAKE_MODE_LOCAL)
+                .build();
+        built.setPlaybackParameters(new PlaybackParameters(playbackSpeed));
+        built.addListener(new PlayerEvents(built));
+        return built;
+    }
+
+    /**
+     * Listens to one player instance. Callbacks only act while that instance
+     * holds the role they care about, since the players swap on crossfade.
+     */
+    private final class PlayerEvents implements Player.Listener {
+        private final ExoPlayer self;
+
+        PlayerEvents(ExoPlayer self) {
+            this.self = self;
+        }
+
+        @Override
+        public void onPlaybackStateChanged(int playbackState) {
+            if (self != player) {
+                return;
+            }
+            if (!crossfadeActive) {
+                ended = playbackState == Player.STATE_ENDED;
+            }
+            refreshCacheFromPlayer();
+            syncPositionTicker();
+        }
+
+        @Override
+        public void onIsPlayingChanged(boolean isPlaying) {
+            if (self != player) {
+                return;
+            }
+            playingCached = isPlaying || (crossfadePlayer != null && crossfadePlayer.isPlaying());
+            refreshCacheFromPlayer();
+            syncPositionTicker();
+        }
+
+        @Override
+        public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+            if (self != player || playWhenReady) {
+                return;
+            }
+            // ExoPlayer paused on its own: another app took audio focus for
+            // good, or headphones were unplugged. Route it through the engine
+            // so its transport clock, the UI and the media session all follow.
+            if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS
+                    || reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY) {
+                if (crossfadePlayer != null) {
+                    crossfadePlayer.pause();
+                }
+                app.bmdarklight.wave.MediaNativeBridge.dispatch("pause");
+            }
+        }
+
+        @Override
+        public void onPlaybackSuppressionReasonChanged(int reason) {
+            if (self != player) {
+                return;
+            }
+            // Transient focus loss (a call, a navigation prompt): ExoPlayer
+            // holds playback and resumes by itself afterwards. The engine only
+            // needs to stop its clock in the meantime.
+            app.bmdarklight.wave.MediaNativeBridge.dispatch(
+                    reason == Player.PLAYBACK_SUPPRESSION_REASON_NONE ? "unsuspend" : "suspend");
+        }
+
+        @Override
+        public void onPlayerError(PlaybackException error) {
+            if (self != player) {
+                return;
+            }
+            Log.e(TAG, "Playback error: " + error.getMessage());
+            ended = true;
+            playingCached = false;
+            cancelCrossfadeInternal();
+            stopPositionTicker();
+        }
+
+        @Override
+        public void onMediaItemTransition(MediaItem mediaItem, int reason) {
+            if (self != player) {
+                return;
+            }
+            attachEqualizerForPlayer(player, /* crossfade= */ false);
+            if (!gaplessEnabled || crossfadeActive) {
+                return;
+            }
+            int index = player.getCurrentMediaItemIndex();
+            if (index != lastReportedMediaIndex) {
+                lastReportedMediaIndex = index;
+                pendingMediaIndexChange = index;
+            }
+        }
+
+        @Override
+        public void onAudioSessionIdChanged(int audioSessionId) {
+            attachEqualizerForPlayer(self, /* crossfade= */ self == crossfadePlayer);
+        }
     }
 
     private ExoPlayer ensureCrossfadePlayer() {
         if (crossfadePlayer == null) {
-            crossfadePlayer = new ExoPlayer.Builder(appContext, meteredRenderers())
-                    .setAudioAttributes(buildAudioAttributes(), /* handleAudioFocus= */ false)
-                    .setHandleAudioBecomingNoisy(false)
-                    .build();
-            crossfadePlayer.setPlaybackParameters(new PlaybackParameters(playbackSpeed));
-            crossfadePlayer.addListener(new Player.Listener() {
-                @Override
-                public void onAudioSessionIdChanged(int audioSessionId) {
-                    attachEqualizerForPlayer(crossfadePlayer, /* crossfade= */ true);
-                }
-            });
+            crossfadePlayer = buildPlayer(/* primary= */ false);
         }
         attachEqualizerForPlayer(crossfadePlayer, /* crossfade= */ true);
         return crossfadePlayer;
@@ -613,6 +667,12 @@ public final class WaveExoPlayer {
         crossfadePlayer.stop();
         crossfadePlayer.clearMediaItems();
         crossfadePlayer.setVolume(0f);
+        // Hand audio focus and the noisy pause to the new primary. The old
+        // one is already stopped, so it cannot react to losing focus.
+        crossfadePlayer.setAudioAttributes(buildAudioAttributes(), /* handleAudioFocus= */ false);
+        crossfadePlayer.setHandleAudioBecomingNoisy(false);
+        player.setAudioAttributes(buildAudioAttributes(), /* handleAudioFocus= */ true);
+        player.setHandleAudioBecomingNoisy(true);
         releaseEqualizer(crossfadeEq);
         crossfadeEq = null;
         crossfadeEqSessionId = C.AUDIO_SESSION_ID_UNSET;

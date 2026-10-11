@@ -538,6 +538,10 @@ pub struct AudioPlayer {
     /// Active ExoPlayer playlist URIs (Android gapless mode).
     #[cfg(target_os = "android")]
     android_gapless_playlist: Vec<String>,
+    /// ExoPlayer is holding output for a transient audio focus loss and the
+    /// transport clock is frozen until it lets go (see `set_output_suspended`).
+    #[cfg(target_os = "android")]
+    output_suspended: bool,
 }
 
 impl AudioPlayer {
@@ -572,6 +576,8 @@ impl AudioPlayer {
             normalization_generation: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "android")]
             android_gapless_playlist: Vec::new(),
+            #[cfg(target_os = "android")]
+            output_suspended: false,
         }
     }
 
@@ -698,6 +704,8 @@ impl AudioPlayer {
                 normalization_generation: Arc::new(AtomicU64::new(0)),
                 #[cfg(target_os = "android")]
                 android_gapless_playlist: Vec::new(),
+                #[cfg(target_os = "android")]
+                output_suspended: false,
             })
         }
     }
@@ -1513,6 +1521,7 @@ impl AudioPlayer {
             crate::android::audio::exo_pause().map_err(AudioError::Decode)?;
             self.clock.elapsed_before_start = Duration::from_secs_f64(position.max(0.0));
             self.clock.started_at = None;
+            self.output_suspended = false;
             return Ok(());
         }
 
@@ -1539,6 +1548,7 @@ impl AudioPlayer {
             }
             crate::android::audio::exo_play().map_err(AudioError::Decode)?;
             self.clock.started_at = Some(Instant::now());
+            self.output_suspended = false;
             return Ok(());
         }
 
@@ -1552,6 +1562,26 @@ impl AudioPlayer {
                 Ok(())
             }
             None => Err(AudioError::NoTrackLoaded),
+        }
+    }
+
+    /// ExoPlayer holds output during a transient audio focus loss (a call, a
+    /// navigation prompt) and resumes by itself afterwards. Freeze the
+    /// transport clock meanwhile so the position stays true and the media
+    /// session shows the track as paused.
+    #[cfg(target_os = "android")]
+    pub fn set_output_suspended(&mut self, suspended: bool) {
+        if suspended {
+            if self.clock.started_at.is_some() {
+                self.clock.elapsed_before_start = self.clock.position();
+                self.clock.started_at = None;
+                self.output_suspended = true;
+            }
+        } else if std::mem::take(&mut self.output_suspended)
+            && self.current_path.is_some()
+            && self.clock.started_at.is_none()
+        {
+            self.clock.started_at = Some(Instant::now());
         }
     }
 

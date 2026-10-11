@@ -135,7 +135,7 @@ pub fn list_audio_files(_app: &AppHandle, tree_uri: &str) -> Result<Vec<String>,
         .map_err(|e| format!("SAF scan: failed to get JavaVM: {e}"))?;
     let activity = ctx.context();
     if activity.is_null() {
-        return Err("SAF scan: Android Activity context is null".into());
+        return Err("SAF scan: Android context is null".into());
     }
 
     let mut env = vm
@@ -161,7 +161,7 @@ pub fn list_audio_files(_app: &AppHandle, tree_uri: &str) -> Result<Vec<String>,
             .l()
             .map_err(|e| format!("SAF scan: bad ClassLoader: {e}"))?;
         if loader.is_null() {
-            return Err("SAF scan: Activity ClassLoader is null".into());
+            return Err("SAF scan: ClassLoader is null".into());
         }
 
         let class_name = env
@@ -200,7 +200,7 @@ pub fn list_audio_files(_app: &AppHandle, tree_uri: &str) -> Result<Vec<String>,
             env.call_static_method(
                 &scanner_class,
                 "listAudioFiles",
-                "(Landroid/app/Activity;Ljava/lang/String;)[Ljava/lang/String;",
+                "(Landroid/content/Context;Ljava/lang/String;)[Ljava/lang/String;",
                 &[JValue::Object(&activity_obj), JValue::Object(&uri_jstring)],
             )
         },

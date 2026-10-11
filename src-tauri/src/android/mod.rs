@@ -19,6 +19,9 @@ pub mod saf_scan;
 pub mod audio;
 
 #[cfg(target_os = "android")]
+pub mod lifecycle;
+
+#[cfg(target_os = "android")]
 pub mod media_bridge;
 
 #[cfg(target_os = "android")]

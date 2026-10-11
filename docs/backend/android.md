@@ -8,7 +8,7 @@ Wave on Android uses a **hybrid** audio stack: Rust still owns the queue and tra
 |---------|--------|-------|
 | Playback queue, shuffle, repeat | Rust `AudioPlayer` (`src-tauri/src/audio/player.rs`) | Same command surface as desktop |
 | Decode / output | ExoPlayer via JNI | `content://` and `file://` URIs play natively |
-| Lock-screen / notification controls | `tauri-plugin-media-session` + `MediaNativeBridge` | Actions drain into Rust on the GUI tick |
+| Lock-screen / notification controls | `tauri-plugin-media-session` + `MediaNativeBridge` | Driven over JNI in both directions, no Activity needed |
 | Library / metadata | SQLite + MediaMetadataRetriever (URI) / Symphonia (files) | Folder scans store SAF URIs — **no audio copies** |
 
 ```text
@@ -67,7 +67,8 @@ src-tauri/src/android/
 ├── metadata.rs         # JNI → MediaMetadataProbe for content://
 ├── folder_picker.rs    # SAF folder picker (JNI → FolderPickerCallback)
 ├── saf_scan.rs         # Recursive audio listing under a SAF tree URI
-├── media_bridge.rs     # Notification actions → Rust (Android-only)
+├── media_bridge.rs     # Media session <-> Rust over JNI (Android-only)
+├── lifecycle.rs        # Keep playing when the UI is destroyed; reopen the window
 └── audio/
     ├── mod.rs
     └── jni_bridge.rs   # JNI to WaveExoPlayer
@@ -79,7 +80,7 @@ Java shipped into the APK (copied by CI into `gen/android`):
 src-tauri/android-src/java/app/bmdarklight/wave/
 ├── FolderPickerCallback.java
 ├── SafMediaScanner.java
-├── MediaNativeBridge.java
+├── MediaNativeBridge.java    # JNI bridge to the media session, both directions
 ├── MediaMetadataProbe.java   # MediaMetadataRetriever for URI metadata + art
 └── audio/
     └── WaveExoPlayer.java      # Media3 ExoPlayer singleton
@@ -99,13 +100,37 @@ ProGuard keep rules: `src-tauri/android-src/proguard-wave.pro`.
 
 Wave keeps **one** MediaSession owner for the notification UI: the vendored `tauri-plugin-media-session` plugin (MediaSessionCompat + foreground service).
 
-`WaveExoPlayer` is deliberately a plain ExoPlayer holder — not a `MediaSessionService` — so it does not fight the plugin for the session or notification.
+`WaveExoPlayer` is deliberately a plain ExoPlayer holder, not a `MediaSessionService`, so it does not fight the plugin for the session or notification.
 
-Notification button presses:
+All session state lives in `MediaSessionState`, a process-wide Kotlin object that runs on the main thread and outlives the Activity. The Tauri plugin class is only a thin adapter for the guest JS API.
 
-1. Plugin → `MediaNativeBridge.dispatch(action)`
-2. JNI → `android::media_bridge`
-3. Tick loop → `commands::handle_native_media_action`
+Rust to session (now playing, play/pause, position, shuffle/repeat):
+
+1. `MediaBridgeState` (`integrations/media_controls.rs`)
+2. `android::media_bridge::session_update` / `session_timeline` / `session_clear`
+3. JNI → `MediaNativeBridge` → `MediaSessionBridge` → `MediaSessionState`
+
+This path does not use Tauri plugin commands on purpose: those dispatch through the Activity and panic once it has been destroyed. `tick_media_session` re-reads the engine every tick so the session stays right with the WebView frozen or gone; position reports within a second of what the session already extrapolates are dropped.
+
+Session to Rust (notification, lock screen, Bluetooth/AVRCP, headset buttons, audio focus):
+
+1. `MediaSessionCompat.Callback` / `MediaActionReceiver` / `WaveExoPlayer` listener → `MediaNativeBridge.dispatch(action)`
+2. JNI → `android::media_bridge` worker thread
+3. `commands::handle_native_media_action`
+
+ExoPlayer handles audio focus and headphone unplugs itself. When it pauses on its own it dispatches `pause`; during a transient focus loss (a call) it dispatches `suspend` / `unsuspend`, which only freeze the Rust transport clock because ExoPlayer resumes by itself.
+
+Notification behaviour:
+
+- Updates are coalesced (a track change is several calls) and held up to 500 ms for the new cover, so the shade never flashes the old art under a new title.
+- The small icon is `drawable/ic_notification` from `android-src/res`. Without it the notification falls back to the template's `ic_launcher_foreground`, which is the stock Android robot.
+- Paused: the service stays in the foreground for 10 minutes (as Media3 does), then leaves it and the notification becomes dismissable. Dismissing it pauses, clears the controls and keeps the queue.
+
+## Closing the app while playing
+
+Swiping Wave out of recents destroys the Activity, and Tauri treats the last window closing as an exit. `android::lifecycle` prevents that exit while something is playing, so the foreground service keeps the process and the music going. When the user comes back, Android starts a new Activity and `RunEvent::Resumed` builds a new main window for it. If nothing is playing the app exits as before, after saving the playback state.
+
+Because the UI can disappear under a running engine, `ndk_context` holds the Application context rather than the Activity. Code that needs a real Activity (the folder picker) asks tao for the live one with `android::jni::live_activity`.
 
 ## Cover art on Android
 
@@ -132,7 +157,7 @@ Full-device MediaStore browsing (all phone music without picking a folder) is ou
 
 `.github/workflows/android.yml` after `tauri android init`:
 
-1. Copies `android-src/java` into `gen/android/app/src/main/java`
+1. Copies `android-src/java` into `gen/android/app/src/main/java` and `android-src/res` into the app resources
 2. Injects Media3 dependencies (`media3-exoplayer`, `media3-common`) into the app Gradle file
 3. Patches permissions + portrait lock into `AndroidManifest.xml`
 4. Hooks `proguard-wave.pro` for JNI entry points including `WaveExoPlayer` and `MediaMetadataProbe`

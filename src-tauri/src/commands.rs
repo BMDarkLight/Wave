@@ -303,12 +303,51 @@ pub(crate) fn tick_listen_progress(app: &tauri::AppHandle) {
     }
 }
 
-/// Keep the Android media notification alive while backgrounded.
+/// Keep the Android media session in step with the engine.
 ///
-/// Safe mode: the post-v0.3.0 JNI/FGS sync path crashed cold launch on device.
-/// Left as a no-op until foreground-service cold-start is re-enabled safely.
+/// The frontend reports position while it runs, but Android freezes the
+/// WebView in the background and destroys it when the task is swiped away.
+/// This keeps play/pause state and position right from Rust either way. The
+/// bridge drops reports that match what the session already extrapolates, so
+/// this costs nothing while playback runs normally.
 #[cfg(target_os = "android")]
-pub(crate) fn tick_media_session(_app: &tauri::AppHandle) {}
+pub(crate) fn tick_media_session(app: &tauri::AppHandle) {
+    let Some(state) = app.try_state::<PlayerState>() else {
+        return;
+    };
+    let snapshot = {
+        // Never wait on the player from the tick; a command holding it will
+        // push its own update.
+        let Ok(guard) = state.0.try_lock() else {
+            return;
+        };
+        guard.as_ref().and_then(|player| {
+            player
+                .get_current_path()
+                .map(|_| (player.position_seconds(), player.is_playing()))
+        })
+    };
+    let Some((position, playing)) = snapshot else {
+        return;
+    };
+    if let Some(bridge) = app.try_state::<MediaBridgeState>() {
+        bridge.0.update_position(position, playing);
+    }
+}
+
+/// Whether a track is playing right now. Decides if the process stays alive
+/// when Android destroys the UI.
+#[cfg(target_os = "android")]
+pub(crate) fn is_playback_active(app: &tauri::AppHandle) -> bool {
+    let Some(state) = app.try_state::<PlayerState>() else {
+        return false;
+    };
+    let guard = match state.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.as_ref().is_some_and(|player| player.is_playing())
+}
 
 /// End the current listen session and start one for `record_path`.
 ///
@@ -882,7 +921,7 @@ pub async fn set_playback_speed(
         let speed = player.set_speed(speed)?;
         (speed, player.position_seconds(), player.is_playing())
     };
-    bridge.0.update_position(position, playing);
+    bridge.0.set_speed(f64::from(speed), position, playing);
     Ok(speed)
 }
 
@@ -994,6 +1033,37 @@ pub(crate) fn handle_native_media_action(
             })?;
             let bridge = app.state::<MediaBridgeState>();
             sync_bridge_playback_mode(app, &bridge);
+            Ok(())
+        }
+        "dismiss" => {
+            // The paused notification was swiped away. Drop the controls but
+            // keep the queue, so the app reopens where it left off.
+            let paused = with_app_player(app, |player| {
+                if player.is_playing() {
+                    player.pause().map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            });
+            if let Err(error) = paused {
+                tracing::warn!("dismiss: pause failed: {error}");
+            }
+            persist_playback_state(app);
+            app.state::<MediaBridgeState>().0.set_stopped();
+            if app.webview_windows().is_empty() {
+                // No UI and no controls left: nothing keeps this process useful.
+                app.exit(0);
+            }
+            Ok(())
+        }
+        "suspend" | "unsuspend" => {
+            // ExoPlayer held or released output for a transient focus loss.
+            let (position, playing) = with_app_player(app, |player| {
+                player.set_output_suspended(action == "suspend");
+                Ok((player.position_seconds(), player.is_playing()))
+            })?;
+            app.state::<MediaBridgeState>()
+                .0
+                .update_position(position, playing);
             Ok(())
         }
         other => {

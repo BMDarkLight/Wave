@@ -516,56 +516,6 @@ pub fn exo_is_playing() -> Result<bool, String> {
     with_player(|p| p.call_bool("isPlaying"))
 }
 
-/// Refresh the OS media notification from Rust (works when the WebView is frozen).
-pub fn sync_media_session(position_sec: f64, playing: bool) {
-    let Ok(guard) = EXO_PLAYER.lock() else {
-        return;
-    };
-    let Some(handle) = guard.as_ref() else {
-        return;
-    };
-    let _ = handle.with_env(|env| {
-        // Worker threads must use the app ClassLoader. FindClass often fails
-        // and a pending exception can abort the process on the next JNI call.
-        let ctx = match std::panic::catch_unwind(ndk_context::android_context) {
-            Ok(ctx) => ctx,
-            Err(_) => return Ok(()),
-        };
-        let activity = unsafe { JObject::from_raw(ctx.context() as *mut _) };
-        if activity.is_null() {
-            return Ok(());
-        }
-        let cls = match load_class(env, &activity, "app.bmdarklight.wave.MediaNativeBridge") {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::debug!("syncSession class load skipped: {e}");
-                return Ok(());
-            }
-        };
-        match env.call_static_method(
-            cls,
-            "syncSession",
-            "(DZ)V",
-            &[JValue::Double(position_sec), JValue::Bool(playing as u8)],
-        ) {
-            Ok(_) => {}
-            Err(e) => {
-                tracing::debug!("syncSession: {e}");
-                if env.exception_check().unwrap_or(false) {
-                    let _ = env.exception_describe();
-                    let _ = env.exception_clear();
-                }
-                return Ok(());
-            }
-        }
-        if env.exception_check().unwrap_or(false) {
-            let _ = env.exception_describe();
-            let _ = env.exception_clear();
-        }
-        Ok(())
-    });
-}
-
 /// True when ExoPlayer reached end-of-media for the current item.
 pub fn exo_playback_ended() -> Result<bool, String> {
     with_player(|p| p.call_bool("isEnded"))
