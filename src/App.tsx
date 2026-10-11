@@ -860,7 +860,12 @@ function App() {
   const albumScopeName = viewingAlbum?.name ?? null;
   const albumScopeArtist = viewingAlbum?.albumArtist ?? null;
 
+  // The phone's Search tab is a page of its own, not a search inside
+  // whatever page it was opened from, so it always covers the library.
+  const onMobileSearchPage = mainSearchOpen && isMobileLayout();
+
   const mainSearchScope = useMemo((): MainSearchScope => {
+    if (onMobileSearchPage) return { kind: "library" };
     // Prefer browse stack over mainView so album/artist opened from Home
     // still scopes search (and can offer "Search full library").
     if (albumScopeName) {
@@ -894,6 +899,7 @@ function App() {
       paths: playlistSearchPaths,
     };
   }, [
+    onMobileSearchPage,
     albumScopeName,
     albumScopeArtist,
     viewingArtist,
