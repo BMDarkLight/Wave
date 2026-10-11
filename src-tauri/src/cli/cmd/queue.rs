@@ -19,7 +19,6 @@ pub fn run(cmd: QueueCmd) {
         QueueCmd::List => match daemon_request_if_running(DaemonRequest::QueueList) {
             Ok(Some(resp)) if resp.ok => {
                 let tracks = resp.queue.unwrap_or_default();
-                let shuffle = resp.status.as_ref().is_some_and(|s| s.shuffle);
                 let current = resp.status.and_then(|s| s.queue_position);
                 json::maybe_emit(&serde_json::json!({
                     "queue_position": current,
@@ -37,7 +36,7 @@ pub fn run(cmd: QueueCmd) {
                     .collect();
                 print!(
                     "{}",
-                    render::queue_list(ui::current(), &labels, &durations, current, shuffle)
+                    render::queue_list(ui::current(), &labels, &durations, current)
                 );
             }
             Ok(Some(resp)) => {

@@ -854,7 +854,7 @@ Advance to the next track in the queue.
 - **`repeat: "one"`** — replays the current track
 - **`repeat: "all"`** — wraps to the first track
 - **`repeat: "off"`** — returns `null` at end of queue
-- Respects shuffle order when enabled
+- Follows the queue order, which shuffle rearranges
 
 **Arguments:** none
 
@@ -885,7 +885,7 @@ Go to the previous track, with a common UX rule:
 
 **Returns:** `void`
 
-When enabled, rebuilds a shuffle order with the current track kept first.
+When enabled, shuffles the queue itself with the current track moved to the front, so `get_queue_tracks` returns the new order. When disabled, the queue goes back to the order it had before shuffling.
 
 ---
 

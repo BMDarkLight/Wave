@@ -85,35 +85,34 @@ impl PlaybackClock {
 // ── Queue ─────────────────────────────────────────────────────────────────────
 
 /// In-memory playback queue (separate from the library's persisted playlist).
+///
+/// Shuffle reorders `tracks` itself, so the queue always lists tracks in the
+/// order they play. Turning shuffle off puts them back in their old order.
 #[derive(Debug, Clone, Default)]
 pub struct Queue {
     tracks: Vec<String>,
     current_index: Option<usize>,
-    shuffle_order: Option<Vec<usize>>,
-    shuffle_pos: usize,
+    shuffle: bool,
+    /// Each entry's slot in the unshuffled queue, kept while `tracks` is
+    /// shuffled. `None` with shuffle on is a new queue that gets shuffled once
+    /// the first track to play is picked.
+    unshuffled_rank: Option<Vec<usize>>,
 }
 
 impl Queue {
-    /// Replace the queue. Shuffle stays on if it was on, with a fresh order
-    /// for the new tracks.
+    /// Replace the queue. Shuffle stays on if it was on, and the new tracks
+    /// are shuffled around whichever one starts playing.
     pub fn set_tracks(&mut self, tracks: Vec<String>) {
-        let shuffled = self.is_shuffled();
         self.tracks = tracks;
         self.current_index = None;
-        self.shuffle_order = None;
-        self.shuffle_pos = 0;
-        if shuffled {
-            self.rebuild_shuffle_order();
-        }
+        self.unshuffled_rank = None;
     }
 
-    /// Rebuild the Fisher-Yates shuffle order when shuffle is enabled.
-    fn rebuild_shuffle_order(&mut self) {
-        if self.tracks.is_empty() {
-            self.shuffle_order = None;
-            return;
-        }
-        let mut order: Vec<usize> = (0..self.tracks.len()).collect();
+    /// Fisher-Yates over the whole queue. The current track moves to the
+    /// front so every other track is still ahead of it.
+    fn shuffle_tracks(&mut self) {
+        let len = self.tracks.len();
+        let mut order: Vec<usize> = (0..len).collect();
         // splitmix64. Each swap needs its own random draw; deriving every j
         // from one fixed seed reaches only a sliver of the possible orders.
         let mut state = uuid::Uuid::new_v4().as_u64_pair().0;
@@ -124,7 +123,7 @@ impl Queue {
             z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
             z ^ (z >> 31)
         };
-        for i in (1..order.len()).rev() {
+        for i in (1..len).rev() {
             let j = (next_random() % (i as u64 + 1)) as usize;
             order.swap(i, j);
         }
@@ -132,9 +131,40 @@ impl Queue {
             if let Some(pos) = order.iter().position(|&v| v == idx) {
                 order.swap(0, pos);
             }
+            self.current_index = Some(0);
         }
-        self.shuffle_pos = 0;
-        self.shuffle_order = Some(order);
+        let ranks = self
+            .unshuffled_rank
+            .take()
+            .unwrap_or_else(|| (0..len).collect());
+        self.unshuffled_rank = Some(order.iter().map(|&i| ranks[i]).collect());
+        self.reorder(&order);
+    }
+
+    /// Put the tracks back in the order they had before shuffling.
+    fn unshuffle_tracks(&mut self) {
+        let Some(ranks) = self.unshuffled_rank.take() else {
+            return;
+        };
+        let mut order: Vec<usize> = (0..self.tracks.len()).collect();
+        order.sort_by_key(|&i| ranks[i]);
+        self.current_index = self
+            .current_index
+            .and_then(|current| order.iter().position(|&i| i == current));
+        self.reorder(&order);
+    }
+
+    /// Rebuild `tracks` so slot `n` holds the entry that was at `order[n]`.
+    fn reorder(&mut self, order: &[usize]) {
+        let mut old = std::mem::take(&mut self.tracks);
+        self.tracks = order.iter().map(|&i| std::mem::take(&mut old[i])).collect();
+    }
+
+    /// Shuffle a new queue the first time a track is picked from it.
+    fn shuffle_if_pending(&mut self) {
+        if self.shuffle && self.unshuffled_rank.is_none() {
+            self.shuffle_tracks();
+        }
     }
 
     pub fn current_index(&self) -> Option<usize> {
@@ -145,35 +175,16 @@ impl Queue {
         &self.tracks
     }
 
-    /// Jump to a specific raw index and return its path.
+    /// Jump to a specific index and return its path. On a new shuffled queue
+    /// this also shuffles it, with the picked track first.
     pub fn jump(&mut self, index: usize) -> Option<&str> {
         if index >= self.tracks.len() {
             return None;
         }
-        let fresh = self.current_index.is_none();
         self.current_index = Some(index);
-        if let Some(ref mut order) = self.shuffle_order {
-            if let Some(pos) = order.iter().position(|&v| v == index) {
-                if fresh {
-                    // Starting a new queue on this track: it opens the shuffle
-                    // instead of skipping every track ordered before it.
-                    order.swap(0, pos);
-                    self.shuffle_pos = 0;
-                } else {
-                    self.shuffle_pos = pos;
-                }
-            }
-        }
-        self.tracks.get(index).map(String::as_str)
-    }
-
-    /// Shuffle slot that `next` moves to. Before anything has played, the
-    /// first slot is next rather than already used up.
-    fn next_shuffle_pos(&self) -> usize {
-        match self.current_index {
-            Some(_) => self.shuffle_pos + 1,
-            None => 0,
-        }
+        self.shuffle_if_pending();
+        let current = self.current_index?;
+        self.tracks.get(current).map(String::as_str)
     }
 
     /// Index that `next` would select, without mutating queue state.
@@ -181,34 +192,13 @@ impl Queue {
         if self.tracks.is_empty() {
             return None;
         }
-        if let Some(ref order) = self.shuffle_order {
-            let next_pos = self.next_shuffle_pos();
-            match repeat {
-                RepeatMode::All => Some(order[next_pos % order.len()]),
-                RepeatMode::Off | RepeatMode::One => {
-                    if next_pos < order.len() {
-                        Some(order[next_pos])
-                    } else {
-                        None
-                    }
-                }
-            }
-        } else {
-            match self.current_index {
-                None if !self.tracks.is_empty() => Some(0),
-                None => None,
-                Some(current) => {
-                    let next = current + 1;
-                    match repeat {
-                        RepeatMode::All => Some(next % self.tracks.len()),
-                        RepeatMode::Off | RepeatMode::One => {
-                            if next < self.tracks.len() {
-                                Some(next)
-                            } else {
-                                None
-                            }
-                        }
-                    }
+        match self.current_index {
+            None => Some(0),
+            Some(current) => {
+                let next = current + 1;
+                match repeat {
+                    RepeatMode::All => Some(next % self.tracks.len()),
+                    RepeatMode::Off | RepeatMode::One => (next < self.tracks.len()).then_some(next),
                 }
             }
         }
@@ -223,14 +213,8 @@ impl Queue {
     /// Advance to the next track. Returns `None` when the queue is exhausted
     /// and `repeat == Off`. With `repeat == All` it wraps around.
     pub fn next(&mut self, repeat: &RepeatMode) -> Option<&str> {
+        self.shuffle_if_pending();
         let next_idx = self.peek_next_index(repeat)?;
-        if let Some(ref order) = self.shuffle_order.clone() {
-            let next_pos = self.next_shuffle_pos();
-            match repeat {
-                RepeatMode::All => self.shuffle_pos = next_pos % order.len(),
-                RepeatMode::Off | RepeatMode::One => self.shuffle_pos = next_pos,
-            }
-        }
         self.current_index = Some(next_idx);
         self.tracks.get(next_idx).map(String::as_str)
     }
@@ -240,30 +224,12 @@ impl Queue {
     // below cover it on every target.
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub fn paths_from_current_forward(&self, repeat: &RepeatMode) -> Vec<String> {
-        let mut sim = self.clone();
-        let mut paths = Vec::new();
-        let Some(start_idx) = sim.current_index else {
-            return paths;
+        let Some(start) = self.current_index else {
+            return Vec::new();
         };
-        paths.push(sim.tracks[start_idx].clone());
-        let extra_limit = match repeat {
-            RepeatMode::All => self.tracks.len().saturating_sub(1),
-            _ => self.tracks.len().saturating_sub(1),
-        };
-        let mut added = 0usize;
-        while added < extra_limit {
-            let Some(next) = sim.peek_next(repeat) else {
-                break;
-            };
-            paths.push(next.to_string());
-            sim.next(repeat);
-            added += 1;
-            if *repeat != RepeatMode::All && sim.peek_next(repeat).is_none() {
-                break;
-            }
-            if *repeat == RepeatMode::All && paths.len() >= self.tracks.len() {
-                break;
-            }
+        let mut paths = self.tracks[start..].to_vec();
+        if *repeat == RepeatMode::All {
+            paths.extend_from_slice(&self.tracks[..start]);
         }
         paths
     }
@@ -273,52 +239,44 @@ impl Queue {
         if self.tracks.is_empty() {
             return None;
         }
-        let prev_idx = if let Some(ref order) = self.shuffle_order.clone() {
-            match (self.shuffle_pos, repeat) {
-                (0, RepeatMode::All) => {
-                    self.shuffle_pos = order.len() - 1;
-                    Some(order[self.shuffle_pos])
-                }
-                (0, _) => None,
-                (pos, _) => {
-                    self.shuffle_pos = pos - 1;
-                    Some(order[self.shuffle_pos])
-                }
-            }
-        } else {
-            let current = self.current_index.unwrap_or(0);
-            match (current, repeat) {
-                (0, RepeatMode::All) => Some(self.tracks.len() - 1),
-                (0, _) => None,
-                (idx, _) => Some(idx - 1),
-            }
-        };
-
+        let current = self.current_index.unwrap_or(0);
         // At the start of the queue there is nothing to go back to, and the
         // current track keeps playing, so its index has to stay put.
-        let prev_idx = prev_idx?;
+        let prev_idx = match (current, repeat) {
+            (0, RepeatMode::All) => self.tracks.len() - 1,
+            (0, _) => return None,
+            (idx, _) => idx - 1,
+        };
         self.current_index = Some(prev_idx);
         self.tracks.get(prev_idx).map(String::as_str)
     }
 
+    /// Turning shuffle on reshuffles the queue around the current track;
+    /// turning it off restores the order the queue had before.
     pub fn set_shuffle(&mut self, enabled: bool) {
+        self.shuffle = enabled;
         if enabled {
-            self.rebuild_shuffle_order();
+            self.shuffle_tracks();
         } else {
-            self.shuffle_order = None;
+            self.unshuffle_tracks();
         }
     }
 
+    /// Turn shuffle on for a queue saved while shuffled, keeping its order.
+    pub fn resume_shuffle(&mut self) {
+        self.shuffle = true;
+        self.unshuffled_rank = Some((0..self.tracks.len()).collect());
+    }
+
     pub fn is_shuffled(&self) -> bool {
-        self.shuffle_order.is_some()
+        self.shuffle
     }
 
     /// Append a track to the end of the queue.
     pub fn enqueue(&mut self, path: String) {
-        let new_idx = self.tracks.len();
         self.tracks.push(path);
-        if let Some(ref mut order) = self.shuffle_order {
-            order.push(new_idx);
+        if let Some(ref mut ranks) = self.unshuffled_rank {
+            ranks.push(ranks.len());
         }
     }
 
@@ -329,20 +287,24 @@ impl Queue {
             Some(idx) => (idx + 1).min(self.tracks.len()),
             None => self.tracks.len(),
         };
-        self.tracks.insert(insert_at, path.clone());
-        if let Some(ref mut order) = self.shuffle_order {
-            for idx in order.iter_mut() {
-                if *idx >= insert_at {
-                    *idx += 1;
+        self.tracks.insert(insert_at, path);
+        if let Some(ref mut ranks) = self.unshuffled_rank {
+            // Unshuffled, it still follows the track it was queued behind.
+            let rank = match self.current_index {
+                Some(idx) => ranks[idx] + 1,
+                None => ranks.len(),
+            };
+            for r in ranks.iter_mut() {
+                if *r >= rank {
+                    *r += 1;
                 }
             }
-            let pos = (self.shuffle_pos + 1).min(order.len());
-            order.insert(pos, insert_at);
+            ranks.insert(insert_at, rank);
         }
     }
 
-    /// Remove the track at `index` from the raw track list, adjusting
-    /// `current_index` and shuffle order accordingly. Returns the removed path.
+    /// Remove the track at `index`, adjusting `current_index` accordingly.
+    /// Returns the removed path.
     pub fn remove_at(&mut self, index: usize) -> Option<String> {
         if index >= self.tracks.len() {
             return None;
@@ -362,25 +324,12 @@ impl Queue {
             }
         }
 
-        if let Some(ref mut order) = self.shuffle_order {
-            let mut new_order = Vec::with_capacity(order.len().saturating_sub(1));
-            let mut removed_pos = None;
-            for (i, &idx) in order.iter().enumerate() {
-                if idx == index {
-                    removed_pos = Some(i);
-                    continue;
+        if let Some(ref mut ranks) = self.unshuffled_rank {
+            let rank = ranks.remove(index);
+            for r in ranks.iter_mut() {
+                if *r > rank {
+                    *r -= 1;
                 }
-                new_order.push(if idx > index { idx - 1 } else { idx });
-            }
-            *order = new_order;
-            if let Some(rp) = removed_pos {
-                if rp <= self.shuffle_pos {
-                    self.shuffle_pos = self.shuffle_pos.saturating_sub(1);
-                }
-            }
-            if order.is_empty() {
-                self.shuffle_order = None;
-                self.shuffle_pos = 0;
             }
         }
 
@@ -388,7 +337,7 @@ impl Queue {
     }
 
     /// Move a track from `from` to `to` within the queue, keeping
-    /// `current_index` and shuffle indices consistent.
+    /// `current_index` consistent.
     pub fn move_track(&mut self, from: usize, to: usize) -> bool {
         let len = self.tracks.len();
         if from >= len || to >= len || from == to {
@@ -398,30 +347,22 @@ impl Queue {
         let item = self.tracks.remove(from);
         self.tracks.insert(to, item);
 
-        let remap = |idx: usize| -> usize {
-            if idx == from {
-                to
-            } else if from < to {
-                if idx > from && idx <= to {
-                    idx - 1
-                } else {
-                    idx
-                }
-            } else if idx >= to && idx < from {
-                idx + 1
-            } else {
-                idx
-            }
-        };
-
-        if let Some(current) = self.current_index {
-            self.current_index = Some(remap(current));
+        if let Some(ref mut ranks) = self.unshuffled_rank {
+            let rank = ranks.remove(from);
+            ranks.insert(to, rank);
         }
 
-        if let Some(ref mut order) = self.shuffle_order {
-            for idx in order.iter_mut() {
-                *idx = remap(*idx);
-            }
+        if let Some(current) = self.current_index {
+            let moved = if current == from {
+                to
+            } else if from < current && current <= to {
+                current - 1
+            } else if to <= current && current < from {
+                current + 1
+            } else {
+                current
+            };
+            self.current_index = Some(moved);
         }
 
         true
@@ -440,8 +381,7 @@ impl Queue {
         } else {
             self.tracks.clear();
         }
-        self.shuffle_order = None;
-        self.shuffle_pos = 0;
+        self.unshuffled_rank = self.shuffle.then(|| (0..self.tracks.len()).collect());
     }
 
     /// Jump to a specific index in the queue and return its path.
@@ -2459,10 +2399,6 @@ mod tests {
         queue.set_tracks(vec!["x".to_string(), "y".to_string()]);
         assert_eq!(queue.current_index(), None);
         assert!(queue.is_shuffled());
-        assert_eq!(queue.shuffle_pos, 0);
-        let mut order = queue.shuffle_order.clone().unwrap();
-        order.sort_unstable();
-        assert_eq!(order, vec![0, 1]);
         assert_eq!(queue.tracks(), &["x".to_string(), "y".to_string()]);
     }
 
@@ -2479,15 +2415,16 @@ mod tests {
         let mut queue = queue_of(&["a"]);
         queue.set_shuffle(true);
         queue.set_tracks(paths);
-        queue.jump(7);
-        assert_eq!(queue.shuffle_order.as_ref().unwrap()[0], 7);
+        assert_eq!(queue.jump(7), Some("7"));
+        assert_eq!(queue.current_index(), Some(0));
 
-        let mut played = vec![7];
-        while queue.next(&RepeatMode::Off).is_some() {
-            played.push(queue.current_index().unwrap());
+        let mut played = vec!["7".to_string()];
+        while let Some(path) = queue.next(&RepeatMode::Off) {
+            played.push(path.to_string());
         }
-        played.sort_unstable();
-        assert_eq!(played, (0..20).collect::<Vec<_>>());
+        assert_eq!(played, queue.tracks());
+        played.sort_unstable_by_key(|p| p.parse::<usize>().unwrap());
+        assert_eq!(played, (0..20).map(|i| i.to_string()).collect::<Vec<_>>());
     }
 
     // ── jump ─────────────────────────────────────────────────────────────
@@ -2528,21 +2465,17 @@ mod tests {
     }
 
     #[test]
-    fn next_wraps_to_shuffle_order_start_under_repeat_all() {
+    fn next_wraps_to_the_shuffled_start_under_repeat_all() {
         let mut queue = queue_of(&["a", "b", "c"]);
         queue.jump(2);
         queue.set_shuffle(true);
-        // Pinned: shuffle_order[0] must equal the index that was current at
-        // shuffle time (2, "c").
-        assert_eq!(queue.shuffle_order.as_ref().unwrap()[0], 2);
+        // The track playing when shuffle went on opens the shuffled queue.
+        assert_eq!(queue.tracks()[0], "c");
 
-        let last_pos = queue.shuffle_order.as_ref().unwrap().len() - 1;
-        queue.shuffle_pos = last_pos;
-        queue.current_index = Some(queue.shuffle_order.as_ref().unwrap()[last_pos]);
-
+        queue.jump(2);
         let result = queue.next(&RepeatMode::All);
         assert_eq!(result, Some("c"));
-        assert_eq!(queue.current_index(), Some(2));
+        assert_eq!(queue.current_index(), Some(0));
     }
 
     // ── previous ─────────────────────────────────────────────────────────
@@ -2563,12 +2496,9 @@ mod tests {
     fn a_fresh_shuffled_queue_starts_at_the_first_shuffled_track() {
         let mut queue = queue_of(&["a", "b", "c"]);
         queue.set_shuffle(true);
-        let order = queue.shuffle_order.clone().unwrap();
-        let played: Vec<usize> = (0..3)
-            .map(|_| {
-                queue.next(&RepeatMode::Off);
-                queue.current_index().unwrap()
-            })
+        let order = queue.tracks().to_vec();
+        let played: Vec<String> = (0..3)
+            .map(|_| queue.next(&RepeatMode::Off).unwrap().to_string())
             .collect();
         assert_eq!(played, order);
         assert_eq!(queue.next(&RepeatMode::Off), None);
@@ -2578,10 +2508,9 @@ mod tests {
     fn previous_at_the_start_of_a_shuffled_queue_keeps_the_current_track() {
         let mut queue = queue_of(&["a", "b", "c"]);
         queue.set_shuffle(true);
-        let first = queue.shuffle_order.as_ref().unwrap()[0];
-        queue.jump(first);
+        queue.jump(0);
         assert_eq!(queue.previous(&RepeatMode::Off), None);
-        assert_eq!(queue.current_index(), Some(first));
+        assert_eq!(queue.current_index(), Some(0));
     }
 
     #[test]
@@ -2610,28 +2539,33 @@ mod tests {
     // ── set_shuffle / is_shuffled ────────────────────────────────────────
 
     #[test]
-    fn set_shuffle_true_builds_valid_permutation_pinned_to_current() {
+    fn set_shuffle_true_reorders_the_queue_with_the_current_track_first() {
         let mut queue = queue_of(&["a", "b", "c", "d", "e"]);
         queue.jump(2);
         queue.set_shuffle(true);
         assert!(queue.is_shuffled());
 
-        let order = queue.shuffle_order.clone().unwrap();
-        let mut sorted = order.clone();
+        let mut sorted = queue.tracks().to_vec();
         sorted.sort_unstable();
-        assert_eq!(sorted, vec![0, 1, 2, 3, 4]);
-        // Current track is pinned to the front of the shuffle order.
-        assert_eq!(order[0], 2);
+        assert_eq!(sorted, ["a", "b", "c", "d", "e"]);
+        assert_eq!(queue.tracks()[0], "c");
+        assert_eq!(queue.current_index(), Some(0));
     }
 
     #[test]
-    fn set_shuffle_false_clears_order() {
-        let mut queue = queue_of(&["a", "b", "c"]);
+    fn set_shuffle_false_restores_the_order_and_keeps_the_current_track() {
+        let paths: Vec<String> = (0..20).map(|i| i.to_string()).collect();
+        let mut queue = Queue::default();
+        queue.set_tracks(paths.clone());
+        queue.jump(5);
         queue.set_shuffle(true);
-        assert!(queue.is_shuffled());
+        queue.next(&RepeatMode::Off);
+        let playing = queue.tracks()[queue.current_index().unwrap()].clone();
+
         queue.set_shuffle(false);
         assert!(!queue.is_shuffled());
-        assert!(queue.shuffle_order.is_none());
+        assert_eq!(queue.tracks(), paths);
+        assert_eq!(queue.tracks()[queue.current_index().unwrap()], playing);
     }
 
     // ── enqueue ──────────────────────────────────────────────────────────
@@ -2647,13 +2581,13 @@ mod tests {
     }
 
     #[test]
-    fn enqueue_while_shuffled_appends_new_index_to_shuffle_order() {
+    fn enqueue_while_shuffled_appends_and_stays_last_when_unshuffled() {
         let mut queue = queue_of(&["a", "b", "c"]);
         queue.set_shuffle(true);
         queue.enqueue("d".to_string());
-        let order = queue.shuffle_order.clone().unwrap();
-        assert_eq!(order.len(), 4);
-        assert!(order.contains(&3));
+        assert_eq!(queue.tracks()[3], "d");
+        queue.set_shuffle(false);
+        assert_eq!(queue.tracks(), ["a", "b", "c", "d"]);
     }
 
     // ── insert_next ──────────────────────────────────────────────────────
@@ -2686,23 +2620,36 @@ mod tests {
     }
 
     #[test]
-    fn insert_next_while_shuffled_updates_shuffle_order() {
-        let mut queue = queue_of(&["a", "b", "c"]);
-        queue.jump(0);
+    fn insert_next_while_shuffled_follows_the_current_track_both_ways() {
+        let mut queue = queue_of(&["a", "b", "c", "d"]);
+        queue.jump(1);
         queue.set_shuffle(true);
-        assert_eq!(queue.shuffle_order.as_ref().unwrap()[0], 0);
+        assert_eq!(queue.tracks()[0], "b");
 
         queue.insert_next("x".to_string());
+        assert_eq!(queue.tracks()[1], "x");
+        assert_eq!(queue.next(&RepeatMode::Off), Some("x"));
 
-        let order = queue.shuffle_order.clone().unwrap();
-        assert_eq!(order.len(), 4);
-        let mut sorted = order.clone();
-        sorted.sort_unstable();
-        assert_eq!(sorted, vec![0, 1, 2, 3]);
-        // Pin at position 0 is untouched, and the newly inserted index (1)
-        // lands right after the shuffle cursor.
-        assert_eq!(order[0], 0);
-        assert_eq!(order[1], 1);
+        queue.set_shuffle(false);
+        assert_eq!(queue.tracks(), ["a", "b", "x", "c", "d"]);
+        assert_eq!(queue.current_index(), Some(2));
+    }
+
+    #[test]
+    fn removing_and_moving_while_shuffled_still_unshuffles_cleanly() {
+        let mut queue = queue_of(&["a", "b", "c", "d", "e"]);
+        queue.jump(0);
+        queue.set_shuffle(true);
+        let gone = queue.tracks()[2].clone();
+        queue.remove_at(2);
+        queue.move_track(3, 1);
+        queue.set_shuffle(false);
+        let expected: Vec<&str> = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .filter(|p| *p != gone)
+            .collect();
+        assert_eq!(queue.tracks(), expected);
+        assert_eq!(queue.tracks()[queue.current_index().unwrap()], "a");
     }
 
     // ── remove_at ────────────────────────────────────────────────────────
@@ -2826,7 +2773,9 @@ mod tests {
         queue.clear_upcoming();
         assert_eq!(queue.tracks(), &["b".to_string()]);
         assert_eq!(queue.current_index(), Some(0));
-        assert!(!queue.is_shuffled());
+        assert!(queue.is_shuffled());
+        queue.set_shuffle(false);
+        assert_eq!(queue.tracks(), &["b".to_string()]);
     }
 
     #[test]

@@ -1159,6 +1159,7 @@ function App() {
           const mode = await getPlaybackMode();
           await setShuffle(!mode.shuffle);
           await loadPlaybackMode();
+          await loadQueueTracks();
         },
         onRepeat: async () => {
           const mode = await getPlaybackMode();

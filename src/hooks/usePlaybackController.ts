@@ -482,6 +482,7 @@ export function usePlaybackController({
       const next = !playbackMode.shuffle;
       await setShuffle(next);
       await loadPlaybackMode();
+      await loadQueueTracks();
     } catch (err) {
       setError(formatInvokeError(err, "Failed to toggle shuffle"));
     }

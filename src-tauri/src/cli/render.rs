@@ -221,7 +221,6 @@ pub fn queue_list(
     labels: &[String],
     durations: &[Option<f64>],
     current: Option<usize>,
-    shuffle: bool,
 ) -> String {
     if labels.is_empty() {
         return "Queue is empty.\n".to_string();
@@ -262,12 +261,6 @@ pub fn queue_list(
                 ui.dim(&format!("{i:>digits$}"))
             ));
         }
-    }
-    if shuffle {
-        out.push_str(&format!(
-            "\n  {}\n",
-            ui.dim("Shuffle is on, so tracks play in a different order than listed.")
-        ));
     }
     out
 }
@@ -885,7 +878,7 @@ mod tests {
             "Talking Heads - Once in a Lifetime".to_string(),
             "A band with a very long name - and an even longer title".to_string(),
         ];
-        let out = queue_list(&ui, &labels, &[Some(258.0), None], Some(1), false);
+        let out = queue_list(&ui, &labels, &[Some(258.0), None], Some(1));
         assert!(out.starts_with("2 tracks in queue"));
         for line in out.lines() {
             assert!(display_width(line) <= 40, "{line:?}");
@@ -897,17 +890,11 @@ mod tests {
     }
 
     #[test]
-    fn queue_list_warns_that_shuffle_reorders_it() {
+    fn queue_list_counts_tracks_or_says_it_is_empty() {
         let labels = vec!["a".to_string()];
-        let plain = queue_list(&wide(80), &labels, &[None], None, false);
-        let shuffled = queue_list(&wide(80), &labels, &[None], None, true);
-        assert!(plain.starts_with("1 track in queue"));
-        assert!(!plain.contains("Shuffle"));
-        assert!(shuffled.contains("Shuffle is on"));
-        assert_eq!(
-            queue_list(&wide(80), &[], &[], None, false),
-            "Queue is empty.\n"
-        );
+        let out = queue_list(&wide(80), &labels, &[None], None);
+        assert!(out.starts_with("1 track in queue"));
+        assert_eq!(queue_list(&wide(80), &[], &[], None), "Queue is empty.\n");
     }
 
     #[test]

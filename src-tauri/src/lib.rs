@@ -93,7 +93,10 @@ pub fn run() {
                     }
                 }
             }
-            player.queue.set_shuffle(settings.shuffle);
+            // The saved queue is already in its shuffled order.
+            if settings.shuffle {
+                player.queue.resume_shuffle();
+            }
             player.repeat = settings.repeat.clone();
 
             app.manage(PlayerState(std::sync::Mutex::new(Some(player))));

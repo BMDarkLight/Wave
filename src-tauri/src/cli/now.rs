@@ -32,36 +32,24 @@ pub fn clamp_interval(seconds: f64) -> f64 {
     }
 }
 
-/// What "Up next" can honestly show, given only the raw queue.
-#[derive(Debug, PartialEq)]
-pub enum Upcoming {
-    /// Queue positions, as `wave queue list` numbers them.
-    Positions(Vec<usize>),
-    /// The daemon does not report its shuffled order, so the raw order
-    /// would name the wrong tracks.
-    Shuffled,
-}
-
-pub fn upcoming(status: &PlaybackStatus, queue_len: usize) -> Upcoming {
-    if status.shuffle {
-        return Upcoming::Shuffled;
-    }
+/// Queue positions that play next, as `wave queue list` numbers them. Shuffle
+/// reorders the queue itself, so this holds with shuffle on as well.
+pub fn upcoming(status: &PlaybackStatus, queue_len: usize) -> Vec<usize> {
     let Some(current) = status.queue_position else {
-        return Upcoming::Positions(Vec::new());
+        return Vec::new();
     };
     if queue_len == 0 {
-        return Upcoming::Positions(Vec::new());
+        return Vec::new();
     }
     let wraps = status.repeat.eq_ignore_ascii_case("all");
-    let positions = (0..PEEK.min(queue_len - 1))
+    (0..PEEK.min(queue_len - 1))
         .map(|slot| current + 1 + slot)
         .filter_map(|p| match p < queue_len {
             true => Some(p),
             false if wraps => Some(p % queue_len),
             false => None,
         })
-        .collect();
-    Upcoming::Positions(positions)
+        .collect()
 }
 
 /// One screenful of the dashboard. Always the same height at a given width.
@@ -69,7 +57,7 @@ pub fn upcoming(status: &PlaybackStatus, queue_len: usize) -> Upcoming {
 pub fn frame(
     ui: &Ui,
     status: &PlaybackStatus,
-    next: Option<&[(usize, String)]>,
+    next: &[(usize, String)],
     queue_len: usize,
     album: Option<&str>,
 ) -> String {
@@ -81,24 +69,12 @@ pub fn frame(
     let digits = queue_len.max(1).to_string().len();
     let room = ui.width.saturating_sub(5 + digits + 2);
     let mut lines = Vec::new();
-    match next {
-        None => lines.push(format!(
-            "     {}",
-            ui.dim(&ui::truncate(
-                "Shuffle is on, so the next track is not known here.",
-                ui.width.saturating_sub(5),
-                ui.glyphs.ellipsis
-            ))
-        )),
-        Some(next) => {
-            for (position, label) in next {
-                lines.push(format!(
-                    "     {}  {}",
-                    ui.dim(&format!("{position:>digits$}")),
-                    ui::truncate(label, room, ui.glyphs.ellipsis)
-                ));
-            }
-        }
+    for (position, label) in next {
+        lines.push(format!(
+            "     {}  {}",
+            ui.dim(&format!("{position:>digits$}")),
+            ui::truncate(label, room, ui.glyphs.ellipsis)
+        ));
     }
     // Blank filler keeps the frame height constant.
     lines.resize(PEEK, String::new());
@@ -148,35 +124,28 @@ fn fetch(live: bool) -> (PlaybackStatus, Vec<String>) {
 /// Album and upcoming labels for one frame, looked up together.
 struct Labels {
     album: Option<String>,
-    next: Option<Vec<(usize, String)>>,
+    next: Vec<(usize, String)>,
 }
 
 fn label(status: &PlaybackStatus, queue: &[String]) -> Labels {
     let current = status.path.clone();
-    let positions = match upcoming(status, queue.len()) {
-        Upcoming::Positions(positions) => Some(positions),
-        Upcoming::Shuffled => None,
-    };
+    let positions = upcoming(status, queue.len());
     let mut paths: Vec<String> = current.iter().cloned().collect();
-    if let Some(positions) = &positions {
-        paths.extend(positions.iter().map(|&p| queue[p].clone()));
-    }
+    paths.extend(positions.iter().map(|&p| queue[p].clone()));
     let known = crate::cli::library_tracks_for(&paths);
     let offset = usize::from(current.is_some());
     let album = current
         .and(known.first().cloned().flatten())
         .map(|t| t.album)
         .filter(|album| !album.is_empty());
-    let next = positions.map(|positions| {
-        positions
-            .iter()
-            .enumerate()
-            .map(|(i, &p)| {
-                let track = known.get(offset + i).and_then(Option::as_ref);
-                (p, render::queue_label(track, &queue[p]))
-            })
-            .collect()
-    });
+    let next = positions
+        .iter()
+        .enumerate()
+        .map(|(i, &p)| {
+            let track = known.get(offset + i).and_then(Option::as_ref);
+            (p, render::queue_label(track, &queue[p]))
+        })
+        .collect();
     Labels { album, next }
 }
 
@@ -197,7 +166,7 @@ pub fn run(once: bool, interval: f64) {
         print!("{HIDE_CURSOR}");
     }
 
-    type LabelKey = (Option<String>, Option<usize>, bool, String, Vec<String>);
+    type LabelKey = (Option<String>, Option<usize>, String, Vec<String>);
     let mut labels_for: Option<(LabelKey, Labels)> = None;
     let mut previous_height = 0usize;
     loop {
@@ -211,7 +180,6 @@ pub fn run(once: bool, interval: f64) {
         let key: LabelKey = (
             status.path.clone(),
             status.queue_position,
-            status.shuffle,
             status.repeat.clone(),
             queue.clone(),
         );
@@ -223,7 +191,7 @@ pub fn run(once: bool, interval: f64) {
         let mut text = frame(
             ui,
             &status,
-            labels.next.as_deref(),
+            &labels.next,
             queue.len(),
             labels.album.as_deref(),
         );
@@ -295,16 +263,11 @@ mod tests {
 
     /// A frame labelled by file name, the way it looks for untagged files.
     fn frame_for(ui: &Ui, status: &PlaybackStatus, q: &[String], album: Option<&str>) -> String {
-        let next = match upcoming(status, q.len()) {
-            Upcoming::Positions(positions) => Some(
-                positions
-                    .into_iter()
-                    .map(|p| (p, render::queue_label(None, &q[p])))
-                    .collect::<Vec<_>>(),
-            ),
-            Upcoming::Shuffled => None,
-        };
-        frame(ui, status, next.as_deref(), q.len(), album)
+        let next: Vec<_> = upcoming(status, q.len())
+            .into_iter()
+            .map(|p| (p, render::queue_label(None, &q[p])))
+            .collect();
+        frame(ui, status, &next, q.len(), album)
     }
 
     #[test]
@@ -380,21 +343,20 @@ mod tests {
     fn the_peek_wraps_to_the_start_only_under_repeat_all() {
         let mut s = status();
         s.queue_position = Some(2);
-        assert_eq!(upcoming(&s, 3), Upcoming::Positions(vec![]));
+        assert_eq!(upcoming(&s, 3), Vec::<usize>::new());
         s.repeat = "all".into();
-        assert_eq!(upcoming(&s, 3), Upcoming::Positions(vec![0, 1]));
+        assert_eq!(upcoming(&s, 3), vec![0, 1]);
         // A lone track under repeat all is not its own "next".
         s.queue_position = Some(0);
-        assert_eq!(upcoming(&s, 1), Upcoming::Positions(vec![]));
+        assert_eq!(upcoming(&s, 1), Vec::<usize>::new());
     }
 
     #[test]
-    fn a_shuffled_queue_does_not_guess_what_plays_next() {
+    fn a_shuffled_queue_peeks_in_queue_order() {
         let mut s = status();
         s.shuffle = true;
-        assert_eq!(upcoming(&s, 5), Upcoming::Shuffled);
+        assert_eq!(upcoming(&s, 5), vec![1, 2]);
         let out = frame_for(&at(100), &s, &queue(&["current", "next"]), None);
-        assert!(!out.contains("next.flac"));
-        assert!(out.contains("Shuffle is on"));
+        assert!(out.contains("next.flac"));
     }
 }

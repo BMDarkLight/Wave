@@ -177,8 +177,9 @@ playback ended up after the change, so a second request is never needed:
 {"message": "Paused.", "ok": true, "status": {"state": "paused", "...": "..."}}
 ```
 
-`wave --json queue list` gives the queue in stored order, with the same 0-based
-position. With shuffle on, tracks play in a different order than listed.
+`wave --json queue list` gives the queue in play order, with the same 0-based
+position. Turning shuffle on reorders the queue, and turning it off restores
+the previous order.
 
 ```json
 {"queue_position": 0, "tracks": ["/music/a.flac", "/music/b.flac"]}
