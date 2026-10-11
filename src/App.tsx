@@ -2336,6 +2336,10 @@ function App() {
               canRemoveFromPlaylist={
                 !browsing && !isLibraryPlaylistName(selectedPlaylist?.name)
               }
+              // Already on that album or artist page, unless the menu came
+              // from Now Playing on top of it.
+              canGoToAlbum={!viewingAlbum || mobilePlayerOpen}
+              canGoToArtist={!viewingArtist || mobilePlayerOpen}
               onPlayNext={handlePlayNext}
               onAddToQueue={handleAddToQueue}
               onAddToPlaylist={setAddToPlaylistTrack}

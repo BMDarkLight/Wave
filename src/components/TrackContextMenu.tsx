@@ -28,6 +28,8 @@ export default function TrackContextMenu({
   onClose,
   canAddToPlaylist,
   canRemoveFromPlaylist,
+  canGoToAlbum = true,
+  canGoToArtist = true,
   onPlayNext,
   onAddToQueue,
   onAddToPlaylist,
@@ -42,6 +44,10 @@ export default function TrackContextMenu({
   onClose: () => void;
   canAddToPlaylist: boolean;
   canRemoveFromPlaylist: boolean;
+  /** Off on an album page, which is already the song's album. */
+  canGoToAlbum?: boolean;
+  /** Off on an artist page, which is already the song's artist. */
+  canGoToArtist?: boolean;
   onPlayNext: (path: string) => void;
   onAddToQueue: (path: string) => void;
   onAddToPlaylist: (path: string) => void;
@@ -97,7 +103,7 @@ export default function TrackContextMenu({
           <BiEditAlt /> Edit Metadata...
         </button>
       )}
-      {track.album && (
+      {canGoToAlbum && track.album && (
         <button
           type="button"
           role="menuitem"
@@ -109,7 +115,7 @@ export default function TrackContextMenu({
           <BiAlbum /> Go to Album
         </button>
       )}
-      {track.artist && (
+      {canGoToArtist && track.artist && (
         <button
           type="button"
           role="menuitem"
