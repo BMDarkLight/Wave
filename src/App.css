@@ -3423,10 +3423,28 @@ img.queue-thumb {
   }
 }
 
-.shuffle-btn.active,
-.repeat-btn.active,
 .sleep-timer-btn.active {
   color: var(--green-hot);
+}
+
+/* Shuffle and repeat read as off or on at a glance: off is dim, on is a lit
+   white icon on a filled pill with a soft glow. */
+.shuffle-btn,
+.repeat-btn {
+  color: rgba(255, 255, 255, 0.34);
+}
+
+.shuffle-btn.active,
+.repeat-btn.active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 0 14px rgba(255, 255, 255, 0.16);
+}
+
+/* Hovering an off button must not light it up like an on one. */
+.shuffle-btn:hover:not(:disabled):not(.active),
+.repeat-btn:hover:not(:disabled):not(.active) {
+  color: rgba(255, 255, 255, 0.6);
 }
 
 /* The countdown sits beside the moon, so the button grows sideways. */
