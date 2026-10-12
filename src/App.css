@@ -639,7 +639,7 @@ img.track-thumb {
 /* Desktop has the sidebar for getting back and its own search, so the
    phone layout's back arrow and list search only show there. */
 .playlist-back-btn,
-.playlist-filter-btn {
+.hero-actions .playlist-filter-btn {
   display: none;
 }
 
