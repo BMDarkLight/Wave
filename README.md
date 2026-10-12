@@ -274,7 +274,7 @@ directly — no copying your music into app storage.
   player, and a full **Now Playing** sheet you can drag to dismiss. The
   Library tab gathers all songs, favorites, albums, artists, listening
   history and playlists in one list, and Settings opens from the gear on
-  Home or Library.
+  Library.
 - When a song has synced lyrics, tap the cover to read along, or keep watching
   the cover and Now Playing turns to the lyrics as the first verse starts.
 - **Glass effect** and **Animations** switches in Settings swap the blurred
@@ -283,24 +283,34 @@ directly — no copying your music into app storage.
   instead of sliding them.
 - **SAF folder picker** and scanning — grant a folder once, keep your files where
   they are.
-- **Media session** bridge: notification controls, lock screen, Bluetooth, and
-  Android Auto-style transport events.
+- **Background playback that behaves like a music player.** Music keeps
+  playing with the screen off and after you swipe Wave out of recents; open it
+  again and the UI comes back to what is playing. Pause, then swipe the
+  notification away, and Wave closes for good with your queue saved for next
+  time.
+- **Media notification and lock screen** with the Wave icon, cover art,
+  a seek bar and shuffle / repeat buttons. The same controls answer Bluetooth
+  headphones, car head units (title, artist and position over AVRCP) and
+  headset buttons.
+- **Interruptions handled**: a call or a navigation prompt holds the music
+  and it picks up again afterwards; unplugging headphones or another app
+  starting playback pauses it.
 - Android back button is trapped so it closes panels and sheets before leaving.
 - Built for `arm64-v8a` and `armeabi-v7a`, `minSdkVersion 24`.
 
 <div align="center">
 
-<img src="docs/screenshots/android-home.png" alt="Android — Home" width="30%">
-<img src="docs/screenshots/android-library.png" alt="Android — Library" width="30%">
-<img src="docs/screenshots/android-now-playing.png" alt="Android — Now Playing" width="30%">
+<img src="docs/screenshots/android-home.png" alt="Android: Home" width="30%">
+<img src="docs/screenshots/android-library.png" alt="Android: Library" width="30%">
+<img src="docs/screenshots/android-now-playing.png" alt="Android: Now Playing" width="30%">
 
-<img src="docs/screenshots/android-lyrics.png" alt="Android — Synced lyrics" width="30%">
-<img src="docs/screenshots/android-queue.png" alt="Android — Up next" width="30%">
-<img src="docs/screenshots/android-nav.png" alt="Android — Navigation drawer" width="30%">
+<img src="docs/screenshots/android-lyrics.png" alt="Android: Synced lyrics" width="30%">
+<img src="docs/screenshots/android-queue.png" alt="Android: Up next" width="30%">
+<img src="docs/screenshots/android-albums.png" alt="Android: Albums" width="30%">
 
-<img src="docs/screenshots/android-search.png" alt="Android — Library search" width="30%">
-<img src="docs/screenshots/android-sources.png" alt="Android — Remote sources" width="30%">
-<img src="docs/screenshots/android-eq.png" alt="Android — Equalizer and playback settings" width="30%">
+<img src="docs/screenshots/android-search.png" alt="Android: Library search" width="30%">
+<img src="docs/screenshots/android-sources.png" alt="Android: Remote sources" width="30%">
+<img src="docs/screenshots/android-eq.png" alt="Android: Bass, treble, speed and equalizer" width="30%">
 
 </div>
 
@@ -550,7 +560,8 @@ Wave/
 ├── src-tauri/                  # Rust/Tauri backend
 │   ├── Cargo.toml
 │   ├── tauri.conf.json
-│   ├── android-src/            # Java sources copied into gen/android by CI
+│   ├── android-src/            # Android Java, resources and keep rules (applied by scripts/configure-android.sh)
+│   ├── vendor/                 # Vendored tauri-plugin-media-session (Android media session + notification)
 │   └── src/
 │       ├── app/                # App paths, settings, single-instance runtime logic
 │       ├── android/            # Android JNI: ExoPlayer, SAF, media bridge
@@ -572,6 +583,7 @@ Wave/
 │       ├── tag_edit.rs         # Writing edited tags back to audio files
 │       ├── lib.rs              # Tauri backend composition root
 │       └── main.rs             # Native process entry point
+├── scripts/                    # Android project setup and release signing helpers
 ├── docs/
 │   ├── backend/                # Backend API and architecture documentation
 │   └── screenshots/            # Images used by this README
@@ -635,14 +647,55 @@ Packaging inputs (desktop entry, installer hooks, distro manifests) live in
 
 ### Android
 
+Prerequisites on top of the ones above:
+
+- **Android SDK** with a platform and build tools, and the **NDK** (r27 or
+  newer). Point `ANDROID_HOME` at the SDK and `NDK_HOME` at the NDK.
+- **JDK 17** or newer for Gradle.
+- **CMake** and **Ninja** on `PATH`; `opusic-sys` builds the Opus library with
+  them for Android targets.
+- The Rust targets, installed through rustup:
+
 ```bash
-npm run android:init     # once, to generate the Gradle project
-npm run android:dev      # run on a connected device or emulator
-npm run android:build    # produce an APK / AAB
+rustup target add aarch64-linux-android armv7-linux-androideabi
 ```
 
-Requires the Android SDK + NDK and the `aarch64-linux-android` /
-`armv7-linux-androideabi` Rust targets.
+Then generate the Gradle project and apply Wave's Android parts to it:
+
+```bash
+npm run android:init
+bash scripts/configure-android.sh
+```
+
+`tauri android init` alone produces a stock Tauri project with no audio engine.
+`configure-android.sh` adds Wave's Java sources, icons, manifest permissions,
+the Media3 dependencies and the ProGuard keep rules (the same step CI runs). Run
+it again after every `android:init` and after editing anything under
+`src-tauri/android-src/`. Then:
+
+```bash
+npm run android:dev                                  # run on a connected device or emulator
+npx tauri android build --target aarch64 --apk       # build an APK for 64-bit phones
+```
+
+APKs land in `src-tauri/gen/android/app/build/outputs/apk/<abi>/release/`.
+`--target aarch64 armv7` also covers older 32-bit phones. With no `--target`
+Tauri builds all four ABIs, including the x86 ones emulators use, which need
+those Rust targets installed as well.
+
+To sign a release build, set `ANDROID_KEY_BASE64` (the keystore, base64
+encoded), `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` (plus
+`ANDROID_STORE_PASSWORD` if it differs) and run
+`bash scripts/setup-android-signing.sh` before building. CI does the same with
+repository secrets.
+
+If Rust fails with `can't find crate for 'core'` for an Android target, the
+`cargo` on `PATH` is not rustup's (a Homebrew Rust, for example) and has no
+Android standard library. Put `~/.cargo/bin` first on `PATH`.
+
+How playback, the media session and background play work on Android, and what
+to check on a phone after changing them:
+[`docs/backend/android.md`](docs/backend/android.md).
 
 ### Optional: remote sources
 
