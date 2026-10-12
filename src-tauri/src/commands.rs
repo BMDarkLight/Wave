@@ -335,8 +335,8 @@ pub(crate) fn tick_media_session(app: &tauri::AppHandle) {
     }
 }
 
-/// Whether a track is playing right now. Decides if the process stays alive
-/// when Android destroys the UI.
+/// Whether a track is playing right now, or only held for a call and about
+/// to resume. Decides if the process stays alive when Android destroys the UI.
 #[cfg(target_os = "android")]
 pub(crate) fn is_playback_active(app: &tauri::AppHandle) -> bool {
     let Some(state) = app.try_state::<PlayerState>() else {
@@ -346,7 +346,9 @@ pub(crate) fn is_playback_active(app: &tauri::AppHandle) -> bool {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
     };
-    guard.as_ref().is_some_and(|player| player.is_playing())
+    guard
+        .as_ref()
+        .is_some_and(|player| player.is_playing() || player.is_output_suspended())
 }
 
 /// End the current listen session and start one for `record_path`.

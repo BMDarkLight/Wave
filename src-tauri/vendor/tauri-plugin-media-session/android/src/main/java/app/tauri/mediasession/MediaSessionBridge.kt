@@ -48,6 +48,12 @@ object MediaSessionBridge {
         )
     }
 
+    /** Called by the player when it holds or releases output for a call. */
+    @JvmStatic
+    fun setTransientPause(held: Boolean) {
+        MediaSessionState.setTransientPause(held)
+    }
+
     @JvmStatic
     fun clear() {
         MediaSessionState.stop()

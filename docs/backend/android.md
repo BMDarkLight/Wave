@@ -124,6 +124,7 @@ Notification behaviour:
 
 - Updates are coalesced (a track change is several calls) and held up to 500 ms for the new cover, so the shade never flashes the old art under a new title.
 - The small icon is `drawable/ic_notification` from `android-src/res`. Without it the notification falls back to the template's `ic_launcher_foreground`, which is the stock Android robot.
+- Held for a call (transient focus loss): the session shows paused but the service stays in the foreground. ExoPlayer resumes on its own when the call ends, with no user action, and Android refuses to start a foreground service from the background without one. `WaveExoPlayer` flags the hold to `MediaSessionState` before telling the engine.
 - Paused: the service leaves the foreground right away and the notification stays, now dismissable (Media3's `stopForeground(false)`). Resuming from the notification or a media button gets a foreground-start exemption from the system; if Android still refuses, playback runs and the notification is posted without the foreground guarantee.
 - Dismissing the paused notification, or a stop from a car, headset or the lock screen, pauses, clears the controls and keeps the queue. With the UI closed, the process then exits.
 

@@ -188,7 +188,13 @@ public final class WaveExoPlayer {
 
         @Override
         public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
-            if (self != player || playWhenReady) {
+            if (self != player) {
+                return;
+            }
+            // Any change of intent (the user or the system playing or
+            // pausing) ends a transient hold.
+            setTransientPause(false);
+            if (playWhenReady) {
                 return;
             }
             // ExoPlayer paused on its own: another app took audio focus for
@@ -210,9 +216,13 @@ public final class WaveExoPlayer {
             }
             // Transient focus loss (a call, a navigation prompt): ExoPlayer
             // holds playback and resumes by itself afterwards. The engine only
-            // needs to stop its clock in the meantime.
-            app.bmdarklight.wave.MediaNativeBridge.dispatch(
-                    reason == Player.PLAYBACK_SUPPRESSION_REASON_NONE ? "unsuspend" : "suspend");
+            // needs to stop its clock in the meantime. Flag the hold to the
+            // media session first, so it keeps the foreground service through
+            // the call: the resume afterwards comes with no user action, and
+            // Android would refuse to start the service again then.
+            boolean held = reason != Player.PLAYBACK_SUPPRESSION_REASON_NONE && self.getPlayWhenReady();
+            setTransientPause(held);
+            app.bmdarklight.wave.MediaNativeBridge.dispatch(held ? "suspend" : "unsuspend");
         }
 
         @Override
@@ -246,6 +256,14 @@ public final class WaveExoPlayer {
         @Override
         public void onAudioSessionIdChanged(int audioSessionId) {
             attachEqualizerForPlayer(self, /* crossfade= */ self == crossfadePlayer);
+        }
+    }
+
+    private static void setTransientPause(boolean held) {
+        try {
+            app.tauri.mediasession.MediaSessionBridge.setTransientPause(held);
+        } catch (Throwable t) {
+            Log.w(TAG, "transient pause update failed: " + t.getMessage());
         }
     }
 

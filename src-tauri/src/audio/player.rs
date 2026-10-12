@@ -1571,6 +1571,12 @@ impl AudioPlayer {
         }
     }
 
+    /// True while output is held for a transient focus loss.
+    #[cfg(target_os = "android")]
+    pub fn is_output_suspended(&self) -> bool {
+        self.output_suspended && self.current_path.is_some()
+    }
+
     pub fn stop(&mut self) -> Result<(), AudioError> {
         #[cfg(target_os = "android")]
         {

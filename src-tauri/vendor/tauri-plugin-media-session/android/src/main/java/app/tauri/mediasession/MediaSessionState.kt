@@ -100,6 +100,9 @@ internal object MediaSessionState {
     private var position = 0.0
     private var playbackSpeed = 1.0
     private var isPlaying = false
+    // Output held by a transient audio focus loss (a call, a navigation
+    // prompt). The session shows paused, but playback will resume by itself.
+    private var transientPause = false
     private var canPrev = false
     private var canNext = false
     private var canSeek = true
@@ -123,9 +126,19 @@ internal object MediaSessionState {
     var hasMedia = false
         private set
 
-    /** True while that track is playing. Safe to read from any thread. */
+    /**
+     * True while the service has to stay in the foreground: the track is
+     * playing, or only held for a call and about to resume on its own. Safe to
+     * read from any thread.
+     *
+     * A held track must keep the foreground. When the call ends ExoPlayer
+     * resumes without any tap or button press, and Android refuses to start a
+     * foreground service from the background without one. Media3 keeps the
+     * foreground for the same reason (it goes by playWhenReady, which stays
+     * true through a transient focus loss).
+     */
     @Volatile
-    var playing = false
+    var foregroundWanted = false
         private set
 
     fun init(context: Context) {
@@ -153,6 +166,14 @@ internal object MediaSessionState {
         main { applyTimeline(newPosition, newDuration, newSpeed) }
 
     fun stop() = main { stopInternal() }
+
+    /** The player is holding output for a transient focus loss, or let go. */
+    fun setTransientPause(held: Boolean) = main {
+        if (transientPause == held) return@main
+        transientPause = held
+        foregroundWanted = hasMedia && (isPlaying || transientPause)
+        if (hasMedia) schedulePublish()
+    }
 
     /**
      * Take the session down synchronously. Main thread only; for callers that
@@ -188,7 +209,7 @@ internal object MediaSessionState {
         u.artworkUrl?.let { setArtworkUrl(it) }
 
         hasMedia = title.isNotBlank() || artist.isNotBlank()
-        playing = hasMedia && isPlaying
+        foregroundWanted = hasMedia && (isPlaying || transientPause)
         if (!hasMedia) {
             stopInternal()
             return
@@ -246,7 +267,8 @@ internal object MediaSessionState {
         mainHandler.removeCallbacks(publishRunnable)
         publishScheduled = false
         hasMedia = false
-        playing = false
+        foregroundWanted = false
+        transientPause = false
 
         // The session object is kept and only deactivated: releasing and
         // recreating it makes Bluetooth and car head units drop the player.
@@ -335,10 +357,10 @@ internal object MediaSessionState {
             publishedMetadataKey = metadataKey
         }
 
-        val notificationKey = "$metadataKey\u0000$isPlaying\u0000$canPrev\u0000$canNext\u0000$shuffleEnabled\u0000$repeatMode"
+        val notificationKey = "$metadataKey\u0000$isPlaying\u0000$transientPause\u0000$canPrev\u0000$canNext\u0000$shuffleEnabled\u0000$repeatMode"
         if (notificationKey == publishedNotificationKey) return
         publishedNotificationKey = notificationKey
-        MediaSessionCleanupService.publish(ctx, buildNotification(ctx, s, art), isPlaying)
+        MediaSessionCleanupService.publish(ctx, buildNotification(ctx, s, art), foregroundWanted)
     }
 
     private fun durationMs(): Long = (duration * 1000.0).toLong()
@@ -467,8 +489,9 @@ internal object MediaSessionState {
             .setShowWhen(false)
             .setSilent(true)
             .setColorized(true)
-            // Dismissable once paused; swiping it away stops the session.
-            .setOngoing(isPlaying)
+            // Dismissable once paused; swiping it away stops the session. A
+            // track held for a call is not really paused, so keep it pinned.
+            .setOngoing(isPlaying || transientPause)
             .setDeleteIntent(actionIntent(ctx, "dismiss", RC_DISMISS))
 
         if (art != null) builder.setLargeIcon(art)

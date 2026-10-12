@@ -24,6 +24,8 @@ import androidx.core.content.ContextCompat
  *   dismissable straight away (Media3 does the same with
  *   `stopForeground(false)`). Resuming from the notification or a media button
  *   comes with a foreground-start exemption from the system.
+ * - Held for a call: stays in the foreground, because the resume afterwards
+ *   has no user action behind it and would not be allowed to start it again.
  * - Task swiped away: playback keeps going if something is playing; otherwise
  *   the service and notification go away with the app.
  *
@@ -45,15 +47,15 @@ class MediaSessionCleanupService : Service() {
         private var notificationShown = false
 
         /** Show [notification], starting or updating the service as needed. */
-        internal fun publish(context: Context, notification: Notification, playing: Boolean) {
+        internal fun publish(context: Context, notification: Notification, foreground: Boolean) {
             val svc = instance
             if (svc != null) {
-                svc.apply(notification, playing)
+                svc.apply(notification, foreground)
                 return
             }
             pending = notification
             if (startRequested) return
-            if (!playing) {
+            if (!foreground) {
                 // A paused track with no service (say, the queue restored on
                 // launch): only refresh a notification that is already up.
                 if (notificationShown) notify(context, notification)
@@ -66,10 +68,11 @@ class MediaSessionCleanupService : Service() {
                 )
                 startRequested = true
             } catch (t: Throwable) {
-                // Background start refused (Android 12+). Playback still runs;
-                // show the controls without the foreground guarantee.
+                // Android 12+ refuses a foreground start from the background
+                // without a user action behind it. Handled, not a crash:
+                // playback still runs, the controls are posted without the
+                // foreground guarantee, and the next state change retries.
                 Log.w(TAG, "startForegroundService refused: ${t.message}")
-                MediaSessionState.recordHostError("MediaSessionCleanupService.start", t)
                 notify(context, notification)
             }
         }
@@ -136,7 +139,7 @@ class MediaSessionCleanupService : Service() {
             shutDown()
             return START_NOT_STICKY
         }
-        apply(notification, MediaSessionState.playing)
+        apply(notification, MediaSessionState.foregroundWanted)
         // Never sticky: a restart without the app's runtime has nothing to play.
         return START_NOT_STICKY
     }
@@ -144,7 +147,7 @@ class MediaSessionCleanupService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (MediaSessionState.playing || MediaSessionPlugin.isPlaybackActive()) {
+        if (MediaSessionState.foregroundWanted || MediaSessionPlugin.isPlaybackActive()) {
             Log.d(TAG, "task removed while playing, playback continues")
             return
         }
@@ -163,9 +166,9 @@ class MediaSessionCleanupService : Service() {
         super.onDestroy()
     }
 
-    internal fun apply(notification: Notification, playing: Boolean) {
+    internal fun apply(notification: Notification, foreground: Boolean) {
         pending = notification
-        if (playing) {
+        if (foreground) {
             enterForeground(notification)
             acquireWakeLock()
             return
@@ -202,7 +205,6 @@ class MediaSessionCleanupService : Service() {
             // background after the paused window ran out. Keep the controls
             // visible; the next resume from the app or notification recovers.
             Log.w(TAG, "startForeground refused: ${t.message}")
-            MediaSessionState.recordHostError("MediaSessionCleanupService.startForeground", t)
             notify(this, notification)
         }
     }
