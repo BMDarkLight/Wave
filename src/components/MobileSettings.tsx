@@ -39,6 +39,7 @@ import {
   BiVolumeFull,
   BiPulse,
   BiPalette,
+  BiLink,
 } from "react-icons/bi";
 import {
   listMediaFolders,
@@ -225,6 +226,8 @@ interface MobileSettingsProps {
   onGaplessChange: (enabled: boolean) => void;
   volumeNormalizationEnabled: boolean;
   onVolumeNormalizationChange: (enabled: boolean) => void;
+  songCouplingEnabled: boolean;
+  onSongCouplingChange: (enabled: boolean) => void;
   sourceSettings: SourceSettings;
   onSourceSettingsChange: (settings: SourceSettings) => void;
   currentOutputDevice: string;
@@ -270,6 +273,8 @@ export default function MobileSettings({
   onGaplessChange,
   volumeNormalizationEnabled,
   onVolumeNormalizationChange,
+  songCouplingEnabled,
+  onSongCouplingChange,
   sourceSettings,
   onSourceSettingsChange,
   currentOutputDevice,
@@ -923,6 +928,29 @@ export default function MobileSettings({
                   Even out volume across your queue by boosting quiet tracks and
                   turning down loud ones toward the median loudness, without
                   clipping.
+                </span>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <section className="mset-section">
+          <h2>
+            <BiLink /> Song coupling
+          </h2>
+          <div className="mset-card mset-playback-card">
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={songCouplingEnabled}
+                onChange={(event) => onSongCouplingChange(event.target.checked)}
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Couple songs</span>
+                <span className="mset-gapless-hint">
+                  Link two songs so they always play back to back, in the order
+                  you pick, with shuffle on or off. Couple songs from any song's
+                  menu.
                 </span>
               </span>
             </label>

@@ -843,6 +843,7 @@ mod tests {
             bit_depth: None,
             lyrics: None,
             lyrics_source: None,
+            has_synced_lyrics: false,
             cover_art_data_url: None,
             cover_art_mime: None,
             cover_art_source: None,

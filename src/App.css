@@ -7926,3 +7926,47 @@ div.album-hero-cover {
     display: none !important;
   }
 }
+
+/* Couple With... reuses the library picker, with a line of explanation and
+   a two-way switch for which song plays first. */
+.couple-dialog-hint {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.couple-order {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.couple-order button {
+  min-width: 0;
+  padding: 8px 10px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: 0.16s ease;
+}
+
+.couple-order button.active {
+  background: var(--text);
+  color: var(--bg);
+}
+
+/* Nothing to mark: the icon row takes no room after the text. */
+.track-meta-icons:empty {
+  display: none;
+}

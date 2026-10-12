@@ -82,6 +82,21 @@ pub struct AppSettings {
     /// is protected (playing or queued).
     #[serde(default = "default_source_cache_limit_mb")]
     pub source_cache_limit_mb: u64,
+    /// Keep coupled songs back to back in the queue.
+    #[serde(default)]
+    pub song_coupling_enabled: bool,
+    /// Coupled songs, kept even while coupling is off so turning it back on
+    /// brings them back.
+    #[serde(default)]
+    pub song_couples: Vec<SongCouple>,
+}
+
+/// Two songs, by path, that always play back to back: `first`, then
+/// `second`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SongCouple {
+    pub first: String,
+    pub second: String,
 }
 
 fn default_source_cache_limit_mb() -> u64 {
@@ -137,6 +152,8 @@ impl Default for AppSettings {
             spotify_client_id: None,
             jamendo_client_id: None,
             source_cache_limit_mb: default_source_cache_limit_mb(),
+            song_coupling_enabled: false,
+            song_couples: Vec::new(),
         }
     }
 }
@@ -182,6 +199,33 @@ impl AppSettings {
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize settings: {e}"))?;
         fs::write(path, json).map_err(|e| format!("Failed to write settings: {e}"))
+    }
+
+    /// The pairs the player should keep together: none while coupling is off.
+    pub fn active_song_couples(&self) -> Vec<(String, String)> {
+        if !self.song_coupling_enabled {
+            return Vec::new();
+        }
+        self.song_couples
+            .iter()
+            .map(|c| (c.first.clone(), c.second.clone()))
+            .collect()
+    }
+
+    /// Couple two songs. A song belongs to one couple at a time, so any
+    /// couple either one was already in is dropped.
+    pub fn couple_songs(&mut self, first: String, second: String) {
+        self.uncouple_song(&first);
+        self.uncouple_song(&second);
+        if first != second {
+            self.song_couples.push(SongCouple { first, second });
+        }
+    }
+
+    /// Drop the couple `path` belongs to, if any.
+    pub fn uncouple_song(&mut self, path: &str) {
+        self.song_couples
+            .retain(|c| c.first != path && c.second != path);
     }
 
     pub fn toggle_close_action(&mut self) {
@@ -281,5 +325,33 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         let loaded: AppSettings = serde_json::from_str(&json).unwrap();
         assert!(loaded.reduce_motion_enabled);
+    }
+
+    #[test]
+    fn a_song_is_in_one_couple_at_a_time() {
+        let mut settings = AppSettings::default();
+        settings.couple_songs("a".into(), "b".into());
+        settings.couple_songs("c".into(), "a".into());
+        assert_eq!(
+            settings.song_couples,
+            [SongCouple {
+                first: "c".into(),
+                second: "a".into()
+            }]
+        );
+        settings.couple_songs("d".into(), "d".into());
+        assert_eq!(settings.song_couples.len(), 1);
+    }
+
+    #[test]
+    fn couples_only_reach_the_player_while_coupling_is_on() {
+        let mut settings = AppSettings::default();
+        settings.couple_songs("a".into(), "b".into());
+        assert!(settings.active_song_couples().is_empty());
+        settings.song_coupling_enabled = true;
+        assert_eq!(
+            settings.active_song_couples(),
+            [("a".to_string(), "b".to_string())]
+        );
     }
 }

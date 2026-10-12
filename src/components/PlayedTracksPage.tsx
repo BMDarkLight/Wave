@@ -22,6 +22,7 @@ import type { ContextMenuAnchor } from "./ContextMenu";
 import MobileFilterField from "./MobileFilterField";
 import TrackMenuButton from "./TrackMenuButton";
 import VirtualizedList from "./VirtualizedList";
+import CoupleMarker from "./CoupleMarker";
 
 const formatTime = (seconds?: number | null) => {
   if (!seconds || !Number.isFinite(seconds)) return "0:00";
@@ -301,6 +302,9 @@ export default function PlayedTracksPage({
                         <div className="track-meta">
                           {track.artist || "Unknown"}
                           {track.album ? ` · ${track.album}` : ""}
+                          <span className="track-meta-icons">
+                            <CoupleMarker path={track.path} />
+                          </span>
                         </div>
                       </div>
                     </div>

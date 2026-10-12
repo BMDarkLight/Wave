@@ -59,7 +59,12 @@ export function useLyricsPanel({
     setPlaylist((prev) =>
       prev.map((t) =>
         t.path === path
-          ? { ...t, lyrics, lyrics_source: lyricsSource ?? t.lyrics_source }
+          ? {
+              ...t,
+              lyrics,
+              lyrics_source: lyricsSource ?? t.lyrics_source,
+              has_synced_lyrics: hasTimestamps(lyrics),
+            }
           : t,
       ),
     );

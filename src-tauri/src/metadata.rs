@@ -60,6 +60,10 @@ pub struct Track {
     pub bit_depth: Option<i32>,
     pub lyrics: Option<String>,
     pub lyrics_source: Option<String>,
+    /// Whether the lyrics are synced to the music. Set even in list rows,
+    /// which leave the lyrics text itself out to stay small.
+    #[serde(default)]
+    pub has_synced_lyrics: bool,
     /// Absolute thumb path (or legacy data URL). Never a full-size image in list payloads.
     pub cover_art_data_url: Option<String>,
     pub cover_art_mime: Option<String>,
@@ -269,6 +273,7 @@ pub fn extract_track_with_options(
         sample_rate,
         channels,
         bit_depth,
+        has_synced_lyrics: lyrics.as_deref().is_some_and(crate::lyrics::is_synced),
         lyrics,
         lyrics_source,
         cover_art_data_url: None,
@@ -351,6 +356,7 @@ fn extract_track_content_uri(
         bit_depth: None,
         lyrics: None,
         lyrics_source: None,
+        has_synced_lyrics: false,
         cover_art_data_url: None,
         cover_art_mime: None,
         cover_art_source: None,
@@ -747,6 +753,7 @@ pub fn enrich_lyrics_online(track: &mut Track) {
     if let Some(lyrics) = lyrics {
         track.lyrics = Some(lyrics.to_string());
         track.lyrics_source = Some("lrclib".to_string());
+        track.has_synced_lyrics = crate::lyrics::is_synced(lyrics);
     }
 }
 

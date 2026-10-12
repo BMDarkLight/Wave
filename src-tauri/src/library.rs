@@ -25,6 +25,8 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 /// Lean list/playlist select: no lyrics / acoustid blobs; cover is album_art thumb path.
+/// Lyrics are left out, but whether they are synced (an LRC `[mm:ss` tag or a
+/// TTML `begin=`, as `hasTimestamps` checks in the UI) is kept for the list icon.
 pub(crate) const TRACK_SELECT_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.artist, t.album, t.album_artist, t.genre,
                         t.year, t.track_number, t.disc_number, t.format, t.duration_seconds,
                         t.sample_rate, t.channels, t.bit_depth,
@@ -32,7 +34,10 @@ pub(crate) const TRACK_SELECT_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.
                         aa.thumb_path, COALESCE(aa.mime, t.cover_art_mime), t.cover_art_source,
                         t.fingerprint_sha256, NULL AS acoustid_fingerprint, t.musicbrainz_recording_id,
                         t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri, t.album_art_id,
-                        t.source_provider, t.source_state";
+                        t.source_provider, t.source_state,
+                        (t.lyrics GLOB '*[[][0-9]:[0-9][0-9]*' OR t.lyrics GLOB '*[[][0-9][0-9]:[0-9][0-9]*'
+                         OR t.lyrics GLOB '*[[][0-9][0-9][0-9]:[0-9][0-9]*'
+                         OR t.lyrics LIKE '%begin=%') IS 1 AS has_synced_lyrics";
 
 /// Full track row including lyrics (lyrics panel / detail).
 pub(crate) const TRACK_DETAIL_COLUMNS: &str =
@@ -42,7 +47,10 @@ pub(crate) const TRACK_DETAIL_COLUMNS: &str =
                         aa.thumb_path, COALESCE(aa.mime, t.cover_art_mime), t.cover_art_source,
                         t.fingerprint_sha256, t.acoustid_fingerprint, t.musicbrainz_recording_id,
                         t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri, t.album_art_id,
-                        t.source_provider, t.source_state";
+                        t.source_provider, t.source_state,
+                        (t.lyrics GLOB '*[[][0-9]:[0-9][0-9]*' OR t.lyrics GLOB '*[[][0-9][0-9]:[0-9][0-9]*'
+                         OR t.lyrics GLOB '*[[][0-9][0-9][0-9]:[0-9][0-9]*'
+                         OR t.lyrics LIKE '%begin=%') IS 1 AS has_synced_lyrics";
 
 pub(crate) const TRACK_FROM: &str = "tracks t LEFT JOIN album_art aa ON aa.id = t.album_art_id";
 
@@ -3721,6 +3729,7 @@ pub(crate) fn row_to_track(row: &rusqlite::Row<'_>, cover_root: &Path) -> rusqli
         bit_depth: row.get(15)?,
         lyrics: row.get(16)?,
         lyrics_source: row.get(17)?,
+        has_synced_lyrics: row.get(31)?,
         cover_art_data_url,
         cover_art_mime: row.get(19)?,
         cover_art_source: row.get(20)?,
@@ -5670,6 +5679,7 @@ mod tests {
             bit_depth: None,
             lyrics: None,
             lyrics_source: None,
+            has_synced_lyrics: false,
             cover_art_data_url: None,
             cover_art_mime: None,
             cover_art_source: None,
@@ -5803,6 +5813,44 @@ mod tests {
         assert_eq!(updated.artist, "Artist");
         assert_eq!(updated.album, "Album");
         assert_eq!(updated.lyrics.as_deref(), Some("la la la"));
+    }
+
+    #[test]
+    fn list_rows_say_which_tracks_have_synced_lyrics_without_carrying_them() {
+        let library = open_test_library().expect("library");
+        let rows = [
+            ("lrc", Some("[00:12.30]la la la\n[00:15.00]la la")),
+            ("long", Some("[123:04]a very long mix")),
+            (
+                "ttml",
+                Some(r#"<tt><body><p begin="1.0s">la</p></body></tt>"#),
+            ),
+            ("plain", Some("la la la")),
+            ("tagged", Some("[ar:Someone]\nla la la")),
+            ("none", None),
+        ];
+        {
+            let connection = library.lock_connection().expect("connection");
+            for (name, lyrics) in rows {
+                let mut track = sample_track(name, &format!("/music/{name}.mp3"));
+                track.lyrics = lyrics.map(str::to_string);
+                upsert_track(&*connection, &track).expect("upsert");
+            }
+        }
+
+        let paths: Vec<String> = rows
+            .iter()
+            .map(|(name, _)| format!("/music/{name}.mp3"))
+            .collect();
+        let synced: Vec<bool> = library
+            .get_tracks_by_paths(&paths)
+            .expect("rows")
+            .into_iter()
+            .map(|t| t.unwrap().has_synced_lyrics)
+            .collect();
+        assert_eq!(synced, [true, true, true, false, false, false]);
+        let lrc = library.get_tracks_by_paths(&paths[..1]).expect("row");
+        assert_eq!(lrc[0].as_ref().unwrap().lyrics, None);
     }
 
     #[test]

@@ -12,13 +12,13 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::app_settings::{AppSettings, AppSettingsState};
+use crate::app_settings::{AppSettings, AppSettingsState, SongCouple};
 use crate::audio::player::AudioPlayer;
 use crate::audio::sleep_timer::{SleepRequest, SleepTimerStatus};
 use crate::dto::{
     AlbumSummaryDto, ArtistSummaryDto, CloseAction, EqSettingsDto, HomeSuggestionsDto,
     ImportResultDto, ListeningStatsDto, LyricsImportResultDto, PlaybackModeDto, PlaybackStateDto,
-    QueueDto, QueueStateDto, SearchCollectionsDto, SearchHitDto,
+    QueueDto, QueueStateDto, SearchCollectionsDto, SearchHitDto, SongCoupleDto, SongCouplingDto,
 };
 use crate::library::{Library, PlaylistInfo};
 use crate::listen::{ListenEndReason, ListenFlush, ListenTracker};
@@ -627,6 +627,7 @@ fn placeholder_track(path: &str) -> Track {
         bit_depth: None,
         lyrics: None,
         lyrics_source: None,
+        has_synced_lyrics: false,
         cover_art_data_url: None,
         cover_art_mime: None,
         cover_art_source: None,
@@ -1693,6 +1694,126 @@ pub async fn set_waveform_seek_enabled(
     settings.waveform_seek_enabled = enabled;
     settings.save(&app)?;
     Ok(())
+}
+
+/// Couples with their songs' titles, looked up after the settings lock is
+/// released so the two locks are never held together.
+fn song_coupling_dto(
+    enabled: bool,
+    couples: Vec<SongCouple>,
+    library: &tauri::State<'_, LibraryState>,
+) -> Result<SongCouplingDto, String> {
+    let library = lock_library(library)?;
+    let title = |path: &str| {
+        let track = resolve_track(&library, path);
+        if track.title.is_empty() {
+            track.name
+        } else {
+            track.title
+        }
+    };
+    let couples = couples
+        .into_iter()
+        .map(|c| SongCoupleDto {
+            first_title: title(&c.first),
+            second_title: title(&c.second),
+            first: c.first,
+            second: c.second,
+        })
+        .collect();
+    Ok(SongCouplingDto { enabled, couples })
+}
+
+/// Apply a coupling change, save it and hand the pairs to the player, which
+/// rearranges the queue straight away.
+fn change_song_coupling(
+    change: impl FnOnce(&mut AppSettings),
+    state: &tauri::State<'_, PlayerState>,
+    settings_state: &tauri::State<'_, AppSettingsState>,
+    library: &tauri::State<'_, LibraryState>,
+    app: &tauri::AppHandle,
+) -> Result<SongCouplingDto, String> {
+    let (enabled, couples, active) = {
+        let mut settings = lock_settings(settings_state)?;
+        change(&mut settings);
+        settings.save(app)?;
+        (
+            settings.song_coupling_enabled,
+            settings.song_couples.clone(),
+            settings.active_song_couples(),
+        )
+    };
+    if let Some(player) = lock_player_state(state).as_mut() {
+        player.set_song_couples(active);
+    }
+    song_coupling_dto(enabled, couples, library)
+}
+
+#[tauri::command]
+pub async fn get_song_coupling(
+    settings_state: tauri::State<'_, AppSettingsState>,
+    library: tauri::State<'_, LibraryState>,
+) -> Result<SongCouplingDto, String> {
+    let (enabled, couples) = {
+        let settings = lock_settings(&settings_state)?;
+        (
+            settings.song_coupling_enabled,
+            settings.song_couples.clone(),
+        )
+    };
+    song_coupling_dto(enabled, couples, &library)
+}
+
+#[tauri::command]
+pub async fn set_song_coupling_enabled(
+    enabled: bool,
+    state: tauri::State<'_, PlayerState>,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    library: tauri::State<'_, LibraryState>,
+    app: tauri::AppHandle,
+) -> Result<SongCouplingDto, String> {
+    change_song_coupling(
+        |settings| settings.song_coupling_enabled = enabled,
+        &state,
+        &settings_state,
+        &library,
+        &app,
+    )
+}
+
+#[tauri::command]
+pub async fn couple_songs(
+    first: String,
+    second: String,
+    state: tauri::State<'_, PlayerState>,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    library: tauri::State<'_, LibraryState>,
+    app: tauri::AppHandle,
+) -> Result<SongCouplingDto, String> {
+    change_song_coupling(
+        |settings| settings.couple_songs(first, second),
+        &state,
+        &settings_state,
+        &library,
+        &app,
+    )
+}
+
+#[tauri::command]
+pub async fn uncouple_song(
+    path: String,
+    state: tauri::State<'_, PlayerState>,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    library: tauri::State<'_, LibraryState>,
+    app: tauri::AppHandle,
+) -> Result<SongCouplingDto, String> {
+    change_song_coupling(
+        |settings| settings.uncouple_song(&path),
+        &state,
+        &settings_state,
+        &library,
+        &app,
+    )
 }
 
 #[tauri::command]
@@ -3754,6 +3875,7 @@ fn source_track_to_track(
         bit_depth: None,
         lyrics: None,
         lyrics_source: None,
+        has_synced_lyrics: false,
         cover_art_data_url: None,
         cover_art_mime: album_art_id.as_ref().map(|_| "image/jpeg".to_string()),
         cover_art_source: Some(source.provider.clone()),

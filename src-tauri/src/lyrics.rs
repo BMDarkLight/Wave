@@ -83,6 +83,12 @@ impl LyricsSheet {
     }
 }
 
+/// Whether the lyrics carry line or word timings, so they can follow along
+/// with the music.
+pub fn is_synced(raw: &str) -> bool {
+    parse_sheet(raw).kind != LyricsKind::Plain
+}
+
 /// Parse any supported lyrics text into a sheet.
 ///
 /// Detection is by content, not by file extension or provider name, because

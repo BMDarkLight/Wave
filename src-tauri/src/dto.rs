@@ -22,6 +22,22 @@ pub enum CloseAction {
     HideWindow,
 }
 
+/// Song coupling as the settings page and the song menu show it.
+#[derive(Debug, Clone, Serialize)]
+pub struct SongCouplingDto {
+    pub enabled: bool,
+    pub couples: Vec<SongCoupleDto>,
+}
+
+/// Two coupled songs, with titles from the library for the song menu.
+#[derive(Debug, Clone, Serialize)]
+pub struct SongCoupleDto {
+    pub first: String,
+    pub second: String,
+    pub first_title: String,
+    pub second_title: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PlaybackStateDto {
     pub is_playing: bool,

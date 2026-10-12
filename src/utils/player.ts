@@ -129,6 +129,9 @@ export interface Track {
   bit_depth: number | null;
   lyrics: string | null;
   lyrics_source: string | null;
+  /** Lyrics are synced to the music. Set even in list rows, which leave the
+   * lyrics text out. */
+  has_synced_lyrics?: boolean;
   /** Absolute thumb path, data URL, or https URL. */
   cover_art_data_url: string | null;
   cover_art_mime: string | null;
@@ -1280,6 +1283,40 @@ export const getWaveformSeekEnabled = (): Promise<boolean> => {
 
 export const setWaveformSeekEnabled = (enabled: boolean): Promise<void> => {
   return safeInvoke("set_waveform_seek_enabled", { enabled });
+};
+
+/** Two songs, by path, that always play back to back: first, then second. */
+export interface SongCouple {
+  first: string;
+  second: string;
+  first_title: string;
+  second_title: string;
+}
+
+export interface SongCoupling {
+  enabled: boolean;
+  couples: SongCouple[];
+}
+
+export const getSongCoupling = (): Promise<SongCoupling> => {
+  return safeInvoke<SongCoupling>("get_song_coupling");
+};
+
+export const setSongCouplingEnabled = (
+  enabled: boolean,
+): Promise<SongCoupling> => {
+  return safeInvoke<SongCoupling>("set_song_coupling_enabled", { enabled });
+};
+
+export const coupleSongs = (
+  first: string,
+  second: string,
+): Promise<SongCoupling> => {
+  return safeInvoke<SongCoupling>("couple_songs", { first, second });
+};
+
+export const uncoupleSong = (path: string): Promise<SongCoupling> => {
+  return safeInvoke<SongCoupling>("uncouple_song", { path });
 };
 
 export const getGlassEffectsEnabled = (): Promise<boolean> => {

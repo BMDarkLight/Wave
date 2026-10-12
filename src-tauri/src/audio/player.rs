@@ -97,6 +97,12 @@ pub struct Queue {
     /// shuffled. `None` with shuffle on is a new queue that gets shuffled once
     /// the first track to play is picked.
     unshuffled_rank: Option<Vec<usize>>,
+    /// Song coupling: pairs of paths kept back to back, the first always
+    /// right before the second.
+    couples: Vec<(String, String)>,
+    /// A new queue nothing has played from yet. It is shuffled and its
+    /// couples are put together once the first track is picked.
+    fresh: bool,
 }
 
 impl Queue {
@@ -106,6 +112,7 @@ impl Queue {
         self.tracks = tracks;
         self.current_index = None;
         self.unshuffled_rank = None;
+        self.fresh = true;
     }
 
     /// Fisher-Yates over the whole queue. The current track moves to the
@@ -139,6 +146,37 @@ impl Queue {
             .unwrap_or_else(|| (0..len).collect());
         self.unshuffled_rank = Some(order.iter().map(|&i| ranks[i]).collect());
         self.reorder(&order);
+        self.keep_couples_together();
+    }
+
+    /// Replace the coupled pairs. The queue is rearranged right away so the
+    /// new pairs already play back to back.
+    pub fn set_couples(&mut self, couples: Vec<(String, String)>) {
+        self.couples = couples;
+        if !self.fresh {
+            self.keep_couples_together();
+        }
+    }
+
+    /// Move each couple's second song right after its first, among the tracks
+    /// still to play. A pair the current track splits is left alone, since
+    /// half of it has already played.
+    fn keep_couples_together(&mut self) {
+        for (first, second) in self.couples.clone() {
+            let floor = self.current_index.unwrap_or(0);
+            let Some(a) = self.tracks.iter().position(|p| *p == first) else {
+                continue;
+            };
+            let Some(b) = self.tracks.iter().position(|p| *p == second) else {
+                continue;
+            };
+            if a < floor || b < floor || Some(b) == self.current_index || b == a + 1 {
+                continue;
+            }
+            // Taking `b` out from before `a` shifts `a` back one slot.
+            let to = if b > a { a + 1 } else { a };
+            self.move_track(b, to);
+        }
     }
 
     /// Put the tracks back in the order they had before shuffling.
@@ -152,6 +190,7 @@ impl Queue {
             .current_index
             .and_then(|current| order.iter().position(|&i| i == current));
         self.reorder(&order);
+        self.keep_couples_together();
     }
 
     /// Rebuild `tracks` so slot `n` holds the entry that was at `order[n]`.
@@ -160,10 +199,16 @@ impl Queue {
         self.tracks = order.iter().map(|&i| std::mem::take(&mut old[i])).collect();
     }
 
-    /// Shuffle a new queue the first time a track is picked from it.
-    fn shuffle_if_pending(&mut self) {
-        if self.shuffle && self.unshuffled_rank.is_none() {
+    /// Get a new queue ready the first time a track is picked from it:
+    /// shuffled if shuffle is on, with its couples back to back either way.
+    fn settle_new_queue(&mut self) {
+        if !std::mem::take(&mut self.fresh) {
+            return;
+        }
+        if self.shuffle {
             self.shuffle_tracks();
+        } else {
+            self.keep_couples_together();
         }
     }
 
@@ -182,7 +227,7 @@ impl Queue {
             return None;
         }
         self.current_index = Some(index);
-        self.shuffle_if_pending();
+        self.settle_new_queue();
         let current = self.current_index?;
         self.tracks.get(current).map(String::as_str)
     }
@@ -213,7 +258,7 @@ impl Queue {
     /// Advance to the next track. Returns `None` when the queue is exhausted
     /// and `repeat == Off`. With `repeat == All` it wraps around.
     pub fn next(&mut self, repeat: &RepeatMode) -> Option<&str> {
-        self.shuffle_if_pending();
+        self.settle_new_queue();
         let next_idx = self.peek_next_index(repeat)?;
         self.current_index = Some(next_idx);
         self.tracks.get(next_idx).map(String::as_str)
@@ -256,6 +301,7 @@ impl Queue {
     pub fn set_shuffle(&mut self, enabled: bool) {
         self.shuffle = enabled;
         if enabled {
+            self.fresh = false;
             self.shuffle_tracks();
         } else {
             self.unshuffle_tracks();
@@ -2318,6 +2364,12 @@ impl AudioPlayer {
         self.resync_android_gapless();
     }
 
+    pub fn set_song_couples(&mut self, couples: Vec<(String, String)>) {
+        self.queue.set_couples(couples);
+        #[cfg(target_os = "android")]
+        self.resync_android_gapless();
+    }
+
     pub fn enqueue(&mut self, path: &str) {
         self.queue.enqueue(path.to_string());
         #[cfg(target_os = "android")]
@@ -2761,6 +2813,103 @@ mod tests {
         );
         let idx = queue.current_index().unwrap();
         assert_eq!(queue.tracks()[idx], "c");
+    }
+
+    // ── song coupling ────────────────────────────────────────────────────
+
+    fn couple(first: &str, second: &str) -> Vec<(String, String)> {
+        vec![(first.to_string(), second.to_string())]
+    }
+
+    fn assert_back_to_back(queue: &Queue, first: &str, second: &str) {
+        let tracks = queue.tracks();
+        let a = tracks.iter().position(|p| p == first).unwrap();
+        assert_eq!(
+            tracks.get(a + 1).map(String::as_str),
+            Some(second),
+            "{tracks:?}"
+        );
+    }
+
+    #[test]
+    fn a_shuffle_always_plays_a_couple_back_to_back_in_order() {
+        let paths: Vec<String> = (0..12).map(|i| i.to_string()).collect();
+        for _ in 0..200 {
+            let mut queue = Queue::default();
+            queue.set_couples(couple("7", "3"));
+            queue.set_tracks(paths.clone());
+            queue.set_shuffle(true);
+            assert_back_to_back(&queue, "7", "3");
+            assert_eq!(queue.tracks().len(), 12);
+        }
+    }
+
+    #[test]
+    fn picking_either_half_of_a_couple_to_start_still_keeps_them_together() {
+        let paths: Vec<String> = (0..8).map(|i| i.to_string()).collect();
+        let mut queue = Queue::default();
+        queue.set_couples(couple("2", "5"));
+        queue.set_shuffle(true);
+        queue.set_tracks(paths.clone());
+        queue.jump(2);
+        assert_eq!(&queue.tracks()[..2], ["2", "5"]);
+    }
+
+    #[test]
+    fn coupling_while_shuffled_rearranges_only_what_is_still_to_play() {
+        let mut queue = queue_of(&["a", "b", "c", "d", "e"]);
+        queue.jump(0);
+        queue.set_shuffle(true);
+        queue.set_couples(couple("a", "e"));
+        assert_eq!(&queue.tracks()[..2], ["a", "e"]);
+        assert_eq!(queue.current_index(), Some(0));
+
+        // The second song is playing, so its first has nowhere to go.
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(0);
+        queue.set_shuffle(true);
+        let before = queue.tracks().to_vec();
+        queue.set_couples(couple("b", "a"));
+        assert_eq!(queue.tracks(), before);
+    }
+
+    #[test]
+    fn a_couple_plays_back_to_back_without_shuffle_too() {
+        let mut queue = queue_of(&["a", "b", "c", "d", "e"]);
+        queue.set_couples(couple("b", "e"));
+        // Nothing has played yet, so the new queue waits for its first pick.
+        assert_eq!(queue.tracks(), ["a", "b", "c", "d", "e"]);
+        assert_eq!(queue.jump(0), Some("a"));
+        assert_eq!(queue.tracks(), ["a", "b", "e", "c", "d"]);
+
+        // Coupling a queue that is already playing rearranges what is left.
+        queue.set_couples(couple("d", "c"));
+        assert_eq!(queue.tracks(), ["a", "b", "e", "d", "c"]);
+    }
+
+    #[test]
+    fn turning_shuffle_off_keeps_couples_together() {
+        let mut queue = queue_of(&["a", "b", "c", "d"]);
+        queue.set_couples(couple("d", "b"));
+        queue.jump(0);
+        assert_eq!(queue.tracks(), ["a", "c", "d", "b"]);
+        queue.set_shuffle(true);
+        assert_back_to_back(&queue, "d", "b");
+        queue.set_shuffle(false);
+        assert_back_to_back(&queue, "d", "b");
+        assert_eq!(queue.tracks()[queue.current_index().unwrap()], "a");
+    }
+
+    #[test]
+    fn shuffling_a_new_queue_does_not_reshuffle_on_the_first_pick() {
+        let paths: Vec<String> = (0..10).map(|i| i.to_string()).collect();
+        let mut queue = Queue::default();
+        queue.set_tracks(paths);
+        queue.set_shuffle(true);
+        let shuffled = queue.tracks().to_vec();
+        queue.jump(3);
+        assert_eq!(queue.tracks(), shuffled);
+        assert_eq!(queue.current_index(), Some(3));
     }
 
     // ── clear_upcoming ───────────────────────────────────────────────────

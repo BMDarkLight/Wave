@@ -875,6 +875,30 @@ Go to the previous track, with a common UX rule:
 
 ---
 
+### `get_song_coupling`
+
+**Arguments:** none
+
+**Returns:** `{ enabled: boolean, couples: { first: string, second: string }[] }`
+
+Couples are track paths. While coupling is on, each couple's `second` plays
+right after its `first` when both are in the queue, with shuffle on or off.
+
+---
+
+### `set_song_coupling_enabled` / `couple_songs` / `uncouple_song`
+
+| Command | Arguments | Effect |
+|---------|-----------|--------|
+| `set_song_coupling_enabled` | `enabled: boolean` | Turn coupling on or off. Couples are kept either way |
+| `couple_songs` | `first: string`, `second: string` | Link two songs. A song is in one couple at a time, so older couples with either song are dropped |
+| `uncouple_song` | `path: string` | Remove the couple the song belongs to |
+
+**Returns:** the same object as `get_song_coupling`. The queue is rearranged
+straight away so new couples already play back to back.
+
+---
+
 ### `set_shuffle`
 
 **Arguments**

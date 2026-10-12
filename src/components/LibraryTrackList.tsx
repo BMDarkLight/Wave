@@ -48,6 +48,8 @@ import {
   matchesQuery,
 } from "../utils/track";
 import type { PlaybackState, PlaylistInfo, Track } from "../utils/player";
+import { hasTimestamps } from "../utils/lyrics";
+import CoupleMarker from "./CoupleMarker";
 
 export type SortColumn = "index" | "title" | "album";
 export type SortDirection = "asc" | "desc" | "none";
@@ -587,36 +589,34 @@ export default function LibraryTrackList({
                           >
                             {track.artist}
                           </button>
-                          {(track.lyrics ||
-                            track.cover_art_source === "cover-art-archive") && (
-                            <span className="track-meta-icons">
-                              {track.lyrics ? (
-                                <span
-                                  className="track-meta-icon-wrap"
-                                  title="Has lyrics"
-                                  aria-label="Has lyrics"
-                                >
-                                  <BiAlignLeft
-                                    className="track-meta-icon"
-                                    aria-hidden
-                                  />
-                                </span>
-                              ) : null}
-                              {track.cover_art_source ===
-                              "cover-art-archive" ? (
-                                <span
-                                  className="track-meta-icon-wrap"
-                                  title="Online cover"
-                                  aria-label="Online cover"
-                                >
-                                  <BiImage
-                                    className="track-meta-icon"
-                                    aria-hidden
-                                  />
-                                </span>
-                              ) : null}
-                            </span>
-                          )}
+                          <span className="track-meta-icons">
+                            {track.has_synced_lyrics ||
+                            hasTimestamps(track.lyrics) ? (
+                              <span
+                                className="track-meta-icon-wrap"
+                                title="Live lyrics"
+                                aria-label="Live lyrics"
+                              >
+                                <BiAlignLeft
+                                  className="track-meta-icon"
+                                  aria-hidden
+                                />
+                              </span>
+                            ) : null}
+                            {track.cover_art_source === "cover-art-archive" ? (
+                              <span
+                                className="track-meta-icon-wrap"
+                                title="Online cover"
+                                aria-label="Online cover"
+                              >
+                                <BiImage
+                                  className="track-meta-icon"
+                                  aria-hidden
+                                />
+                              </span>
+                            ) : null}
+                            <CoupleMarker path={track.path} />
+                          </span>
                         </div>
                       </div>
                     </div>

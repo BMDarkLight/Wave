@@ -20,6 +20,7 @@ import { canEditMetadata } from "../utils/track";
 import type { ContextMenuAnchor } from "./ContextMenu";
 import TrackMenuButton from "./TrackMenuButton";
 import VirtualizedList from "./VirtualizedList";
+import CoupleMarker from "./CoupleMarker";
 
 const formatTime = (seconds?: number | null) => {
   if (!seconds || !Number.isFinite(seconds)) return "0:00";
@@ -296,7 +297,12 @@ export default function AlbumPage({
                       <div>
                         <div className="track-name">{getTrackTitle(track)}</div>
                         {track.artist && (
-                          <div className="track-meta">{track.artist}</div>
+                          <div className="track-meta">
+                            {track.artist}
+                            <span className="track-meta-icons">
+                              <CoupleMarker path={track.path} />
+                            </span>
+                          </div>
                         )}
                       </div>
                     </div>

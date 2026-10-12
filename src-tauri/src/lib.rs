@@ -93,6 +93,7 @@ pub fn run() {
                     }
                 }
             }
+            player.set_song_couples(settings.active_song_couples());
             // The saved queue is already in its shuffled order.
             if settings.shuffle {
                 player.queue.resume_shuffle();
@@ -320,6 +321,10 @@ pub fn run() {
             commands::set_auto_lyrics_download,
             commands::get_waveform_seek_enabled,
             commands::set_waveform_seek_enabled,
+            commands::get_song_coupling,
+            commands::set_song_coupling_enabled,
+            commands::couple_songs,
+            commands::uncouple_song,
             commands::get_glass_effects_enabled,
             commands::set_glass_effects_enabled,
             commands::get_animations_enabled,

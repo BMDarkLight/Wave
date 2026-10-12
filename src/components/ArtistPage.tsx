@@ -20,6 +20,7 @@ import type { Track, PlaybackState, AlbumSummary } from "../utils/player";
 import type { ContextMenuAnchor } from "./ContextMenu";
 import TrackMenuButton from "./TrackMenuButton";
 import VirtualizedList from "./VirtualizedList";
+import CoupleMarker from "./CoupleMarker";
 
 const formatTime = (seconds?: number | null) => {
   if (!seconds || !Number.isFinite(seconds)) return "0:00";
@@ -328,7 +329,12 @@ export default function ArtistPage({
                           <div className="track-name">
                             {getTrackTitle(track)}
                           </div>
-                          <div className="track-meta">{track.album}</div>
+                          <div className="track-meta">
+                            {track.album}
+                            <span className="track-meta-icons">
+                              <CoupleMarker path={track.path} />
+                            </span>
+                          </div>
                         </div>
                       </div>
                       <div className="track-duration">

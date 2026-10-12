@@ -178,6 +178,11 @@ An in-memory queue independent of your playlists: reorder by drag, remove
 individual entries, queue a track next, shuffle, and repeat off / one / all.
 Previous rewinds the current track if you are more than three seconds in.
 
+**Song coupling** links two songs so they always play back to back, in the
+order you choose, like an intro and the track it leads into. It holds with
+shuffle on or off. Turn it on in Settings, then pick **Couple With…** from a
+song's menu.
+
 A **sleep timer** pauses playback after 15 to 90 minutes, or when the current
 track ends. The volume eases down over the last ten seconds, and resuming
 picks up where it stopped. Set it in the volume and equalizer panel on

@@ -12,15 +12,18 @@ import {
   BiAlbum,
   BiEditAlt,
   BiListPlus,
+  BiLink,
   BiListUl,
   BiMinus,
   BiSkipNext,
+  BiTransfer,
   BiTrash,
+  BiUnlink,
   BiUser,
 } from "react-icons/bi";
 import ContextMenu, { type ContextMenuAnchor } from "./ContextMenu";
 import { canEditMetadata } from "../utils/track";
-import type { Track } from "../utils/player";
+import type { SongCouple, Track } from "../utils/player";
 
 export default function TrackContextMenu({
   track,
@@ -38,6 +41,7 @@ export default function TrackContextMenu({
   onGoToArtist,
   onRemoveFromPlaylist,
   onRemoveFromLibrary,
+  songCoupling,
 }: {
   track: Track;
   anchor: ContextMenuAnchor;
@@ -56,7 +60,19 @@ export default function TrackContextMenu({
   onGoToArtist: (artist: string) => void;
   onRemoveFromPlaylist: (path: string) => void;
   onRemoveFromLibrary: (path: string) => void;
+  /** Present while song coupling is on in Settings. */
+  songCoupling?: {
+    /** The couple this song is in, if any. */
+    couple: SongCouple | null;
+    onCoupleWith: (track: Track) => void;
+    onCouple: (first: string, second: string) => void;
+    onUncouple: (path: string) => void;
+  };
 }) {
+  const couple = songCoupling?.couple ?? null;
+  const partnerTitle =
+    couple &&
+    (couple.first === track.path ? couple.second_title : couple.first_title);
   return (
     <ContextMenu anchor={anchor} onClose={onClose}>
       <button
@@ -90,6 +106,46 @@ export default function TrackContextMenu({
         >
           <BiListUl /> Add to Playlist...
         </button>
+      )}
+      {songCoupling && !couple && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onClose();
+            songCoupling.onCoupleWith(track);
+          }}
+        >
+          <BiLink /> Couple With...
+        </button>
+      )}
+      {songCoupling && couple && (
+        <>
+          <button
+            type="button"
+            role="menuitem"
+            title={`Plays ${couple.first === track.path ? "before" : "after"} ${partnerTitle}`}
+            onClick={() => {
+              onClose();
+              songCoupling.onCouple(couple.second, couple.first);
+            }}
+          >
+            <BiTransfer />{" "}
+            {couple.first === track.path
+              ? `Play ${partnerTitle} First`
+              : `Play ${track.title || track.name} First`}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onClose();
+              songCoupling.onUncouple(track.path);
+            }}
+          >
+            <BiUnlink /> Uncouple from {partnerTitle}
+          </button>
+        </>
       )}
       {canEditMetadata(track) && (
         <button
