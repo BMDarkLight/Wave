@@ -69,5 +69,14 @@ public final class MediaNativeBridge {
         }
     }
 
+    /** Remove the notification and stop the service synchronously, before exit. */
+    public static void shutdownSessionNow() {
+        try {
+            MediaSessionBridge.shutdownNow();
+        } catch (Throwable t) {
+            Log.w(TAG, "shutdownSessionNow failed: " + t.getMessage());
+        }
+    }
+
     private static native void nativeOnMediaAction(String action);
 }

@@ -6,18 +6,42 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
-//! Keep playing after Android destroys the UI.
+//! Keep playing after Android destroys the UI, and close properly after.
 //!
 //! Swiping Wave out of recents (or backing out of it on older Android)
 //! destroys the Activity. Tauri treats its last window going away as a request
 //! to exit and would end the process, and the music with it. While something
 //! is playing we keep the process; the media service holds it in the
-//! foreground. When the user comes back, Android starts a fresh Activity and
-//! we give it a new main window.
+//! foreground, which also stops Android from killing it with the task.
+//!
+//! The process then runs "headless": engine, media session and notification,
+//! no window. From there:
+//! - Opening Wave again starts a new Activity, which gets a new main window.
+//! - Dismissing the paused notification, or a stop from Bluetooth, ends the
+//!   process, since nothing is left for it to do.
+//!
+//! Headless code must never call anything that dispatches through the
+//! Activity (Tauri plugin commands, `app.path()`): with no Activity those
+//! panic inside Tauri and abort the process. See `app_paths::app_data_dir`.
+
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, Manager, RunEvent};
 
 use crate::commands;
+
+/// Set once the UI was destroyed while playback kept the process alive.
+static HEADLESS: AtomicBool = AtomicBool::new(false);
+
+/// When the last window rebuild was requested, so the tick and the Activity
+/// start signal do not both build one while the first is still coming up.
+static REOPEN_REQUESTED_MS: AtomicU64 = AtomicU64::new(0);
+const REOPEN_RETRY_MS: u64 = 3000;
+
+/// The Activity the previous tick saw, so the tick only acts on one that has
+/// been around for a full tick and is surely done with onCreate.
+static TICK_SEEN_ACTIVITY: AtomicUsize = AtomicUsize::new(0);
 
 pub fn on_run_event(app: &AppHandle, event: &RunEvent) {
     match event {
@@ -28,20 +52,65 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent) {
             // controls); those always go through.
             if code.is_none() && commands::is_playback_active(app) {
                 tracing::info!("UI closed while playing, keeping playback alive");
+                HEADLESS.store(true, Ordering::Release);
                 api.prevent_exit();
             }
         }
-        RunEvent::Resumed => reopen_main_window(app),
+        RunEvent::Exit => {
+            // The process ends right after this. Take the notification down
+            // synchronously, or a paused one would outlive us with dead
+            // buttons.
+            crate::android::media_bridge::session_shutdown_now();
+        }
         _ => {}
     }
 }
 
-/// Recreate the main window for an Activity that started after the previous
-/// one was destroyed. The new Activity waits for a window to attach to.
-fn reopen_main_window(app: &AppHandle) {
-    if !app.webview_windows().is_empty() {
+/// True while the engine runs without any window.
+pub fn is_headless(app: &AppHandle) -> bool {
+    HEADLESS.load(Ordering::Acquire) && app.webview_windows().is_empty()
+}
+
+/// Called from the playback tick. A fallback: normally the Activity start
+/// signal from Java ("ui-started") rebuilds the window first.
+pub fn tick(app: &AppHandle) {
+    let current = crate::android::jni::live_activity()
+        .map(|(_, activity)| activity as usize)
+        .unwrap_or(0);
+    // Tao registers an Activity a moment before wry can host a webview in it;
+    // building in that gap panics. Wait until it has been seen twice.
+    if TICK_SEEN_ACTIVITY.swap(current, Ordering::AcqRel) == current {
+        ensure_main_window(app);
+    }
+}
+
+/// Give a freshly started Activity its main window.
+///
+/// Called when Android reports an Activity start (onStart, so onCreate has
+/// fully run) and from the tick. Tauri
+/// only creates windows from the config at launch, and its own resume event
+/// is per window, so with no window left nothing else would ever build one
+/// and the reopened app would stay blank.
+pub fn ensure_main_window(app: &AppHandle) {
+    if !HEADLESS.load(Ordering::Acquire) {
         return;
     }
+    if !app.webview_windows().is_empty() {
+        // The rebuilt window is up; back to normal.
+        HEADLESS.store(false, Ordering::Release);
+        return;
+    }
+    // The Activity has to exist before a window can attach to it.
+    if crate::android::jni::live_activity().is_none() {
+        return;
+    }
+    let now = now_ms();
+    let last = REOPEN_REQUESTED_MS.load(Ordering::Acquire);
+    if now.saturating_sub(last) < REOPEN_RETRY_MS {
+        return;
+    }
+    REOPEN_REQUESTED_MS.store(now, Ordering::Release);
+
     let Some(config) = app
         .config()
         .app
@@ -53,7 +122,25 @@ fn reopen_main_window(app: &AppHandle) {
         return;
     };
     match tauri::WebviewWindowBuilder::from_config(app, &config).and_then(|b| b.build()) {
+        // Stay headless until the window shows up in the manager; if the
+        // build fails, the next tick tries again.
         Ok(_) => tracing::info!("Recreated the main window for a new Activity"),
         Err(error) => tracing::error!("Could not recreate the main window: {error}"),
     }
+}
+
+/// End the process if it is only running for playback that just ended (the
+/// paused notification was dismissed, or playback was stopped).
+pub fn exit_if_headless(app: &AppHandle) {
+    if is_headless(app) {
+        tracing::info!("Playback ended with no UI open, exiting");
+        app.exit(0);
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }

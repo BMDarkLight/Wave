@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
 
 use crate::audio::dsp::EqConfig;
 use crate::audio::player::RepeatMode;
@@ -258,8 +257,7 @@ impl AppSettings {
 }
 
 fn settings_path(app: &tauri::AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
+    super::paths::app_data_dir(app)
         .map(|dir| dir.join(SETTINGS_FILE))
         .unwrap_or_else(|_| PathBuf::from(SETTINGS_FILE))
 }

@@ -981,11 +981,6 @@ pub(crate) fn handle_native_media_action(
             app.state::<MediaBridgeState>().0.set_paused(position);
             Ok(())
         }
-        "stop" => {
-            with_app_player(app, |player| player.stop().map_err(|e| e.to_string()))?;
-            app.state::<MediaBridgeState>().0.set_stopped();
-            Ok(())
-        }
         "next" => {
             let path =
                 with_app_player(app, |player| player.play_next().map_err(|e| e.to_string()))?;
@@ -1036,9 +1031,10 @@ pub(crate) fn handle_native_media_action(
             sync_bridge_playback_mode(app, &bridge);
             Ok(())
         }
-        "dismiss" => {
-            // The paused notification was swiped away. Drop the controls but
-            // keep the queue, so the app reopens where it left off.
+        "dismiss" | "stop" => {
+            // The paused notification was swiped away, or a car / headset /
+            // lock screen sent stop. Drop the controls but keep the queue, so
+            // the app reopens where it left off.
             let paused = with_app_player(app, |player| {
                 if player.is_playing() {
                     player.pause().map_err(|e| e.to_string())?;
@@ -1050,10 +1046,13 @@ pub(crate) fn handle_native_media_action(
             }
             persist_playback_state(app);
             app.state::<MediaBridgeState>().0.set_stopped();
-            if app.webview_windows().is_empty() {
-                // No UI and no controls left: nothing keeps this process useful.
-                app.exit(0);
-            }
+            // Closed app, paused music, controls swiped away: close for good.
+            crate::android::lifecycle::exit_if_headless(app);
+            Ok(())
+        }
+        "ui-started" => {
+            // An Activity started; if the UI had been destroyed, rebuild it.
+            crate::android::lifecycle::ensure_main_window(app);
             Ok(())
         }
         "suspend" | "unsuspend" => {
@@ -2525,9 +2524,7 @@ fn write_tags_over_saf(
     uri: &str,
     edit: &ResolvedEdit,
 ) -> Result<(), String> {
-    let staging = app
-        .path()
-        .app_cache_dir()
+    let staging = crate::app_paths::app_cache_dir(app)
         .map_err(|e| format!("Failed to resolve cache dir: {e}"))?
         .join("retag");
     std::fs::create_dir_all(&staging).map_err(|e| format!("Failed to create retag dir: {e}"))?;
@@ -3544,9 +3541,7 @@ pub fn dismiss_folder_setup(
 /// Frees up space used by materialized content:// URI copies.
 #[tauri::command]
 pub fn clear_audio_imports(app: tauri::AppHandle) -> Result<u64, String> {
-    let imports_dir = app
-        .path()
-        .app_data_dir()
+    let imports_dir = crate::app_paths::app_data_dir(&app)
         .map_err(|e| format!("Failed to resolve app data dir: {e}"))?
         .join("imports");
 
@@ -3608,7 +3603,7 @@ pub async fn reset_app(app: tauri::AppHandle) -> Result<ResetAppResult, String> 
     }
 
     // Best-effort cleanup of on-disk caches.
-    if let Ok(app_dir) = app.path().app_data_dir() {
+    if let Ok(app_dir) = crate::app_paths::app_data_dir(&app) {
         let cover_dir = app_dir.join("cover_art");
         if cover_dir.is_dir() {
             let _ = std::fs::remove_dir_all(&cover_dir);

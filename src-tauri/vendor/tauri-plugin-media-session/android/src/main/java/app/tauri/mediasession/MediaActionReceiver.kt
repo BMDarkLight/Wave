@@ -22,6 +22,12 @@ class MediaActionReceiver : BroadcastReceiver() {
             MediaSessionCleanupService.cancel(context)
             return
         }
+        if (action == "dismiss") {
+            // Take the controls down here and now, on the main thread. The
+            // engine may end the process right after it hears about this, and
+            // a queued update would never get to remove the notification.
+            MediaSessionState.stopNow()
+        }
         MediaSessionPlugin.handleMediaAction(action)
     }
 

@@ -65,6 +65,9 @@ pub fn run() {
         // No-op on desktop; on Android/iOS owns MediaSession + media notification.
         .plugin(tauri_plugin_media_session::init())
         .setup(|app| {
+            // Resolve these while the Activity exists; on Android the lookup
+            // cannot run once it has been destroyed.
+            app_paths::warm_app_dirs(app.handle());
             let settings = app_settings::AppSettings::load(app.handle());
 
             // Previews are session-scoped clips, never library content. Drop
@@ -186,18 +189,26 @@ pub fn run() {
             std::thread::spawn(move || {
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(400));
-                    // Media actions are handled by the dedicated worker; tick
-                    // only retries JNI install and auto-advances the queue.
-                    #[cfg(target_os = "android")]
-                    {
-                        android::media_bridge::drain_actions(&tick_app);
+                    // A panic in one pass must not end the thread: it drives
+                    // auto-advance, and with the UI closed nothing else would.
+                    let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // Media actions are handled by the dedicated worker;
+                        // tick only retries JNI install and auto-advances.
+                        #[cfg(target_os = "android")]
+                        {
+                            android::media_bridge::drain_actions(&tick_app);
+                            android::lifecycle::tick(&tick_app);
+                        }
+                        commands::tick_listen_progress(&tick_app);
+                        #[cfg(target_os = "android")]
+                        commands::tick_media_session(&tick_app);
+                        commands::tick_sleep_timer(&tick_app);
+                        commands::tick_auto_advance(&tick_app);
+                        commands::persist_playback_state_throttled(&tick_app);
+                    }));
+                    if tick.is_err() {
+                        tracing::error!("playback tick panicked; continuing");
                     }
-                    commands::tick_listen_progress(&tick_app);
-                    #[cfg(target_os = "android")]
-                    commands::tick_media_session(&tick_app);
-                    commands::tick_sleep_timer(&tick_app);
-                    commands::tick_auto_advance(&tick_app);
-                    commands::persist_playback_state_throttled(&tick_app);
                 }
             });
 

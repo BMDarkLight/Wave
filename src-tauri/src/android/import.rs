@@ -20,16 +20,14 @@ use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use uuid::Uuid;
 
 use crate::metadata::is_supported_audio_file;
 use crate::path_validation::is_android_content_uri;
 
 fn imports_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::app_paths::app_data_dir(app)
         .map_err(|e| format!("Failed to resolve app data dir: {e}"))?
         .join("imports");
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create imports dir: {e}"))?;

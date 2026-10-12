@@ -53,6 +53,13 @@ object MediaSessionBridge {
         MediaSessionState.stop()
     }
 
+    /** Synchronous teardown for the moment before the process exits. */
+    @JvmStatic
+    fun shutdownNow() {
+        val ctx = MediaSessionState.context() ?: return
+        MediaSessionCleanupService.shutdownNow(ctx)
+    }
+
     private fun JSONObject.optStringOrNull(key: String): String? =
         if (has(key) && !isNull(key)) getString(key) else null
 

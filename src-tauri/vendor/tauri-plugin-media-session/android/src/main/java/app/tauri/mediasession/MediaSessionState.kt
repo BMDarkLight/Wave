@@ -154,10 +154,12 @@ internal object MediaSessionState {
 
     fun stop() = main { stopInternal() }
 
-    /** Called from the service after it dropped out of the foreground. */
-    fun republish() = main {
-        publishedNotificationKey = null
-        if (hasMedia) schedulePublish()
+    /**
+     * Take the session down synchronously. Main thread only; for callers that
+     * are already on it and must not wait for a queued [stop].
+     */
+    fun stopNow() {
+        stopInternal()
     }
 
     // ── State changes ───────────────────────────────────────────────────

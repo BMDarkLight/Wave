@@ -29,6 +29,7 @@ public final class CrashInitProvider extends ContentProvider {
             // Give the media session a context before anything can touch it,
             // including a notification button that cold-starts the process.
             MediaNativeBridge.attach(context);
+            UiLifecycle.install(context);
         }
         return true;
     }

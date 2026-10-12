@@ -113,8 +113,17 @@ pub fn start_worker(app: AppHandle) {
             if !NATIVES_READY.load(Ordering::Acquire) {
                 try_install();
             }
-            if let Err(error) = commands::handle_native_media_action(&app, &action) {
-                tracing::warn!("Android native media action '{action}' failed: {error}");
+            // Keep the worker alive through a panicking action: it is the
+            // only way notification and Bluetooth controls reach the engine.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                commands::handle_native_media_action(&app, &action)
+            }));
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!("Android native media action '{action}' failed: {error}")
+                }
+                Err(_) => tracing::error!("Android native media action '{action}' panicked"),
             }
         })
         .ok();
@@ -229,6 +238,16 @@ pub fn session_timeline(position: Option<f64>, duration: Option<f64>, speed: Opt
                 JValue::Double(speed.unwrap_or(f64::NAN)),
             ],
         )?;
+        Ok(())
+    });
+}
+
+/// Remove the notification and stop the service right now, from this thread.
+/// Used just before the process exits, when a main-thread post would never run
+/// and a detached notification would be left behind with dead buttons.
+pub fn session_shutdown_now() {
+    call_bridge(|env, class| {
+        env.call_static_method(class, "shutdownSessionNow", "()V", &[])?;
         Ok(())
     });
 }

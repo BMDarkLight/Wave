@@ -124,11 +124,19 @@ Notification behaviour:
 
 - Updates are coalesced (a track change is several calls) and held up to 500 ms for the new cover, so the shade never flashes the old art under a new title.
 - The small icon is `drawable/ic_notification` from `android-src/res`. Without it the notification falls back to the template's `ic_launcher_foreground`, which is the stock Android robot.
-- Paused: the service stays in the foreground for 10 minutes (as Media3 does), then leaves it and the notification becomes dismissable. Dismissing it pauses, clears the controls and keeps the queue.
+- Paused: the service leaves the foreground right away and the notification stays, now dismissable (Media3's `stopForeground(false)`). Resuming from the notification or a media button gets a foreground-start exemption from the system; if Android still refuses, playback runs and the notification is posted without the foreground guarantee.
+- Dismissing the paused notification, or a stop from a car, headset or the lock screen, pauses, clears the controls and keeps the queue. With the UI closed, the process then exits.
 
 ## Closing the app while playing
 
-Swiping Wave out of recents destroys the Activity, and Tauri treats the last window closing as an exit. `android::lifecycle` prevents that exit while something is playing, so the foreground service keeps the process and the music going. When the user comes back, Android starts a new Activity and `RunEvent::Resumed` builds a new main window for it. If nothing is playing the app exits as before, after saving the playback state.
+Swiping Wave out of recents destroys the Activity, and Tauri treats the last window closing as an exit. `android::lifecycle` prevents that exit while something is playing. The foreground service then keeps the process alive; Android does not kill a process with a running foreground service when its task is removed. If nothing is playing the app exits as before, after saving the playback state, and the notification is removed synchronously on the way out.
+
+While the process runs without a window ("headless"):
+
+- **Nothing may dispatch through the Activity.** On Android, Tauri plugin commands and `app.path()` go through the Activity and panic once it is gone; that panic aborts the process and stops the music. Use `app_paths::app_data_dir` / `app_cache_dir` (resolved once at startup), drive the media session over JNI, and guard plugin calls such as `saf_io::open`.
+- **Reopening** starts a new Activity in the same process. `UiLifecycle` (Java) reports it with a `ui-started` action and `lifecycle::ensure_main_window` builds a new main window for it; the playback tick retries as a fallback. Tauri's own resume event is per window, so with no window it never fires. `UiLifecycle` also unbinds Tauri's `PluginManager` from the destroyed Activity so file dialogs and permission prompts work in the new one.
+- **Ending**: dismissing the paused notification, or a media-session stop, exits the process.
+- The playback tick and the media-action worker catch panics, since with no UI they are what keeps auto-advance and the controls working.
 
 Because the UI can disappear under a running engine, `ndk_context` holds the Application context rather than the Activity. Code that needs a real Activity (the folder picker) asks tao for the live one with `android::jni::live_activity`.
 

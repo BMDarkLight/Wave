@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose, Engine as _};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 const COVER_ART_DIR: &str = "cover_art";
 const THUMBS_DIR: &str = "thumbs";
@@ -170,7 +170,7 @@ pub fn resolve_thumb_abs(app: &AppHandle, relative_or_id: &str) -> Option<PathBu
     if relative_or_id.is_empty() {
         return None;
     }
-    let app_dir = app.path().app_data_dir().ok()?;
+    let app_dir = crate::app_paths::app_data_dir(app).ok()?;
     let cover_root = app_dir.join(COVER_ART_DIR);
 
     // Already a relative path, or a bare filename with a known image
@@ -232,7 +232,7 @@ pub fn decode_data_url(data_url: &str) -> Result<(Vec<u8>, String), String> {
 
 /// Delete legacy per-track cover files under `cover_art/` (not under `thumbs/`).
 pub fn cleanup_legacy_track_covers(app: &AppHandle) {
-    let Ok(app_dir) = app.path().app_data_dir() else {
+    let Ok(app_dir) = crate::app_paths::app_data_dir(app) else {
         return;
     };
     let cover_dir = app_dir.join(COVER_ART_DIR);
@@ -261,9 +261,7 @@ pub fn cleanup_legacy_track_covers(app: &AppHandle) {
 }
 
 fn cover_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let app_dir = app
-        .path()
-        .app_data_dir()
+    let app_dir = crate::app_paths::app_data_dir(app)
         .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
     Ok(app_dir.join(COVER_ART_DIR))
 }

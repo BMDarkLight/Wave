@@ -27,9 +27,18 @@ use tauri_plugin_fs::{FilePath, FsExt, OpenOptions};
 fn open(app: &AppHandle, uri: &str, opts: OpenOptions) -> Result<File, String> {
     let file_path =
         FilePath::from_str(uri).map_err(|e| format!("Invalid source URI {uri}: {e}"))?;
-    app.fs()
-        .open(file_path, opts)
-        .map_err(|e| format!("Failed to open {uri}: {e}"))
+    // On Android the plugin opens documents through the Activity. With the UI
+    // destroyed (playing in the background) that call panics inside Tauri, so
+    // refuse up front, and catch the panic if the Activity goes mid-call.
+    #[cfg(target_os = "android")]
+    if crate::android::jni::live_activity().is_none() {
+        return Err(format!("Cannot open {uri} while Wave has no UI"));
+    }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        app.fs().open(file_path, opts)
+    }))
+    .map_err(|_| format!("Failed to open {uri}: the UI went away"))?
+    .map_err(|e| format!("Failed to open {uri}: {e}"))
 }
 
 /// Copy a document into a local file.

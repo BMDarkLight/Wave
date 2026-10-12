@@ -93,3 +93,54 @@ fn data_root() -> Option<PathBuf> {
         .ok()
         .map(|h| PathBuf::from(h).join(".local/share"))
 }
+
+static APP_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static APP_CACHE_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Tauri's app data directory, resolved once and then served from memory.
+///
+/// Use this instead of `app.path().app_data_dir()`. On Android that call is a
+/// plugin round trip through the Activity, and once Android has destroyed the
+/// Activity (task swiped away while music plays) it panics inside Tauri, which
+/// aborts the whole process. The directory never changes, so one lookup while
+/// the UI exists is enough.
+pub fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    cached_dir(&APP_DATA_DIR, || {
+        tauri::Manager::path(app)
+            .app_data_dir()
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// Tauri's app cache directory, cached like [`app_data_dir`].
+pub fn app_cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    cached_dir(&APP_CACHE_DIR, || {
+        tauri::Manager::path(app)
+            .app_cache_dir()
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// Resolve both directories up front, while the Activity is still alive.
+pub fn warm_app_dirs(app: &tauri::AppHandle) {
+    if let Err(error) = app_data_dir(app) {
+        tracing::warn!("Could not resolve the app data directory: {error}");
+    }
+    if let Err(error) = app_cache_dir(app) {
+        tracing::warn!("Could not resolve the app cache directory: {error}");
+    }
+}
+
+fn cached_dir(
+    cell: &std::sync::OnceLock<PathBuf>,
+    resolve: impl FnOnce() -> Result<PathBuf, String>,
+) -> Result<PathBuf, String> {
+    if let Some(dir) = cell.get() {
+        return Ok(dir.clone());
+    }
+    // Belt and braces for a lookup that slips through after the Activity is
+    // gone: report an error instead of letting Tauri's panic abort playback.
+    let dir = std::panic::catch_unwind(std::panic::AssertUnwindSafe(resolve))
+        .map_err(|_| "the app directory cannot be resolved without a UI".to_string())??;
+    Ok(cell.get_or_init(|| dir).clone())
+}

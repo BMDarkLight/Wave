@@ -19,6 +19,9 @@
 }
 -keep class app.bmdarklight.wave.CrashInitProvider { *; }
 -keep class app.bmdarklight.wave.KeyboardInsets { *; }
+-keep class app.bmdarklight.wave.UiLifecycle { *; }
+# UiLifecycle rebinds Tauri's PluginManager to a new Activity by field name.
+-keepclassmembers class app.tauri.plugin.PluginManager { *; }
 -keep class app.bmdarklight.wave.MediaNativeBridge { *; }
 -keepclassmembers class app.bmdarklight.wave.MediaNativeBridge {
     public static void dispatch(java.lang.String);
@@ -26,6 +29,7 @@
     public static void updateSession(java.lang.String);
     public static void updateTimeline(double, double, double);
     public static void clearSession();
+    public static void shutdownSessionNow();
     private static native void nativeOnMediaAction(java.lang.String);
 }
 -keep class app.bmdarklight.wave.MediaMetadataProbe { *; }

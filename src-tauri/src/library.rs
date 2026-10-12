@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Manager;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -162,9 +161,7 @@ pub struct Library {
 
 impl Library {
     pub fn new(app_handle: &tauri::AppHandle) -> Result<Self, String> {
-        let app_dir = app_handle
-            .path()
-            .app_data_dir()
+        let app_dir = crate::app_paths::app_data_dir(app_handle)
             .map_err(|error| format!("Failed to resolve application data directory: {error}"))?;
         std::fs::create_dir_all(&app_dir)
             .map_err(|error| format!("Failed to create application data directory: {error}"))?;

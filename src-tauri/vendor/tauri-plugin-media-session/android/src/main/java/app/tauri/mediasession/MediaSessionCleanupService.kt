@@ -7,9 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -20,12 +18,12 @@ import androidx.core.content.ContextCompat
  * Foreground service that keeps the process alive for playback.
  *
  * - Playing: in the foreground with a partial wake lock, so the engine keeps
- *   running and can move to the next track with the screen off.
- * - Paused: stays in the foreground for [PAUSED_FOREGROUND_MS] (the same window
- *   Media3 uses). Resuming inside it never needs a fresh foreground start,
- *   which Android 12+ may refuse while the app is in the background. After
- *   that it leaves the foreground but keeps the notification, which becomes
- *   dismissable.
+ *   running and moves to the next track with the screen off, and Android does
+ *   not kill the process when the task is swiped away.
+ * - Paused: leaves the foreground but keeps the notification, which becomes
+ *   dismissable straight away (Media3 does the same with
+ *   `stopForeground(false)`). Resuming from the notification or a media button
+ *   comes with a foreground-start exemption from the system.
  * - Task swiped away: playback keeps going if something is playing; otherwise
  *   the service and notification go away with the app.
  *
@@ -35,7 +33,6 @@ class MediaSessionCleanupService : Service() {
 
     companion object {
         private const val TAG = "plugin/media-session"
-        private const val PAUSED_FOREGROUND_MS = 10 * 60 * 1000L
         private const val WAKE_LOCK_TIMEOUT_MS = 6 * 60 * 60 * 1000L
 
         @Volatile
@@ -96,6 +93,20 @@ class MediaSessionCleanupService : Service() {
             }
         }
 
+        /**
+         * Remove the notification and stop the service from any thread, without
+         * waiting for the main looper. For the moment before the process exits.
+         */
+        internal fun shutdownNow(context: Context) {
+            pending = null
+            startRequested = false
+            cancel(context)
+            try {
+                context.stopService(Intent(context, MediaSessionCleanupService::class.java))
+            } catch (_: Throwable) {
+            }
+        }
+
         internal fun cancel(context: Context) {
             notificationShown = false
             try {
@@ -105,18 +116,9 @@ class MediaSessionCleanupService : Service() {
         }
     }
 
-    private val handler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
     private var inForeground = false
     private var everForeground = false
-
-    private val leaveForeground = Runnable {
-        if (MediaSessionState.playing || !inForeground) return@Runnable
-        Log.d(TAG, "paused for a while, leaving the foreground")
-        stopForegroundCompat(removeNotification = false)
-        // Repost so the notification picks up its dismissable flags.
-        MediaSessionState.republish()
-    }
 
     override fun onCreate() {
         super.onCreate()
@@ -155,7 +157,6 @@ class MediaSessionCleanupService : Service() {
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(leaveForeground)
         releaseWakeLock()
         instance = null
         if (!MediaSessionState.hasMedia) cancel(this)
@@ -165,7 +166,6 @@ class MediaSessionCleanupService : Service() {
     internal fun apply(notification: Notification, playing: Boolean) {
         pending = notification
         if (playing) {
-            handler.removeCallbacks(leaveForeground)
             enterForeground(notification)
             acquireWakeLock()
             return
@@ -173,15 +173,14 @@ class MediaSessionCleanupService : Service() {
 
         releaseWakeLock()
         if (!everForeground) {
-            // startForegroundService() must be answered with startForeground().
+            // startForegroundService() must be answered with startForeground(),
+            // even if playback paused while the service was starting.
             enterForeground(notification)
-        } else {
-            notify(this, notification)
         }
-        if (inForeground) {
-            handler.removeCallbacks(leaveForeground)
-            handler.postDelayed(leaveForeground, PAUSED_FOREGROUND_MS)
-        }
+        // Post first, then detach: the paused notification stays up, now
+        // dismissable, and is no longer tied to the service.
+        notify(this, notification)
+        if (inForeground) stopForegroundCompat(removeNotification = false)
     }
 
     private fun enterForeground(notification: Notification) {
@@ -225,7 +224,6 @@ class MediaSessionCleanupService : Service() {
     }
 
     internal fun shutDown() {
-        handler.removeCallbacks(leaveForeground)
         if (!everForeground) {
             try {
                 enterForeground(placeholderNotification())
