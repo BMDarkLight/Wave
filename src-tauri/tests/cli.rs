@@ -172,9 +172,47 @@ impl Wave {
     }
 
     fn write_wav(&self, name: &str) -> String {
+        self.write_wav_of(name, 0.5)
+    }
+
+    fn write_wav_of(&self, name: &str, seconds: f32) -> String {
         let path = self.music(name);
-        write_silent_wav(Path::new(&path));
+        write_silent_wav(Path::new(&path), seconds);
         path
+    }
+
+    /// Play `tracks` as a playlist, so the whole queue is known when the
+    /// first one starts, the way the app plays a playlist.
+    fn start_playlist(&self, tracks: &[&str]) {
+        self.ok(&["tracks", "import", &self.path("music")]);
+        let created = self.ok(&["playlists", "create", "Queue"]);
+        for track in tracks {
+            self.ok(&["playlists", "add-track", "Queue", track]);
+        }
+        let id = created["playlist"]["id"].as_str().unwrap();
+        self.ok(&["playback", "start", id]);
+    }
+
+    /// Follow playback until it stops, noting each file that becomes the
+    /// current one and how long the whole run took.
+    fn play_order(&self, limit: std::time::Duration) -> (Vec<String>, std::time::Duration) {
+        let start = std::time::Instant::now();
+        let mut order: Vec<String> = Vec::new();
+        while start.elapsed() < limit {
+            let status = self.ok(&["playback", "status"]);
+            // Between two tracks the state can read stopped for a tick while
+            // the next one is still loaded, so only an empty player counts.
+            if status["state"] == "stopped" && status["file"].is_null() {
+                break;
+            }
+            if let Some(file) = status["file"].as_str() {
+                if order.last().map(String::as_str) != Some(file) {
+                    order.push(file.to_string());
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        (order, start.elapsed())
     }
 
     fn track_names(&self, args: &[&str]) -> Vec<String> {
@@ -199,9 +237,9 @@ impl Drop for Wave {
     }
 }
 
-/// Half a second of silent 16-bit mono PCM.
-fn write_silent_wav(path: &Path) {
-    let samples = vec![0u8; 8000];
+/// `seconds` of silent 16-bit mono PCM at 8 kHz.
+fn write_silent_wav(path: &Path, seconds: f32) {
+    let samples = vec![0u8; (seconds * 8000.0) as usize * 2];
     let mut wav = Vec::new();
     wav.extend_from_slice(b"RIFF");
     wav.extend_from_slice(&(36u32 + samples.len() as u32).to_le_bytes());
@@ -697,4 +735,54 @@ fn a_reader_closing_the_pipe_ends_output_quietly() {
     let status = child.wait().unwrap();
     assert_eq!(status.code(), Some(141), "{stderr}");
     assert!(stderr.is_empty(), "no panic message: {stderr}");
+}
+
+#[test]
+#[ignore = "needs an audio output device"]
+fn a_track_queued_next_mid_song_plays_right_after_it() {
+    let wave = Wave::new();
+    silent(&wave);
+    let a = wave.write_wav_of("a.wav", 1.0);
+    let b = wave.write_wav_of("b.wav", 0.5);
+    let c = wave.write_wav_of("c.wav", 0.5);
+    wave.start_playlist(&[&a, &b, &c]);
+    // Gapless has already lined b up behind a by now.
+    let x = wave.write_wav_of("x.wav", 0.5);
+    wave.ok(&["queue", "next", &x]);
+    let (order, _) = wave.play_order(std::time::Duration::from_secs(8));
+    assert_eq!(order, ["a.wav", "x.wav", "b.wav", "c.wav"]);
+}
+
+#[test]
+#[ignore = "needs an audio output device"]
+fn crossfaded_tracks_each_play_once() {
+    let wave = Wave::new();
+    silent(&wave);
+    wave.ok(&["dsp", "crossfade", "1"]);
+    let a = wave.write_wav_of("a.wav", 2.0);
+    let b = wave.write_wav_of("b.wav", 2.0);
+    let c = wave.write_wav_of("c.wav", 2.0);
+    wave.start_playlist(&[&a, &b, &c]);
+    let (order, took) = wave.play_order(std::time::Duration::from_secs(12));
+    assert_eq!(order, ["a.wav", "b.wav", "c.wav"]);
+    // Six seconds of audio with two one-second overlaps. Playing a track
+    // a second time, or waiting out a track before starting the next,
+    // runs well past that.
+    assert!(took.as_secs_f32() < 5.5, "took {took:?}");
+}
+
+#[test]
+#[ignore = "needs an audio output device"]
+fn an_unreadable_track_is_skipped_rather_than_ending_the_queue() {
+    let wave = Wave::new();
+    silent(&wave);
+    let a = wave.write_wav_of("a.wav", 0.8);
+    let b = wave.write_wav_of("b.wav", 0.8);
+    let c = wave.write_wav_of("c.wav", 0.8);
+    wave.ok(&["tracks", "import", &wave.path("music")]);
+    // Imported fine, then replaced by something that will not decode.
+    std::fs::write(&b, b"not audio").unwrap();
+    wave.start_playlist(&[&a, &b, &c]);
+    let (order, _) = wave.play_order(std::time::Duration::from_secs(6));
+    assert_eq!(order, ["a.wav", "c.wav"]);
 }

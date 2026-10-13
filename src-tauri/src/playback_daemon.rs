@@ -679,7 +679,8 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
         DaemonRequest::Seek { seconds } => match state.player.seek(seconds) {
             Ok(()) => {
                 sync_media_playback_state(state);
-                let whole = seconds.max(0.0) as u64;
+                // Where it landed, which past the end is the end.
+                let whole = state.player.position_seconds() as u64;
                 DaemonResponse::ok_msg(format!("Seeked to {}:{:02}.", whole / 60, whole % 60))
             }
             Err(e) => DaemonResponse::err(e.to_string()),
@@ -764,7 +765,7 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
                 "all" => RepeatMode::All,
                 _ => return DaemonResponse::err(format!("Invalid repeat mode: {mode}")),
             };
-            state.player.repeat = repeat;
+            state.player.set_repeat(repeat);
             DaemonResponse::ok_msg(format!("Repeat {mode}."))
         }
         DaemonRequest::QueueClear => {
@@ -1050,6 +1051,18 @@ fn playback_tick_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>
             sync_media_playback_state(&mut guard);
         }
 
+        // A crossfade hands over to the next track at fade start, inside the
+        // same sink, so it never shows up as the track ending.
+        if guard.player.check_crossfade_track_switch() {
+            if let Some(path) = guard
+                .player
+                .get_current_path()
+                .map(|path| path.to_string_lossy().into_owned())
+            {
+                sync_media_for_path(&mut guard, &path);
+            }
+        }
+
         if !guard.player.should_auto_advance() {
             // keep waiting
         } else if guard.player.sleep_after_current_track() {
@@ -1062,7 +1075,7 @@ fn playback_tick_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>
                     guard.media.clear();
                 }
             }
-        } else if let Ok(Some(path)) = guard.player.play_next() {
+        } else if let Some(path) = advance_past_unreadable(&mut guard.player) {
             // Repeat one restarts the same file, which tick_listen cannot
             // tell apart from the track simply playing on, so close the
             // finished play here.
@@ -1090,6 +1103,18 @@ fn playback_tick_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>
             *tip = current_tooltip(&guard.player, &guard.library);
         }
     }
+}
+
+/// Move on to the next queue track, skipping files that will not open the
+/// way the app does, so one bad file does not end the queue.
+fn advance_past_unreadable(player: &mut AudioPlayer) -> Option<String> {
+    for _ in 0..8 {
+        match player.play_next() {
+            Ok(path) => return path,
+            Err(e) => tracing::warn!("Skipping a track that would not play: {e}"),
+        }
+    }
+    None
 }
 
 // ── Listen stats ──────────────────────────────────────────────────────────────
