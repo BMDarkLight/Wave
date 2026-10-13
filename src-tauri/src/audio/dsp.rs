@@ -7,10 +7,11 @@
 // https://github.com/BMDarkLight/Wave
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rodio::source::Source;
+use rodio::source::{Source, UniformSourceIterator};
 
 /// Shared state for crossfade track switching.
 ///
@@ -29,6 +30,42 @@ pub struct CrossfadeState {
     pub pending_next: bool,
     /// Latched when the logical track changes (fade start); cleared by the player.
     pub track_switched: bool,
+    /// The track the mixer will fade into next, or is fading into now.
+    pub next_path: Option<String>,
+    /// The fade toward [`Self::next_path`] has begun, so it can no longer be
+    /// replaced.
+    pub fading: bool,
+}
+
+/// A track to fade into, opened by the player off the audio thread.
+pub struct NextTrack {
+    pub source: Box<dyn Source<Item = f32> + Send>,
+    pub path: String,
+}
+
+/// Hands a [`Crossfade`] a different track to fade into, such as after a
+/// queue edit. The audio thread picks it up on its next sample unless the
+/// fade toward the old one has already begun.
+#[derive(Default)]
+pub struct NextTrackSlot {
+    pending: AtomicBool,
+    next: Mutex<Option<Option<NextTrack>>>,
+}
+
+impl NextTrackSlot {
+    /// Fade into `next` instead, or into nothing for `None`.
+    #[cfg_attr(target_os = "android", allow(dead_code))]
+    pub fn replace(&self, next: Option<NextTrack>) {
+        *self.next.lock().unwrap_or_else(|e| e.into_inner()) = Some(next);
+        self.pending.store(true, Ordering::Release);
+    }
+
+    fn take(&self) -> Option<Option<NextTrack>> {
+        if !self.pending.load(Ordering::Relaxed) || !self.pending.swap(false, Ordering::Acquire) {
+            return None;
+        }
+        self.next.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
 }
 
 /// Standard ISO frequency bands for a 10-band graphic equalizer.
@@ -402,6 +439,8 @@ pub struct Crossfade {
     current_path: Option<String>,
     /// Path of the next track (if any).
     next_path: Option<String>,
+    /// Replacements for [`Self::next`] sent by the player.
+    slot: Arc<NextTrackSlot>,
 }
 
 impl Crossfade {
@@ -416,6 +455,7 @@ impl Crossfade {
         let channels = current.channels().max(1);
         let current_duration = current.total_duration();
         let next_duration = next.as_ref().and_then(|n| n.total_duration());
+        let next = next.map(|next| fit_format(next, channels, sr));
         let pending_next = next.is_some();
         let state = Arc::new(Mutex::new(CrossfadeState {
             current_path: current_path.clone(),
@@ -423,6 +463,8 @@ impl Crossfade {
             duration: current_duration,
             pending_next,
             track_switched: false,
+            next_path: next.as_ref().and(next_path.clone()),
+            fading: false,
         }));
         let crossfade = Self {
             current,
@@ -441,8 +483,47 @@ impl Crossfade {
             state: state.clone(),
             current_path,
             next_path,
+            slot: Arc::default(),
         };
         (crossfade, state)
+    }
+
+    /// Where the player sends a different track to fade into.
+    pub fn next_slot(&self) -> Arc<NextTrackSlot> {
+        self.slot.clone()
+    }
+
+    /// Swap in the track the player sent, unless the fade toward the old
+    /// one has already begun and it is audible.
+    fn take_replacement(&mut self) {
+        let Some(replacement) = self.slot.take() else {
+            return;
+        };
+        if self.ui_on_next {
+            return;
+        }
+        match replacement {
+            Some(track) => {
+                self.next_duration = track.source.total_duration();
+                self.next = Some(fit_format(track.source, self.channels, self.sr));
+                self.next_path = Some(track.path);
+            }
+            None => {
+                self.next = None;
+                self.next_path = None;
+                self.next_duration = None;
+            }
+        }
+        self.next_position = Duration::ZERO;
+        self.publish_next();
+    }
+
+    /// Tell the player which track comes next, and whether it is fading in.
+    fn publish_next(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.next_path = self.next.as_ref().and(self.next_path.clone());
+            state.fading = self.ui_on_next && self.next.is_some();
+        }
     }
 
     fn sample_period(&self) -> Duration {
@@ -520,6 +601,7 @@ impl Crossfade {
             state.pending_next = true;
             state.track_switched = true;
         }
+        self.publish_next();
     }
 
     fn sync_shared_state(&self) {
@@ -561,7 +643,9 @@ impl Crossfade {
         self.in_crossfade = false;
         self.fade_progress = 0.0;
         self.fade_from = None;
-        self.ui_on_next = true;
+        // The promoted track is the current one now, with nothing after it
+        // until the player sends the track that follows.
+        self.ui_on_next = false;
 
         if let Ok(mut state) = self.state.lock() {
             // Only latch a switch if fade-start didn't already (e.g. unknown duration).
@@ -574,8 +658,92 @@ impl Crossfade {
                 state.track_switched = true;
             }
         }
+        self.publish_next();
 
         None
+    }
+}
+
+/// Resample and remix `source` to `channels` and `sample_rate` so it can be
+/// mixed sample by sample with a track in that layout.
+fn fit_format(
+    source: Box<dyn Source<Item = f32> + Send>,
+    channels: u16,
+    sample_rate: u32,
+) -> Box<dyn Source<Item = f32> + Send> {
+    if source.channels() == channels && source.sample_rate() == sample_rate {
+        source
+    } else {
+        Box::new(UniformSourceIterator::new(source, channels, sample_rate))
+    }
+}
+
+/// A track queued in the sink behind the playing one that can still be
+/// dropped before it starts. Once revoked it ends at its next frame boundary,
+/// so the sink moves straight on to whatever was queued after it.
+pub struct Revocable<S> {
+    inner: S,
+    revoked: Arc<AtomicBool>,
+    channels: u16,
+    /// Samples into the current frame, so it never ends between channels.
+    offset: u16,
+}
+
+impl<S: Source<Item = f32>> Revocable<S> {
+    pub fn new(inner: S) -> (Self, Arc<AtomicBool>) {
+        let revoked = Arc::new(AtomicBool::new(false));
+        let channels = inner.channels().max(1);
+        let source = Self {
+            inner,
+            revoked: revoked.clone(),
+            channels,
+            offset: 0,
+        };
+        (source, revoked)
+    }
+
+    fn is_revoked(&self) -> bool {
+        self.offset == 0 && self.revoked.load(Ordering::Relaxed)
+    }
+}
+
+impl<S: Source<Item = f32>> Iterator for Revocable<S> {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        if self.is_revoked() {
+            return None;
+        }
+        let sample = self.inner.next()?;
+        self.offset = (self.offset + 1) % self.channels;
+        Some(sample)
+    }
+}
+
+impl<S: Source<Item = f32>> Source for Revocable<S> {
+    fn current_frame_len(&self) -> Option<usize> {
+        if self.is_revoked() {
+            Some(0)
+        } else {
+            self.inner.current_frame_len()
+        }
+    }
+
+    fn channels(&self) -> u16 {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.offset = 0;
+        self.inner.try_seek(pos)
     }
 }
 
@@ -583,6 +751,7 @@ impl Iterator for Crossfade {
     type Item = f32;
 
     fn next(&mut self) -> Option<f32> {
+        self.take_replacement();
         let dt = self.sample_period();
         self.update_crossfade_region();
 
@@ -707,6 +876,7 @@ impl Source for Crossfade {
 
         self.update_crossfade_region();
         self.sync_shared_state();
+        self.publish_next();
         Ok(())
     }
 }
@@ -1251,6 +1421,118 @@ impl Source for TimeStretch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `secs` of a constant mono level at 1 kHz.
+    fn level(value: f32, secs: f32) -> Box<dyn Source<Item = f32> + Send> {
+        Box::new(SamplesBuffer::new(
+            1,
+            1000,
+            vec![value; (secs * 1000.0) as usize],
+        ))
+    }
+
+    fn crossfade_of(next: Option<(f32, &str)>) -> (Crossfade, Arc<Mutex<CrossfadeState>>) {
+        Crossfade::new(
+            level(0.0, 1.0),
+            next.map(|(value, _)| level(value, 1.0)),
+            0.2,
+            Some("current".to_string()),
+            next.map(|(_, path)| path.to_string()),
+        )
+    }
+
+    fn next_path(state: &Arc<Mutex<CrossfadeState>>) -> Option<String> {
+        state.lock().unwrap().next_path.clone()
+    }
+
+    #[test]
+    fn a_crossfade_fades_into_the_track_sent_before_the_fade() {
+        let (mut crossfade, state) = crossfade_of(Some((0.25, "old")));
+        assert_eq!(next_path(&state).as_deref(), Some("old"));
+        crossfade.next_slot().replace(Some(NextTrack {
+            source: level(0.75, 1.0),
+            path: "new".to_string(),
+        }));
+        let samples: Vec<f32> = crossfade.by_ref().collect();
+        assert_eq!(*samples.last().unwrap(), 0.75);
+        assert!(!samples.contains(&0.25));
+        assert_eq!(state.lock().unwrap().current_path.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn a_replacement_sent_once_the_fade_began_is_ignored() {
+        let (mut crossfade, state) = crossfade_of(Some((0.25, "old")));
+        while !state.lock().unwrap().fading {
+            crossfade.next().unwrap();
+        }
+        crossfade.next_slot().replace(Some(NextTrack {
+            source: level(0.75, 1.0),
+            path: "new".to_string(),
+        }));
+        let samples: Vec<f32> = crossfade.by_ref().collect();
+        assert_eq!(*samples.last().unwrap(), 0.25);
+        assert_eq!(state.lock().unwrap().current_path.as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn a_crossfade_without_a_next_track_can_be_given_one() {
+        let (mut crossfade, state) = crossfade_of(None);
+        assert_eq!(next_path(&state), None);
+        crossfade.next_slot().replace(Some(NextTrack {
+            source: level(0.75, 1.0),
+            path: "new".to_string(),
+        }));
+        let samples: Vec<f32> = crossfade.by_ref().collect();
+        assert_eq!(*samples.last().unwrap(), 0.75);
+    }
+
+    #[test]
+    fn dropping_the_next_track_ends_with_the_current_one() {
+        let (mut crossfade, state) = crossfade_of(Some((0.25, "old")));
+        crossfade.next_slot().replace(None);
+        assert_eq!(crossfade.by_ref().count(), 1000);
+        assert_eq!(next_path(&state), None);
+    }
+
+    #[test]
+    fn the_promoted_track_fades_into_the_one_sent_after_it() {
+        let (mut crossfade, state) = crossfade_of(Some((0.25, "second")));
+        // Play through the first track and into the second.
+        for _ in 0..1100 {
+            crossfade.next().unwrap();
+        }
+        {
+            let state = state.lock().unwrap();
+            assert_eq!(state.current_path.as_deref(), Some("second"));
+            assert_eq!(state.next_path, None);
+            assert!(!state.fading);
+        }
+        crossfade.next_slot().replace(Some(NextTrack {
+            source: level(0.75, 1.0),
+            path: "third".to_string(),
+        }));
+        let samples: Vec<f32> = crossfade.by_ref().collect();
+        assert_eq!(*samples.last().unwrap(), 0.75);
+        assert_eq!(state.lock().unwrap().current_path.as_deref(), Some("third"));
+    }
+
+    #[test]
+    fn a_revoked_track_ends_at_its_next_frame_boundary() {
+        let (mut source, revoked) =
+            Revocable::new(SamplesBuffer::new(2, 1000, vec![1.0f32, 2.0, 3.0, 4.0]));
+        assert_eq!(source.next(), Some(1.0));
+        revoked.store(true, Ordering::Relaxed);
+        assert_eq!(source.next(), Some(2.0));
+        assert_eq!(source.next(), None);
+    }
+
+    #[test]
+    fn a_track_revoked_before_it_starts_plays_nothing() {
+        let (mut source, revoked) = Revocable::new(SamplesBuffer::new(2, 1000, vec![1.0f32; 8]));
+        revoked.store(true, Ordering::Relaxed);
+        assert_eq!(source.current_frame_len(), Some(0));
+        assert_eq!(source.next(), None);
+    }
 
     #[test]
     fn an_imported_eq_file_is_held_to_the_control_limits() {

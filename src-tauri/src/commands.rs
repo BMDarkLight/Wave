@@ -1022,11 +1022,12 @@ pub(crate) fn handle_native_media_action(
         }
         "repeat" => {
             with_app_player(app, |player| {
-                player.repeat = match player.repeat {
+                let repeat = match player.repeat {
                     RepeatMode::Off => RepeatMode::All,
                     RepeatMode::All => RepeatMode::One,
                     RepeatMode::One => RepeatMode::Off,
                 };
+                player.set_repeat(repeat);
                 Ok(())
             })?;
             let bridge = app.state::<MediaBridgeState>();
@@ -2188,7 +2189,7 @@ pub async fn set_repeat(
         "all" => RepeatMode::All,
         _ => return Err(format!("Invalid repeat mode: {mode}")),
     };
-    lock_player(&state)?.repeat = repeat;
+    lock_player(&state)?.set_repeat(repeat);
     let bridge = app.state::<MediaBridgeState>();
     sync_bridge_playback_mode(&app, &bridge);
     Ok(())

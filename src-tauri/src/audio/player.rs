@@ -7,10 +7,10 @@
 // https://github.com/BMDarkLight/Wave
 
 #[cfg(target_os = "android")]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rodio::source::UniformSourceIterator;
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -19,8 +19,9 @@ use crate::error::AudioError;
 
 use super::dsp::{
     load_shared_speed, set_shared_gain, set_shared_speed, shared_gain, shared_level, shared_speed,
-    Crossfade, CrossfadeState, EqConfig, Equalizer, LevelMeter, SharedGain, SharedLevel,
-    SharedSpeed, SoftFade, SoftFadeState, TimeStretch, VolumeGain, SOFT_FADE_SECS,
+    Crossfade, CrossfadeState, EqConfig, Equalizer, LevelMeter, NextTrack, NextTrackSlot,
+    Revocable, SharedGain, SharedLevel, SharedSpeed, SoftFade, SoftFadeState, TimeStretch,
+    VolumeGain, SOFT_FADE_SECS,
 };
 use super::normalization::{analyze_track_levels, VolumeNormalizer};
 use super::sleep_timer::{SleepRequest, SleepStep, SleepTimer, SleepTimerStatus};
@@ -458,13 +459,35 @@ struct AudioOutput {
     handle: OutputStreamHandle,
 }
 
+/// The crossfade wrapped around the playing track while crossfade is on.
+/// ExoPlayer crossfades by itself on Android, so this stays unused there.
+#[cfg_attr(target_os = "android", allow(dead_code))]
+struct CrossfadeParts {
+    /// Shared with the mixer, which reports the handoff and what comes next.
+    state: Arc<Mutex<CrossfadeState>>,
+    /// Sends the mixer a different track to fade into.
+    slot: Arc<NextTrackSlot>,
+    /// The track last sent through `slot`, so it is not reopened every tick
+    /// while the mixer has yet to pick it up.
+    requested: Option<Option<String>>,
+}
+
+/// The next queue track, appended to the sink behind the playing one.
+struct Prefetched {
+    path: String,
+    duration: Option<Duration>,
+    /// Drops it before it starts, once the queue no longer plays it next.
+    #[cfg_attr(target_os = "android", allow(dead_code))]
+    revoked: Arc<AtomicBool>,
+}
+
 /// A decoded, fully-wrapped playback source: the boxed sample stream, the
-/// track duration when the decoder could report one, and the crossfade state
-/// shared with the next track (present only while a crossfade is armed).
+/// track duration when the decoder could report one, and its crossfade
+/// (present only while crossfade is on).
 type BuiltSource = (
     Box<dyn Source<Item = f32> + Send + 'static>,
     Option<Duration>,
-    Option<Arc<Mutex<CrossfadeState>>>,
+    Option<CrossfadeParts>,
 );
 
 pub const MIN_SPEED: f32 = 0.5;
@@ -485,14 +508,14 @@ pub struct AudioPlayer {
     pub(crate) eq_version: Arc<Mutex<u64>>,
     /// Crossfade duration in seconds (0.0 = off).
     crossfade_duration: f32,
-    /// Shared state for crossfade track switching.
-    crossfade_state: Option<Arc<Mutex<CrossfadeState>>>,
+    /// The crossfade around the playing track, for track switching.
+    crossfade: Option<CrossfadeParts>,
     /// Soft gain ramp for play/pause/seek/stop (shared with the active SoftFade).
     soft_fade: Arc<Mutex<SoftFadeState>>,
     /// Next queue path already appended to the sink so playback can continue
     /// when the current source ends. Critical on Android while backgrounded,
     /// where a delayed tick alone can miss the transition.
-    prefetched_next: Option<(String, Option<Duration>)>,
+    prefetched_next: Option<Prefetched>,
     /// Seamless queue transitions when crossfade is off.
     gapless_enabled: bool,
     /// Boost quieter tracks toward the session median peak (off by default).
@@ -547,7 +570,7 @@ impl AudioPlayer {
             eq_config: Arc::new(Mutex::new(EqConfig::default())),
             eq_version: Arc::new(Mutex::new(0)),
             crossfade_duration: 0.0,
-            crossfade_state: None,
+            crossfade: None,
             soft_fade: Arc::new(Mutex::new(SoftFadeState::default())),
             prefetched_next: None,
             gapless_enabled: true,
@@ -675,7 +698,7 @@ impl AudioPlayer {
                 eq_config: Arc::new(Mutex::new(EqConfig::default())),
                 eq_version: Arc::new(Mutex::new(0)),
                 crossfade_duration: 0.0,
-                crossfade_state: None,
+                crossfade: None,
                 soft_fade: Arc::new(Mutex::new(SoftFadeState::default())),
                 prefetched_next: None,
                 gapless_enabled: true,
@@ -972,65 +995,68 @@ impl AudioPlayer {
         let eq_version_for_next = eq_version.clone();
         let eq = Equalizer::new(gained, eq_config, eq_version);
 
-        // Wrap in Crossfade if enabled and we have a next track.
-        let chain: Box<dyn Source<Item = f32> + Send> = if crossfade_duration > 0.0 {
-            if let Some(next_path) = next_path {
-                let next_source =
-                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        SymphoniaSource::new(next_path)
-                    })) {
-                        Ok(Ok(source)) => Some(source.convert_samples()),
-                        Ok(Err(error)) => {
-                            tracing::warn!("Crossfade preload failed for \"{next_path}\": {error}");
-                            None
-                        }
-                        Err(_) => {
-                            tracing::warn!("Crossfade preload panicked for \"{next_path}\"");
-                            None
-                        }
-                    };
-
-                if let Some(next_converted) = next_source {
-                    let next_gained = VolumeGain::new(next_converted, next_gain);
-                    let next_eq =
-                        Equalizer::new(next_gained, eq_config_for_next, eq_version_for_next);
-                    // Match channel count / sample rate so per-sample mixing is valid.
-                    let target_channels = eq.channels();
-                    let target_sr = eq.sample_rate();
-                    let next_matched: Box<dyn Source<Item = f32> + Send> = if next_eq.channels()
-                        != target_channels
-                        || next_eq.sample_rate() != target_sr
-                    {
-                        Box::new(UniformSourceIterator::new(
-                            next_eq,
-                            target_channels,
-                            target_sr,
-                        ))
-                    } else {
-                        Box::new(next_eq)
-                    };
-                    let (crossfade, state) = Crossfade::new(
-                        Box::new(eq),
-                        Some(next_matched),
-                        crossfade_duration,
-                        Some(path.to_string()),
-                        Some(next_path.to_string()),
-                    );
-                    let stretched = TimeStretch::new(Box::new(crossfade), speed);
-                    let faded = SoftFade::new(Box::new(stretched), soft_fade);
-                    let metered = LevelMeter::new(Box::new(faded), level);
-                    return Ok((Box::new(metered), duration, Some(state)));
-                }
-            }
-            Box::new(eq)
-        } else {
-            Box::new(eq)
-        };
+        // While crossfade is on every track is wrapped, even with nothing to
+        // fade into yet, so a track queued later can still be faded into.
+        let (chain, crossfade): (Box<dyn Source<Item = f32> + Send>, _) =
+            if crossfade_duration > 0.0 {
+                let next = next_path.and_then(|next_path| {
+                    Self::open_crossfade_next(
+                        next_path,
+                        next_gain,
+                        eq_config_for_next,
+                        eq_version_for_next,
+                    )
+                });
+                let opened = next.as_ref().map(|next| next.path.clone());
+                let (crossfade, state) = Crossfade::new(
+                    Box::new(eq),
+                    next.map(|next| next.source),
+                    crossfade_duration,
+                    Some(path.to_string()),
+                    opened,
+                );
+                let parts = CrossfadeParts {
+                    state,
+                    slot: crossfade.next_slot(),
+                    requested: None,
+                };
+                (Box::new(crossfade), Some(parts))
+            } else {
+                (Box::new(eq), None)
+            };
 
         let stretched = TimeStretch::new(chain, speed);
         let faded = SoftFade::new(Box::new(stretched), soft_fade);
         let metered = LevelMeter::new(Box::new(faded), level);
-        Ok((Box::new(metered), duration, None))
+        Ok((Box::new(metered), duration, crossfade))
+    }
+
+    /// Open the track a crossfade fades into, with its own gain and the
+    /// shared EQ. A file that will not open just leaves nothing to fade into.
+    fn open_crossfade_next(
+        path: &str,
+        gain: SharedGain,
+        eq_config: Arc<Mutex<EqConfig>>,
+        eq_version: Arc<Mutex<u64>>,
+    ) -> Option<NextTrack> {
+        let source = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            SymphoniaSource::new(path)
+        })) {
+            Ok(Ok(source)) => source,
+            Ok(Err(error)) => {
+                tracing::warn!("Crossfade preload failed for \"{path}\": {error}");
+                return None;
+            }
+            Err(_) => {
+                tracing::warn!("Crossfade preload panicked for \"{path}\"");
+                return None;
+            }
+        };
+        let gained = VolumeGain::new(source.convert_samples(), gain);
+        Some(NextTrack {
+            source: Box::new(Equalizer::new(gained, eq_config, eq_version)),
+            path: path.to_string(),
+        })
     }
 
     fn set_soft_fade_target(&self, target: f32) {
@@ -1078,7 +1104,7 @@ impl AudioPlayer {
                 .as_deref()
                 .map(|next| self.peek_normalization_gain_cell_for_path(next))
                 .unwrap_or_else(|| shared_gain(1.0));
-            let (source, duration, crossfade_state) = Self::build_source(
+            let (source, duration, crossfade) = Self::build_source(
                 path,
                 track_gain,
                 self.eq_config.clone(),
@@ -1124,7 +1150,7 @@ impl AudioPlayer {
                 speed: self.speed(),
             };
 
-            self.crossfade_state = crossfade_state;
+            self.crossfade = crossfade;
             self.prefetch_next_into_sink();
 
             Ok(())
@@ -1174,7 +1200,7 @@ impl AudioPlayer {
 
         self.sink = None;
         self.prefetched_next = None;
-        self.crossfade_state = None;
+        self.crossfade = None;
         self.current_path = Some(PathBuf::from(path));
         self.clock = PlaybackClock {
             started_at: Some(Instant::now()),
@@ -1190,13 +1216,19 @@ impl AudioPlayer {
     fn sync_android_playback_extras(&self) {
         let _ = crate::android::audio::exo_set_crossfade_duration(self.crossfade_duration);
         let _ = crate::android::audio::exo_set_gapless_enabled(self.gapless_enabled);
+        self.sync_android_upcoming();
+    }
+
+    /// Tell ExoPlayer which track to crossfade into next.
+    #[cfg(target_os = "android")]
+    fn sync_android_upcoming(&self) {
         self.sync_android_crossfade_normalization();
-        if self.crossfade_duration > 0.0 {
-            let next = self.upcoming_for_preload();
-            let _ = crate::android::audio::exo_set_upcoming_uri(next.as_deref());
-            return;
-        }
-        let _ = crate::android::audio::exo_set_upcoming_uri(None);
+        let next = if self.crossfade_duration > 0.0 {
+            self.upcoming_for_preload()
+        } else {
+            None
+        };
+        let _ = crate::android::audio::exo_set_upcoming_uri(next.as_deref());
     }
 
     /// ExoPlayer holds the gapless playlist it was given at play time. Hand it
@@ -1215,6 +1247,11 @@ impl AudioPlayer {
             return;
         }
         upcoming.remove(0);
+        // Repeat one plays the current track again, so nothing may follow it
+        // inside ExoPlayer's own timeline.
+        if self.upcoming_for_preload().is_none() {
+            upcoming.clear();
+        }
         match crate::android::audio::exo_replace_upcoming_media_items(&upcoming) {
             Ok(Some(current)) => {
                 self.android_gapless_playlist.truncate(current + 1);
@@ -1318,7 +1355,7 @@ impl AudioPlayer {
 
     /// Append the upcoming queue track to the active sink (best-effort).
     fn prefetch_next_into_sink(&mut self) {
-        if !self.gapless_enabled {
+        if !self.gapless_enabled || self.prefetched_next.is_some() {
             return;
         }
         if self.repeat == RepeatMode::One {
@@ -1348,9 +1385,82 @@ impl AudioPlayer {
             return;
         };
         if let Some(sink) = self.sink.as_ref() {
+            let (source, revoked) = Revocable::new(source);
             sink.append(source);
-            self.prefetched_next = Some((next_path, duration));
+            self.prefetched_next = Some(Prefetched {
+                path: next_path,
+                duration,
+                revoked,
+            });
         }
+    }
+
+    /// Line the preloaded next track back up with the queue. Gapless and
+    /// crossfade both preload the following track as soon as one starts, so
+    /// after a queue edit, shuffle or repeat change it has to be swapped out,
+    /// or it plays anyway and the queue jumps to wherever it sits.
+    #[cfg(not(target_os = "android"))]
+    fn refresh_preload(&mut self) {
+        let wanted = self.upcoming_for_preload();
+
+        if let Some(crossfade) = self.crossfade.as_mut() {
+            let (queued, fading) = {
+                let state = crossfade.state.lock().unwrap_or_else(|e| e.into_inner());
+                (state.next_path.clone(), state.fading)
+            };
+            if fading {
+                // The next track is already fading in. Anything sent before
+                // the fade began was dropped, so send it again afterwards.
+                crossfade.requested = None;
+                return;
+            }
+            if queued == wanted || crossfade.requested.as_ref() == Some(&wanted) {
+                return;
+            }
+            let next = wanted.as_deref().and_then(|path| {
+                let gain = self.peek_normalization_gain_cell_for_path(path);
+                Self::open_crossfade_next(
+                    path,
+                    gain,
+                    self.eq_config.clone(),
+                    self.eq_version.clone(),
+                )
+            });
+            if let Some(crossfade) = self.crossfade.as_mut() {
+                crossfade.slot.replace(next);
+                crossfade.requested = Some(wanted);
+            }
+            return;
+        }
+
+        let Some(sink) = self.sink.as_ref() else {
+            return;
+        };
+        if self.prefetched_next.as_ref().map(|next| &next.path) == wanted.as_ref() {
+            return;
+        }
+        match self.prefetched_next.take() {
+            // Nothing else is left in the sink, so the prefetched track is
+            // the one playing and the next tick adopts it.
+            Some(stale) if sink.len() <= 1 => self.prefetched_next = Some(stale),
+            Some(stale) => {
+                stale.revoked.store(true, Ordering::Relaxed);
+                self.prefetch_next_into_sink();
+            }
+            None if !sink.empty() => self.prefetch_next_into_sink(),
+            None => {}
+        }
+    }
+
+    /// The queue or repeat mode changed: have what plays next follow it.
+    fn sync_preload(&mut self) {
+        #[cfg(target_os = "android")]
+        {
+            self.resync_android_gapless();
+            self.sync_android_upcoming();
+        }
+        #[cfg(not(target_os = "android"))]
+        self.refresh_preload();
     }
 
     /// Adopt a track that is already playing via sink prefetch (no restart).
@@ -1373,7 +1483,7 @@ impl AudioPlayer {
             speed: self.speed(),
         };
         self.prefetched_next = None;
-        self.crossfade_state = None;
+        self.crossfade = None;
         self.prefetch_next_into_sink();
     }
 
@@ -1414,7 +1524,7 @@ impl AudioPlayer {
 
         self.sink = None;
         self.prefetched_next = None;
-        self.crossfade_state = None;
+        self.crossfade = None;
         self.current_path = Some(PathBuf::from(path));
         self.clock = PlaybackClock {
             started_at: None,
@@ -1438,19 +1548,24 @@ impl AudioPlayer {
             }
         }
         self.prefetched_next = None;
-        self.crossfade_state = None;
+        self.crossfade = None;
         self.set_soft_fade_target(1.0);
 
         let offset = Duration::from_secs_f64(position_secs.max(0.0));
+        let next_path = self.upcoming_for_preload();
         let track_gain = self.normalization_gain_cell_for_path(path);
-        let (source, duration, crossfade_state) = Self::build_source(
+        let next_gain = next_path
+            .as_deref()
+            .map(|next| self.peek_normalization_gain_cell_for_path(next))
+            .unwrap_or_else(|| shared_gain(1.0));
+        let (source, duration, crossfade) = Self::build_source(
             path,
             track_gain,
             self.eq_config.clone(),
             self.eq_version.clone(),
-            0.0,
-            None,
-            shared_gain(1.0),
+            self.crossfade_duration,
+            next_path.as_deref(),
+            next_gain,
             self.soft_fade.clone(),
             self.speed.clone(),
             self.level.clone(),
@@ -1488,7 +1603,8 @@ impl AudioPlayer {
             duration,
             speed: self.speed(),
         };
-        self.crossfade_state = crossfade_state;
+        self.crossfade = crossfade;
+        self.prefetch_next_into_sink();
         Ok(())
     }
 
@@ -1584,7 +1700,7 @@ impl AudioPlayer {
             self.sink = None;
             self.current_path = None;
             self.prefetched_next = None;
-            self.crossfade_state = None;
+            self.crossfade = None;
             self.clock = PlaybackClock::stopped();
             return Ok(());
         }
@@ -1599,7 +1715,7 @@ impl AudioPlayer {
             }
             self.current_path = None;
             self.prefetched_next = None;
-            self.crossfade_state = None;
+            self.crossfade = None;
             self.set_soft_fade_target(1.0);
             self.clock = PlaybackClock::stopped();
             Ok(())
@@ -1724,9 +1840,10 @@ impl AudioPlayer {
     }
 
     /// The next queue track worth preloading for gapless or crossfade, or
-    /// `None` while the sleep timer is waiting for the current track to end.
+    /// `None` while the sleep timer is waiting for the current track to end
+    /// and under repeat one, where the current track plays again instead.
     fn upcoming_for_preload(&self) -> Option<String> {
-        if self.stop_after_current {
+        if self.stop_after_current || self.repeat == RepeatMode::One {
             return None;
         }
         self.queue.peek_next(&self.repeat).map(str::to_string)
@@ -1849,8 +1966,6 @@ impl AudioPlayer {
             return Ok(None);
         };
         self.load_paused_at(&path, 0.0)?;
-        #[cfg(not(target_os = "android"))]
-        self.prefetch_next_into_sink();
         Ok(Some(path))
     }
 
@@ -1883,7 +1998,7 @@ impl AudioPlayer {
         // The next track may already be lined up behind this one. Reload the
         // current track at the same spot without it.
         #[cfg(not(target_os = "android"))]
-        let preloaded = self.has_sink_prefetch() || self.crossfade_state.is_some();
+        let preloaded = self.has_sink_prefetch() || self.crossfade_has_next();
         #[cfg(target_os = "android")]
         let preloaded = self.android_gapless_playlist.len() > 1;
         if !preloaded {
@@ -1907,6 +2022,19 @@ impl AudioPlayer {
         if was_playing {
             let _ = self.resume();
         }
+    }
+
+    /// True when the crossfade has a track lined up to fade into.
+    #[cfg(not(target_os = "android"))]
+    fn crossfade_has_next(&self) -> bool {
+        self.crossfade.as_ref().is_some_and(|crossfade| {
+            crossfade
+                .state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_path
+                .is_some()
+        })
     }
 
     pub fn is_playing(&self) -> bool {
@@ -1988,7 +2116,7 @@ impl AudioPlayer {
             // once the mixer promotes, pending_next flips false while audio is still
             // mid-song, and a premature play_next() restarts that track from 0.
             // Only advance when this sink is truly exhausted (then start the following track).
-            if self.crossfade_state.is_some() && !self.sink_exhausted() {
+            if self.crossfade.is_some() && !self.sink_exhausted() {
                 return false;
             }
 
@@ -2072,47 +2200,59 @@ impl AudioPlayer {
 
         #[cfg(not(target_os = "android"))]
         {
-            let Some(state) = self.crossfade_state.clone() else {
-                return false;
-            };
-            let Ok(mut guard) = state.lock() else {
-                return false;
-            };
-            if !guard.track_switched {
-                return false;
+            let switched = self.adopt_crossfade_switch();
+            // Once a fade finishes, the track it faded into has nothing after
+            // it until the following queue track is sent along.
+            if self.crossfade.is_some() {
+                self.refresh_preload();
             }
-            guard.track_switched = false;
-
-            let Some(new_path) = guard.current_path.clone() else {
-                return false;
-            };
-            let duration = guard.duration;
-            let position = guard.position;
-            drop(guard);
-
-            let new_path_buf = PathBuf::from(&new_path);
-            if self.current_path.as_deref() == Some(new_path_buf.as_path()) {
-                return false;
-            }
-
-            // Keep the in-memory queue index aligned with the track now audible.
-            let peeked = self.queue.peek_next(&self.repeat).map(str::to_string);
-            if peeked.as_deref() == Some(new_path.as_str()) {
-                let _ = self.queue.next(&self.repeat);
-            } else if let Some(idx) = self.queue.tracks().iter().position(|p| p == &new_path) {
-                let _ = self.queue.jump(idx);
-            }
-
-            let was_playing = self.is_playing();
-            self.current_path = Some(new_path_buf);
-            self.clock = PlaybackClock {
-                started_at: was_playing.then(Instant::now),
-                elapsed_before_start: position,
-                duration,
-                speed: self.speed(),
-            };
-            true
+            switched
         }
+    }
+
+    /// Follow the crossfade mixer onto the track it started fading into.
+    #[cfg(not(target_os = "android"))]
+    fn adopt_crossfade_switch(&mut self) -> bool {
+        let Some(state) = self.crossfade.as_ref().map(|c| c.state.clone()) else {
+            return false;
+        };
+        let Ok(mut guard) = state.lock() else {
+            return false;
+        };
+        if !guard.track_switched {
+            return false;
+        }
+        guard.track_switched = false;
+
+        let Some(new_path) = guard.current_path.clone() else {
+            return false;
+        };
+        let duration = guard.duration;
+        let position = guard.position;
+        drop(guard);
+
+        let new_path_buf = PathBuf::from(&new_path);
+        if self.current_path.as_deref() == Some(new_path_buf.as_path()) {
+            return false;
+        }
+
+        // Keep the in-memory queue index aligned with the track now audible.
+        let peeked = self.queue.peek_next(&self.repeat).map(str::to_string);
+        if peeked.as_deref() == Some(new_path.as_str()) {
+            let _ = self.queue.next(&self.repeat);
+        } else if let Some(idx) = self.queue.tracks().iter().position(|p| p == &new_path) {
+            let _ = self.queue.jump(idx);
+        }
+
+        let was_playing = self.is_playing();
+        self.current_path = Some(new_path_buf);
+        self.clock = PlaybackClock {
+            started_at: was_playing.then(Instant::now),
+            elapsed_before_start: position,
+            duration,
+            speed: self.speed(),
+        };
+        true
     }
 
     /// Align `current_path` / duration with the crossfade mixer after a seek.
@@ -2121,7 +2261,7 @@ impl AudioPlayer {
     /// `track_switched` latch; seek may promote the incoming source without
     /// re-signaling a switch.
     fn adopt_crossfade_logical_track(&mut self) {
-        let Some(state) = self.crossfade_state.clone() else {
+        let Some(state) = self.crossfade.as_ref().map(|c| c.state.clone()) else {
             return;
         };
         let Ok(guard) = state.lock() else {
@@ -2308,7 +2448,12 @@ impl AudioPlayer {
                 .and_then(|p| p.to_str().map(str::to_string)));
         }
 
-        if let Some((prefetched, duration)) = self.prefetched_next.take() {
+        if let Some(Prefetched {
+            path: prefetched,
+            duration,
+            ..
+        }) = self.prefetched_next.take()
+        {
             if self.gapless_enabled && self.prefetched_is_now_audible() {
                 let peeked = self.queue.peek_next(&self.repeat).map(str::to_string);
                 if peeked.as_deref() == Some(prefetched.as_str()) {
@@ -2366,26 +2511,27 @@ impl AudioPlayer {
 
     pub fn set_shuffle(&mut self, enabled: bool) {
         self.queue.set_shuffle(enabled);
-        #[cfg(target_os = "android")]
-        self.resync_android_gapless();
+        self.sync_preload();
+    }
+
+    pub fn set_repeat(&mut self, repeat: RepeatMode) {
+        self.repeat = repeat;
+        self.sync_preload();
     }
 
     pub fn set_song_couples(&mut self, couples: Vec<(String, String)>) {
         self.queue.set_couples(couples);
-        #[cfg(target_os = "android")]
-        self.resync_android_gapless();
+        self.sync_preload();
     }
 
     pub fn enqueue(&mut self, path: &str) {
         self.queue.enqueue(path.to_string());
-        #[cfg(target_os = "android")]
-        self.resync_android_gapless();
+        self.sync_preload();
     }
 
     pub fn insert_next(&mut self, path: &str) {
         self.queue.insert_next(path.to_string());
-        #[cfg(target_os = "android")]
-        self.resync_android_gapless();
+        self.sync_preload();
     }
 
     /// Remove a queue entry. Removing the track that is playing moves on to
@@ -2404,25 +2550,22 @@ impl AudioPlayer {
                 let _ = self.stop();
             }
         } else {
-            #[cfg(target_os = "android")]
-            self.resync_android_gapless();
+            self.sync_preload();
         }
         Some(removed)
     }
 
     pub fn move_queue_track(&mut self, from: usize, to: usize) -> bool {
         let moved = self.queue.move_track(from, to);
-        #[cfg(target_os = "android")]
         if moved {
-            self.resync_android_gapless();
+            self.sync_preload();
         }
         moved
     }
 
     pub fn clear_upcoming(&mut self) {
         self.queue.clear_upcoming();
-        #[cfg(target_os = "android")]
-        self.resync_android_gapless();
+        self.sync_preload();
     }
 
     pub fn jump_to_queue_index(&mut self, index: usize) -> Result<Option<String>, AudioError> {
@@ -2443,8 +2586,6 @@ mod tests {
         queue.set_tracks(paths.iter().map(|p| p.to_string()).collect());
         queue
     }
-
-    // ── set_tracks ───────────────────────────────────────────────────────
 
     #[test]
     fn set_tracks_resets_current_index_and_keeps_shuffle_on() {
@@ -3091,5 +3232,200 @@ mod tests {
         std::thread::sleep(Duration::from_millis(5));
         assert_eq!(clock.position(), Duration::from_millis(1));
         assert!(clock.raw_elapsed() > clock.position());
+    }
+
+    /// `seconds` of a 440 Hz tone, as a mono WAV.
+    fn tone_of(seconds: f32) -> String {
+        let rate = 22_050u32;
+        let samples: Vec<i16> = (0..(rate as f32 * seconds) as u32)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                (12_000.0 * (2.0 * std::f32::consts::PI * 440.0 * t).sin()) as i16
+            })
+            .collect();
+        let data_len = (samples.len() * 2) as u32;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&rate.to_le_bytes());
+        bytes.extend_from_slice(&(rate * 2).to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        let path = std::env::temp_dir().join(format!("wave-tone-{}.wav", uuid::Uuid::new_v4()));
+        std::fs::write(&path, bytes).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    /// A muted player on the real output with a queue of `count` tones.
+    #[cfg(not(target_os = "android"))]
+    fn playing_queue(count: usize, seconds: f32) -> (AudioPlayer, Vec<String>) {
+        let paths: Vec<String> = (0..count).map(|_| tone_of(seconds)).collect();
+        let mut player = AudioPlayer::new().unwrap();
+        player.set_volume(0.0).unwrap();
+        player.queue.set_tracks(paths.clone());
+        (player, paths)
+    }
+
+    /// Tick the player the way the app does until the queue runs out, and
+    /// return each track that became current with the time it did.
+    #[cfg(not(target_os = "android"))]
+    fn play_out(player: &mut AudioPlayer, limit: Duration) -> Vec<(String, Duration)> {
+        let start = Instant::now();
+        let mut order = Vec::new();
+        let mut last = None;
+        while start.elapsed() < limit {
+            player.check_crossfade_track_switch();
+            if player.should_auto_advance() && !matches!(player.play_next(), Ok(Some(_))) {
+                let _ = player.stop();
+            }
+            let current = player
+                .get_current_path()
+                .map(|path| path.to_string_lossy().into_owned());
+            if current != last {
+                if let Some(path) = &current {
+                    order.push((path.clone(), start.elapsed()));
+                }
+                last = current.clone();
+            }
+            if current.is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        order
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn paths_of(order: &[(String, Duration)]) -> Vec<&str> {
+        order.iter().map(|(path, _)| path.as_str()).collect()
+    }
+
+    // The tests below play through the real audio output (muted), so CI
+    // skips them. Run with `cargo test --lib -- --ignored --test-threads=1`.
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn a_track_queued_next_mid_song_plays_right_after_it() {
+        let (mut player, paths) = playing_queue(3, 0.8);
+        player.jump_to_queue_index(0).unwrap();
+        let next = tone_of(0.8);
+        player.insert_next(&next);
+        let order = play_out(&mut player, Duration::from_secs(6));
+        assert_eq!(paths_of(&order), [&paths[0], &next, &paths[1], &paths[2]]);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn moving_a_track_mid_song_changes_what_plays_next() {
+        let (mut player, paths) = playing_queue(3, 0.8);
+        player.jump_to_queue_index(0).unwrap();
+        player.move_queue_track(2, 1);
+        let order = play_out(&mut player, Duration::from_secs(5));
+        assert_eq!(paths_of(&order), [&paths[0], &paths[2], &paths[1]]);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn shuffling_mid_song_still_plays_every_track_once() {
+        let (mut player, _) = playing_queue(6, 0.6);
+        player.jump_to_queue_index(0).unwrap();
+        player.set_shuffle(true);
+        let shuffled = player.queue.tracks().to_vec();
+        let order = play_out(&mut player, Duration::from_secs(8));
+        assert_eq!(paths_of(&order), shuffled);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn repeat_one_set_mid_song_drops_the_preloaded_track() {
+        let (mut player, paths) = playing_queue(2, 0.8);
+        player.jump_to_queue_index(0).unwrap();
+        assert!(player.prefetched_next.is_some());
+        player.set_repeat(RepeatMode::One);
+        assert!(player.prefetched_next.is_none());
+        let order = play_out(&mut player, Duration::from_secs(2));
+        assert_eq!(paths_of(&order), [&paths[0]]);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn a_crossfade_fades_into_a_track_queued_next_mid_song() {
+        let (mut player, paths) = playing_queue(3, 1.6);
+        player.set_crossfade_duration(0.5);
+        player.jump_to_queue_index(0).unwrap();
+        let next = tone_of(1.6);
+        player.insert_next(&next);
+        let order = play_out(&mut player, Duration::from_secs(9));
+        assert_eq!(paths_of(&order), [&paths[0], &next, &paths[1], &paths[2]]);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn repeat_one_repeats_with_crossfade_on() {
+        let (mut player, paths) = playing_queue(3, 1.6);
+        player.set_crossfade_duration(0.5);
+        player.set_repeat(RepeatMode::One);
+        player.jump_to_queue_index(0).unwrap();
+        let order = play_out(&mut player, Duration::from_secs(4));
+        assert_eq!(paths_of(&order), [&paths[0]]);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn every_track_change_crossfades() {
+        let (mut player, paths) = playing_queue(4, 1.6);
+        player.set_crossfade_duration(0.5);
+        player.jump_to_queue_index(0).unwrap();
+        let order = play_out(&mut player, Duration::from_secs(8));
+        assert_eq!(paths_of(&order), paths);
+        // Each handoff comes at the fade, half a second before the outgoing
+        // track ends. One that waits for the end lands 1.6 s after the last.
+        for pair in order.windows(2) {
+            let gap = pair[1].1 - pair[0].1;
+            assert!(gap < Duration::from_millis(1400), "{gap:?}");
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn a_restored_track_lines_up_the_next_one() {
+        let (mut player, paths) = playing_queue(2, 1.6);
+        player.queue.jump(0);
+        player.load_paused_at(&paths[0], 0.5).unwrap();
+        assert!(player.prefetched_next.is_some(), "gapless");
+
+        player.set_crossfade_duration(0.5);
+        player.load_paused_at(&paths[0], 0.5).unwrap();
+        assert!(player.crossfade_has_next(), "crossfade");
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore = "needs an audio output device"]
+    fn a_track_added_to_the_end_mid_song_is_lined_up() {
+        let (mut player, paths) = playing_queue(1, 0.8);
+        player.jump_to_queue_index(0).unwrap();
+        assert!(player.prefetched_next.is_none());
+        let added = tone_of(0.8);
+        player.enqueue(&added);
+        let order = play_out(&mut player, Duration::from_secs(4));
+        assert_eq!(paths_of(&order), [&paths[0], &added]);
     }
 }
