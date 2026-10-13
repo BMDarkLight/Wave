@@ -385,12 +385,6 @@ mod live_tests {
         crate::audio::symphonia_source::SymphoniaSource::new(dest.to_string_lossy().as_ref())
             .expect("cached preview must be decodable by the playback engine");
 
-        // Bytes that look like MP3 are not enough: every Deezer preview ships
-        // an empty ID3v2.4 tag that used to fail Symphonia's probe outright.
-        // Decoding is the assertion that actually catches that.
-        crate::audio::symphonia_source::SymphoniaSource::new(dest.to_string_lossy().as_ref())
-            .expect("cached preview must be decodable by the playback engine");
-
         println!(
             "OK  {} — {} ({} bytes cached to {})",
             track.artist,
