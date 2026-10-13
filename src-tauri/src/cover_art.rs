@@ -22,6 +22,11 @@ use tauri::AppHandle;
 const COVER_ART_DIR: &str = "cover_art";
 const THUMBS_DIR: &str = "thumbs";
 const MEDIA_DIR: &str = "media";
+/// One small file per cover image already saved, named by a hash of the
+/// image as it came out of the audio file and holding the art id it became.
+/// Every track of an album usually carries the same bytes, so this lets an
+/// import skip decoding and resizing all but the first of them.
+const SOURCES_DIR: &str = "sources";
 const THUMB_MAX_EDGE: u32 = 96;
 const THUMB_MAX_BYTES: usize = 12 * 1024;
 const THUMB_JPEG_QUALITY: u8 = 70;
@@ -62,35 +67,85 @@ pub fn save_album_art_thumb(
 /// Same, for callers that already know the cover root and have no app handle:
 /// the CLI and the playback daemon both open the library that way.
 pub fn save_album_art_thumb_in(cover_root: &Path, data: &[u8]) -> Result<SavedAlbumArt, String> {
-    let thumb = make_sized_jpeg(data, THUMB_MAX_EDGE, THUMB_MAX_BYTES, THUMB_JPEG_QUALITY)?;
-    let media = make_sized_jpeg(data, MEDIA_MAX_EDGE, MEDIA_MAX_BYTES, MEDIA_JPEG_QUALITY)?;
+    let source_key = hex_sha256(data);
+    if let Some(saved) = reuse_saved_source(cover_root, &source_key) {
+        return Ok(saved);
+    }
+
+    // Both sizes come from one decode. The output matches what decoding
+    // twice gave, so art ids stay the same as in earlier versions.
+    let img = image::load_from_memory(data).map_err(|e| format!("Failed to load image: {e}"))?;
+    let thumb = encode_sized_jpeg(&img, THUMB_MAX_EDGE, THUMB_MAX_BYTES, THUMB_JPEG_QUALITY)?;
+    let media = encode_sized_jpeg(&img, MEDIA_MAX_EDGE, MEDIA_MAX_BYTES, MEDIA_JPEG_QUALITY)?;
     let id = hex_sha256(&thumb);
-    let relative = format!("{THUMBS_DIR}/{id}.jpg");
     let abs = cover_root.join(THUMBS_DIR).join(format!("{id}.jpg"));
     let media_abs = cover_root.join(MEDIA_DIR).join(format!("{id}.jpg"));
 
     if !abs.is_file() {
-        if let Some(parent) = abs.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create cover art thumbs dir: {e}"))?;
-        }
-        fs::write(&abs, &thumb).map_err(|e| format!("Failed to write cover art thumb: {e}"))?;
+        write_new_file(&abs, &thumb)
+            .map_err(|e| format!("Failed to write cover art thumb: {e}"))?;
     }
     if !media_abs.is_file() {
-        if let Some(parent) = media_abs.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create cover art media dir: {e}"))?;
-        }
-        fs::write(&media_abs, &media)
+        write_new_file(&media_abs, &media)
             .map_err(|e| format!("Failed to write cover art media: {e}"))?;
     }
+    // Only a speed-up: if it is not written, the next import decodes again.
+    let _ = write_new_file(
+        &cover_root.join(SOURCES_DIR).join(&source_key),
+        id.as_bytes(),
+    );
 
-    Ok(SavedAlbumArt {
+    Ok(saved_album_art(cover_root, id, thumb.len() as i64))
+}
+
+/// The art a cover with this source hash was saved as, while both its files
+/// are still on disk.
+fn reuse_saved_source(cover_root: &Path, source_key: &str) -> Option<SavedAlbumArt> {
+    let id = fs::read_to_string(cover_root.join(SOURCES_DIR).join(source_key)).ok()?;
+    let id = id.trim();
+    if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let thumb = fs::metadata(cover_root.join(THUMBS_DIR).join(format!("{id}.jpg"))).ok()?;
+    if !cover_root
+        .join(MEDIA_DIR)
+        .join(format!("{id}.jpg"))
+        .is_file()
+    {
+        return None;
+    }
+    Some(saved_album_art(
+        cover_root,
+        id.to_string(),
+        thumb.len() as i64,
+    ))
+}
+
+fn saved_album_art(cover_root: &Path, id: String, byte_size: i64) -> SavedAlbumArt {
+    SavedAlbumArt {
+        thumb_abs_path: cover_root.join(THUMBS_DIR).join(format!("{id}.jpg")),
+        relative_path: format!("{THUMBS_DIR}/{id}.jpg"),
         id,
-        thumb_abs_path: abs,
-        relative_path: relative,
         mime: "image/jpeg".into(),
-        byte_size: thumb.len() as i64,
+        byte_size,
+    }
+}
+
+/// Write through a temporary file and rename it into place. Imports save
+/// covers from several threads, and two tracks of one album can finish
+/// together; a reader must never see a half-written file.
+fn write_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("{}-{n}.tmp", std::process::id()));
+    fs::write(&tmp, bytes)?;
+    fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
     })
 }
 
@@ -289,6 +344,15 @@ fn make_sized_jpeg(
     start_quality: u8,
 ) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(data).map_err(|e| format!("Failed to load image: {e}"))?;
+    encode_sized_jpeg(&img, max_edge, max_bytes, start_quality)
+}
+
+fn encode_sized_jpeg(
+    img: &image::DynamicImage,
+    max_edge: u32,
+    max_bytes: usize,
+    start_quality: u8,
+) -> Result<Vec<u8>, String> {
     let resized = img.thumbnail(max_edge, max_edge);
     let rgb = resized.to_rgb8();
 
@@ -369,5 +433,66 @@ fn normalize_mime(mime: &str) -> String {
         "image/webp" => "image/webp".into(),
         other if other.starts_with("image/") => other.to_string(),
         _ => "image/jpeg".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_root() -> PathBuf {
+        std::env::temp_dir().join(format!("wave-test-art-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn sample_cover() -> Vec<u8> {
+        let img = image::RgbImage::from_fn(640, 640, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8])
+        });
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
+            .encode(img.as_raw(), 640, 640, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        jpeg
+    }
+
+    #[test]
+    fn keeps_the_art_id_of_earlier_versions() {
+        let root = test_root();
+        let cover = sample_cover();
+        let saved = save_album_art_thumb_in(&root, &cover).unwrap();
+        let thumb =
+            make_sized_jpeg(&cover, THUMB_MAX_EDGE, THUMB_MAX_BYTES, THUMB_JPEG_QUALITY).unwrap();
+        assert_eq!(saved.id, hex_sha256(&thumb));
+        assert!(saved.thumb_abs_path.is_file());
+        assert!(root
+            .join(MEDIA_DIR)
+            .join(format!("{}.jpg", saved.id))
+            .is_file());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reuses_a_cover_it_has_seen_without_decoding_it() {
+        let root = test_root();
+        let cover = sample_cover();
+        let first = save_album_art_thumb_in(&root, &cover).unwrap();
+        let second = reuse_saved_source(&root, &hex_sha256(&cover)).unwrap();
+        assert_eq!(second.id, first.id);
+        assert_eq!(second.byte_size, first.byte_size);
+        let again = save_album_art_thumb_in(&root, &cover).unwrap();
+        assert_eq!(again.id, first.id);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn writes_a_deleted_thumb_again() {
+        let root = test_root();
+        let cover = sample_cover();
+        let first = save_album_art_thumb_in(&root, &cover).unwrap();
+        fs::remove_file(&first.thumb_abs_path).unwrap();
+        let second = save_album_art_thumb_in(&root, &cover).unwrap();
+        assert_eq!(second.id, first.id);
+        assert!(second.thumb_abs_path.is_file());
+        let _ = fs::remove_dir_all(root);
     }
 }

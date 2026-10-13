@@ -44,8 +44,26 @@ public final class MediaMetadataProbe {
         }
 
         ContentResolver resolver = context.getContentResolver();
-        String displayName = queryDisplayName(resolver, uri);
-        long fileSize = queryFileSize(resolver, uri);
+        // One query for both columns: each one is a round trip to the
+        // documents provider, and a library import makes thousands.
+        String displayName = null;
+        long fileSize = 0L;
+        try (Cursor cursor = resolver.query(
+                uri, new String[]{OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE},
+                null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (nameIdx >= 0) {
+                    displayName = emptyToNull(cursor.getString(nameIdx));
+                }
+                int sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE);
+                if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) {
+                    fileSize = cursor.getLong(sizeIdx);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Name and size query failed: " + e.getMessage());
+        }
 
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         try {
@@ -80,35 +98,6 @@ public final class MediaMetadataProbe {
             } catch (Exception ignored) {
             }
         }
-    }
-
-    @Nullable
-    private static String queryDisplayName(ContentResolver resolver, Uri uri) {
-        try (Cursor cursor = resolver.query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
-            if (cursor != null && cursor.moveToFirst()) {
-                int idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-                if (idx >= 0) {
-                    return emptyToNull(cursor.getString(idx));
-                }
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "DISPLAY_NAME query failed: " + e.getMessage());
-        }
-        return null;
-    }
-
-    private static long queryFileSize(ContentResolver resolver, Uri uri) {
-        try (Cursor cursor = resolver.query(uri, new String[]{OpenableColumns.SIZE}, null, null, null)) {
-            if (cursor != null && cursor.moveToFirst()) {
-                int idx = cursor.getColumnIndex(OpenableColumns.SIZE);
-                if (idx >= 0 && !cursor.isNull(idx)) {
-                    return cursor.getLong(idx);
-                }
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "SIZE query failed: " + e.getMessage());
-        }
-        return 0L;
     }
 
     @Nullable

@@ -3465,6 +3465,53 @@ pub struct SyncPlaylistResult {
     pub errors: Vec<String>,
 }
 
+/// Read tags and covers for `paths` on a few threads, one result per path in
+/// the same order. Each file is mostly waiting on storage and image decoding,
+/// so this is where a large import spends its time.
+fn extract_tracks_parallel(app: &tauri::AppHandle, paths: &[&str]) -> Vec<Result<Track, String>> {
+    use std::sync::atomic::AtomicUsize;
+
+    // A few threads is where phones stop getting faster; each one also holds
+    // a decoded cover in memory.
+    let workers = std::thread::available_parallelism()
+        .map_or(2, |n| n.get())
+        .clamp(1, 4)
+        .min(paths.len());
+    if workers <= 1 {
+        return paths
+            .iter()
+            .map(|path| crate::metadata::extract_track_for_bulk(Some(app), path))
+            .collect();
+    }
+
+    let next = AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<Result<Track, String>>>> =
+        paths.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(path) = paths.get(index) else {
+                    break;
+                };
+                let result = crate::metadata::extract_track_for_bulk(Some(app), path);
+                if let Ok(mut slot) = slots[index].lock() {
+                    *slot = Some(result);
+                }
+            });
+        }
+    });
+    slots
+        .into_iter()
+        .map(|slot| {
+            slot.into_inner()
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| Err("Reading the file stopped unexpectedly".into()))
+        })
+        .collect()
+}
+
 /// Reconcile a synced playlist with its folder contents.
 ///
 /// `scanned_paths`: optional pre-scanned file list (required on Android SAF).
@@ -3575,17 +3622,23 @@ pub async fn sync_playlist_folder(
         let mut processed = 0usize;
         let mut need_online_art: Vec<Track> = Vec::new();
 
+        let started = std::time::Instant::now();
         for chunk in to_add.chunks(BATCH_SIZE) {
             let mut extracted = Vec::new();
             let mut link_ids = Vec::new();
+            let mut new_paths = Vec::new();
             for path in chunk {
                 let key = normalize_import_path(path);
                 if let Some(id) = existing_ids.get(&key).cloned() {
                     link_ids.push(id);
-                    processed += 1;
-                    continue;
+                } else {
+                    new_paths.push(path.as_str());
                 }
-                match crate::metadata::extract_track_for_bulk(Some(&app_clone), path) {
+                processed += 1;
+            }
+            let results = extract_tracks_parallel(&app_clone, &new_paths);
+            for (path, result) in new_paths.iter().zip(results) {
+                match result {
                     Ok(track) => {
                         if track.album_art_id.is_none() {
                             need_online_art.push(track.clone());
@@ -3597,7 +3650,6 @@ pub async fn sync_playlist_folder(
                         push_import_error(&mut errors, format!("{path}: {e}"));
                     }
                 }
-                processed += 1;
             }
 
             let batch_added = {
@@ -3622,6 +3674,11 @@ pub async fn sync_playlist_folder(
             std::thread::sleep(std::time::Duration::from_millis(8));
         }
 
+        tracing::info!(
+            "Sync added {added} of {} track(s) in {:.1}s",
+            to_add.len(),
+            started.elapsed().as_secs_f64()
+        );
         let _ = app_clone.emit(
             "sync-progress",
             serde_json::json!({
