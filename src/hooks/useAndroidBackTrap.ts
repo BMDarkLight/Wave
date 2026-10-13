@@ -18,6 +18,7 @@ import {
 
 type OverlaySnapshot = {
   showFolderSetup: boolean;
+  showImportProgress: boolean;
   menuTrackPath: string | null;
   queueMenuIndex: number | null;
   showAddTrackMenu: boolean;
@@ -49,6 +50,8 @@ export function useAndroidBackTrap({
   androidHostRef,
   showFolderSetup,
   skipFolderSetup,
+  showImportProgress,
+  closeImportProgress,
   menuTrackPath,
   closeTrackContextMenu,
   queueMenuIndex,
@@ -102,6 +105,9 @@ export function useAndroidBackTrap({
   androidHostRef: { current: boolean };
   showFolderSetup: boolean;
   skipFolderSetup: () => void | Promise<void>;
+  /** The import progress dialog; back hides it and the import goes on. */
+  showImportProgress: boolean;
+  closeImportProgress: () => void;
   menuTrackPath: string | null;
   closeTrackContextMenu: () => void;
   queueMenuIndex: number | null;
@@ -153,6 +159,7 @@ export function useAndroidBackTrap({
 }) {
   const overlaySnapshotRef = useRef<OverlaySnapshot>({
     showFolderSetup,
+    showImportProgress,
     menuTrackPath,
     queueMenuIndex,
     showAddTrackMenu,
@@ -175,6 +182,7 @@ export function useAndroidBackTrap({
   });
   overlaySnapshotRef.current = {
     showFolderSetup,
+    showImportProgress,
     menuTrackPath,
     queueMenuIndex,
     showAddTrackMenu,
@@ -200,6 +208,7 @@ export function useAndroidBackTrap({
   ) => {
     let layers = openBackLayers("popup") + openBackLayers("page");
     if (s.showFolderSetup) layers++;
+    if (s.showImportProgress) layers++;
     if (s.menuTrackPath) layers++;
     if (s.queueMenuIndex != null) layers++;
     if (s.showAddTrackMenu) layers++;
@@ -237,6 +246,11 @@ export function useAndroidBackTrap({
     if (s.showFolderSetup) {
       s.showFolderSetup = false;
       void skipFolderSetup();
+      return true;
+    }
+    if (s.showImportProgress) {
+      s.showImportProgress = false;
+      closeImportProgress();
       return true;
     }
     if (s.menuTrackPath) {
@@ -423,6 +437,7 @@ export function useAndroidBackTrap({
     }
   }, [
     showFolderSetup,
+    showImportProgress,
     menuTrackPath,
     queueMenuIndex,
     showAddTrackMenu,

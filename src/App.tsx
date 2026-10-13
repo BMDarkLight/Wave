@@ -122,6 +122,7 @@ import LibraryTrackList from "./components/LibraryTrackList";
 import MobileNowPlaying from "./components/MobileNowPlaying";
 import MobileSettings from "./components/MobileSettings";
 import UpdateToast from "./components/UpdateToast";
+import ImportProgressDialog from "./components/ImportProgressDialog";
 import MobileTabBar, { type MobileTab } from "./components/MobileTabBar";
 import MobileLibraryPage from "./components/MobileLibraryPage";
 import MobileSearchPage from "./components/MobileSearchPage";
@@ -542,6 +543,8 @@ function App() {
     handlePickFileFromLibraryModal,
     handleAddFolder,
     handleAddFolderAndroid,
+    importProgress,
+    closeImportProgress,
     handleAddMediaSource,
     handleAddExtraMediaSource,
     handleRemoveMediaSource,
@@ -1551,6 +1554,8 @@ function App() {
     androidHostRef,
     showFolderSetup,
     skipFolderSetup,
+    showImportProgress: importProgress !== null,
+    closeImportProgress,
     menuTrackPath,
     closeTrackContextMenu,
     queueMenuIndex,
@@ -2767,7 +2772,9 @@ function App() {
                 </button>
                 <button
                   className="btn-primary"
-                  onClick={() => void handleAddFolderAndroid()}
+                  onClick={() =>
+                    void handleAddFolderAndroid({ showProgress: true })
+                  }
                   type="button"
                 >
                   <BiFolderOpen /> Select Media Source
@@ -2775,6 +2782,13 @@ function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {importProgress && (
+          <ImportProgressDialog
+            progress={importProgress}
+            onClose={closeImportProgress}
+          />
         )}
 
         <StatusToasts

@@ -3048,6 +3048,42 @@ img.queue-thumb {
   margin: 12px 0 18px;
 }
 
+.import-progress-dialog .modal-desc {
+  font-variant-numeric: tabular-nums;
+}
+
+.import-progress-bar {
+  position: relative;
+  height: 6px;
+  margin: -4px 0 20px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(var(--ink), 0.1);
+}
+
+.import-progress-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+  transition: width 0.3s ease;
+}
+
+/* Until the number of songs is known, a short bar sweeps across. */
+.import-progress-bar.indeterminate > span {
+  width: 35% !important;
+  animation: import-progress-sweep 1.2s ease-in-out infinite;
+}
+
+@keyframes import-progress-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+
 .modal-dialog h2 {
   font-size: 20px;
   font-weight: 800;

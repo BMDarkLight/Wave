@@ -37,6 +37,17 @@ import {
 import { formatInvokeError } from "../utils/errors";
 import { isLibraryPlaylistName } from "../utils/track";
 
+/** Where the import started from the Welcome dialog stands, for the progress
+ *  dialog that follows it. */
+export interface ImportProgress {
+  phase: "finding" | "adding" | "done";
+  /** Songs read so far, out of `total`. */
+  processed: number;
+  /** New songs to add; 0 until the folder has been listed. */
+  total: number;
+  added: number;
+}
+
 /** Adding tracks/folders to the library: the add-track menu, the "add from
  * library" picker, folder scan + sync (including the first-time import
  * progress UI), media-source management, and track removal. */
@@ -85,6 +96,9 @@ export function useMediaImport({
   const importingPlaylistIdRef = useRef<string | null>(null);
   const isImporting = importingPlaylistId != null;
   const [importedCount, setImportedCount] = useState(0);
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(
+    null,
+  );
 
   const beginPlaylistImport = (playlistId: string) => {
     importingPlaylistIdRef.current = playlistId;
@@ -343,7 +357,11 @@ export function useMediaImport({
     }
   };
 
-  const handleAddFolderAndroid = async () => {
+  /** `showProgress` opens the import progress dialog once a folder is
+   *  picked. The Welcome dialog uses it; the import runs the same either way. */
+  const handleAddFolderAndroid = async ({
+    showProgress = false,
+  }: { showProgress?: boolean } = {}) => {
     try {
       setError(null);
       // Keep the user-gesture chain intact for the SAF folder picker.
@@ -356,6 +374,14 @@ export function useMediaImport({
       }
       if (!result?.uri) return;
       setShowFolderSetup(false);
+      if (showProgress) {
+        setImportProgress({
+          phase: "finding",
+          processed: 0,
+          total: 0,
+          added: 0,
+        });
+      }
 
       const directory = result.uri;
 
@@ -365,6 +391,7 @@ export function useMediaImport({
 
       const paths = await scanDirectoryRecursive(directory);
       if (!paths.length) {
+        setImportProgress(null);
         setError("No audio files found in the selected folder.");
         setIsScanningFolder(false);
         setFolderScanIsSync(false);
@@ -377,6 +404,7 @@ export function useMediaImport({
         list.find((p) => isLibraryPlaylistName(p.name))?.id ??
         getDefaultPlaylistId(list);
       if (!playlistId) {
+        setImportProgress(null);
         setError("No playlist selected.");
         setIsScanningFolder(false);
         setFolderScanIsSync(false);
@@ -391,10 +419,30 @@ export function useMediaImport({
         if (typeof p.processed === "number") setImportedCount(p.processed);
         else if (typeof p.extracted === "number") setImportedCount(p.extracted);
         else if (typeof p.added === "number") setImportedCount(p.added);
+        if (p.phase === "diff" || p.phase === "extract") {
+          setImportProgress(
+            (current) =>
+              current && {
+                ...current,
+                phase: "adding",
+                total: p.to_add ?? current.total,
+                processed: p.processed ?? current.processed,
+              },
+          );
+        }
       }).catch(() => null);
 
       try {
         const syncResult = await syncPlaylistFolder(playlistId, paths);
+        setImportProgress(
+          (current) =>
+            current && {
+              ...current,
+              phase: "done",
+              processed: current.total,
+              added: syncResult.added,
+            },
+        );
         if (syncResult.errors?.length) {
           setError(
             `Imported with ${syncResult.errors.length} error(s) — ${syncResult.errors.slice(0, 2).join(" | ")}`,
@@ -416,6 +464,7 @@ export function useMediaImport({
       await new Promise((r) => setTimeout(r, 0));
       await loadPlaylistTracks(playlistId);
     } catch (err) {
+      setImportProgress(null);
       endPlaylistImport();
       setIsScanningFolder(false);
       setFolderScanIsSync(false);
@@ -724,6 +773,8 @@ export function useMediaImport({
     handlePickFileFromLibraryModal,
     handleAddFolder,
     handleAddFolderAndroid,
+    importProgress,
+    closeImportProgress: () => setImportProgress(null),
     handleAddMediaSource,
     handleAddExtraMediaSource,
     handleRemoveMediaSource,
