@@ -31,8 +31,8 @@ type Props = {
 /**
  * Tier 3 results, grouped by provider.
  *
- * A provider that errored renders as its own unavailable section rather than
- * disappearing, so a Jamendo outage never looks like "no results anywhere".
+ * A provider that failed or still needs setup is left out: its section only
+ * appears when it answered.
  */
 export function SourceResults({
   results,
@@ -68,8 +68,9 @@ export function SourceResults({
     );
   }
 
-  const totalHits = results.reduce((sum, r) => sum + r.tracks.length, 0);
-  if (totalHits === 0 && results.every((r) => !r.error)) {
+  const answered = results.filter((r) => !r.error);
+  const totalHits = answered.reduce((sum, r) => sum + r.tracks.length, 0);
+  if (totalHits === 0) {
     return (
       <div className="source-results">
         <div className="source-section-empty">
@@ -81,23 +82,16 @@ export function SourceResults({
 
   return (
     <div className="source-results">
-      {results.map((section) => (
+      {answered.map((section) => (
         <section key={section.provider} className="source-section">
           <div className="source-section-head">
             <h3>{section.display_name}</h3>
-            {section.error ? null : (
-              <span className="source-section-count">
-                {section.tracks.length}
-              </span>
-            )}
+            <span className="source-section-count">
+              {section.tracks.length}
+            </span>
           </div>
 
-          {section.error ? (
-            <div className="source-section-error">
-              <BiErrorCircle />
-              <span>{section.error}</span>
-            </div>
-          ) : section.tracks.length === 0 ? (
+          {section.tracks.length === 0 ? (
             <div className="source-section-empty">No matches here.</div>
           ) : (
             <div className="source-hit-list">
