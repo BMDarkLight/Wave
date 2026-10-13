@@ -7694,8 +7694,8 @@ div.album-hero-cover {
 
 /* ══════════════════════════════════════════════════════════════════════
    Mobile dock: the mini player and the tabs share one glass layer. With
-   nothing loaded the mini player shrinks to its play button, floating
-   above the tabs, and it extends out of that button once a song loads.
+   nothing loaded the dock is just the tabs, and the mini player grows up
+   out of them once a song loads.
    ══════════════════════════════════════════════════════════════════════ */
 
 @media (max-width: 900px) {
@@ -7740,10 +7740,10 @@ div.album-hero-cover {
     height: 48px;
   }
 
-  /* Only the play button shows, in the spot it holds in the full bar:
-     right padding 14px, then the 44px next button and a 2px gap. */
+  /* Nothing to play: the bar is clipped away to its bottom edge. */
   .player-bar.player-bar-idle {
-    clip-path: inset(6px 56px 6px calc(100% - 112px) round 28px);
+    clip-path: inset(100% 0 0 0);
+    pointer-events: none;
   }
 
   .player-bar .player-left,
@@ -7752,16 +7752,8 @@ div.album-hero-cover {
     transition: opacity 0.24s ease;
   }
 
-  .player-bar.player-bar-idle .player-left,
-  .player-bar.player-bar-idle .mini-progress,
-  .player-bar.player-bar-idle
-    .player-controls
-    .control-btn:not(.play-pause-btn) {
+  .player-bar.player-bar-idle > * {
     opacity: 0;
-  }
-
-  .player-bar.player-bar-idle .play-pause-btn {
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
   }
 
   /* The dock layer is what turns solid; the bar itself stays clear. */
