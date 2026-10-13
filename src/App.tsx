@@ -841,6 +841,13 @@ function App() {
     return () => narrow.removeEventListener("change", onChange);
   }, []);
 
+  // Now Playing only renders while a track is loaded. Left open once playback
+  // ends (the queue ran out, or Android stopped it), it keeps the tabs and
+  // mini player faded out for a page that is no longer there.
+  useEffect(() => {
+    if (!currentTrack && mobilePlayerOpen) forceCloseMobilePlayer();
+  }, [currentTrack, mobilePlayerOpen, forceCloseMobilePlayer]);
+
   const playlistSearchPaths = useMemo(
     () => new Set(playlist.map((t) => t.path)),
     [playlist],
@@ -1952,7 +1959,7 @@ function App() {
   return (
     <SongCouplingContext.Provider value={activeCouples}>
       <div
-        className={`app-container${mobileNavOpen ? " nav-open" : ""}${rightPanelOpen || rightPanelClosing ? " panel-open" : ""}${rightPanelClosing ? " panel-closing" : ""}${mobilePlayerOpen && !mobilePlayerClosing ? " now-playing-open" : ""}`}
+        className={`app-container${mobileNavOpen ? " nav-open" : ""}${rightPanelOpen || rightPanelClosing ? " panel-open" : ""}${rightPanelClosing ? " panel-closing" : ""}${mobilePlayerOpen && currentTrack && !mobilePlayerClosing ? " now-playing-open" : ""}`}
         style={
           {
             "--sidebar-width": `${sidebarWidth}px`,
