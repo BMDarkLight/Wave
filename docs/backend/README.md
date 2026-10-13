@@ -179,6 +179,18 @@ artists](./commands.md#albums--artists).
 | `get_system_theme` | Android: read the phone's light or dark setting |
 | `set_system_bar_theme` | Android: match the status bar icons to the page |
 
+### Updates
+
+| Command | Description |
+|---------|-------------|
+| `get_auto_update_enabled` | Read whether Wave looks for updates at launch |
+| `set_auto_update_enabled` | Turn the launch update check on or off |
+| `check_for_update` | Look for a newer release on GitHub |
+| `download_update` | Android: download the APK the last check found |
+| `install_update` | Android: open the system installer on the downloaded APK |
+| `open_release_page` | Open the release the last check found in the browser |
+| `open_repository` | Open Wave's GitHub repository in the browser |
+
 ## Error handling
 
 Commands return `Promise<T>` on success. Failures reject with a **string** error message from the backend (for example `"No track is currently playing"` or `"Track is already in the playlist"`).

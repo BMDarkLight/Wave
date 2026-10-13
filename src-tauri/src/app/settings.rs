@@ -91,6 +91,10 @@ pub struct AppSettings {
     /// brings them back.
     #[serde(default)]
     pub song_couples: Vec<SongCouple>,
+    /// Look for a newer release when Wave starts. On Android the new APK is
+    /// also downloaded, ready to install. Off leaves a manual check button.
+    #[serde(default = "default_auto_update_enabled")]
+    pub auto_update_enabled: bool,
 }
 
 /// Two songs, by path, that always play back to back: `first`, then
@@ -129,6 +133,10 @@ fn default_animations_enabled() -> bool {
     true
 }
 
+fn default_auto_update_enabled() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -157,6 +165,7 @@ impl Default for AppSettings {
             source_cache_limit_mb: default_source_cache_limit_mb(),
             song_coupling_enabled: false,
             song_couples: Vec::new(),
+            auto_update_enabled: default_auto_update_enabled(),
         }
     }
 }

@@ -2,9 +2,11 @@
 # Turn the Gradle project from `tauri android init` into Wave's Android app.
 #
 # `tauri android init` only generates a stock Tauri project. Wave adds to it:
-#   - its Java sources (ExoPlayer, media-session bridge, SAF, crash reporter)
+#   - its Java sources (ExoPlayer, media-session bridge, SAF, crash reporter,
+#     updater)
 #   - its resources (launcher icons, the status bar / notification icon)
-#   - manifest permissions, the portrait lock and the early crash provider
+#   - manifest permissions, the portrait lock, the early crash provider and
+#     the provider that shares downloaded updates with the installer
 #   - the Media3 / ExoPlayer Gradle dependencies
 #   - ProGuard keep rules for everything native code calls over JNI
 #
@@ -95,6 +97,8 @@ permissions = [
     "android.permission.POST_NOTIFICATIONS",
     "android.permission.READ_MEDIA_AUDIO",
     "android.permission.READ_EXTERNAL_STORAGE",
+    # Lets the in-app updater open the system installer on a downloaded APK.
+    "android.permission.REQUEST_INSTALL_PACKAGES",
 ]
 
 inserts = []
@@ -172,6 +176,32 @@ if provider_name not in text:
     print("Registered CrashInitProvider in AndroidManifest.xml")
 else:
     print("CrashInitProvider already present in AndroidManifest.xml")
+
+# FileProvider that shares downloaded update APKs with the system installer.
+text = path.read_text(encoding="utf-8")
+update_provider = "app.bmdarklight.wave.UpdateFileProvider"
+if update_provider not in text:
+    provider_xml = (
+        '        <provider\n'
+        f'            android:name="{update_provider}"\n'
+        '            android:authorities="${applicationId}.wave-updates"\n'
+        '            android:exported="false"\n'
+        '            android:grantUriPermissions="true">\n'
+        '            <meta-data\n'
+        '                android:name="android.support.FILE_PROVIDER_PATHS"\n'
+        '                android:resource="@xml/wave_update_paths" />\n'
+        '        </provider>\n'
+    )
+    app_open = re.search(r"<application\b[^>]*>", text, flags=re.IGNORECASE | re.DOTALL)
+    if not app_open:
+        print("::error::could not find <application> open tag for UpdateFileProvider", file=sys.stderr)
+        sys.exit(1)
+    insert_at = app_open.end()
+    text = text[:insert_at] + "\n" + provider_xml + text[insert_at:]
+    path.write_text(text, encoding="utf-8")
+    print("Registered UpdateFileProvider in AndroidManifest.xml")
+else:
+    print("UpdateFileProvider already present in AndroidManifest.xml")
 PY
 
 # Media3 / ExoPlayer deps for WaveExoPlayer

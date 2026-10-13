@@ -33,6 +33,27 @@ pub enum ThemeMode {
     Dark,
 }
 
+/// The result of looking for a newer Wave release.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateCheckDto {
+    pub current_version: String,
+    /// Set only when the release is newer than this build.
+    pub latest_version: Option<String>,
+    pub release_url: String,
+    /// Size of the APK this device would download. `None` on desktop, and on
+    /// Android when the release has no APK for this CPU.
+    pub download_size: Option<u64>,
+    /// The APK is already downloaded and ready to install.
+    pub downloaded: bool,
+}
+
+/// Payload of `update-download-progress`, in bytes.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct UpdateProgressDto {
+    pub received: u64,
+    pub total: u64,
+}
+
 /// Song coupling as the settings page and the song menu show it.
 #[derive(Debug, Clone, Serialize)]
 pub struct SongCouplingDto {

@@ -332,6 +332,30 @@ The choice is persisted to `wave-settings.json` as `theme_mode`.
 
 ---
 
+## `UpdateCheck`
+
+Returned by `check_for_update`.
+
+```typescript
+interface UpdateCheck {
+  current_version: string;
+  latest_version: string | null;
+  release_url: string;
+  download_size: number | null;
+  downloaded: boolean;
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `current_version` | This build's version |
+| `latest_version` | The newer release's version, or `null` when this build is current |
+| `release_url` | Page of that release, or the latest release page |
+| `download_size` | Bytes of the APK this phone would download. `null` on desktop, and on Android when the release has no APK for this CPU |
+| `downloaded` | The APK is already downloaded and ready to install |
+
+---
+
 ## Copy-paste module
 
 You can import types from the existing frontend wrapper:

@@ -1230,3 +1230,99 @@ Match the Android status and navigation bar icons to the page: dark icons for
 | `theme` | `"light" \| "dark"` | yes | The theme the page shows |
 
 **Returns:** nothing
+
+---
+
+### `get_auto_update_enabled`
+
+Whether Wave looks for a newer release when it starts. On by default.
+
+**Arguments:** none
+
+**Returns:** `boolean`
+
+---
+
+### `set_auto_update_enabled`
+
+Turn the launch update check on or off. With it off, Settings shows a manual
+"Check for updates" button instead.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `enabled` | `boolean` | yes | Check at launch |
+
+**Returns:** nothing
+
+---
+
+### `check_for_update`
+
+Ask GitHub for the latest published release of
+`BMDarkLight/Wave` and compare its tag with this build's version. Drafts and
+pre-releases are never offered. On Android the result also says whether the
+release has an APK for this phone's CPU (`Wave_<version>_<abi>.apk`, or one
+with `universal` in its name).
+
+When there is nothing newer, any APK left from an earlier update is deleted.
+
+**Arguments:** none
+
+**Returns:** [`UpdateCheck`](./types.md#updatecheck)
+
+```typescript
+const check = await invoke<UpdateCheck>("check_for_update");
+if (check.latest_version) {
+  // A newer release is out.
+}
+```
+
+---
+
+### `download_update`
+
+Android only. Download the APK the last `check_for_update` found into the
+app's cache, reporting progress through
+[`update-download-progress`](./events.md#update-download-progress). The file
+is checked against the size GitHub reports and, when GitHub lists one, its
+SHA-256 digest. Resolves once the APK is ready to install.
+
+**Arguments:** none
+
+**Returns:** nothing
+
+---
+
+### `install_update`
+
+Android only. Open the system installer on the downloaded APK. Android asks
+the user to confirm, and the first time also asks them to let Wave install
+apps. Android refuses the update unless it is signed with the same key as the
+installed app.
+
+**Arguments:** none
+
+**Returns:** nothing
+
+---
+
+### `open_release_page`
+
+Open the release the last check found in the browser, or the latest release
+page when there was none.
+
+**Arguments:** none
+
+**Returns:** nothing
+
+---
+
+### `open_repository`
+
+Open `https://github.com/BMDarkLight/Wave` in the browser.
+
+**Arguments:** none
+
+**Returns:** nothing

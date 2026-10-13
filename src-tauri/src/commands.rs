@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::app::updater::UpdaterState;
 use crate::app_settings::{AppSettings, AppSettingsState, SongCouple};
 use crate::audio::player::AudioPlayer;
 use crate::audio::sleep_timer::{SleepRequest, SleepTimerStatus};
@@ -19,7 +20,7 @@ use crate::dto::{
     AlbumSummaryDto, ArtistSummaryDto, CloseAction, EqSettingsDto, HomeSuggestionsDto,
     ImportResultDto, ListeningStatsDto, LyricsImportResultDto, PlaybackModeDto, PlaybackStateDto,
     QueueDto, QueueStateDto, SearchCollectionsDto, SearchHitDto, SongCoupleDto, SongCouplingDto,
-    ThemeMode,
+    ThemeMode, UpdateCheckDto,
 };
 use crate::library::{Library, PlaylistInfo};
 use crate::listen::{ListenEndReason, ListenFlush, ListenTracker};
@@ -1934,6 +1935,55 @@ pub fn set_system_bar_theme(theme: tauri::Theme) {
     crate::android::system_theme::set_light_bars(theme == tauri::Theme::Light);
     #[cfg(not(target_os = "android"))]
     let _ = theme;
+}
+
+// ── Updates ──────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_auto_update_enabled(
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<bool, String> {
+    let settings = lock_settings(&settings_state)?;
+    Ok(settings.auto_update_enabled)
+}
+
+#[tauri::command]
+pub async fn set_auto_update_enabled(
+    enabled: bool,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut settings = lock_settings(&settings_state)?;
+    settings.auto_update_enabled = enabled;
+    settings.save(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateCheckDto, String> {
+    blocking(move || crate::app::updater::check(&app, &app.state::<UpdaterState>())).await
+}
+
+/// Android only: download the APK the last check found.
+#[tauri::command]
+pub async fn download_update(app: tauri::AppHandle) -> Result<(), String> {
+    blocking(move || crate::app::updater::download(&app, &app.state::<UpdaterState>())).await
+}
+
+/// Android only: open the system installer on the downloaded APK.
+#[tauri::command]
+pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    blocking(move || crate::app::updater::install(&app, &app.state::<UpdaterState>())).await
+}
+
+#[tauri::command]
+pub async fn open_release_page(app: tauri::AppHandle) -> Result<(), String> {
+    blocking(move || crate::app::updater::open_release_page(&app.state::<UpdaterState>())).await
+}
+
+#[tauri::command]
+pub async fn open_repository() -> Result<(), String> {
+    blocking(crate::app::updater::open_repository).await
 }
 
 // ── Library / playlist commands ───────────────────────────────────────────────

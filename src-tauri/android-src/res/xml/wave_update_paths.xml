@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The one folder UpdateFileProvider shares: downloaded update APKs, so the
+     system installer can read them. -->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>

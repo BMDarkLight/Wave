@@ -114,6 +114,7 @@ pub fn run() {
             let library = app::library_recovery::open_library_or_recover(app.handle());
             app.manage(LibraryState(std::sync::Mutex::new(library)));
             app.manage(EnrichmentState(std::sync::atomic::AtomicBool::new(false)));
+            app.manage(app::updater::UpdaterState::default());
 
             let app_handle = app.handle().clone();
 
@@ -360,6 +361,13 @@ pub fn run() {
             commands::set_theme_mode,
             commands::get_system_theme,
             commands::set_system_bar_theme,
+            commands::get_auto_update_enabled,
+            commands::set_auto_update_enabled,
+            commands::check_for_update,
+            commands::download_update,
+            commands::install_update,
+            commands::open_release_page,
+            commands::open_repository,
             commands::get_close_action,
             commands::set_close_action,
             commands::toggle_close_action,

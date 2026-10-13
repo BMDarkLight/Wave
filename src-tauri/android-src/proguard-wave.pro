@@ -25,6 +25,11 @@
     public static boolean isDark(android.content.Context);
     public static void setLightBars(android.app.Activity, boolean);
 }
+-keep class app.bmdarklight.wave.AppUpdater { *; }
+-keepclassmembers class app.bmdarklight.wave.AppUpdater {
+    public static void install(android.app.Activity, java.lang.String);
+    public static void openUrl(android.app.Activity, java.lang.String);
+}
 # UiLifecycle rebinds Tauri's PluginManager to a new Activity by field name.
 -keepclassmembers class app.tauri.plugin.PluginManager { *; }
 -keep class app.bmdarklight.wave.MediaNativeBridge { *; }

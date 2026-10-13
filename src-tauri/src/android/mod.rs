@@ -29,3 +29,6 @@ pub mod crash_report;
 
 #[cfg(target_os = "android")]
 pub mod system_theme;
+
+#[cfg(target_os = "android")]
+pub mod app_updater;

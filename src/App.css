@@ -1969,6 +1969,52 @@ input[type="search"]::-webkit-search-decoration {
   pointer-events: none;
 }
 
+.update-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--player-height) + var(--section-inset) + 8px);
+  z-index: 229;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(480px, 92vw);
+  padding: 8px 8px 8px 18px;
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(var(--glass-toast), 0.88);
+  border: 1px solid rgba(var(--ink), 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(28px) saturate(1.7);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.update-toast-text {
+  min-width: 0;
+}
+
+.update-toast .btn-primary {
+  flex-shrink: 0;
+  padding: 7px 14px;
+  font-size: 13px;
+}
+
+.update-toast-close {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(var(--ink), 0.1);
+  color: var(--text);
+  font-size: 15px;
+  cursor: pointer;
+}
+
 .error-toast button {
   display: grid;
   place-items: center;
@@ -7169,6 +7215,7 @@ div.album-hero-cover {
 }
 
 .no-glass .exit-toast,
+.no-glass .update-toast,
 .no-glass .loading-indicator,
 .no-glass .eq-panel {
   background: var(--panel-soft);
@@ -8045,6 +8092,77 @@ div.album-hero-cover {
 .mset-theme-choice button.active {
   background: var(--text);
   color: var(--bg);
+}
+
+.mset-update-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+}
+
+.mset-update-row > .mset-gapless-copy {
+  flex: 1;
+}
+
+.mset-update-row > button {
+  flex-shrink: 0;
+}
+
+.mset-update-progress {
+  display: block;
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(var(--ink), 0.1);
+}
+
+.mset-update-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+  transition: width 0.2s ease;
+}
+
+.mset-about {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 8px 8px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--quiet);
+}
+
+.mset-about-credit {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.mset-about-version {
+  font-variant-numeric: tabular-nums;
+}
+
+.mset-about-version a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.mset-about-version a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.mset-about-version svg {
+  font-size: 14px;
 }
 
 .mset-theme-row {

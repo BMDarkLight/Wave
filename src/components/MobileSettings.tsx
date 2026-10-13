@@ -16,6 +16,7 @@ import {
   useRef,
   useState,
   type InputHTMLAttributes,
+  type ReactNode,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { BiArrowBack, BiSearch } from "react-icons/bi";
@@ -38,12 +39,13 @@ import {
   BiErrorCircle,
   BiReset,
   BiVolumeFull,
-  BiPulse,
   BiPalette,
   BiLink,
   BiAdjust,
   BiSun,
   BiMoon,
+  BiDownload,
+  BiLogoGithub,
 } from "react-icons/bi";
 import {
   listMediaFolders,
@@ -53,6 +55,7 @@ import {
   formatListenDuration,
   EQ_BAND_LABELS,
   EQ_PRESETS,
+  openRepository,
 } from "../utils/player";
 import type {
   EqSettings,
@@ -61,12 +64,119 @@ import type {
   ThemeMode,
 } from "../utils/player";
 import { isAndroid } from "../utils/platform";
+import type { AppUpdate } from "../hooks/useAppUpdate";
 
 const THEME_CHOICES: { mode: ThemeMode; label: string; Icon: IconType }[] = [
   { mode: "system", label: "System", Icon: BiAdjust },
   { mode: "light", label: "Light", Icon: BiSun },
   { mode: "dark", label: "Dark", Icon: BiMoon },
 ];
+
+const formatMegabytes = (bytes: number) =>
+  `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+/** The line under the auto update switch: where updating stands. */
+function UpdateStatusRow({ update }: { update: AppUpdate }) {
+  const latest = update.latestVersion;
+  let label: string;
+  let hint: string | null = update.problem;
+  let action: ReactNode = null;
+
+  switch (update.status) {
+    case "checking":
+      label = "Checking for updates…";
+      break;
+    case "current":
+      label = "Wave is up to date";
+      break;
+    case "available":
+      label = `Wave ${latest} is available`;
+      if (update.canDownload) {
+        hint ??=
+          update.downloadSize !== null
+            ? `${formatMegabytes(update.downloadSize)} download`
+            : null;
+        action = (
+          <button
+            className="btn-primary btn-sm"
+            type="button"
+            onClick={update.download}
+          >
+            Download
+          </button>
+        );
+      } else {
+        hint ??= "Get it from the release page.";
+        action = (
+          <button
+            className="btn-primary btn-sm"
+            type="button"
+            onClick={update.openPage}
+          >
+            Release page
+          </button>
+        );
+      }
+      break;
+    case "downloading":
+      label = `Downloading Wave ${latest}`;
+      hint =
+        update.progress !== null
+          ? `${Math.round(update.progress * 100)}%`
+          : null;
+      break;
+    case "ready":
+      label = `Wave ${latest} is ready to install`;
+      hint = "Android asks you to confirm the install.";
+      action = (
+        <button
+          className="btn-primary btn-sm"
+          type="button"
+          onClick={update.install}
+        >
+          Install
+        </button>
+      );
+      break;
+    case "error":
+      label = "Could not check for updates";
+      break;
+    default:
+      label = "Not checked yet";
+  }
+
+  const canCheck =
+    !update.autoUpdate &&
+    (update.status === "idle" ||
+      update.status === "current" ||
+      update.status === "error");
+  if (canCheck) {
+    action = (
+      <button
+        className="btn-ghost btn-sm"
+        type="button"
+        onClick={update.checkNow}
+      >
+        Check for updates
+      </button>
+    );
+  }
+
+  return (
+    <div className="mset-update-row" aria-live="polite">
+      <span className="mset-gapless-copy">
+        <span className="mset-gapless-label">{label}</span>
+        {hint && <span className="mset-gapless-hint">{hint}</span>}
+        {update.status === "downloading" && (
+          <span className="mset-update-progress" aria-hidden>
+            <span style={{ width: `${(update.progress ?? 0) * 100}%` }} />
+          </span>
+        )}
+      </span>
+      {action}
+    </div>
+  );
+}
 
 const LIBRARY_PLAYLIST_NAME = "Library";
 const isLibraryPlaylistName = (name?: string | null) =>
@@ -250,6 +360,7 @@ interface MobileSettingsProps {
   currentOutputDevice: string;
   onSelectOutputDevice: (name: string) => Promise<void>;
   onResetApp: () => Promise<void>;
+  update: AppUpdate;
 }
 
 export default function MobileSettings({
@@ -299,6 +410,7 @@ export default function MobileSettings({
   currentOutputDevice,
   onSelectOutputDevice,
   onResetApp,
+  update,
 }: MobileSettingsProps) {
   // Both the embedded desktop pane and the mobile sheet can be mounted at
   // once, so the credential fields need ids unique to this instance.
@@ -313,6 +425,7 @@ export default function MobileSettings({
   const [listenStats, setListenStats] = useState<ListeningStats | null>(null);
   const [lyricsBusy, setLyricsBusy] = useState(false);
   const [lyricsStatus, setLyricsStatus] = useState<string | null>(null);
+  const [onAndroid, setOnAndroid] = useState(false);
 
   const refreshMediaFolders = () => {
     listMediaFolders()
@@ -331,7 +444,10 @@ export default function MobileSettings({
     refreshListenStats();
     void (async () => {
       // Android only exposes ExoPlayer (system default) — hide the section.
-      if (await isAndroid()) return;
+      if (await isAndroid()) {
+        setOnAndroid(true);
+        return;
+      }
       setShowAudioOutput(true);
       listOutputDevices()
         .then(setOutputDevices)
@@ -978,29 +1094,6 @@ export default function MobileSettings({
 
         <section className="mset-section">
           <h2>
-            <BiPulse /> Seek bar
-          </h2>
-          <div className="mset-card mset-playback-card">
-            <label className="mset-gapless-row">
-              <input
-                type="checkbox"
-                checked={waveformSeekEnabled}
-                onChange={(event) => onWaveformSeekChange(event.target.checked)}
-              />
-              <span className="mset-gapless-copy">
-                <span className="mset-gapless-label">Waveform seek bar</span>
-                <span className="mset-gapless-hint">
-                  Show each track's waveform in the seek bar, moving with the
-                  music around the playhead. Turn off for a plain slider and no
-                  track analysis.
-                </span>
-              </span>
-            </label>
-          </div>
-        </section>
-
-        <section className="mset-section">
-          <h2>
             <BiPalette /> Appearance
           </h2>
           <div className="mset-card mset-playback-card">
@@ -1032,6 +1125,22 @@ export default function MobileSettings({
                 ))}
               </div>
             </div>
+            <div className="mset-playback-divider" role="separator" />
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={waveformSeekEnabled}
+                onChange={(event) => onWaveformSeekChange(event.target.checked)}
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Waveform seek bar</span>
+                <span className="mset-gapless-hint">
+                  Show each track's waveform in the seek bar, moving with the
+                  music around the playhead. Turn off for a plain slider and no
+                  track analysis.
+                </span>
+              </span>
+            </label>
             <div className="mset-playback-divider" role="separator" />
             <label className="mset-gapless-row">
               <input
@@ -1168,6 +1277,62 @@ export default function MobileSettings({
             )}
           </div>
         </section>
+
+        <section className="mset-section">
+          <h2>
+            <BiDownload /> Updates
+          </h2>
+          <div className="mset-card mset-playback-card">
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={update.autoUpdate}
+                onChange={(event) =>
+                  void update.handleAutoUpdateChange(event.target.checked)
+                }
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Auto update</span>
+                <span className="mset-gapless-hint">
+                  {onAndroid
+                    ? "Look for a new version when Wave starts and download it in the background. Android asks you to confirm before it installs."
+                    : "Look for a new version when Wave starts and let you know when one is out."}
+                </span>
+              </span>
+            </label>
+            {(!update.autoUpdate || update.status !== "idle") && (
+              <>
+                <div className="mset-playback-divider" role="separator" />
+                <UpdateStatusRow update={update} />
+              </>
+            )}
+          </div>
+        </section>
+
+        <footer className="mset-about">
+          <p className="mset-about-credit">
+            Built with <span aria-label="love">❤️</span> by Behdad
+          </p>
+          <p>
+            Wave is free software, licensed under the GNU Affero General Public
+            License v3.0 with additional terms. It comes with no warranty, to
+            the extent permitted by law. The Wave name and logo are not covered
+            by that license.
+          </p>
+          <p>Copyright © {new Date().getFullYear()} BMDarkLight</p>
+          <p className="mset-about-version">
+            {update.currentVersion && <>Version {update.currentVersion} · </>}
+            <a
+              href="https://github.com/BMDarkLight/Wave"
+              onClick={(event) => {
+                event.preventDefault();
+                openRepository().catch(() => {});
+              }}
+            >
+              <BiLogoGithub aria-hidden /> Source on GitHub
+            </a>
+          </p>
+        </footer>
       </div>
     </Root>
   );

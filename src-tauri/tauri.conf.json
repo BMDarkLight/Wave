@@ -49,9 +49,7 @@
       "icons/icon.ico"
     ],
     "android": {
-      "minSdkVersion": 24,
-      "versionCode": 1,
-      "autoIncrementVersionCode": true
+      "minSdkVersion": 24
     },
     "publisher": "BMDarkLight",
     "homepage": "https://github.com/BMDarkLight/Wave",

@@ -78,6 +78,7 @@ import {
 } from "./utils/search";
 import { useEqualizerSettings } from "./hooks/useEqualizerSettings";
 import { useTheme } from "./hooks/useTheme";
+import { useAppUpdate } from "./hooks/useAppUpdate";
 import { useSongCoupling } from "./hooks/useSongCoupling";
 import { useResizablePanels } from "./hooks/useResizablePanels";
 import { useLibrarySearch } from "./hooks/useLibrarySearch";
@@ -120,6 +121,7 @@ import Sidebar, { type MainView } from "./components/Sidebar";
 import LibraryTrackList from "./components/LibraryTrackList";
 import MobileNowPlaying from "./components/MobileNowPlaying";
 import MobileSettings from "./components/MobileSettings";
+import UpdateToast from "./components/UpdateToast";
 import MobileTabBar, { type MobileTab } from "./components/MobileTabBar";
 import MobileLibraryPage from "./components/MobileLibraryPage";
 import MobileSearchPage from "./components/MobileSearchPage";
@@ -297,6 +299,7 @@ function App() {
   } = useEqualizerSettings(setError);
 
   const { themeMode, handleThemeModeChange } = useTheme(setError);
+  const appUpdate = useAppUpdate(setError);
 
   const {
     showFolderSetup,
@@ -2217,6 +2220,7 @@ function App() {
             currentOutputDevice={playbackState.output_device_name}
             onSelectOutputDevice={handleSelectOutputDeviceSettings}
             onResetApp={handleResetApp}
+            update={appUpdate}
           />
         ) : (
           <LibraryTrackList
@@ -2717,6 +2721,7 @@ function App() {
             currentOutputDevice={playbackState.output_device_name}
             onSelectOutputDevice={handleSelectOutputDeviceSettings}
             onResetApp={handleResetApp}
+            update={appUpdate}
           />
         )}
 
@@ -2785,6 +2790,7 @@ function App() {
           onCancelLyricsFetch={cancelLyricsFetch}
           isLoading={isLoading}
         />
+        <UpdateToast update={appUpdate} />
       </div>
     </SongCouplingContext.Provider>
   );

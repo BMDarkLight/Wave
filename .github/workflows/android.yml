@@ -211,3 +211,55 @@ jobs:
           name: wave-android-${{ matrix.arch }}
           path: src-tauri/gen/android/app/build/outputs/apk/**/release/*.apk
           if-no-files-found: error
+
+  # On a v* tag, attach both APKs to the draft release that build.yml makes.
+  # Each is named for its ABI: the in-app updater picks the asset ending in
+  # _<abi>.apk for the phone it runs on, so keep this naming in step with
+  # src-tauri/src/app/updater.rs.
+  publish-apks:
+    name: Attach APKs to the release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-android
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the APKs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wave-android-*
+          path: apks
+
+      - name: Upload them to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p out
+          for abi in arm64-v8a armeabi-v7a; do
+            mapfile -t found < <(find "apks/wave-android-$abi" -name '*.apk')
+            if [ "${#found[@]}" -ne 1 ]; then
+              echo "::error::Expected one APK for $abi, found ${#found[@]}"
+              exit 1
+            fi
+            cp "${found[0]}" "out/Wave_${VERSION}_${abi}.apk"
+          done
+          ls -l out
+
+          # build.yml creates the draft release when its first desktop build
+          # finishes. Wait for it instead of racing it with a second draft.
+          for attempt in $(seq 1 60); do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "::error::No release for $TAG after an hour"
+              exit 1
+            fi
+            echo "Waiting for the $TAG release ($attempt/60)"
+            sleep 60
+          done
+          gh release upload "$TAG" out/*.apk --clobber

@@ -220,3 +220,24 @@ await listen("system-theme-changed", async () => {
   const theme = await invoke<"light" | "dark" | null>("get_system_theme");
 });
 ```
+
+---
+
+### `update-download-progress`
+
+Emitted while [`download_update`](./commands.md#download_update) runs, at most
+every 200 ms, plus once at the start and once at the end.
+
+| Payload | Type |
+|---------|------|
+| `received` | `number`: bytes downloaded so far |
+| `total` | `number`: size of the APK in bytes |
+
+```typescript
+import { listen } from "@tauri-apps/api/event";
+
+await listen<{ received: number; total: number }>(
+  "update-download-progress",
+  ({ payload }) => setProgress(payload.received / payload.total),
+);
+```

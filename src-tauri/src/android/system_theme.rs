@@ -12,7 +12,7 @@
 #![cfg(target_os = "android")]
 
 use jni::objects::{JClass, JObject, JValue};
-use jni::{JNIEnv, JavaVM};
+use jni::JNIEnv;
 
 const CLASS: &str = "app.bmdarklight.wave.SystemTheme";
 
@@ -50,44 +50,7 @@ fn with_class<T>(
         &JObject<'local>,
     ) -> jni::errors::Result<T>,
 ) -> Option<T> {
-    let (vm_ptr, activity) = crate::android::jni::live_activity()?;
-    let vm = unsafe { JavaVM::from_raw(vm_ptr as *mut _) }.ok()?;
-    let mut env = vm.attach_current_thread().ok()?;
-    let activity = unsafe { JObject::from_raw(activity as jni::sys::jobject) };
-    // Command threads can stay attached, so free the call's local refs here.
-    let result = env.with_local_frame(8, |env| -> Result<T, CallError> {
-        let class = crate::android::media_bridge::load_app_class(env, &activity, CLASS)
-            .map_err(CallError::Load)?;
-        Ok(f(env, &class, &activity)?)
-    });
-    match result {
-        Ok(value) => Some(value),
-        Err(e) => {
-            if env.exception_check().unwrap_or(false) {
-                let _ = env.exception_clear();
-            }
-            tracing::warn!("SystemTheme call failed: {e}");
-            None
-        }
-    }
-}
-
-enum CallError {
-    Load(String),
-    Jni(jni::errors::Error),
-}
-
-impl From<jni::errors::Error> for CallError {
-    fn from(e: jni::errors::Error) -> Self {
-        CallError::Jni(e)
-    }
-}
-
-impl std::fmt::Display for CallError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CallError::Load(e) => f.write_str(e),
-            CallError::Jni(e) => e.fmt(f),
-        }
-    }
+    crate::android::media_bridge::with_activity_class(CLASS, f)
+        .map_err(|e| tracing::warn!("SystemTheme call failed: {e}"))
+        .ok()
 }

@@ -335,6 +335,52 @@ pub(crate) fn load_app_class<'local>(
     Ok(JClass::from(class_obj))
 }
 
+/// Call into one of Wave's Java classes with the Activity on screen. A Java
+/// exception is cleared and comes back as an error.
+pub(crate) fn with_activity_class<T>(
+    binary_name: &str,
+    f: impl for<'local> FnOnce(
+        &mut JNIEnv<'local>,
+        &JClass<'local>,
+        &JObject<'local>,
+    ) -> jni::errors::Result<T>,
+) -> Result<T, String> {
+    let (vm_ptr, activity) =
+        crate::android::jni::live_activity().ok_or("Wave has no window open")?;
+    let vm = unsafe { JavaVM::from_raw(vm_ptr as *mut _) }.map_err(|e| e.to_string())?;
+    let mut env = vm.attach_current_thread().map_err(|e| e.to_string())?;
+    let activity = unsafe { JObject::from_raw(activity as jni::sys::jobject) };
+    // Command threads can stay attached, so free the call's local refs here.
+    let result = env.with_local_frame(8, |env| -> Result<T, CallError> {
+        let class = load_app_class(env, &activity, binary_name).map_err(CallError::Load)?;
+        Ok(f(env, &class, &activity)?)
+    });
+    result.map_err(|e| {
+        clear_exception(&mut env);
+        e.to_string()
+    })
+}
+
+enum CallError {
+    Load(String),
+    Jni(jni::errors::Error),
+}
+
+impl From<jni::errors::Error> for CallError {
+    fn from(e: jni::errors::Error) -> Self {
+        CallError::Jni(e)
+    }
+}
+
+impl std::fmt::Display for CallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CallError::Load(e) => f.write_str(e),
+            CallError::Jni(e) => e.fmt(f),
+        }
+    }
+}
+
 extern "system" fn native_on_media_action(mut env: JNIEnv, _class: JClass, action: JString) {
     let Ok(action) = env.get_string(&action) else {
         return;

@@ -299,6 +299,12 @@ directly — no copying your music into app storage.
   and it picks up again afterwards; unplugging headphones or another app
   starting playback pauses it.
 - Android back button is trapped so it closes panels and sheets before leaving.
+- **Updates itself.** With **Auto update** on (the default, at the end of
+  Settings), Wave looks for a newer GitHub release at launch, downloads the
+  APK for your phone in the background, and offers to install it. Android
+  asks you to confirm the install. Turn it off and Settings shows a
+  **Check for updates** button instead. Desktop builds check the same way and
+  link to the release page.
 - Built for `arm64-v8a` and `armeabi-v7a`, `minSdkVersion 24`.
 
 <div align="center">
@@ -562,6 +568,7 @@ in [`docs/cli.md`](docs/cli.md).
 - **LRCLIB** — lyrics
 - **MusicBrainz** + **Cover Art Archive** — metadata and cover art enrichment
 - **Internet Archive**, **Jamendo**, **Deezer** — remote search tier
+- **GitHub Releases** — the update check at launch (Settings, Auto update)
 
 ---
 

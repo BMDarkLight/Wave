@@ -1406,6 +1406,74 @@ export const watchSystemTheme = async (
   return win.onThemeChanged(({ payload }) => onChange(payload));
 };
 
+// ── Updates ───────────────────────────────────────────────────────────────────
+
+/** What a look for a newer Wave release found. */
+export interface UpdateCheck {
+  current_version: string;
+  /** Set only when the release is newer than this build. */
+  latest_version: string | null;
+  release_url: string;
+  /**
+   * Bytes of the APK this device would download. Null on desktop, and on
+   * Android when the release has no APK for this phone.
+   */
+  download_size: number | null;
+  /** The APK is downloaded and ready to install. */
+  downloaded: boolean;
+}
+
+export interface UpdateProgress {
+  received: number;
+  total: number;
+}
+
+export const getAppVersion = async (): Promise<string | null> => {
+  if (!(await tauriInitialized)) return null;
+  const { getVersion } = await import("@tauri-apps/api/app");
+  return getVersion();
+};
+
+export const getAutoUpdateEnabled = (): Promise<boolean> => {
+  return safeInvoke<boolean>("get_auto_update_enabled");
+};
+
+export const setAutoUpdateEnabled = (enabled: boolean): Promise<void> => {
+  return safeInvoke("set_auto_update_enabled", { enabled });
+};
+
+export const checkForUpdate = (): Promise<UpdateCheck> => {
+  return safeInvoke<UpdateCheck>("check_for_update");
+};
+
+/** Android only. Resolves once the APK is downloaded and checked. */
+export const downloadUpdate = (): Promise<void> => {
+  return safeInvoke("download_update");
+};
+
+/** Android only. Opens the system installer, which asks to confirm. */
+export const installUpdate = (): Promise<void> => {
+  return safeInvoke("install_update");
+};
+
+export const openReleasePage = (): Promise<void> => {
+  return safeInvoke("open_release_page");
+};
+
+export const openRepository = (): Promise<void> => {
+  return safeInvoke("open_repository");
+};
+
+export const onUpdateProgress = async (
+  handler: (progress: UpdateProgress) => void,
+): Promise<() => void> => {
+  if (!(await tauriInitialized)) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<UpdateProgress>("update-download-progress", ({ payload }) =>
+    handler(payload),
+  );
+};
+
 // ── Audio Output Devices ──────────────────────────────────────────────────────
 
 export const listOutputDevices = (): Promise<string[]> => {
