@@ -233,6 +233,51 @@ impl Queue {
         self.tracks.get(current).map(String::as_str)
     }
 
+    /// Jump to a track the user picked. Picking the second song of a couple
+    /// starts from its first, which is moved, or queued, right before it.
+    pub fn pick(&mut self, index: usize) -> Option<&str> {
+        let picked = self.tracks.get(index)?;
+        let first = self
+            .couples
+            .iter()
+            .find(|(_, second)| second == picked)
+            .map(|(first, _)| first.clone());
+        let index = match first {
+            None => index,
+            Some(first) => match self.tracks.iter().position(|p| *p == first) {
+                Some(at) if at + 1 == index => at,
+                // Taking the first out from before the second shifts it back.
+                Some(at) => {
+                    let to = if at < index { index - 1 } else { index };
+                    self.move_track(at, to);
+                    to
+                }
+                None => {
+                    self.insert_at(index, first);
+                    index
+                }
+            },
+        };
+        self.jump(index)
+    }
+
+    /// Put `path` at `index`, keeping it there in the unshuffled order too.
+    fn insert_at(&mut self, index: usize, path: String) {
+        self.tracks.insert(index, path);
+        if let Some(current) = self.current_index.filter(|&current| current >= index) {
+            self.current_index = Some(current + 1);
+        }
+        if let Some(ref mut ranks) = self.unshuffled_rank {
+            let rank = ranks.get(index).copied().unwrap_or(ranks.len());
+            for r in ranks.iter_mut() {
+                if *r >= rank {
+                    *r += 1;
+                }
+            }
+            ranks.insert(index, rank);
+        }
+    }
+
     /// Index that `next` would select, without mutating queue state.
     fn peek_next_index(&self, repeat: &RepeatMode) -> Option<usize> {
         if self.tracks.is_empty() {
@@ -2568,6 +2613,19 @@ impl AudioPlayer {
         self.sync_preload();
     }
 
+    /// Play the queue's current track, such as one just picked with
+    /// [`Queue::pick`]. Returns its path.
+    pub fn play_current(&mut self) -> Result<Option<String>, AudioError> {
+        let path = self
+            .queue
+            .current_index()
+            .and_then(|index| self.queue.tracks().get(index).cloned());
+        if let Some(ref path) = path {
+            self.play(path)?;
+        }
+        Ok(path)
+    }
+
     pub fn jump_to_queue_index(&mut self, index: usize) -> Result<Option<String>, AudioError> {
         let path = self.queue.jump_to(index).map(str::to_string);
         if let Some(ref path) = path {
@@ -2586,6 +2644,55 @@ mod tests {
         queue.set_tracks(paths.iter().map(|p| p.to_string()).collect());
         queue
     }
+
+    fn coupled(paths: &[&str], first: &str, second: &str) -> Queue {
+        let mut queue = queue_of(paths);
+        queue.set_couples(vec![(first.to_string(), second.to_string())]);
+        queue
+    }
+
+    #[test]
+    fn picking_the_second_of_a_couple_starts_from_the_first() {
+        let mut queue = coupled(&["/a", "/x", "/b"], "/a", "/b");
+        assert_eq!(queue.pick(2), Some("/a"));
+        assert_eq!(queue.next(&RepeatMode::Off), Some("/b"));
+    }
+
+    #[test]
+    fn picking_the_second_of_a_couple_queues_a_first_that_was_missing() {
+        let mut queue = coupled(&["/x", "/b", "/y"], "/a", "/b");
+        assert_eq!(queue.pick(1), Some("/a"));
+        assert_eq!(queue.tracks(), ["/x", "/a", "/b", "/y"]);
+        assert_eq!(queue.next(&RepeatMode::Off), Some("/b"));
+    }
+
+    #[test]
+    fn picking_the_second_of_a_couple_moves_a_first_that_comes_later() {
+        let mut queue = coupled(&["/b", "/x", "/a"], "/a", "/b");
+        assert_eq!(queue.pick(0), Some("/a"));
+        assert_eq!(queue.tracks(), ["/a", "/b", "/x"]);
+    }
+
+    #[test]
+    fn picking_the_second_of_a_couple_works_under_shuffle() {
+        let mut queue = Queue::default();
+        queue.set_shuffle(true);
+        queue.set_couples(vec![("/a".to_string(), "/b".to_string())]);
+        queue.set_tracks(["/x", "/a", "/y", "/b", "/z"].map(String::from).to_vec());
+        assert_eq!(queue.pick(3), Some("/a"));
+        assert_eq!(queue.next(&RepeatMode::Off), Some("/b"));
+        assert_eq!(queue.tracks().len(), 5);
+    }
+
+    #[test]
+    fn picking_anything_else_plays_what_was_picked() {
+        let mut queue = coupled(&["/a", "/x", "/b"], "/a", "/b");
+        assert_eq!(queue.pick(0), Some("/a"));
+        let x = queue.tracks().iter().position(|p| p == "/x").unwrap();
+        assert_eq!(queue.pick(x), Some("/x"));
+    }
+
+    // ── set_tracks ───────────────────────────────────────────────────────
 
     #[test]
     fn set_tracks_resets_current_index_and_keeps_shuffle_on() {

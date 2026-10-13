@@ -551,7 +551,7 @@ fn sync_queue_from_tracks(player: &mut AudioPlayer, tracks: &[Track], index: usi
         .collect();
 
     player.queue.set_tracks(new_paths);
-    if player.queue.jump(index).is_none() {
+    if player.queue.pick(index).is_none() {
         tracing::warn!("Failed to align playback queue with playlist index {index}");
     }
     // Re-append manual items so they play after the playlist finishes.
@@ -1281,24 +1281,23 @@ pub async fn play_tracks(
         .filter(|p| !p.is_empty())
         .ok_or_else(|| format!("Audio file not found for track at index {index}"))?;
 
-    let play_path = local_path.clone();
     let queue_paths = materialized.clone();
     let app_clone = app.clone();
-    blocking(move || {
+    let played = blocking(move || {
         with_app_player(&app_clone, |player| {
             player.queue.set_tracks(queue_paths);
-            if player.queue.jump(index).is_none() {
+            if player.queue.pick(index).is_none() {
                 tracing::warn!("Failed to align queue with play_tracks index {index}");
             }
             player
-                .play(&play_path)
+                .play_current()
                 .map_err(|e| format!("Playback failed: {e}"))
         })
     })
     .await?;
 
     let app_clone = app.clone();
-    let lookup = local_path.clone();
+    let lookup = played.unwrap_or(local_path);
     let track = blocking(move || {
         let lib = app_clone.state::<LibraryState>();
         let lib = lib.0.lock().map_err(|e| e.to_string())?;
@@ -2021,15 +2020,24 @@ pub async fn play_track_from_playlist(index: usize, app: tauri::AppHandle) -> Re
 
     let app_clone = app.clone();
     let tracks_clone = tracks.clone();
-    blocking(move || {
+    let played = blocking(move || {
         with_app_player(&app_clone, |player| {
             sync_queue_from_tracks(player, &tracks_clone, index);
             player
-                .play(&local_path)
+                .play_current()
                 .map_err(|e| format!("Playback failed: {e}"))
         })
     })
     .await?;
+    // A coupled song's first plays before it, so that may be what started.
+    let track = match played {
+        Some(path) if path != local_path => tracks
+            .iter()
+            .find(|t| t.path == path)
+            .cloned()
+            .unwrap_or_else(|| placeholder_track(&path)),
+        _ => track,
+    };
 
     sync_bridge_now_playing(&app, &track);
     listen_switch_track(&app, &track.path, ListenEndReason::Partial);
@@ -2731,11 +2739,10 @@ pub async fn play_track_from_specific_playlist(
         .cloned()
         .unwrap_or_else(|| placeholder_track(&original_path));
 
-    let play_path = local_path.clone();
     let queue_for_sync = materialized;
     let originals_for_filter = original_paths;
     let app_clone = app.clone();
-    blocking(move || {
+    let played = blocking(move || {
         with_app_player(&app_clone, |player| {
             let playlist_set: std::collections::HashSet<&str> =
                 queue_for_sync.iter().map(String::as_str).collect();
@@ -2752,23 +2759,40 @@ pub async fn play_track_from_specific_playlist(
                 .collect();
 
             player.queue.set_tracks(queue_for_sync);
-            if player.queue.jump(index).is_none() {
+            if player.queue.pick(index).is_none() {
                 tracing::warn!("Failed to align playback queue with playlist index {index}");
             }
             for path in manual {
                 player.queue.enqueue(path);
             }
             player
-                .play(&play_path)
+                .play_current()
                 .map_err(|e| format!("Playback failed: {e}"))
         })
     })
     .await?;
 
-    let mut played_track = track;
-    played_track.path = local_path;
+    // A coupled song's first plays before it, so that may be what started.
+    let (played_track, listened_path) = match played {
+        Some(path) if path != local_path => {
+            let app_clone = app.clone();
+            let lookup = path.clone();
+            let track = blocking(move || {
+                let lib = app_clone.state::<LibraryState>();
+                let lib = lib.0.lock().map_err(|e| e.to_string())?;
+                Ok::<_, String>(resolve_track(&lib, &lookup))
+            })
+            .await?;
+            (track, path)
+        }
+        _ => {
+            let mut played_track = track;
+            played_track.path = local_path;
+            (played_track, original_path)
+        }
+    };
     sync_bridge_now_playing(&app, &played_track);
-    listen_switch_track(&app, &original_path, ListenEndReason::Partial);
+    listen_switch_track(&app, &listened_path, ListenEndReason::Partial);
     Ok(())
 }
 
@@ -2861,7 +2885,10 @@ pub async fn play_track_from_queue(index: usize, app: tauri::AppHandle) -> Resul
     let app_clone = app.clone();
     let path = blocking(move || {
         with_app_player(&app_clone, |guard| {
-            guard.jump_to_queue_index(index).map_err(|e| e.to_string())
+            if guard.queue.pick(index).is_none() {
+                return Ok(None);
+            }
+            guard.play_current().map_err(|e| e.to_string())
         })
     })
     .await?;

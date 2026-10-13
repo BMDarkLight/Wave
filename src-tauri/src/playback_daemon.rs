@@ -937,13 +937,14 @@ fn playlist_start_message(name: &str, count: usize, artist: &str, title: &str) -
 
 /// Put `path` right after the current entry and make it current. Status, next
 /// and previous all read the queue's current entry, so it has to be the track
-/// that is actually playing.
+/// that is actually playing. For the second song of a couple that is its
+/// first, which goes in right before it.
 fn queue_play_now(queue: &mut Queue, path: &str) {
     let index = queue
         .current_index()
         .map_or(queue.tracks().len(), |i| (i + 1).min(queue.tracks().len()));
     queue.insert_next(path.to_string());
-    queue.jump(index);
+    queue.pick(index);
 }
 
 fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
@@ -958,19 +959,22 @@ fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
             Ok(tracks) => {
                 let paths: Vec<String> = tracks.iter().map(|t| t.path.clone()).collect();
                 state.player.queue.set_tracks(paths);
-                if state.player.queue.jump(0).is_none() {
+                if state.player.queue.pick(0).is_none() {
                     return DaemonResponse::err("Failed to set queue.");
                 }
-                let first_path = tracks[0].path.clone();
-                if let Err(e) = state.player.play(&first_path) {
-                    return DaemonResponse::err(e.to_string());
-                }
-                sync_media_for_track(state, &tracks[0]);
+                let played = match state.player.play_current() {
+                    Ok(path) => path,
+                    Err(e) => return DaemonResponse::err(e.to_string()),
+                };
+                let first = played
+                    .and_then(|path| tracks.iter().find(|t| t.path == path))
+                    .unwrap_or(&tracks[0]);
+                sync_media_for_track(state, first);
                 let msg = playlist_start_message(
                     &playlist.name,
                     tracks.len(),
-                    &tracks[0].artist,
-                    &tracks[0].title,
+                    &first.artist,
+                    &first.title,
                 );
                 DaemonResponse::ok_msg(msg)
             }
@@ -985,9 +989,10 @@ fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
             return DaemonResponse::err(e);
         }
         queue_play_now(&mut state.player.queue, &path);
-        if let Err(e) = state.player.play(&path) {
-            return DaemonResponse::err(e.to_string());
-        }
+        let path = match state.player.play_current() {
+            Ok(played) => played.unwrap_or(path),
+            Err(e) => return DaemonResponse::err(e.to_string()),
+        };
         sync_media_for_path(state, &path);
         DaemonResponse::ok_msg(format_now_playing(&state.library, &path))
     }

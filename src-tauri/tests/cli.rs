@@ -786,3 +786,32 @@ fn an_unreadable_track_is_skipped_rather_than_ending_the_queue() {
     let (order, _) = wave.play_order(std::time::Duration::from_secs(6));
     assert_eq!(order, ["a.wav", "c.wav"]);
 }
+
+#[test]
+#[ignore = "needs an audio output device"]
+fn playing_the_second_song_of_a_couple_starts_with_the_first() {
+    let wave = Wave::new();
+    let first = wave.write_wav_of("first.wav", 0.6);
+    let second = wave.write_wav_of("second.wav", 0.6);
+    // The daemon resolves the path it is given, so the couple has to name
+    // the resolved path (the temp dir sits behind a symlink on macOS).
+    let canonical = |path: &str| std::fs::canonicalize(path).unwrap();
+    let (first, second) = (canonical(&first), canonical(&second));
+    let second = second.to_str().unwrap();
+    std::fs::create_dir_all(wave.data_dir()).unwrap();
+    let settings = serde_json::json!({
+        "volume": 0.0,
+        "song_coupling_enabled": true,
+        "song_couples": [{ "first": first, "second": second }],
+    });
+    std::fs::write(
+        wave.data_dir().join("wave-settings.json"),
+        settings.to_string(),
+    )
+    .unwrap();
+
+    let started = wave.ok(&["playback", "start", second]);
+    assert_eq!(started["status"]["file"], "first.wav");
+    let (order, _) = wave.play_order(std::time::Duration::from_secs(5));
+    assert_eq!(order, ["first.wav", "second.wav"]);
+}
