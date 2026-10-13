@@ -6,6 +6,7 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
+pub mod library_recovery;
 pub mod paths;
 pub mod settings;
 pub mod single_instance;

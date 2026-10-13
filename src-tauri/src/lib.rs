@@ -108,7 +108,7 @@ pub fn run() {
             app.manage(AppSettingsState(std::sync::Mutex::new(settings)));
             app.manage(ListenState(std::sync::Mutex::new(ListenTracker::new())));
 
-            let library = library::Library::new(app.handle())?;
+            let library = app::library_recovery::open_library_or_recover(app.handle());
             app.manage(LibraryState(std::sync::Mutex::new(library)));
             app.manage(EnrichmentState(std::sync::atomic::AtomicBool::new(false)));
 
