@@ -22,6 +22,17 @@ pub enum CloseAction {
     HideWindow,
 }
 
+/// Light or dark interface, or whichever the operating system is using.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeMode {
+    /// Follow the system setting, and change with it.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 /// Song coupling as the settings page and the song menu show it.
 #[derive(Debug, Clone, Serialize)]
 pub struct SongCouplingDto {

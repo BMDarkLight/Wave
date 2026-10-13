@@ -19,6 +19,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { BiArrowBack, BiSearch } from "react-icons/bi";
+import type { IconType } from "react-icons";
 import type { SourceSettings } from "../utils/player";
 import {
   BiFolderOpen,
@@ -40,6 +41,9 @@ import {
   BiPulse,
   BiPalette,
   BiLink,
+  BiAdjust,
+  BiSun,
+  BiMoon,
 } from "react-icons/bi";
 import {
   listMediaFolders,
@@ -50,8 +54,19 @@ import {
   EQ_BAND_LABELS,
   EQ_PRESETS,
 } from "../utils/player";
-import type { EqSettings, ListeningStats, PlaylistInfo } from "../utils/player";
+import type {
+  EqSettings,
+  ListeningStats,
+  PlaylistInfo,
+  ThemeMode,
+} from "../utils/player";
 import { isAndroid } from "../utils/platform";
+
+const THEME_CHOICES: { mode: ThemeMode; label: string; Icon: IconType }[] = [
+  { mode: "system", label: "System", Icon: BiAdjust },
+  { mode: "light", label: "Light", Icon: BiSun },
+  { mode: "dark", label: "Dark", Icon: BiMoon },
+];
 
 const LIBRARY_PLAYLIST_NAME = "Library";
 const isLibraryPlaylistName = (name?: string | null) =>
@@ -209,6 +224,8 @@ interface MobileSettingsProps {
   onAutoLyricsDownloadChange: (enabled: boolean) => void;
   waveformSeekEnabled: boolean;
   onWaveformSeekChange: (enabled: boolean) => void;
+  themeMode: ThemeMode;
+  onThemeModeChange: (mode: ThemeMode) => void;
   glassEffectsEnabled: boolean;
   onGlassEffectsChange: (enabled: boolean) => void;
   animationsEnabled: boolean;
@@ -256,6 +273,8 @@ export default function MobileSettings({
   onAutoLyricsDownloadChange,
   waveformSeekEnabled,
   onWaveformSeekChange,
+  themeMode,
+  onThemeModeChange,
   glassEffectsEnabled,
   onGlassEffectsChange,
   animationsEnabled,
@@ -985,6 +1004,35 @@ export default function MobileSettings({
             <BiPalette /> Appearance
           </h2>
           <div className="mset-card mset-playback-card">
+            <div className="mset-theme-row">
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Theme</span>
+                <span className="mset-gapless-hint">
+                  System follows your device's light or dark setting and
+                  switches along with it.
+                </span>
+              </span>
+              <div
+                className="mset-theme-choice"
+                role="radiogroup"
+                aria-label="Theme"
+              >
+                {THEME_CHOICES.map(({ mode, label, Icon }) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={themeMode === mode}
+                    className={themeMode === mode ? "active" : ""}
+                    onClick={() => onThemeModeChange(mode)}
+                  >
+                    <Icon aria-hidden />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mset-playback-divider" role="separator" />
             <label className="mset-gapless-row">
               <input
                 type="checkbox"

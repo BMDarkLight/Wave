@@ -105,6 +105,9 @@ pub fn run() {
 
             app.manage(PlayerState(std::sync::Mutex::new(Some(player))));
 
+            if let Some(window) = app.get_webview_window("main") {
+                crate::app::theme::apply_at_launch(&window, settings.theme_mode);
+            }
             app.manage(AppSettingsState(std::sync::Mutex::new(settings)));
             app.manage(ListenState(std::sync::Mutex::new(ListenTracker::new())));
 
@@ -215,6 +218,17 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::ThemeChanged(shown) = event {
+                let mode = window
+                    .app_handle()
+                    .try_state::<AppSettingsState>()
+                    .and_then(|state| state.0.lock().ok().map(|s| s.theme_mode));
+                if let (Some(mode), Some(webview)) =
+                    (mode, window.app_handle().get_webview_window(window.label()))
+                {
+                    crate::app::theme::keep_chosen(&webview, mode, *shown);
+                }
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle();
 
@@ -342,6 +356,10 @@ pub fn run() {
             commands::set_animations_enabled,
             commands::get_reduce_motion_enabled,
             commands::set_reduce_motion_enabled,
+            commands::get_theme_mode,
+            commands::set_theme_mode,
+            commands::get_system_theme,
+            commands::set_system_bar_theme,
             commands::get_close_action,
             commands::set_close_action,
             commands::toggle_close_action,

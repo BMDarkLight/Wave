@@ -26,8 +26,8 @@ html.wave-no-hover .play-pause-btn:active:not(:disabled) {
 }
 
 html.wave-no-hover .play-pause-btn:hover:not(:disabled) {
-  background: #fff !important;
-  color: #000 !important;
+  background: var(--green) !important;
+  color: var(--on-green) !important;
   transform: none !important;
   filter: none !important;
 }
@@ -43,7 +43,7 @@ html.wave-no-hover .nav-item:hover:not(.active) {
 }
 
 html.wave-no-hover .nav-item:active {
-  background: #1f1f1f !important;
+  background: var(--panel-active) !important;
   color: var(--text) !important;
 }
 
@@ -52,7 +52,7 @@ html.wave-no-hover .sidebar-pin:hover:not(.active) {
 }
 
 html.wave-no-hover .sidebar-pin:active {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--ink), 0.06);
 }
 
 html.wave-no-hover .sidebar-settings-btn:hover {
@@ -87,7 +87,7 @@ html.wave-no-hover .mnp-icon-btn.active:hover {
 }
 
 html.wave-no-hover .mset-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.06) !important;
+  background: rgba(var(--ink), 0.06) !important;
   color: var(--muted) !important;
 }
 
@@ -106,12 +106,12 @@ html.wave-no-hover .eq-close:active,
 html.wave-no-hover .page-back-btn:active,
 html.wave-no-hover .mnp-icon-btn:active:not(.active),
 html.wave-no-hover .mset-icon-btn:active {
-  background: rgba(255, 255, 255, 0.12) !important;
+  background: rgba(var(--ink), 0.12) !important;
   color: var(--text) !important;
 }
 
 html.wave-no-hover .mnp-icon-btn.active:active {
-  background: rgba(255, 255, 255, 0.12) !important;
+  background: rgba(var(--ink), 0.12) !important;
   color: var(--green-hot) !important;
 }
 
@@ -120,7 +120,7 @@ html.wave-no-hover .playlist-item:hover:not(.active) {
 }
 
 html.wave-no-hover .playlist-item:active {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(var(--ink), 0.06);
 }
 
 html.wave-no-hover .track-item:hover:not(.active) {
@@ -128,7 +128,7 @@ html.wave-no-hover .track-item:hover:not(.active) {
 }
 
 html.wave-no-hover .track-item:active:not(.active) {
-  background: rgba(255, 255, 255, 0.09);
+  background: rgba(var(--ink), 0.09);
 }
 
 html.wave-no-hover .queue-item:hover:not(.active) {
@@ -136,7 +136,7 @@ html.wave-no-hover .queue-item:hover:not(.active) {
 }
 
 html.wave-no-hover .queue-item:active:not(.active) {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(var(--ink), 0.08);
 }
 
 html.wave-no-hover .search-hit:hover,
@@ -160,7 +160,7 @@ html.wave-no-hover .device-panel-item:active,
 html.wave-no-hover .artist-album-card:active,
 html.wave-no-hover .artist-discography-item:active,
 html.wave-no-hover .artist-collapsible-header:active {
-  background: rgba(255, 255, 255, 0.09);
+  background: rgba(var(--ink), 0.09);
 }
 
 html.wave-no-hover .home-refresh-btn:hover:not(:disabled),
@@ -213,29 +213,29 @@ html.wave-no-hover .track-context-menu .delete-action:hover {
 html.wave-no-hover .add-track-menu button:active,
 html.wave-no-hover .track-context-menu button:active:not(:disabled),
 html.wave-no-hover .track-context-menu .delete-action:active {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(var(--ink), 0.1);
 }
 
 /* If :hover gets "stuck" after a tap, ensure it never overrides the
    real active state driven by React (`.active`). */
 html.wave-no-hover .lyrics-line:hover:not(:disabled):not(.active) {
-  color: #8a8a8a !important;
+  color: rgba(var(--ink), 0.5) !important;
 }
 
 html.wave-no-hover
   .mnp-lyrics-scroll
   .lyrics-line:hover:not(:disabled):not(.active) {
-  color: rgba(255, 255, 255, 0.4) !important;
+  color: rgba(var(--ink), 0.4) !important;
 }
 
 html.wave-no-hover .lyrics-line:active:not(:disabled):not(.active) {
-  color: rgba(255, 255, 255, 0.85) !important;
+  color: rgba(var(--ink), 0.85) !important;
 }
 
 html.wave-no-hover
   .mnp-lyrics-scroll
   .lyrics-line:active:not(:disabled):not(.active) {
-  color: rgba(255, 255, 255, 0.7) !important;
+  color: rgba(var(--ink), 0.7) !important;
 }
 
 html.wave-no-hover .lyrics-link:hover,
@@ -314,10 +314,10 @@ html.wave-no-hover .page-with-float-back > .page-back-btn:hover {
 
 @media (max-width: 900px) {
   html.wave-no-hover .sidebar-settings-btn:hover {
-    background: rgba(18, 18, 18, 0.55) !important;
+    background: rgba(var(--glass-card), 0.55) !important;
   }
 
   html.wave-no-hover .sidebar-settings-btn:active {
-    background: rgba(28, 28, 28, 0.65);
+    background: rgba(var(--glass-card-hover), 0.65);
   }
 }

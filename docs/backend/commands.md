@@ -1163,3 +1163,70 @@ const action = await invoke<CloseAction>("toggle_close_action");
 ```
 
 Use this from a settings toggle in the UI; call `get_close_action` on startup to initialize the control.
+
+---
+
+### `get_theme_mode`
+
+Return the theme chosen in Settings.
+
+**Arguments:** none
+
+**Returns:** [`ThemeMode`](./types.md#thememode): `"system"`, `"light"` or `"dark"`
+
+```typescript
+const mode = await invoke<ThemeMode>("get_theme_mode");
+```
+
+---
+
+### `set_theme_mode`
+
+Save the theme choice and apply it to the native window: the title bar and
+frame, and the webview's scrollbars and form controls. The page applies it to
+its own colors.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `mode` | [`ThemeMode`](./types.md#thememode) | yes | `"system"`, `"light"` or `"dark"` |
+
+**Returns:** nothing
+
+```typescript
+await invoke("set_theme_mode", { mode: "light" });
+```
+
+With `"system"`, desktop windows follow the operating system and report
+changes through Tauri's window `onThemeChanged`.
+
+---
+
+### `get_system_theme`
+
+Return the phone's light or dark setting on Android. Desktop windows report
+the system theme through Tauri's window `theme()` instead, so this returns
+`null` there. It also returns `null` while the Android app has no Activity.
+
+**Arguments:** none
+
+**Returns:** `"light" | "dark" | null`
+
+When the phone switches, Wave emits
+[`system-theme-changed`](./events.md#system-theme-changed).
+
+---
+
+### `set_system_bar_theme`
+
+Match the Android status and navigation bar icons to the page: dark icons for
+`"light"`, light icons for `"dark"`. Does nothing on other platforms.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `theme` | `"light" \| "dark"` | yes | The theme the page shows |
+
+**Returns:** nothing

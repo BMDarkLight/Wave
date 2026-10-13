@@ -269,21 +269,26 @@ function CircularDial({
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <path
           d={`M ${startPoint.x} ${startPoint.y} A ${r} ${r} 0 1 1 ${endPoint.x} ${endPoint.y}`}
+          className="mnp-dial-track"
           fill="none"
-          stroke="rgba(255,255,255,0.15)"
           strokeWidth={stroke}
           strokeLinecap="round"
         />
         {clamped > 0 && (
           <path
             d={`M ${startPoint.x} ${startPoint.y} A ${r} ${r} 0 ${valueSweepDeg > 180 ? 1 : 0} 1 ${valuePoint.x} ${valuePoint.y}`}
+            className="mnp-dial-value"
             fill="none"
-            stroke="#fff"
             strokeWidth={stroke}
             strokeLinecap="round"
           />
         )}
-        <circle cx={valuePoint.x} cy={valuePoint.y} r={thumb} fill="#fff" />
+        <circle
+          cx={valuePoint.x}
+          cy={valuePoint.y}
+          r={thumb}
+          className="mnp-dial-thumb"
+        />
       </svg>
       <div className="mnp-dial-center">{formatCenter(clamped)}</div>
     </div>

@@ -10,3 +10,4 @@ pub mod library_recovery;
 pub mod paths;
 pub mod settings;
 pub mod single_instance;
+pub mod theme;

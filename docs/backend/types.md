@@ -314,6 +314,24 @@ The preference is persisted to `wave-settings.json` in the app data directory an
 
 ---
 
+## `ThemeMode`
+
+Returned by `get_theme_mode` and taken by `set_theme_mode`.
+
+```typescript
+type ThemeMode = "system" | "light" | "dark";
+```
+
+| Value | Theme |
+|-------|-------|
+| `"system"` | Follow the operating system's light or dark setting (default) |
+| `"light"` | Always light |
+| `"dark"` | Always dark |
+
+The choice is persisted to `wave-settings.json` as `theme_mode`.
+
+---
+
 ## Copy-paste module
 
 You can import types from the existing frontend wrapper:

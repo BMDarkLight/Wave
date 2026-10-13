@@ -248,6 +248,9 @@ genres — computed locally from your own playback history.
 - **OS media controls** — the platform's own now-playing widget, media keys, and
   lock-screen artwork stay in sync.
 - **Close-to-tray** — choose whether the close button quits Wave or hides it.
+- **Light and dark themes**: follows the system's light or dark setting on
+  macOS, Windows, Linux and Android and switches along with it, or stays on
+  the one you pick in Settings.
 - **Single instance** — a second launch hands off to the running app instead of
   starting a competing audio engine.
 

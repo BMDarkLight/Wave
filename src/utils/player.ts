@@ -1343,6 +1343,69 @@ export const setReduceMotionEnabled = (enabled: boolean): Promise<void> => {
   return safeInvoke("set_reduce_motion_enabled", { enabled });
 };
 
+export type ThemeMode = "system" | "light" | "dark";
+export type Theme = "light" | "dark";
+
+export const getThemeMode = (): Promise<ThemeMode> => {
+  return safeInvoke<ThemeMode>("get_theme_mode");
+};
+
+export const setThemeMode = (mode: ThemeMode): Promise<void> => {
+  return safeInvoke("set_theme_mode", { mode });
+};
+
+/** Dark status and navigation bar icons on a light page. Android only. */
+export const setSystemBarTheme = (theme: Theme): Promise<void> => {
+  return safeInvoke("set_system_bar_theme", { theme });
+};
+
+/**
+ * Calls `onChange` with the system's light or dark setting now and each time
+ * it changes. Desktop windows report it themselves. On Android the WebView
+ * is not told when the phone switches, so the engine asks the phone and
+ * passes the switch on.
+ */
+export const watchSystemTheme = async (
+  onChange: (theme: Theme) => void,
+): Promise<() => void> => {
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  const fromMedia = () => onChange(media.matches ? "dark" : "light");
+
+  if (!(await tauriInitialized)) {
+    fromMedia();
+    media.addEventListener("change", fromMedia);
+    return () => media.removeEventListener("change", fromMedia);
+  }
+
+  if ((await safeInvokeHostOs()) === "android") {
+    const read = () => {
+      safeInvoke<Theme | null>("get_system_theme")
+        .then((theme) => (theme ? onChange(theme) : fromMedia()))
+        .catch(fromMedia);
+    };
+    // The phone can switch while the app is in the background.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") read();
+    };
+    read();
+    document.addEventListener("visibilitychange", onVisible);
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen("system-theme-changed", read);
+    return () => {
+      unlisten();
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }
+
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  const win = getCurrentWindow();
+  win
+    .theme()
+    .then((theme) => (theme ? onChange(theme) : fromMedia()))
+    .catch(fromMedia);
+  return win.onThemeChanged(({ payload }) => onChange(payload));
+};
+
 // ── Audio Output Devices ──────────────────────────────────────────────────────
 
 export const listOutputDevices = (): Promise<string[]> => {

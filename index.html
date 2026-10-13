@@ -25,6 +25,25 @@
           if (touch) document.documentElement.classList.add("wave-no-hover");
         } catch (_) {}
       })();
+      // Start in the theme the last launch showed, or the system's on the
+      // first one, so the page does not flash the other theme while the
+      // saved setting loads.
+      (function () {
+        var theme = null;
+        try {
+          theme = localStorage.getItem("wave-theme");
+        } catch (_) {}
+        if (theme !== "light" && theme !== "dark") {
+          theme = window.matchMedia("(prefers-color-scheme: light)").matches
+            ? "light"
+            : "dark";
+        }
+        document.documentElement.dataset.theme = theme;
+        if (theme === "light") {
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", "#ffffff");
+        }
+      })();
     </script>
   </head>
 

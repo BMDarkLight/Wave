@@ -26,3 +26,6 @@ pub mod media_bridge;
 
 #[cfg(target_os = "android")]
 pub mod crash_report;
+
+#[cfg(target_os = "android")]
+pub mod system_theme;

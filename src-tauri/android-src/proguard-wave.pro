@@ -20,6 +20,11 @@
 -keep class app.bmdarklight.wave.CrashInitProvider { *; }
 -keep class app.bmdarklight.wave.KeyboardInsets { *; }
 -keep class app.bmdarklight.wave.UiLifecycle { *; }
+-keep class app.bmdarklight.wave.SystemTheme { *; }
+-keepclassmembers class app.bmdarklight.wave.SystemTheme {
+    public static boolean isDark(android.content.Context);
+    public static void setLightBars(android.app.Activity, boolean);
+}
 # UiLifecycle rebinds Tauri's PluginManager to a new Activity by field name.
 -keepclassmembers class app.tauri.plugin.PluginManager { *; }
 -keep class app.bmdarklight.wave.MediaNativeBridge { *; }

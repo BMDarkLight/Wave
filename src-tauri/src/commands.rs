@@ -19,6 +19,7 @@ use crate::dto::{
     AlbumSummaryDto, ArtistSummaryDto, CloseAction, EqSettingsDto, HomeSuggestionsDto,
     ImportResultDto, ListeningStatsDto, LyricsImportResultDto, PlaybackModeDto, PlaybackStateDto,
     QueueDto, QueueStateDto, SearchCollectionsDto, SearchHitDto, SongCoupleDto, SongCouplingDto,
+    ThemeMode,
 };
 use crate::library::{Library, PlaylistInfo};
 use crate::listen::{ListenEndReason, ListenFlush, ListenTracker};
@@ -1053,6 +1054,11 @@ pub(crate) fn handle_native_media_action(
             crate::android::lifecycle::exit_if_headless(app);
             Ok(())
         }
+        "theme-changed" => {
+            // The phone switched between light and dark.
+            let _ = app.emit("system-theme-changed", ());
+            Ok(())
+        }
         "ui-started" => {
             // An Activity started; if the UI had been destroyed, rebuild it.
             crate::android::lifecycle::ensure_main_window(app);
@@ -1875,6 +1881,59 @@ pub async fn set_reduce_motion_enabled(
     settings.reduce_motion_enabled = enabled;
     settings.save(&app)?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_theme_mode(
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<ThemeMode, String> {
+    let settings = lock_settings(&settings_state)?;
+    Ok(settings.theme_mode)
+}
+
+#[tauri::command]
+pub async fn set_theme_mode(
+    mode: ThemeMode,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    {
+        let mut settings = lock_settings(&settings_state)?;
+        settings.theme_mode = mode;
+        settings.save(&app)?;
+    }
+    crate::app::theme::apply(&app, mode);
+    Ok(())
+}
+
+/// The phone's light or dark setting. Desktop pages read the system theme
+/// from their window, so this is `None` there.
+#[tauri::command]
+pub fn get_system_theme() -> Option<tauri::Theme> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::android::system_theme::is_dark().map(|dark| {
+            if dark {
+                tauri::Theme::Dark
+            } else {
+                tauri::Theme::Light
+            }
+        });
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        None
+    }
+}
+
+/// Match the status and navigation bar icons to the theme the page shows.
+/// Only Android draws them over the page; elsewhere this does nothing.
+#[tauri::command]
+pub fn set_system_bar_theme(theme: tauri::Theme) {
+    #[cfg(target_os = "android")]
+    crate::android::system_theme::set_light_bars(theme == tauri::Theme::Light);
+    #[cfg(not(target_os = "android"))]
+    let _ = theme;
 }
 
 // ── Library / playlist commands ───────────────────────────────────────────────

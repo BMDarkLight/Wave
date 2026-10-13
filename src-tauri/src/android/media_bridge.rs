@@ -298,7 +298,7 @@ fn clear_exception(env: &mut JNIEnv) {
     }
 }
 
-fn load_app_class<'local>(
+pub(crate) fn load_app_class<'local>(
     env: &mut JNIEnv<'local>,
     activity: &JObject<'local>,
     binary_name: &str,

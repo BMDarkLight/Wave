@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::dsp::EqConfig;
 use crate::audio::player::RepeatMode;
-use crate::dto::CloseAction;
+use crate::dto::{CloseAction, ThemeMode};
 
 const SETTINGS_FILE: &str = "wave-settings.json";
 
@@ -59,6 +59,9 @@ pub struct AppSettings {
     /// and drop the smaller flourishes.
     #[serde(default)]
     pub reduce_motion_enabled: bool,
+    /// Light, dark, or following the system.
+    #[serde(default)]
+    pub theme_mode: ThemeMode,
     /// Master switch for the remote-source search tier. When off, no provider
     /// is queried and the escalation button never appears, so nothing in the
     /// app reaches the network for music discovery.
@@ -147,6 +150,7 @@ impl Default for AppSettings {
             glass_effects_enabled: default_glass_effects_enabled(),
             animations_enabled: default_animations_enabled(),
             reduce_motion_enabled: false,
+            theme_mode: ThemeMode::System,
             outside_sourcing_enabled: default_outside_sourcing_enabled(),
             spotify_client_id: None,
             jamendo_client_id: None,
@@ -323,6 +327,27 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         let loaded: AppSettings = serde_json::from_str(&json).unwrap();
         assert!(loaded.reduce_motion_enabled);
+    }
+
+    #[test]
+    fn settings_saved_before_the_theme_choice_follow_the_system() {
+        let mut saved = serde_json::to_value(AppSettings::default()).unwrap();
+        saved.as_object_mut().unwrap().remove("theme_mode");
+        let loaded: AppSettings = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded.theme_mode, ThemeMode::System);
+    }
+
+    #[test]
+    fn a_chosen_theme_survives_a_save() {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let settings = AppSettings {
+                theme_mode: mode,
+                ..AppSettings::default()
+            };
+            let json = serde_json::to_string(&settings).unwrap();
+            let loaded: AppSettings = serde_json::from_str(&json).unwrap();
+            assert_eq!(loaded.theme_mode, mode);
+        }
     }
 
     #[test]

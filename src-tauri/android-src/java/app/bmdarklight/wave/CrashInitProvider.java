@@ -30,6 +30,7 @@ public final class CrashInitProvider extends ContentProvider {
             // including a notification button that cold-starts the process.
             MediaNativeBridge.attach(context);
             UiLifecycle.install(context);
+            SystemTheme.install(context);
         }
         return true;
     }

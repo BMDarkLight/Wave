@@ -77,6 +77,7 @@ import {
   type MainSearchScope,
 } from "./utils/search";
 import { useEqualizerSettings } from "./hooks/useEqualizerSettings";
+import { useTheme } from "./hooks/useTheme";
 import { useSongCoupling } from "./hooks/useSongCoupling";
 import { useResizablePanels } from "./hooks/useResizablePanels";
 import { useLibrarySearch } from "./hooks/useLibrarySearch";
@@ -294,6 +295,8 @@ function App() {
     handleAnimationsChange,
     handleReduceMotionChange,
   } = useEqualizerSettings(setError);
+
+  const { themeMode, handleThemeModeChange } = useTheme(setError);
 
   const {
     showFolderSetup,
@@ -2178,6 +2181,8 @@ function App() {
             onWaveformSeekChange={(enabled) =>
               void handleWaveformSeekChange(enabled)
             }
+            themeMode={themeMode}
+            onThemeModeChange={(mode) => void handleThemeModeChange(mode)}
             glassEffectsEnabled={glassEffectsEnabled}
             onGlassEffectsChange={(enabled) =>
               void handleGlassEffectsChange(enabled)
@@ -2676,6 +2681,8 @@ function App() {
             onWaveformSeekChange={(enabled) =>
               void handleWaveformSeekChange(enabled)
             }
+            themeMode={themeMode}
+            onThemeModeChange={(mode) => void handleThemeModeChange(mode)}
             glassEffectsEnabled={glassEffectsEnabled}
             onGlassEffectsChange={(enabled) =>
               void handleGlassEffectsChange(enabled)

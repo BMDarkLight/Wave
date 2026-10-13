@@ -200,3 +200,23 @@ await listen<string>("waveform-ready", (event) => {
   if (event.payload === currentPath) reloadWaveform();
 });
 ```
+
+---
+
+### `system-theme-changed`
+
+Android only. Emitted when the phone switches between light and dark mode.
+Call [`get_system_theme`](./commands.md#get_system_theme) to read the new
+setting.
+
+| Payload | Type |
+|---------|------|
+| (none) | `()` |
+
+```typescript
+import { listen } from "@tauri-apps/api/event";
+
+await listen("system-theme-changed", async () => {
+  const theme = await invoke<"light" | "dark" | null>("get_system_theme");
+});
+```

@@ -174,6 +174,10 @@ artists](./commands.md#albums--artists).
 | `get_close_action` | Read close-button behavior (`quit` vs `hide_window`) |
 | `set_close_action` | Set close-button behavior |
 | `toggle_close_action` | Toggle close-button behavior and persist |
+| `get_theme_mode` | Read the theme choice (`system`, `light` or `dark`) |
+| `set_theme_mode` | Save the theme choice and apply it to the native window |
+| `get_system_theme` | Android: read the phone's light or dark setting |
+| `set_system_bar_theme` | Android: match the status bar icons to the page |
 
 ## Error handling
 
