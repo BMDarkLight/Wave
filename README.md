@@ -402,8 +402,23 @@ wave playback shutdown           # stop the background service
 
 `wave now` is a live dashboard of what's playing: the track, a progress bar,
 volume, output device, shuffle and repeat, the sleep timer when one is set,
-and the next two tracks. It redraws in place until you press Ctrl-C, and
-`wave now --once` prints a single frame.
+and the next two tracks. It redraws in place until you press Q or Ctrl-C, and
+`wave now --once` prints a single frame. Press L to show the lyrics of the
+playing track under the status, following along line by line when they are
+synced; `wave now --lyrics` starts with them showing.
+
+```bash
+wave lyrics show                 # lyrics of the playing track, as text
+wave lyrics show e541104d --timestamps
+wave lyrics show --live          # follow along as the track plays
+wave lyrics fetch                # look up the playing track on LRCLIB
+wave lyrics fetch e541104d --force
+```
+
+Lyrics come from the file's tags, a sidecar `.ttml`, `.elrc`, `.lrc` or
+`.txt` file beside it, or LRCLIB. `wave lyrics fetch` saves what it finds to
+the library, and the live views look a track up on their own when it has no
+synced lyrics yet.
 
 <img src="docs/screenshots/cli-now.png" alt="wave now: the playing track with a progress bar, volume, device, repeat mode and the next two tracks" width="100%">
 

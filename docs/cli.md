@@ -352,9 +352,12 @@ Reads print the data directly; changes print the envelope described in
 | `metadata set TRACK --title ...` | `track`, the updated track; or `path` alone when the file is not in the library. |
 | `metadata cover-export TRACK FILE` | `output`, `mime`, `bytes`. |
 | `metadata cover-set TRACK IMAGE` | `id`, the track's id. |
+| `lyrics show [TRACK]` | `path`, `title`, `artist`, `source`, and `sheet`: `kind` (`plain`, `line` or `word`), `lines` (each with `time`, `end`, `text`, `words`, `agent`, `background`) and `plain`, the text as stored. |
+| `lyrics fetch [TRACK] [--force]` | `path`, `source`, `kind`, `fetched` (false when the track already had synced lyrics), and `lines` when it fetched. Fails with `not_found` when LRCLIB has nothing. |
 
 A `TRACK` is a full track id, an id prefix of at least four characters, or a
-path to an audio file.
+path to an audio file. The `lyrics` commands use the playing track when it is
+left out. `lyrics show --live` draws to the terminal and has no JSON form.
 
 ### Playlists and favorites
 

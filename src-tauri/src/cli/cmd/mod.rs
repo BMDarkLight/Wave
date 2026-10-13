@@ -14,6 +14,7 @@
 pub mod devices;
 pub mod dsp;
 pub mod favorite;
+pub mod lyrics;
 pub mod metadata;
 pub mod playback;
 pub mod playlists;

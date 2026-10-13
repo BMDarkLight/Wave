@@ -6,23 +6,25 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
-//! The `wave now` dashboard.
-//!
-//! Redraws in place with cursor-up and erase-line rather than the alternate
-//! screen, so scrollback survives and the terminal is left as it was found.
+//! The `wave now` dashboard. Redraws in place through `cli::term`; L shows
+//! and hides the lyrics of the playing track.
 
 use std::io::{IsTerminal, Write};
+use std::time::Duration;
 
+use crate::cli::lyrics_view::{self, Follower, Lyrics};
+use crate::cli::term::{self, Key, Live};
 use crate::cli::ui::{self, Ui};
 use crate::cli::{json, render};
+use crate::lyrics::LyricsKind;
 use crate::playback_daemon::{daemon_request_if_running, DaemonRequest, PlaybackStatus};
 
 /// Tracks shown under "Up next". Fixed, because the frame height must not
 /// change between redraws.
 const PEEK: usize = 2;
 
-const SHOW_CURSOR: &str = "\x1b[?25h";
-const HIDE_CURSOR: &str = "\x1b[?25l";
+/// Rows of lyrics under the status, at most. Fewer on a short terminal.
+const LYRIC_ROWS: usize = 9;
 
 pub fn clamp_interval(seconds: f64) -> f64 {
     if seconds.is_nan() {
@@ -85,40 +87,56 @@ pub fn frame(
     out
 }
 
-/// Bring the cursor back before leaving. `process::exit` does not flush
-/// stdout, so an unflushed escape would leave the terminal without one.
-fn restore_cursor(live: bool) {
-    if live {
-        print!("{SHOW_CURSOR}");
-        let _ = std::io::stdout().flush();
-    }
-}
-
 /// One round trip for everything a frame needs. `QueueList` answers with the
 /// status as well, which saves a second request and keeps the two in step.
 /// Leaves through the standard no-daemon error when nothing is running.
-fn fetch(live: bool) -> (PlaybackStatus, Vec<String>) {
+fn fetch() -> (PlaybackStatus, Vec<String>) {
     let response = match daemon_request_if_running(DaemonRequest::QueueList) {
         Ok(Some(response)) => response,
         Ok(None) => {
-            restore_cursor(live);
+            term::restore();
             ui::no_daemon()
         }
         Err(e) => {
-            restore_cursor(live);
+            term::restore();
             ui::fail_with(e)
         }
     };
     match response.status {
         Some(status) => (status, response.queue.unwrap_or_default()),
         None => {
-            restore_cursor(live);
+            term::restore();
             let error = response
                 .error
                 .unwrap_or_else(|| "The daemon returned no status.".to_string());
             ui::fail(error, None, ui::EXIT_GENERAL)
         }
     }
+}
+
+/// The lyrics panel, placed between the status and the queue peek.
+fn lyrics_block(ui: &Ui, status: &PlaybackStatus, lyrics: &Lyrics, rows: usize) -> String {
+    let duration = status.duration_seconds.unwrap_or(0.0);
+    let progress = if duration > 0.0 {
+        status.position_seconds / duration
+    } else {
+        0.0
+    };
+    let mut out = format!("  {}\n", ui.heading("Lyrics"));
+    for line in lyrics_view::panel(ui, lyrics, status.position_seconds, progress, rows) {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out.push('\n');
+    out
+}
+
+/// Rows the lyrics panel gets: what the terminal has left over after the
+/// rest of the dashboard, within reason.
+fn lyric_rows(dashboard_height: usize) -> usize {
+    term::terminal_height()
+        .saturating_sub(dashboard_height + 2)
+        .clamp(3, LYRIC_ROWS)
 }
 
 /// Album and upcoming labels for one frame, looked up together.
@@ -149,28 +167,22 @@ fn label(status: &PlaybackStatus, queue: &[String]) -> Labels {
     Labels { album, next }
 }
 
-pub fn run(once: bool, interval: f64) {
+pub fn run(once: bool, interval: f64, show_lyrics: bool) {
     let ui = ui::current();
     // Redrawing into a pipe writes escape sequences nobody can read, so a
     // non-terminal stdout gets exactly one frame, and so does --json.
     let live = !(once || ui.json || !std::io::stdout().is_terminal());
     let interval = clamp_interval(interval);
-
-    if live {
-        // Ctrl-C skips destructors, so the cursor has to come back from here.
-        let _ = ctrlc::set_handler(|| {
-            println!("{SHOW_CURSOR}");
-            let _ = std::io::stdout().flush();
-            std::process::exit(0);
-        });
-        print!("{HIDE_CURSOR}");
-    }
+    let mut show_lyrics = show_lyrics && !ui.json;
+    // Asking LRCLIB is a network call, so a single frame does without it and
+    // shows what the library and the file already have.
+    let mut follower = Follower::new(live);
+    let mut screen = live.then(Live::start);
 
     type LabelKey = (Option<String>, Option<usize>, String, Vec<String>);
     let mut labels_for: Option<(LabelKey, Labels)> = None;
-    let mut previous_height = 0usize;
     loop {
-        let (status, queue) = fetch(live);
+        let (status, queue) = fetch();
         if ui.json {
             json::emit(&status);
         }
@@ -195,33 +207,51 @@ pub fn run(once: bool, interval: f64) {
             queue.len(),
             labels.album.as_deref(),
         );
-        if live {
-            text.push_str(&format!("\n  {}\n", ui.dim("Ctrl-C to exit")));
-        }
+        let lyrics = if show_lyrics {
+            let lyrics = match screen {
+                Some(_) => follower.get(status.path.as_deref()),
+                // One frame cannot wait for a background load, so read the
+                // lyrics here instead.
+                None => Follower::load_now(status.path.as_deref()),
+            };
+            // The panel goes in after the status, before "Up next".
+            let at = text
+                .find(&format!("  {}", ui.heading("Up next")))
+                .unwrap_or(text.len());
+            let rows = lyric_rows(text.lines().count() + 2);
+            text.insert_str(at, &lyrics_block(ui, &status, &lyrics, rows));
+            Some(lyrics)
+        } else {
+            None
+        };
 
-        let mut out = String::new();
-        if live && previous_height > 0 {
-            out.push_str(&format!("\x1b[{previous_height}A\r"));
-        }
-        for line in text.lines() {
-            out.push_str(line);
-            if live {
-                // Overwrite in place: erase whatever the last frame left on
-                // this line past the new text.
-                out.push_str("\x1b[K");
-            }
-            out.push('\n');
-        }
-        let mut stdout = std::io::stdout().lock();
-        let _ = stdout.write_all(out.as_bytes());
-        let _ = stdout.flush();
-        drop(stdout);
-        previous_height = text.lines().count();
-
-        if !live {
+        let Some(screen) = screen.as_mut() else {
+            print!("{text}");
+            let _ = std::io::stdout().flush();
             return;
+        };
+        let hint = if screen.reads_keys() {
+            let toggle = if show_lyrics { "hide" } else { "show" };
+            format!(
+                "L to {toggle} lyrics{}Q to exit",
+                format_args!(" {} ", ui.glyphs.dot)
+            )
+        } else {
+            "Ctrl-C to exit".to_string()
+        };
+        text.push_str(&format!("\n  {}\n", ui.dim(&hint)));
+        screen.draw(&text);
+
+        // Word highlighting needs more than the dashboard's default pace.
+        let wait = match lyrics {
+            Some(Lyrics::Ready(ref sheet)) if sheet.kind != LyricsKind::Plain => interval.min(0.2),
+            _ => interval,
+        };
+        match screen.wait(Duration::from_secs_f64(wait)) {
+            Some(Key::Quit) => return,
+            Some(Key::Char('l')) => show_lyrics = !show_lyrics,
+            _ => {}
         }
-        std::thread::sleep(std::time::Duration::from_secs_f64(interval));
     }
 }
 

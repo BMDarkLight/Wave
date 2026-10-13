@@ -11,9 +11,11 @@ pub mod bar;
 pub mod batch;
 pub mod cmd;
 pub mod json;
+pub mod lyrics_view;
 pub mod now;
 pub mod render;
 pub mod table;
+pub mod term;
 pub mod ui;
 pub mod watch;
 
@@ -90,6 +92,9 @@ pub enum Commands {
     /// DSP / equalizer, gapless, and crossfade controls
     #[command(subcommand)]
     Dsp(DspCmd),
+    /// Fetch and read lyrics, or follow them as a track plays
+    #[command(subcommand)]
+    Lyrics(LyricsCmd),
     /// Print a shell completion script
     Completions {
         /// Shell to generate for
@@ -117,6 +122,9 @@ pub enum Commands {
         /// daemon stops (see docs/cli.md)
         #[arg(long, conflicts_with = "once")]
         watch: bool,
+        /// Start with the lyrics showing (press L to toggle them)
+        #[arg(long)]
+        lyrics: bool,
     },
     /// Listening stats (play time, top tracks / artists / albums / genres)
     #[command(subcommand, visible_alias = "listen")]
@@ -454,6 +462,35 @@ pub enum DspCmd {
 }
 
 #[derive(clap::Subcommand)]
+pub enum LyricsCmd {
+    /// Look up a track's lyrics on LRCLIB and save them to the library
+    Fetch {
+        /// Track ID (or unique prefix) or file path. Omit for the track
+        /// that is playing
+        track_id: Option<String>,
+        /// Ask again even when the track already has synced lyrics
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print a track's lyrics, or follow them live with --live
+    Show {
+        /// Track ID (or unique prefix) or file path. Omit for the track
+        /// that is playing
+        #[arg(conflicts_with = "live")]
+        track_id: Option<String>,
+        /// Follow the playing track, highlighting the line being sung
+        #[arg(long)]
+        live: bool,
+        /// Put each synced line's start time in front of it
+        #[arg(long, conflicts_with = "live")]
+        timestamps: bool,
+        /// With --live, seconds between redraws (0.1 to 10)
+        #[arg(long, default_value_t = 0.5, requires = "live")]
+        interval: f64,
+    },
+}
+
+#[derive(clap::Subcommand)]
 pub enum StatsCmd {
     /// Overview: totals plus top tracks, artists, albums, and genres
     Summary {
@@ -729,6 +766,7 @@ pub fn is_daemon_ipc_client(args: &[String]) -> bool {
         Some(Commands::Devices(DevicesCmd::Volume { .. } | DevicesCmd::Switch { .. })) => true,
         // Live DSP when the CLI playback daemon owns the audio engine.
         Some(Commands::Dsp(ref cmd)) => !matches!(cmd, DspCmd::Presets),
+        Some(Commands::Lyrics(LyricsCmd::Show { live: true, .. })) => true,
         _ => false,
     }
 }
@@ -819,13 +857,19 @@ pub fn run() {
         Some(Commands::Favorite(cmd)) => cmd::favorite::run(cmd),
         Some(Commands::Metadata(cmd)) => cmd::metadata::run(cmd),
         Some(Commands::Dsp(cmd)) => cmd::dsp::run(cmd),
+        Some(Commands::Lyrics(cmd)) => cmd::lyrics::run(cmd),
         Some(Commands::Stats(cmd)) => cmd::stats::run(cmd),
         Some(Commands::Now {
             watch: true,
             interval,
             ..
         }) => watch::run(interval),
-        Some(Commands::Now { once, interval, .. }) => now::run(once, interval),
+        Some(Commands::Now {
+            once,
+            interval,
+            lyrics,
+            ..
+        }) => now::run(once, interval, lyrics),
         Some(Commands::Completions { shell }) => {
             clap_complete::generate(shell, &mut Cli::command(), "wave", &mut std::io::stdout())
         }

@@ -25,7 +25,7 @@ pub fn run(cmd: PlaybackCmd) {
         PlaybackCmd::Previous => daemon_cmd(DaemonRequest::Previous),
         PlaybackCmd::Seek { position } => cmd_playback_seek(&position),
         // One renderer for both, so the two views cannot drift apart.
-        PlaybackCmd::Status => crate::cli::now::run(true, 0.5),
+        PlaybackCmd::Status => crate::cli::now::run(true, 0.5, false),
         PlaybackCmd::Sleep { when } => cmd_playback_sleep(when.as_deref()),
         PlaybackCmd::Speed { value } => cmd_playback_speed(value.as_deref()),
         PlaybackCmd::Shutdown => cmd_playback_shutdown(),
