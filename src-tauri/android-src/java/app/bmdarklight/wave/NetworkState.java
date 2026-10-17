@@ -17,22 +17,26 @@ public final class NetworkState {
 
     /**
      * True on cellular, or on a metered network that is not Wi-Fi or
-     * Ethernet (a tethered hotspot, for one). False when it can't tell.
+     * Ethernet (a tethered hotspot, for one). Also true whenever it can't
+     * tell, so mobile data is never used on a guess.
      */
     public static boolean isCellularOrMetered(Context context) {
         try {
+            if (context == null) {
+                return true;
+            }
             ConnectivityManager cm =
                     (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm == null) {
-                return false;
+                return true;
             }
             Network network = cm.getActiveNetwork();
             if (network == null) {
-                return false;
+                return true;
             }
             NetworkCapabilities caps = cm.getNetworkCapabilities(network);
             if (caps == null) {
-                return false;
+                return true;
             }
             if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
                 return true;
@@ -42,7 +46,7 @@ public final class NetworkState {
                     && !caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
                     && !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET);
         } catch (Throwable t) {
-            return false;
+            return true;
         }
     }
 }

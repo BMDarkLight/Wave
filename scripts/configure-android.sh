@@ -4,7 +4,8 @@
 # `tauri android init` only generates a stock Tauri project. Wave adds to it:
 #   - its Java sources (ExoPlayer, media-session bridge, SAF, crash reporter,
 #     updater)
-#   - its resources (launcher icons, the status bar / notification icon)
+#   - its resources (launcher icons, the status bar / notification icon,
+#     the network security config and its debug-build override)
 #   - manifest permissions, the portrait lock, the early crash provider and
 #     the provider that shares downloaded updates with the installer
 #   - the Media3 / ExoPlayer Gradle dependencies
@@ -22,6 +23,7 @@ JAVA_SRC="src-tauri/android-src/java"
 JAVA_DEST="$APP_DIR/src/main/java"
 RES_SRC="src-tauri/icons/android"
 RES_DEST="$APP_DIR/src/main/res"
+DEBUG_RES_DEST="$APP_DIR/src/debug/res"
 MANIFEST="$APP_DIR/src/main/AndroidManifest.xml"
 PROGUARD_SRC="src-tauri/android-src/proguard-wave.pro"
 
@@ -79,6 +81,12 @@ echo "Applied Wave launcher icons into $RES_DEST"
 # xml/wave_network_security.xml is referenced from <application> below.
 cp -R src-tauri/android-src/res/. "$RES_DEST"/
 echo "Applied Wave Android resources into $RES_DEST"
+
+# Debug-only resources. The debug source set overrides main, so debug builds
+# get a network security config that allows the dev server's plain HTTP.
+mkdir -p "$DEBUG_RES_DEST"
+cp -R src-tauri/android-src/res-debug/. "$DEBUG_RES_DEST"/
+echo "Applied Wave debug resources into $DEBUG_RES_DEST"
 
 # Manifest: permissions + portrait lock
 python3 - "$MANIFEST" <<'PY'

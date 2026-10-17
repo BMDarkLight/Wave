@@ -33,5 +33,4 @@ pub mod system_theme;
 #[cfg(target_os = "android")]
 pub mod app_updater;
 
-#[cfg(target_os = "android")]
 pub mod network;
