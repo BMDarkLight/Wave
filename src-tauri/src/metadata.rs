@@ -316,16 +316,7 @@ fn extract_track_content_uri(
     let indexed_at = timestamp(SystemTime::now());
     let track_id = Uuid::new_v4().to_string();
 
-    let display = probed.display_name.clone().unwrap_or_else(|| {
-        path.rsplit(['/', ':'])
-            .next()
-            .unwrap_or("Unknown")
-            .to_string()
-    });
-    let stem = display
-        .rsplit_once('.')
-        .map(|(s, _)| s.to_string())
-        .unwrap_or_else(|| display.clone());
+    let (display, fallback) = content_uri_fallback(path, probed.display_name.as_deref());
     let format = probed
         .mime
         .as_deref()
@@ -338,9 +329,9 @@ fn extract_track_content_uri(
         id: track_id.clone(),
         path: path.to_string(),
         name: display.clone(),
-        title: probed.title.unwrap_or(stem),
-        artist: probed.artist.unwrap_or_else(|| "Unknown Artist".into()),
-        album: probed.album.unwrap_or_else(|| "Unknown Album".into()),
+        title: probed.title.unwrap_or(fallback.title),
+        artist: probed.artist.unwrap_or(fallback.artist),
+        album: probed.album.unwrap_or(fallback.album),
         album_artist: probed.album_artist,
         genre: probed.genre,
         year: probed.year,
@@ -816,13 +807,62 @@ fn set_once(target: &mut Option<String>, value: String) {
     }
 }
 
-struct FallbackFields {
-    title: String,
-    artist: String,
-    album: String,
+pub(crate) struct FallbackFields {
+    pub(crate) title: String,
+    pub(crate) artist: String,
+    pub(crate) album: String,
 }
 
-fn fallback_fields(path: &Path) -> FallbackFields {
+/// The readable path inside a document URI: `Music/Telegram/song.mp3` for
+/// `content://…/document/primary%3AMusic%2FTelegram%2Fsong.mp3`. The last
+/// segment of the URI is the percent-encoded document id, which is never
+/// something to show anyone. `None` for anything but a content URI.
+pub(crate) fn content_uri_display_path(uri: &str) -> Option<String> {
+    let rest = uri.trim().strip_prefix("content://")?;
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    let encoded = match rest.rfind("/document/") {
+        Some(at) => &rest[at + "/document/".len()..],
+        None => rest.rsplit('/').next().unwrap_or(rest),
+    };
+    let decoded = percent_encoding::percent_decode_str(encoded)
+        .decode_utf8_lossy()
+        .into_owned();
+    // Shared storage ids are `<volume>:<path>` (`primary:Music/a.mp3`), and
+    // the downloads provider uses `raw:/storage/…`.
+    let path = decoded
+        .split_once(':')
+        .map_or(decoded.as_str(), |(_, path)| path);
+    (!path.is_empty()).then(|| path.to_string())
+}
+
+/// The file name and the title, artist and album guesses for an untagged
+/// content URI, made the same way as for a plain file: from the file name
+/// and the folder it sits in. Providers report the real file name, so it wins
+/// over the one inside the document id.
+pub(crate) fn content_uri_fallback(
+    uri: &str,
+    display_name: Option<&str>,
+) -> (String, FallbackFields) {
+    let doc_path = content_uri_display_path(uri);
+    let doc_path = doc_path.as_deref().unwrap_or_default();
+    let (folder, doc_name) = match doc_path.rsplit_once('/') {
+        Some((folder, name)) => (Some(folder), name),
+        None => (None, doc_path),
+    };
+    let name = display_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .or_else(|| (!doc_name.is_empty()).then_some(doc_name))
+        .unwrap_or("Unknown")
+        .to_string();
+    let named_path = match folder {
+        Some(folder) => format!("{folder}/{name}"),
+        None => name.clone(),
+    };
+    (name, fallback_fields(Path::new(&named_path)))
+}
+
+pub(crate) fn fallback_fields(path: &Path) -> FallbackFields {
     let file_stem = path
         .file_stem()
         .and_then(|name| name.to_str())
@@ -964,6 +1004,57 @@ mod tests {
     fn fallback_fields_album_falls_back_to_local_files_without_parent() {
         let fields = fallback_fields(Path::new("Track.mp3"));
         assert_eq!(fields.album, "Local Files");
+    }
+
+    // ── content URIs ─────────────────────────────────────────────────────
+
+    const TELEGRAM_URI: &str = "content://com.android.externalstorage.documents/tree/primary%3AMusic/document/primary%3AMusic%2FTelegram%2FArtist%20-%20Song.mp3";
+
+    #[test]
+    fn content_uri_display_path_decodes_the_document_id() {
+        assert_eq!(
+            content_uri_display_path(TELEGRAM_URI).as_deref(),
+            Some("Music/Telegram/Artist - Song.mp3")
+        );
+    }
+
+    #[test]
+    fn content_uri_display_path_reads_raw_download_ids() {
+        let uri = "content://com.android.providers.downloads.documents/document/raw%3A%2Fstorage%2Femulated%2F0%2FDownload%2Fa.mp3";
+        assert_eq!(
+            content_uri_display_path(uri).as_deref(),
+            Some("/storage/emulated/0/Download/a.mp3")
+        );
+    }
+
+    #[test]
+    fn content_uri_display_path_ignores_plain_paths() {
+        assert_eq!(content_uri_display_path("/music/a.mp3"), None);
+    }
+
+    #[test]
+    fn content_uri_fallback_guesses_from_file_and_folder_names() {
+        let (name, fields) = content_uri_fallback(TELEGRAM_URI, None);
+        assert_eq!(name, "Artist - Song.mp3");
+        assert_eq!(fields.artist, "Artist");
+        assert_eq!(fields.title, "Song");
+        assert_eq!(fields.album, "Telegram");
+    }
+
+    #[test]
+    fn content_uri_fallback_prefers_the_provider_display_name() {
+        let uri = "content://com.android.providers.media.documents/document/audio%3A1234";
+        let (name, fields) = content_uri_fallback(uri, Some("Song.flac"));
+        assert_eq!(name, "Song.flac");
+        assert_eq!(fields.title, "Song");
+        assert_eq!(fields.artist, "Unknown Artist");
+    }
+
+    #[test]
+    fn content_uri_fallback_never_shows_the_encoded_id() {
+        let (name, fields) = content_uri_fallback(TELEGRAM_URI, None);
+        assert!(!name.contains('%'));
+        assert!(!fields.title.contains('%'));
     }
 
     // ── parse_year ───────────────────────────────────────────────────────

@@ -603,28 +603,38 @@ fn placeholder_track(path: &str) -> Track {
             return track.clone();
         }
     }
-    let name = Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("Unknown")
-        .to_string();
+    // Guess from the file and folder names, as an import of an untagged file
+    // would. A content URI ends in its encoded document id, so it is decoded
+    // first rather than shown as `primary%3AMusic%2F…`.
+    let is_saf_uri = path.starts_with("content://");
+    let (name, fallback) = if is_saf_uri {
+        crate::metadata::content_uri_fallback(path, None)
+    } else {
+        let name = Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Unknown")
+            .to_string();
+        (name, crate::metadata::fallback_fields(Path::new(path)))
+    };
+    let format = Path::new(&name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("Audio")
+        .to_uppercase();
     Track {
         id: String::new(),
         path: path.to_string(),
-        name: name.clone(),
-        title: name,
-        artist: "Unknown Artist".to_string(),
-        album: "Local Files".to_string(),
+        name,
+        title: fallback.title,
+        artist: fallback.artist,
+        album: fallback.album,
         album_artist: None,
         genre: None,
         year: None,
         track_number: None,
         disc_number: None,
-        format: Path::new(path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("Audio")
-            .to_uppercase(),
+        format,
         duration_seconds: None,
         sample_rate: None,
         channels: None,
@@ -644,7 +654,7 @@ fn placeholder_track(path: &str) -> Track {
         indexed_at: 0,
         source_provider: None,
         source_state: None,
-        is_saf_uri: false,
+        is_saf_uri,
     }
 }
 
@@ -4296,4 +4306,32 @@ pub async fn download_source_track(
         let _ = app.emit("source-download-fallback", reason);
     }
     Ok(stored)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_for_a_content_uri_shows_the_file_name() {
+        let track = placeholder_track(
+            "content://com.android.externalstorage.documents/tree/primary%3AMusic/document/primary%3AMusic%2FTelegram%2FArtist%20-%20Song.mp3",
+        );
+        assert_eq!(track.name, "Artist - Song.mp3");
+        assert_eq!(track.title, "Song");
+        assert_eq!(track.artist, "Artist");
+        assert_eq!(track.album, "Telegram");
+        assert_eq!(track.format, "MP3");
+        assert!(track.is_saf_uri);
+    }
+
+    #[test]
+    fn placeholder_for_a_file_guesses_from_its_name() {
+        let track = placeholder_track("/music/Album/Song.flac");
+        assert_eq!(track.name, "Song.flac");
+        assert_eq!(track.title, "Song");
+        assert_eq!(track.album, "Album");
+        assert_eq!(track.format, "FLAC");
+        assert!(!track.is_saf_uri);
+    }
 }

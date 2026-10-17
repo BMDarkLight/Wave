@@ -420,15 +420,17 @@ export const selectMediaFolder = async (): Promise<{
 
 export const getFileName = (path: string | null): string => {
   if (!path) return "No track selected";
-  // content://.../document/primary:Music/song.mp3 or plain paths
+  // content://.../document/primary%3AMusic%2Fsong.mp3 or plain paths. The
+  // document id hides its folders behind %2F, so decode before splitting.
   const cleaned = path.split("?")[0] ?? path;
-  const parts = cleaned.split(/[/\\:]/);
-  const last = parts[parts.length - 1] || "Unknown";
+  let decoded = cleaned;
   try {
-    return decodeURIComponent(last);
+    decoded = decodeURIComponent(cleaned);
   } catch {
-    return last;
+    /* not percent-encoded */
   }
+  const parts = decoded.split(/[/\\:]/);
+  return parts[parts.length - 1] || "Unknown";
 };
 
 export const addTrackToPlaylist = (path: string): Promise<Track> => {

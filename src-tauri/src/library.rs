@@ -1569,9 +1569,11 @@ impl Library {
         let mut kept_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut added = 0u32;
         let mut position = next_playlist_position(&tx, playlist_id)?;
+        let gone: std::collections::HashSet<String> =
+            to_remove.iter().map(|p| normalize_path_key(p)).collect();
 
         for track in extracted {
-            let track_id = upsert_track_deduped(&tx, track)?;
+            let track_id = upsert_track_deduped(&tx, track, &gone)?;
             kept_ids.insert(track_id.clone());
             if is_default {
                 added += 1;
@@ -2547,9 +2549,50 @@ impl Library {
                 )
                 .optional()
                 .map_err(|error| format!("Failed to query track by path: {error}"))?;
+            let track = match track {
+                Some(track) => Some(track),
+                None => self.track_for_same_document(&connection, path)?,
+            };
             tracks.push(track);
         }
         Ok(tracks)
+    }
+
+    /// The row for the document `uri` names, stored under another folder
+    /// grant. Picking the same folder again, or a folder inside it, builds
+    /// new URIs for the same files, and a queue saved before that still holds
+    /// the old ones.
+    fn track_for_same_document(
+        &self,
+        connection: &Connection,
+        uri: &str,
+    ) -> Result<Option<Track>, String> {
+        let Some(key) = content_document_key(uri) else {
+            return Ok(None);
+        };
+        let pattern = format!(
+            "content://{}/%document/{}",
+            escape_like_pattern(key.0),
+            escape_like_pattern(key.1)
+        );
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT {TRACK_SELECT_COLUMNS}
+                 FROM {TRACK_FROM}
+                 WHERE t.path LIKE ?1 ESCAPE '\\'
+                 LIMIT 8"
+            ))
+            .map_err(|error| format!("Failed to look up document: {error}"))?;
+        let rows = statement
+            .query_map(params![pattern], |row| row_to_track(row, &self.cover_root))
+            .map_err(|error| format!("Failed to look up document: {error}"))?;
+        for row in rows {
+            let track = row.map_err(|error| format!("Failed to read track: {error}"))?;
+            if content_document_key(&track.path) == Some(key) {
+                return Ok(Some(track));
+            }
+        }
+        Ok(None)
     }
 
     // ── Export / Import ──────────────────────────────────────────────────────
@@ -4053,7 +4096,10 @@ fn ensure_library_tracks_view(connection: &Connection) -> rusqlite::Result<()> {
 type DedupeKey = (String, String, String, Option<String>);
 
 fn dedupe_key(path: &str, artist: &str, album: &str, title: &str) -> DedupeKey {
-    let path = path.replace('\\', "/");
+    // A content URI's folders are inside its encoded document id.
+    let path = crate::metadata::content_uri_display_path(path)
+        .unwrap_or_else(|| path.to_string())
+        .replace('\\', "/");
     let folder_scope = path.rsplit_once('/').and_then(|(dir, _)| {
         let folder = dir.rsplit('/').next().unwrap_or(dir);
         folder
@@ -4155,7 +4201,19 @@ fn find_existing_track_id(conn: &Connection, track: &Track) -> Result<Option<Str
 
 /// Upsert for sync: reuse fingerprint/tag matches and rewrite `path` to the
 /// canonical scanned location so later syncs stop seeing false "new" files.
-fn upsert_track_deduped(conn: &Connection, track: &Track) -> Result<String, String> {
+///
+/// `gone` holds the path keys this sync is removing. A match by fingerprint
+/// or tags is a different file with the same song in it. It only takes over
+/// the row when the row's own file is gone (moved or renamed); while that
+/// file is still there the copy just links to the row. Rewriting it anyway
+/// handed the row back and forth between the two files on every sync, and
+/// anything still holding the other path (the queue, a saved session) lost
+/// its track.
+fn upsert_track_deduped(
+    conn: &Connection,
+    track: &Track,
+    gone: &std::collections::HashSet<String>,
+) -> Result<String, String> {
     let mut track = track.clone();
     track.path = normalize_path_key(&track.path);
 
@@ -4172,6 +4230,9 @@ fn upsert_track_deduped(conn: &Connection, track: &Track) -> Result<String, Stri
 
         let id = match path_owner {
             Some(owner_id) if owner_id != existing_id => owner_id,
+            None if row_file_still_present(conn, &existing_id, &track.path, gone)? => {
+                return Ok(existing_id);
+            }
             _ => {
                 conn.exec(
                     "UPDATE tracks SET
@@ -4793,10 +4854,54 @@ fn search_tokens(query: &str) -> Vec<String> {
     }
 }
 
+/// The provider and encoded document id of a document URI. Together they
+/// name one file, whichever folder grant (`tree/…`) the URI was built under.
+fn content_document_key(uri: &str) -> Option<(&str, &str)> {
+    let rest = uri.strip_prefix("content://")?;
+    let (authority, rest) = rest.split_once('/')?;
+    let document = match rest.strip_prefix("document/") {
+        Some(document) => document,
+        None => &rest[rest.rfind("/document/")? + "/document/".len()..],
+    };
+    (!document.is_empty() && !document.contains('/')).then_some((authority, document))
+}
+
 fn escape_like_pattern(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('%', "\\%")
         .replace('_', "\\_")
+}
+
+/// Whether the file a row points at is still there, so a different file that
+/// matched it by fingerprint or tags must not take the row over. Content URIs
+/// cannot be checked cheaply, so they count as present unless this sync is
+/// removing them; a moved document is then picked up by the next sync, once
+/// the old URI shows up as removed.
+fn row_file_still_present(
+    conn: &Connection,
+    row_id: &str,
+    new_path: &str,
+    gone: &std::collections::HashSet<String>,
+) -> Result<bool, String> {
+    let Some(old_path) = conn
+        .query_opt(
+            "SELECT path FROM tracks WHERE id = ?1",
+            params![row_id],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|e| format!("Failed to read track path: {e}"))?
+    else {
+        return Ok(false);
+    };
+    let old_key = normalize_path_key(&old_path);
+    // The same file under another spelling (a symlink): keep the canonical one.
+    if old_key == new_path || gone.contains(&old_key) {
+        return Ok(false);
+    }
+    if old_path.starts_with("content://") {
+        return Ok(true);
+    }
+    Ok(Path::new(&old_path).exists())
 }
 
 /// Stable path key for membership diffs (resolves symlinks when possible).
@@ -6629,6 +6734,100 @@ mod tests {
         assert_eq!(
             track_count, 1,
             "library must not keep a leftover duplicate row"
+        );
+    }
+
+    const SAF_TREE: &str =
+        "content://com.android.externalstorage.documents/tree/primary%3AMusic/document/";
+
+    #[test]
+    fn syncing_a_duplicate_file_keeps_the_existing_row_on_its_own_file() {
+        let library = open_test_library().expect("library");
+        let playlist = library
+            .create_playlist("Telegram", Some("content://tree"))
+            .expect("create");
+        let first = format!("{SAF_TREE}primary%3AMusic%2FTelegram%2Fsong.mp3");
+        let copy = format!("{SAF_TREE}primary%3AMusic%2FTelegram%2Fsong%20(1).mp3");
+
+        library
+            .apply_playlist_sync(&playlist.id, &[], &[sample_track("a", &first)], &[])
+            .expect("first sync");
+
+        // The same song saved twice: both files are still in the folder.
+        let desired = vec![first.clone(), copy.clone()];
+        for _ in 0..3 {
+            let (to_remove, to_add) = library
+                .diff_playlist_paths(&playlist.id, &desired)
+                .expect("diff");
+            let extracted: Vec<Track> = to_add.iter().map(|p| sample_track("b", p)).collect();
+            library
+                .apply_playlist_sync(&playlist.id, &to_remove, &extracted, &[])
+                .expect("sync");
+            let found = library
+                .get_tracks_by_paths(std::slice::from_ref(&first))
+                .expect("lookup");
+            assert!(
+                found[0].as_ref().is_some_and(|t| t.id == "a"),
+                "the first file must keep its row instead of handing it to the copy"
+            );
+        }
+        let tracks = library.get_playlist_tracks(&playlist.id).expect("tracks");
+        assert_eq!(tracks.len(), 1);
+    }
+
+    #[test]
+    fn a_duplicate_takes_over_the_row_when_the_old_file_is_gone() {
+        let library = open_test_library().expect("library");
+        let playlist = library
+            .create_playlist("Telegram", Some("content://tree"))
+            .expect("create");
+        let old = format!("{SAF_TREE}primary%3AMusic%2Fsong.mp3");
+        let moved = format!("{SAF_TREE}primary%3AMusic%2FTelegram%2Fsong.mp3");
+        library
+            .apply_playlist_sync(&playlist.id, &[], &[sample_track("a", &old)], &[])
+            .expect("first sync");
+
+        let (to_remove, to_add) = library
+            .diff_playlist_paths(&playlist.id, std::slice::from_ref(&moved))
+            .expect("diff");
+        let extracted: Vec<Track> = to_add.iter().map(|p| sample_track("b", p)).collect();
+        library
+            .apply_playlist_sync(&playlist.id, &to_remove, &extracted, &[])
+            .expect("sync");
+
+        let tracks = library.get_playlist_tracks(&playlist.id).expect("tracks");
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].id, "a");
+        assert_eq!(tracks[0].path, moved);
+    }
+
+    #[test]
+    fn looking_up_a_document_finds_it_under_another_folder_grant() {
+        let library = open_test_library().expect("library");
+        let favorites_id = library.favorites_playlist_id().expect("favorites");
+        let stored = format!("{SAF_TREE}primary%3AMusic%2FTelegram%2Fsong.mp3");
+        library
+            .apply_playlist_sync(&favorites_id, &[], &[sample_track("a", &stored)], &[])
+            .expect("seed");
+
+        // The same file, reached through a grant on Music/Telegram itself.
+        let queued = "content://com.android.externalstorage.documents/tree/primary%3AMusic%2FTelegram/document/primary%3AMusic%2FTelegram%2Fsong.mp3".to_string();
+        let other = "content://com.android.externalstorage.documents/tree/primary%3AMusic%2FTelegram/document/primary%3AMusic%2FTelegram%2Fother.mp3".to_string();
+        let found = library
+            .get_tracks_by_paths(&[queued, other])
+            .expect("lookup");
+        assert_eq!(found[0].as_ref().map(|t| t.id.as_str()), Some("a"));
+        assert!(found[1].is_none());
+    }
+
+    #[test]
+    fn untagged_documents_with_one_name_in_two_folders_stay_apart() {
+        let a = format!("{SAF_TREE}primary%3AMusic%2FArtist%20One%2FCD1%2F01.mp3");
+        let b = format!("{SAF_TREE}primary%3AMusic%2FArtist%20Two%2FCD1%2F01.mp3");
+        assert_ne!(
+            dedupe_key(&a, "Unknown Artist", "CD1", "01"),
+            dedupe_key(&b, "Unknown Artist", "CD1", "01"),
+            "an album guessed from the folder scopes the key to that folder"
         );
     }
 
