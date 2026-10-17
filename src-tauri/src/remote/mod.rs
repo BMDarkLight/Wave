@@ -11,6 +11,7 @@ pub mod gate;
 pub mod plex;
 pub mod refresh;
 pub mod store;
+pub mod stream;
 pub mod sync;
 pub mod uri;
 

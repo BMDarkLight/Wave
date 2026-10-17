@@ -717,6 +717,28 @@ impl Library {
         Ok(rows)
     }
 
+    /// Every row that should have a cache file, with the extension that names it.
+    pub fn remote_cached_files(&self) -> Result<Vec<(RemoteUri, String)>, String> {
+        let connection = self.read_connection();
+        let mut statement = connection
+            .prepare(
+                "SELECT remote_source_id, source_id, format FROM tracks
+                 WHERE cache_state IS NOT NULL AND remote_source_id IS NOT NULL",
+            )
+            .map_err(sql_error("prepare remote cache file query"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    RemoteUri::new(&row.get::<_, String>(0)?, &row.get::<_, String>(1)?),
+                    row.get::<_, String>(2)?.to_lowercase(),
+                ))
+            })
+            .map_err(sql_error("query remote cache files"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql_error("read remote cache files"))?;
+        Ok(rows)
+    }
+
     /// Give every row of one album in one source the same cover. A cover the
     /// user chose themselves is left alone.
     pub fn set_album_art_for_remote_album(

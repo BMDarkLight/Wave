@@ -50,6 +50,31 @@ pub fn preview_path(provider: &str, id: &str, extension: &str) -> PathBuf {
         .join(format!("{}.{}", sanitize(id), sanitize(extension)))
 }
 
+/// Where remote tracks stream to. Tests use a temp directory so they never
+/// touch, or sweep, the real cache.
+pub fn remote_cache_root() -> PathBuf {
+    if cfg!(test) {
+        std::env::temp_dir().join("wave-test-remote-cache")
+    } else {
+        paths::source_cache_dir().join("remote")
+    }
+}
+
+/// Sparse cache file for a remote track.
+pub fn remote_cache_path(source_id: &str, remote_id: &str, extension: &str) -> PathBuf {
+    remote_cache_path_in(&remote_cache_root(), source_id, remote_id, extension)
+}
+
+pub(crate) fn remote_cache_path_in(
+    root: &Path,
+    source_id: &str,
+    remote_id: &str,
+    extension: &str,
+) -> PathBuf {
+    root.join(sanitize(source_id))
+        .join(format!("{}.{}", sanitize(remote_id), sanitize(extension)))
+}
+
 /// Wipe every cached preview. Called at startup: a 30-second clip is worth
 /// re-fetching, and keeping them would slowly fill the disk with audio the
 /// user never asked to own.
@@ -71,7 +96,7 @@ pub fn clear_previews() {
 
 /// Replace anything that could escape the cache directory or upset a
 /// filesystem. Long ids are truncated with a hash suffix so they stay unique.
-fn sanitize(raw: &str) -> String {
+pub(crate) fn sanitize(raw: &str) -> String {
     let cleaned: String = raw
         .chars()
         .map(|c| {
@@ -320,6 +345,13 @@ mod tests {
         );
         assert!(preview.to_string_lossy().contains("previews"));
         assert!(preview.starts_with(paths::source_cache_dir()));
+    }
+
+    #[test]
+    fn remote_cache_path_is_sanitized_under_its_root() {
+        let path = remote_cache_path_in(Path::new("/root"), "plex-a/b", "../9", "flac");
+        assert_eq!(path, PathBuf::from("/root/plex-a_b/___9.flac"));
+        assert!(remote_cache_path("s", "1", "mp3").starts_with(remote_cache_root()));
     }
 
     #[test]
