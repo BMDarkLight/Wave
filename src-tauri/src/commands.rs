@@ -738,6 +738,7 @@ pub(crate) fn tick_auto_advance(app: &tauri::AppHandle) {
         let Some(player) = slot.as_mut() else {
             return;
         };
+        player.tick_remote_prefetch();
         if player.check_crossfade_track_switch() {
             let path = player
                 .get_current_path()
@@ -1216,6 +1217,13 @@ pub async fn scan_saf_folder(uri: String, app: tauri::AppHandle) -> Result<Vec<S
 
 // ── Playback commands ─────────────────────────────────────────────────────────
 
+/// Buffers the start of a remote track before the player is locked, so the
+/// lock is not held while the network catches up.
+fn prepare_remote_for_play(path: &str) -> Result<(), String> {
+    crate::remote::stream::prepare_for_play(path, std::time::Duration::from_secs(10))
+        .map_err(|e| format!("Playback failed: {e}"))
+}
+
 #[tauri::command]
 pub async fn play_track(path: String, app: tauri::AppHandle) -> Result<(), String> {
     validate_audio_path(&path)?;
@@ -1232,6 +1240,7 @@ pub async fn play_track(path: String, app: tauri::AppHandle) -> Result<(), Strin
     let original_path = path.clone();
     let app_clone = app.clone();
     blocking(move || {
+        prepare_remote_for_play(&play_path)?;
         with_app_player(&app_clone, |player| {
             player
                 .play(&play_path)
@@ -1303,7 +1312,9 @@ pub async fn play_tracks(
 
     let queue_paths = materialized.clone();
     let app_clone = app.clone();
+    let first = local_path.clone();
     let played = blocking(move || {
+        prepare_remote_for_play(&first)?;
         with_app_player(&app_clone, |player| {
             player.queue.set_tracks(queue_paths);
             if player.queue.pick(index).is_none() {
@@ -1383,7 +1394,7 @@ fn last_playback_state() -> &'static Mutex<Option<(PlaybackStateDto, std::time::
 
 /// `state` moved on by `elapsed` of playback, as the player would report it.
 fn carried_forward(mut state: PlaybackStateDto, elapsed: std::time::Duration) -> PlaybackStateDto {
-    if state.is_playing {
+    if state.is_playing && !state.is_buffering {
         let mut position = state.position_seconds + elapsed.as_secs_f64() * f64::from(state.speed);
         if let Some(duration) = state.duration_seconds.filter(|d| *d > 0.0) {
             position = position.min(duration);
@@ -1437,6 +1448,7 @@ fn playback_state_of(player: Option<&AudioPlayer>) -> PlaybackStateDto {
             output_device_name: AudioPlayer::current_output_name(),
             sleep_timer: SleepTimerStatus::default(),
             speed: 1.0,
+            is_buffering: false,
         };
     };
     PlaybackStateDto {
@@ -1452,6 +1464,7 @@ fn playback_state_of(player: Option<&AudioPlayer>) -> PlaybackStateDto {
         output_device_name: AudioPlayer::current_output_name(),
         sleep_timer: player.sleep_timer_status(),
         speed: player.speed(),
+        is_buffering: player.is_buffering(),
     }
 }
 
@@ -2189,7 +2202,9 @@ pub async fn play_track_from_playlist(index: usize, app: tauri::AppHandle) -> Re
 
     let app_clone = app.clone();
     let tracks_clone = tracks.clone();
+    let first = local_path.clone();
     let played = blocking(move || {
+        prepare_remote_for_play(&first)?;
         with_app_player(&app_clone, |player| {
             sync_queue_from_tracks(player, &tracks_clone, index);
             player
@@ -2911,7 +2926,9 @@ pub async fn play_track_from_specific_playlist(
     let queue_for_sync = materialized;
     let originals_for_filter = original_paths;
     let app_clone = app.clone();
+    let first = local_path.clone();
     let played = blocking(move || {
+        prepare_remote_for_play(&first)?;
         with_app_player(&app_clone, |player| {
             let playlist_set: std::collections::HashSet<&str> =
                 queue_for_sync.iter().map(String::as_str).collect();
@@ -3053,6 +3070,12 @@ pub async fn get_queue_tracks(
 pub async fn play_track_from_queue(index: usize, app: tauri::AppHandle) -> Result<(), String> {
     let app_clone = app.clone();
     let path = blocking(move || {
+        let picked = with_app_player(&app_clone, |guard| {
+            Ok(guard.queue.tracks().get(index).cloned())
+        })?;
+        if let Some(picked) = picked {
+            prepare_remote_for_play(&picked)?;
+        }
         with_app_player(&app_clone, |guard| {
             if guard.queue.pick(index).is_none() {
                 return Ok(None);
@@ -4171,15 +4194,56 @@ fn fetch_source_artwork(app: &tauri::AppHandle, source: &SourceTrack) -> Option<
 /// Trim the stream cache back under its configured cap.
 ///
 /// `protected` is the currently playing track plus the live queue. Deleting
-/// one of those would pull a file out from under an open decoder.
-fn evict_source_cache(app: &tauri::AppHandle, library: &Library, protected: Vec<String>) {
-    let cap_mb = app
+/// one of those would pull a file out from under an open decoder. Remote
+/// tracks share the cap: evicting one deletes its cache file but keeps its row.
+fn evict_source_cache(app: &tauri::AppHandle, library: &Library, mut protected: Vec<String>) {
+    use crate::remote::stream::{active_paths, remote_cache_files_for};
+    use crate::remote::uri::RemoteUri;
+
+    let (cap_mb, remote_enabled) = app
         .try_state::<AppSettingsState>()
-        .and_then(|state| state.0.lock().ok().map(|s| s.source_cache_limit_mb))
-        .unwrap_or(512);
-    let Ok(candidates) = library.cached_source_tracks() else {
+        .and_then(|state| {
+            state
+                .0
+                .lock()
+                .ok()
+                .map(|s| (s.source_cache_limit_mb, s.remote_sources_enabled))
+        })
+        .unwrap_or((512, false));
+    let Ok(mut candidates) = library.cached_source_tracks() else {
         return;
     };
+
+    // Remote candidates are keyed by their URI, which no track id can be.
+    let remote_rows = library.remote_eviction_candidates().unwrap_or_else(|e| {
+        tracing::warn!("Could not list cached remote tracks: {e}");
+        Vec::new()
+    });
+    let mut remote: std::collections::HashMap<String, (RemoteUri, String, String)> =
+        std::collections::HashMap::new();
+    for (uri, extension, fetched_at) in remote_rows {
+        let [file, _] = remote_cache_files_for(&uri, &extension);
+        let file = file.to_string_lossy().into_owned();
+        let key = uri.to_path();
+        candidates.push(source_cache::EvictionCandidate {
+            track_id: key.clone(),
+            path: file.clone(),
+            fetched_at,
+        });
+        remote.insert(key, (uri, extension, file));
+    }
+    let queued_files: Vec<String> = protected
+        .iter()
+        .filter_map(|path| RemoteUri::parse(path))
+        .filter_map(|uri| remote.get(&uri.to_path()).map(|(_, _, file)| file.clone()))
+        .collect();
+    protected.extend(queued_files);
+    protected.extend(
+        active_paths()
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned()),
+    );
+
     let sizes = |path: &str| std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let doomed = source_cache::plan_eviction(
         &candidates,
@@ -4187,8 +4251,28 @@ fn evict_source_cache(app: &tauri::AppHandle, library: &Library, protected: Vec<
         cap_mb.saturating_mul(1024 * 1024),
         &protected,
     );
+    let mut evicted_remote = false;
     for candidate in doomed {
-        let _ = library.forget_cached_source_track(&candidate.track_id);
+        let Some((uri, extension, _)) = remote.get(&candidate.track_id) else {
+            let _ = library.forget_cached_source_track(&candidate.track_id);
+            continue;
+        };
+        for file in remote_cache_files_for(uri, extension) {
+            if let Err(e) = std::fs::remove_file(&file) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!("Could not delete {}: {e}", file.display());
+                }
+            }
+        }
+        if let Err(e) = library.set_remote_cache_state(uri, None) {
+            tracing::warn!("Could not forget the cache of {}: {e}", uri.to_path());
+        }
+        evicted_remote = true;
+    }
+    if evicted_remote {
+        if let Err(e) = library.recompute_remote_visibility(remote_enabled) {
+            tracing::warn!("Could not update which remote tracks show: {e}");
+        }
     }
 }
 
@@ -4389,6 +4473,7 @@ mod tests {
             output_device_name: String::new(),
             sleep_timer: SleepTimerStatus::default(),
             speed,
+            is_buffering: false,
         }
     }
 
@@ -4399,6 +4484,14 @@ mod tests {
             std::time::Duration::from_secs(2),
         );
         assert!((state.position_seconds - 13.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_busy_poll_holds_the_position_while_buffering() {
+        let mut buffering = playing_at(10.0, Some(200.0), 1.0);
+        buffering.is_buffering = true;
+        let state = carried_forward(buffering, std::time::Duration::from_secs(2));
+        assert_eq!(state.position_seconds, 10.0);
     }
 
     #[test]

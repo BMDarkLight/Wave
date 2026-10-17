@@ -27,13 +27,11 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::Duration;
 
 /// Bytes buffered at the start of a track before playback begins.
-#[allow(dead_code)]
 pub const READY_BYTES: u64 = 512 * 1024;
 
 const NOT_SET_UP: &str = "Remote music isn't set up";
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum PlayTarget {
     File(String),
     Progressive(Arc<Fill>, String /* extension */),
@@ -108,7 +106,6 @@ pub(crate) fn fill_for_with(
 
 /// What the player should open for `path`: a downloaded or fully cached file,
 /// or a fill to read progressively. Paths that are not remote are files.
-#[allow(dead_code)]
 pub fn resolve_play_target(path: &str) -> Result<PlayTarget, String> {
     let rt = RemoteRuntime::global().ok_or(NOT_SET_UP)?;
     resolve_play_target_with(rt, NetworkGate::global(), path)
@@ -135,7 +132,6 @@ pub(crate) fn resolve_play_target_with(
 }
 
 /// Blocks until a remote track has enough bytes buffered to start.
-#[allow(dead_code)]
 pub fn prepare_for_play(path: &str, timeout: Duration) -> Result<(), String> {
     if !is_remote(path) {
         return Ok(());
@@ -160,7 +156,6 @@ fn prepare_for_play_with(
 }
 
 /// Whether `path` could start playing now. Never starts a fill.
-#[allow(dead_code)]
 pub fn is_ready(path: &str) -> bool {
     if !is_remote(path) {
         return true;
@@ -185,7 +180,6 @@ fn is_ready_with(rt: &RemoteRuntime, path: &str) -> bool {
 }
 
 /// Starts buffering a remote track in the background, when the network allows.
-#[allow(dead_code)]
 pub fn warm(path: &str) {
     if !is_remote(path) {
         return;
@@ -204,7 +198,6 @@ pub fn warm(path: &str) {
 }
 
 /// Cache files in use, which eviction must leave alone.
-#[allow(dead_code)]
 pub fn active_paths() -> Vec<PathBuf> {
     registry()
         .values()
@@ -229,7 +222,6 @@ fn cache_file_if_complete_with(rt: &RemoteRuntime, path: &str) -> Option<String>
 }
 
 /// A track's cache file and its `.ranges` sidecar.
-#[allow(dead_code)]
 pub fn remote_cache_files_for(uri: &RemoteUri, extension: &str) -> [PathBuf; 2] {
     remote_cache_files_in(&remote_cache_root(), uri, extension)
 }

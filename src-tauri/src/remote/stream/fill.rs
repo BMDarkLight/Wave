@@ -314,7 +314,6 @@ impl Fill {
         self.lock().readers += 1;
     }
 
-    #[allow(dead_code)]
     pub(super) fn remove_reader(&self) {
         let mut state = self.lock();
         state.readers = state.readers.saturating_sub(1);

@@ -6,6 +6,7 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
+pub mod buffered_source;
 pub mod dsp;
 pub mod normalization;
 pub mod player;

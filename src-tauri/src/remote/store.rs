@@ -696,13 +696,14 @@ impl Library {
         Ok(())
     }
 
-    /// Cached remote rows, least recently fetched first. Downloads are not
-    /// listed: they are library content, not cache.
-    pub fn remote_eviction_candidates(&self) -> Result<Vec<(RemoteUri, i64)>, String> {
+    /// Cached remote rows with the extension that names their file, least
+    /// recently fetched first. Downloads are not listed: they are library
+    /// content, not cache.
+    pub fn remote_eviction_candidates(&self) -> Result<Vec<(RemoteUri, String, i64)>, String> {
         let connection = self.read_connection();
         let mut statement = connection
             .prepare(
-                "SELECT remote_source_id, source_id, COALESCE(source_fetched_at, 0)
+                "SELECT remote_source_id, source_id, format, COALESCE(source_fetched_at, 0)
                  FROM tracks
                  WHERE cache_state IS NOT NULL AND source_state = 'remote'
                    AND remote_source_id IS NOT NULL
@@ -713,7 +714,8 @@ impl Library {
             .query_map([], |row| {
                 Ok((
                     RemoteUri::new(&row.get::<_, String>(0)?, &row.get::<_, String>(1)?),
-                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(2)?.to_lowercase(),
+                    row.get::<_, i64>(3)?,
                 ))
             })
             .map_err(sql_error("query remote eviction candidates"))?
@@ -1527,10 +1529,13 @@ mod tests {
         assert_eq!(
             candidates
                 .iter()
-                .map(|(uri, _)| uri.clone())
+                .map(|(uri, _, _)| uri.clone())
                 .collect::<Vec<_>>(),
             vec![two.clone(), one.clone()]
         );
+        assert!(candidates
+            .iter()
+            .all(|(_, extension, _)| extension == "flac"));
 
         library
             .set_remote_cache_state(&two, Some("complete"))

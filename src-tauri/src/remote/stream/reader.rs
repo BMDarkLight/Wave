@@ -17,7 +17,6 @@ use symphonia::core::io::MediaSource;
 
 /// Each read waits up to `timeout` for the fill to reach it. While a reader
 /// exists its fill counts as active, which keeps the file from eviction.
-#[allow(dead_code)]
 pub struct ProgressiveReader {
     fill: Arc<Fill>,
     file: File,
@@ -26,7 +25,6 @@ pub struct ProgressiveReader {
 }
 
 impl ProgressiveReader {
-    #[allow(dead_code)]
     pub fn new(fill: Arc<Fill>, timeout: Duration) -> io::Result<Self> {
         let file = File::open(&fill.path)?;
         fill.add_reader();
@@ -184,14 +182,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Task 7 switches this to SymphoniaSource::from_media_source"]
     fn decodes_flac_fixture_while_downloading() {
-        use symphonia::core::audio::SampleBuffer;
-        use symphonia::core::codecs::DecoderOptions;
-        use symphonia::core::formats::FormatOptions;
-        use symphonia::core::io::MediaSourceStream;
-        use symphonia::core::meta::MetadataOptions;
-        use symphonia::core::probe::Hint;
+        use crate::audio::symphonia_source::SymphoniaSource;
 
         let frames = 3 * 44_100;
         let wav = wav_bytes(frames);
@@ -200,32 +192,13 @@ mod tests {
         let fill = h.spawn(Arc::new(FakeBackend::new(data.clone(), SLOW)));
         let reader = ProgressiveReader::new(fill.clone(), LONG).unwrap();
 
-        let mss = MediaSourceStream::new(Box::new(reader), Default::default());
-        let mut hint = Hint::new();
-        hint.with_extension("wav");
-        let mut probed = symphonia::default::get_probe()
-            .format(
-                &hint,
-                mss,
-                &FormatOptions::default(),
-                &MetadataOptions::default(),
-            )
-            .unwrap();
+        let source =
+            SymphoniaSource::from_media_source(Box::new(reader), Some("wav"), &h.uri.to_path())
+                .unwrap();
         assert!(
             !fill.is_complete(),
             "probing should not need the whole file"
         );
-        let track = probed.format.default_track().unwrap();
-        let mut decoder = symphonia::default::get_codecs()
-            .make(&track.codec_params, &DecoderOptions::default())
-            .unwrap();
-        let mut decoded = 0;
-        while let Ok(packet) = probed.format.next_packet() {
-            let audio = decoder.decode(&packet).unwrap();
-            let mut samples = SampleBuffer::<i16>::new(audio.capacity() as u64, *audio.spec());
-            samples.copy_interleaved_ref(audio);
-            decoded += samples.samples().len() / 2;
-        }
-        assert_eq!(decoded, frames);
+        assert_eq!(source.count(), frames * 2);
     }
 }

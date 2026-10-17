@@ -453,7 +453,13 @@ pub fn run_daemon() {
         eprintln!("Failed to initialize audio player: {e}");
         std::process::exit(1);
     });
-    apply_settings_to_player(&mut player, &AppSettings::load_from_disk());
+    let settings = AppSettings::load_from_disk();
+    apply_settings_to_player(&mut player, &settings);
+    if let Err(e) = crate::remote::RemoteRuntime::init_runtime(library_db_path(), Box::new(|_| {}))
+    {
+        tracing::warn!("Remote music won't play in the background: {e}");
+    }
+    crate::remote::gate::NetworkGate::global().set_policy(settings.remote_sources_enabled, true);
 
     let state = Arc::new(Mutex::new(DaemonState {
         player,
@@ -1056,6 +1062,7 @@ fn playback_tick_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>
             sync_media_playback_state(&mut guard);
         }
 
+        guard.player.tick_remote_prefetch();
         // A crossfade hands over to the next track at fade start, inside the
         // same sink, so it never shows up as the track ending.
         if guard.player.check_crossfade_track_switch() {

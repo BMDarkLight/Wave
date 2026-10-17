@@ -81,6 +81,8 @@ pub struct PlaybackStateDto {
     pub output_device_name: String,
     pub sleep_timer: SleepTimerStatus,
     pub speed: f32,
+    /// Playing silence while a remote track catches up.
+    pub is_buffering: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -114,11 +114,15 @@ fn content_hash(path: &Path) -> Result<String, String> {
 /// Resolve a source for playback.
 ///
 /// On Android, `content://` URIs are returned as-is so ExoPlayer can stream
-/// them without copying into app storage.
+/// them without copying into app storage. Remote tracks stream from their
+/// own cache, so their URIs pass through too.
 pub fn resolve_playback_source(app: &AppHandle, source: &str) -> Result<PathBuf, String> {
     let trimmed = source.trim();
     if trimmed.is_empty() {
         return Err("Audio path is empty".to_string());
+    }
+    if crate::remote::uri::is_remote(trimmed) {
+        return Ok(PathBuf::from(trimmed));
     }
     #[cfg(target_os = "android")]
     if is_android_content_uri(trimmed) {

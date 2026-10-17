@@ -26,7 +26,10 @@ pub fn is_android_content_uri(path: &str) -> bool {
 /// Content URIs are accepted here so callers can materialize them into local
 /// storage before playback/indexing. Plain filesystem paths must exist.
 pub fn validate_audio_path(path: &str) -> Result<PathBuf, String> {
-    if is_android_content_uri(path) || path.starts_with("file://") {
+    if is_android_content_uri(path)
+        || path.starts_with("file://")
+        || crate::remote::uri::is_remote(path)
+    {
         return Ok(PathBuf::from(path));
     }
     let path_buf = PathBuf::from(path);
@@ -137,6 +140,12 @@ mod tests {
     fn validate_audio_path_short_circuits_for_file_uri_without_touching_disk() {
         let result = validate_audio_path("file://nonexistent/foo.mp3");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_audio_path_passes_remote_uris_through_unchanged() {
+        let result = validate_audio_path("wave-remote://plex-a/42").unwrap();
+        assert_eq!(result, PathBuf::from("wave-remote://plex-a/42"));
     }
 
     #[test]

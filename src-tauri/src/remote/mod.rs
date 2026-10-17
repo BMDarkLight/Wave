@@ -73,7 +73,6 @@ pub struct RemoteRuntime {
 static RUNTIME: OnceLock<RemoteRuntime> = OnceLock::new();
 
 impl RemoteRuntime {
-    #[allow(dead_code)]
     pub fn global() -> Option<&'static RemoteRuntime> {
         RUNTIME.get()
     }
@@ -81,7 +80,6 @@ impl RemoteRuntime {
     /// Opens the runtime's own connection to `db_path`. A second call keeps
     /// the first runtime and drops its arguments. An unopenable database is an
     /// error for the caller to log: remote sources are optional.
-    #[allow(dead_code)]
     pub fn init_runtime(
         db_path: PathBuf,
         events: EventSink,

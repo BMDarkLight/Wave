@@ -10,17 +10,14 @@
 //! this URI, so it can sit in `tracks.path`, playlists and the queue like any
 //! local path while never being mistaken for a file.
 
-#[allow(dead_code)]
 pub const REMOTE_SCHEME: &str = "wave-remote://";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
 pub struct RemoteUri {
     pub source_id: String,
     pub remote_id: String,
 }
 
-#[allow(dead_code)]
 impl RemoteUri {
     pub fn new(source_id: &str, remote_id: &str) -> Self {
         Self {
@@ -52,13 +49,11 @@ impl RemoteUri {
     }
 }
 
-#[allow(dead_code)]
 pub fn is_remote(path: &str) -> bool {
     path.starts_with(REMOTE_SCHEME)
 }
 
 /// Leaves only the RFC 3986 unreserved set (`A-Z a-z 0-9 - _ . ~`) as is.
-#[allow(dead_code)]
 pub(crate) fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for byte in s.bytes() {
@@ -73,7 +68,6 @@ pub(crate) fn percent_encode(s: &str) -> String {
 
 /// `None` on a truncated or non-hex escape, or when the decoded bytes are not
 /// valid UTF-8.
-#[allow(dead_code)]
 pub(crate) fn percent_decode(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());

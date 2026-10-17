@@ -41,6 +41,7 @@ pub struct SymphoniaSource {
     current_frame_offset: usize,
     total_duration: Option<Duration>,
     spec: SignalSpec,
+    failure: Option<String>,
 }
 
 /// Byte length of a leading ID3v2 tag, including its header and footer.
@@ -133,10 +134,26 @@ impl SymphoniaSource {
         let file = File::open(path).map_err(|error| {
             AudioError::FileOpen(format!("Cannot open audio file \"{path}\": {error}"))
         })?;
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        let extension = Path::new(path).extension().and_then(|e| e.to_str());
+        Self::from_media_source(Box::new(file), extension, path).or_else(|first_error| {
+            // A leading ID3v2 tag Symphonia can't walk (notably the empty
+            // ID3v2.4 header every Deezer preview carries) fails the probe
+            // even though the audio behind it decodes fine. Retry from just
+            // past the tag before giving up.
+            Self::open_past_leading_tag(path, extension).ok_or(first_error)
+        })
+    }
+
+    /// Opens any seekable byte source. `label` names it in errors.
+    pub fn from_media_source(
+        source: Box<dyn MediaSource>,
+        extension: Option<&str>,
+        label: &str,
+    ) -> Result<Self, AudioError> {
+        let mss = MediaSourceStream::new(source, Default::default());
 
         let mut hint = Hint::new();
-        if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
+        if let Some(ext) = extension {
             hint.with_extension(ext);
         }
 
@@ -144,30 +161,13 @@ impl SymphoniaSource {
         let metadata_opts = MetadataOptions::default();
         let decoder_opts = DecoderOptions::default();
 
-        let mut probed = match symphonia::default::get_probe().format(
-            &hint,
-            mss,
-            &format_opts,
-            &metadata_opts,
-        ) {
-            Ok(probed) => probed,
-            Err(first_error) => {
-                // A leading ID3v2 tag Symphonia can't walk (notably the empty
-                // ID3v2.4 header every Deezer preview carries) fails the probe
-                // even though the audio behind it decodes fine. Retry from just
-                // past the tag before giving up.
-                let retried =
-                    Self::probe_past_leading_tag(path, &hint, &format_opts, &metadata_opts);
-                match retried {
-                    Some(probed) => probed,
-                    None => {
-                        return Err(AudioError::Decode(format!(
-                            "Unrecognised or corrupted audio format in \"{path}\": {first_error}"
-                        )))
-                    }
-                }
-            }
-        };
+        let mut probed = symphonia::default::get_probe()
+            .format(&hint, mss, &format_opts, &metadata_opts)
+            .map_err(|error| {
+                AudioError::Decode(format!(
+                    "Unrecognised or corrupted audio format in \"{label}\": {error}"
+                ))
+            })?;
 
         let track_id = probed
             .format
@@ -176,7 +176,7 @@ impl SymphoniaSource {
             .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
             .ok_or_else(|| {
                 AudioError::UnsupportedFormat(format!(
-                    "No playable audio stream found in \"{path}\""
+                    "No playable audio stream found in \"{label}\""
                 ))
             })?
             .id;
@@ -213,18 +213,14 @@ impl SymphoniaSource {
             current_frame_offset: 0,
             total_duration,
             spec,
+            failure: None,
         })
     }
 
-    /// Re-probe `path` starting after a leading ID3v2 tag. Returns `None` when
+    /// Reopen `path` starting after a leading ID3v2 tag. Returns `None` when
     /// there is no such tag or the retry fails too, leaving the caller to
     /// report the original error rather than a misleading second one.
-    fn probe_past_leading_tag(
-        path: &str,
-        hint: &Hint,
-        format_opts: &FormatOptions,
-        metadata_opts: &MetadataOptions,
-    ) -> Option<symphonia::core::probe::ProbeResult> {
+    fn open_past_leading_tag(path: &str, extension: Option<&str>) -> Option<Self> {
         let mut header = [0u8; 10];
         {
             let mut file = File::open(path).ok()?;
@@ -233,14 +229,14 @@ impl SymphoniaSource {
         let tag_len = id3v2_tag_len(&header)?;
 
         let source = OffsetMediaSource::new(path, tag_len).ok()?;
-        let mss = MediaSourceStream::new(Box::new(source), Default::default());
-        match symphonia::default::get_probe().format(hint, mss, format_opts, metadata_opts) {
-            Ok(probed) => {
-                tracing::debug!("Recovered \"{path}\" by skipping {tag_len} bytes of ID3v2 tag");
-                Some(probed)
-            }
-            Err(_) => None,
-        }
+        let opened = Self::from_media_source(Box::new(source), extension, path).ok()?;
+        tracing::debug!("Recovered \"{path}\" by skipping {tag_len} bytes of ID3v2 tag");
+        Some(opened)
+    }
+
+    /// Why decoding stopped early, when it was not the end of the stream.
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
     }
 
     fn decode_first_packet(
@@ -292,11 +288,28 @@ impl Iterator for SymphoniaSource {
     fn next(&mut self) -> Option<i16> {
         if self.current_frame_offset >= self.buffer.len() {
             loop {
-                let packet = self.format.next_packet().ok()?;
+                let packet = match self.format.next_packet() {
+                    Ok(packet) => packet,
+                    Err(symphonia::core::errors::Error::IoError(ref e))
+                        if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                    {
+                        return None;
+                    }
+                    Err(error) => {
+                        self.failure = Some(error.to_string());
+                        return None;
+                    }
+                };
                 if packet.track_id() != self.track_id {
                     continue;
                 }
-                let decoded = self.decoder.decode(&packet).ok()?;
+                let decoded = match self.decoder.decode(&packet) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        self.failure = Some(error.to_string());
+                        return None;
+                    }
+                };
                 decoded.spec().clone_into(&mut self.spec);
                 let duration = symphonia::core::units::Duration::from(decoded.capacity() as u64);
                 let mut buf = SampleBuffer::<i16>::new(duration, self.spec);
