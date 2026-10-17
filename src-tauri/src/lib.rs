@@ -113,7 +113,18 @@ pub fn run() {
             app.manage(ListenState(std::sync::Mutex::new(ListenTracker::new())));
 
             let library = app::library_recovery::open_library_or_recover(app.handle());
+            let library_db = std::path::PathBuf::from(library.db_path());
             app.manage(LibraryState(std::sync::Mutex::new(library)));
+
+            // Remote sources are optional: if they can't start, the rest of
+            // the app runs without them.
+            match remote::RemoteRuntime::init_runtime(
+                library_db,
+                remote::commands::event_sink(app.handle().clone()),
+            ) {
+                Ok(runtime) => remote::commands::start(app.handle(), runtime),
+                Err(e) => tracing::warn!("Remote music is unavailable: {e}"),
+            }
             app.manage(EnrichmentState(std::sync::atomic::AtomicBool::new(false)));
             app.manage(app::updater::UpdaterState::default());
 
@@ -180,8 +191,6 @@ pub fn run() {
 
             #[cfg(target_os = "android")]
             {
-                remote::gate::NetworkGate::global()
-                    .set_cellular_probe(crate::android::network::is_cellular);
                 // Best-effort ExoPlayer warm-up once the Activity exists.
                 let exo_app = app_handle.clone();
                 let _ = app.run_on_main_thread(move || {
@@ -317,6 +326,19 @@ pub fn run() {
             commands::search_sources,
             commands::stream_source_track,
             commands::download_source_track,
+            remote::commands::plex_begin_sign_in,
+            remote::commands::plex_poll_sign_in,
+            remote::commands::plex_list_servers,
+            remote::commands::plex_list_libraries,
+            remote::commands::plex_add_source,
+            remote::commands::plex_reauthorize_source,
+            remote::commands::list_remote_sources,
+            remote::commands::remove_remote_source,
+            remote::commands::get_remote_status,
+            remote::commands::request_library_refresh,
+            remote::commands::clear_source_cache,
+            remote::commands::get_source_cache_usage,
+            remote::commands::download_remote_track,
             commands::parse_lyrics_sheet,
             commands::get_source_settings,
             commands::set_source_settings,

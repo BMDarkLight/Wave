@@ -70,11 +70,11 @@ impl std::fmt::Display for RemoteError {
 pub trait ByteStream: std::io::Read + Send {}
 impl<T: std::io::Read + Send> ByteStream for T {}
 
-#[allow(dead_code)]
 pub trait RemoteBackend: Send + Sync {
     fn kind(&self) -> &'static str;
     fn catalog_page(&self, cursor: usize) -> Result<CatalogPage, RemoteError>;
     fn open_bytes(&self, part_key: &str, offset: u64) -> Result<Box<dyn ByteStream>, RemoteError>;
+    #[allow(dead_code)]
     fn check_reachable(&self) -> Result<(), RemoteError>;
     fn fetch_artwork(&self, art_ref: &str) -> Result<Vec<u8>, RemoteError>;
 

@@ -13,18 +13,15 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
-#[allow(dead_code)]
 struct Inner {
     started: Option<Instant>,
     running: bool,
 }
 
-#[allow(dead_code)]
 pub struct RefreshCooldown {
     inner: Mutex<Inner>,
 }
 
-#[allow(dead_code)]
 impl RefreshCooldown {
     pub const COOLDOWN: Duration = Duration::from_secs(30);
 

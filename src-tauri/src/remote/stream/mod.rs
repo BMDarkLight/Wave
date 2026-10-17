@@ -245,7 +245,6 @@ fn remote_cache_files_in(root: &Path, uri: &RemoteUri, extension: &str) -> [Path
 /// Deletes every file under the remote cache that no cached row accounts for,
 /// and returns how many went. The expected names are rebuilt from the rows
 /// because sanitized names cannot be mapped back to tracks.
-#[allow(dead_code)]
 pub fn sweep_orphans(rt: &RemoteRuntime) -> std::io::Result<usize> {
     sweep_orphans_in(rt, &remote_cache_root())
 }

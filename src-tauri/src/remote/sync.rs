@@ -46,7 +46,6 @@ fn state_for(error: &RemoteError) -> SourceState {
 /// Walks the whole catalog into one walk and tombstones only when every page
 /// arrived. A source already syncing is waited on instead of synced twice, and
 /// the wait returns an empty summary.
-#[allow(dead_code)]
 pub fn sync_source(
     rt: &RemoteRuntime,
     source_id: &str,
@@ -198,7 +197,6 @@ pub fn artwork_pass(rt: &RemoteRuntime, source_id: &str) {
 
 /// Syncs every source on its own thread and calls `done` once all have
 /// finished. Returns at once.
-#[allow(dead_code)]
 pub fn sync_all_in_background(
     rt: &'static RemoteRuntime,
     remote_enabled: bool,

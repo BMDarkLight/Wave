@@ -29,7 +29,6 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Candidate base URIs in the order they should be tried: local https, the
 /// plain `http://address:port` of local connections (the fallback when
 /// plex.direct DNS is blocked), remote direct, then relay.
-#[allow(dead_code)]
 pub fn ordered(conns: &[PlexConnection]) -> Vec<String> {
     let local_https = conns
         .iter()
@@ -55,12 +54,11 @@ pub fn ordered(conns: &[PlexConnection]) -> Vec<String> {
 }
 
 /// The first candidate the probe accepts.
-#[allow(dead_code)]
 pub fn pick(candidates: &[String], probe: &dyn Fn(&str) -> bool) -> Option<String> {
     candidates.iter().find(|uri| probe(uri)).cloned()
 }
 
-fn probe_identity(headers: &PlexHeaders, uri: &str) -> bool {
+pub(crate) fn probe_identity(headers: &PlexHeaders, uri: &str) -> bool {
     headers
         .apply(
             api_client()
@@ -99,7 +97,6 @@ fn with_token(url: String, token: &str) -> String {
     format!("{url}{sep}X-Plex-Token={}", percent_encode(token))
 }
 
-#[allow(dead_code)]
 impl PlexBackend {
     pub fn new(config: PlexSourceConfig, headers: PlexHeaders) -> Self {
         Self::with_gate(config, headers, NetworkGate::global())

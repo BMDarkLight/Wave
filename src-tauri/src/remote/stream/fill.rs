@@ -464,6 +464,9 @@ impl Fill {
         }
         self.lock().done = true;
         self.cond.notify_all();
+        rt.emit(RemoteEvent::FillComplete {
+            path: self.uri.to_path(),
+        });
     }
 
     /// The file and sidecar stay so the next fill resumes where this one
@@ -540,6 +543,11 @@ mod tests {
         assert!(!h.sidecar().exists());
         assert!(std::fs::read(h.cache_path()).unwrap() == *h.data);
         assert_eq!(fill.wait_for(0, u64::MAX, Duration::ZERO), Ok(3 * MIB));
+        assert!(wait_until(LONG, || h.events().contains(
+            &RemoteEvent::FillComplete {
+                path: h.uri.to_path()
+            }
+        )));
 
         let idle = Arc::new(FakeBackend::new(h.data.clone(), FAST));
         let again = h.spawn(idle.clone());

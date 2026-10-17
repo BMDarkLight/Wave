@@ -69,16 +69,19 @@ fn safe_component(raw: &str, fallback: &str) -> String {
 
 /// `<root>/<Artist>/<Album>/<Title>.<ext>`, every component sanitised.
 pub fn relative_layout(track: &SourceTrack) -> PathBuf {
-    PathBuf::from(safe_component(&track.artist, "Unknown Artist"))
-        .join(safe_component(
-            track.album.as_deref().unwrap_or("Singles"),
-            "Singles",
-        ))
-        .join(format!(
-            "{}.{}",
-            safe_component(&track.title, "Untitled"),
-            track.extension()
-        ))
+    relative_layout_for(
+        &track.artist,
+        track.album.as_deref().unwrap_or("Singles"),
+        &track.title,
+        &track.extension(),
+    )
+}
+
+/// [`relative_layout`] from loose tags, for tracks that are not search results.
+pub fn relative_layout_for(artist: &str, album: &str, title: &str, ext: &str) -> PathBuf {
+    PathBuf::from(safe_component(artist, "Unknown Artist"))
+        .join(safe_component(album, "Singles"))
+        .join(format!("{}.{}", safe_component(title, "Untitled"), ext))
 }
 
 /// Add `-1`, `-2`, ... before the extension until the name is free, so a
@@ -156,6 +159,25 @@ pub fn choose_destination(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_layout_for_sanitizes_components() {
+        assert_eq!(
+            relative_layout_for("AC/DC", "Back: In Black", "Hells Bells?", "flac"),
+            PathBuf::from("AC_DC")
+                .join(safe_component("Back: In Black", "Singles"))
+                .join(format!(
+                    "{}.flac",
+                    safe_component("Hells Bells?", "Untitled")
+                ))
+        );
+        assert_eq!(
+            relative_layout_for("", "", "", "mp3"),
+            PathBuf::from("Unknown Artist")
+                .join("Singles")
+                .join("Untitled.mp3")
+        );
+    }
 
     fn track() -> SourceTrack {
         SourceTrack {

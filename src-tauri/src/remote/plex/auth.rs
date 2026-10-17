@@ -150,7 +150,6 @@ pub(crate) fn parse_sections(json: &str) -> Result<Vec<PlexSection>, RemoteError
 }
 
 /// Starts a PIN sign-in. The user approves it in the browser at `auth_url`.
-#[allow(dead_code)]
 pub fn create_pin(h: &PlexHeaders) -> Result<PlexPin, RemoteError> {
     let resp = h
         .apply(api_client().post(format!("{PINS_URL}?strong=true")))
@@ -162,7 +161,6 @@ pub fn create_pin(h: &PlexHeaders) -> Result<PlexPin, RemoteError> {
     parse_pin(&body)
 }
 
-#[allow(dead_code)]
 pub fn auth_url(h: &PlexHeaders, pin: &PlexPin) -> String {
     format!(
         "https://app.plex.tv/auth#?clientID={}&code={}&context%5Bdevice%5D%5Bproduct%5D=Wave",
@@ -173,7 +171,6 @@ pub fn auth_url(h: &PlexHeaders, pin: &PlexPin) -> String {
 
 /// `Ok(None)` while the user has not approved yet, `Err(Unauthorized)` once
 /// the PIN has expired.
-#[allow(dead_code)]
 pub fn poll_pin(h: &PlexHeaders, id: i64) -> Result<Option<String>, RemoteError> {
     let resp = h
         .apply(api_client().get(format!("{PINS_URL}/{id}")))
@@ -188,7 +185,6 @@ pub fn poll_pin(h: &PlexHeaders, id: i64) -> Result<Option<String>, RemoteError>
     parse_pin_token(&body)
 }
 
-#[allow(dead_code)]
 pub fn list_servers(h: &PlexHeaders, account_token: &str) -> Result<Vec<PlexServer>, RemoteError> {
     let resp = h
         .apply(api_client().get(RESOURCES_URL))
@@ -201,7 +197,6 @@ pub fn list_servers(h: &PlexHeaders, account_token: &str) -> Result<Vec<PlexServ
     parse_resources(&body)
 }
 
-#[allow(dead_code)]
 pub fn list_music_sections(
     conn_uri: &str,
     server_token: &str,

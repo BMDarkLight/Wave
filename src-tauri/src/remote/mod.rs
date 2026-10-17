@@ -7,6 +7,7 @@
 // https://github.com/BMDarkLight/Wave
 
 pub mod backend;
+pub mod commands;
 pub mod gate;
 pub mod plex;
 pub mod refresh;
@@ -51,7 +52,6 @@ pub enum SourceState {
 /// What the runtime tells its host. The host decides how to deliver these (a
 /// Tauri event, a daemon log line), so nothing here depends on Tauri.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub enum RemoteEvent {
     SyncProgress {
         source_id: String,
@@ -66,6 +66,10 @@ pub enum RemoteEvent {
     StreamFailed {
         path: String,
         message: String,
+    },
+    /// A remote track's whole file is now in the cache.
+    FillComplete {
+        path: String,
     },
 }
 
@@ -139,7 +143,6 @@ impl RemoteRuntime {
     }
 
     /// Plex rows are skipped by [`Self::reload_sources`] until this is set.
-    #[allow(dead_code)]
     pub fn set_plex_headers(&self, headers: PlexHeaders) {
         *self.plex_headers.write() = Some(headers);
     }
@@ -156,7 +159,6 @@ impl RemoteRuntime {
 
     /// Rebuilds every backend from the stored sources. Sources that are gone
     /// lose their backend and status.
-    #[allow(dead_code)]
     pub fn reload_sources(&self, library: &Library) {
         let rows = match library.list_remote_sources() {
             Ok(rows) => rows,
@@ -191,7 +193,6 @@ impl RemoteRuntime {
         self.emit(RemoteEvent::StatusChanged);
     }
 
-    #[allow(dead_code)]
     pub fn status(&self, source_id: &str) -> SourceState {
         self.statuses
             .lock()

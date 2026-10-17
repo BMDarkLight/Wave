@@ -33,12 +33,12 @@ const ALBUM_ARTIST_SQL: &str = "COALESCE(NULLIF(TRIM(album_artist), ''), artist)
 type SongKey = (String, String, String);
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct RemoteSourceRow {
     pub id: String,
     pub kind: String,
     pub display_name: String,
     pub config_json: String,
+    #[allow(dead_code)]
     pub created_at: i64,
     pub last_sync_at: Option<i64>,
     pub last_sync_error: Option<String>,
@@ -349,7 +349,6 @@ struct Candidate {
     visible: bool,
 }
 
-#[allow(dead_code)]
 impl Library {
     /// The id comes from the server's own stable key, so removing a server and
     /// adding it again gives the same id and its tombstones re-match.

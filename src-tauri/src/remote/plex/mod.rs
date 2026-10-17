@@ -28,7 +28,6 @@ pub struct PlexHeaders {
     pub device_name: String,
 }
 
-#[allow(dead_code)]
 impl PlexHeaders {
     pub fn new(client_id: String) -> Self {
         Self {
@@ -56,7 +55,6 @@ impl PlexHeaders {
 
 /// Returns the stored client identifier, generating one on first use. The
 /// caller saves the settings.
-#[allow(dead_code)]
 pub fn client_identifier(settings: &mut AppSettings) -> String {
     settings
         .plex_client_identifier

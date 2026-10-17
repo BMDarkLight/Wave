@@ -1742,6 +1742,11 @@ pub struct SourceSettingsDto {
     pub outside_sourcing_enabled: bool,
     pub jamendo_client_id: String,
     pub spotify_client_id: String,
+    /// "Outside Sourcing": music from the user's own servers, such as Plex.
+    pub remote_sources_enabled: bool,
+    /// Android only: let remote music use mobile data.
+    pub remote_cellular_enabled: bool,
+    pub cache_limit_mb: u64,
 }
 
 #[tauri::command]
@@ -1753,6 +1758,9 @@ pub async fn get_source_settings(
         outside_sourcing_enabled: settings.outside_sourcing_enabled,
         jamendo_client_id: settings.jamendo_client_id.clone().unwrap_or_default(),
         spotify_client_id: settings.spotify_client_id.clone().unwrap_or_default(),
+        remote_sources_enabled: settings.remote_sources_enabled,
+        remote_cellular_enabled: settings.remote_cellular_enabled,
+        cache_limit_mb: settings.source_cache_limit_mb,
     })
 }
 
@@ -1773,13 +1781,37 @@ pub async fn set_source_settings(
         }
     }
 
-    let mut stored = lock_settings(&settings_state)?;
-    stored.outside_sourcing_enabled = settings.outside_sourcing_enabled;
-    stored.jamendo_client_id = normalise(&settings.jamendo_client_id);
-    stored.spotify_client_id = normalise(&settings.spotify_client_id);
-    stored.save(&app)?;
+    let (was_enabled, cap_shrank) = {
+        let mut stored = lock_settings(&settings_state)?;
+        let was_enabled = stored.remote_sources_enabled;
+        let cap_shrank = settings.cache_limit_mb < stored.source_cache_limit_mb;
+        stored.outside_sourcing_enabled = settings.outside_sourcing_enabled;
+        stored.jamendo_client_id = normalise(&settings.jamendo_client_id);
+        stored.spotify_client_id = normalise(&settings.spotify_client_id);
+        stored.remote_sources_enabled = settings.remote_sources_enabled;
+        stored.remote_cellular_enabled = settings.remote_cellular_enabled;
+        stored.source_cache_limit_mb = settings.cache_limit_mb.max(MIN_CACHE_LIMIT_MB);
+        stored.save(&app)?;
+        (was_enabled, cap_shrank)
+    };
+    crate::remote::commands::apply_settings(&app, was_enabled);
+    if cap_shrank {
+        let protected = queued_paths(&app);
+        let task_app = app.clone();
+        blocking(move || {
+            let state = task_app.state::<LibraryState>();
+            let library = state.0.lock().map_err(lock_poisoned)?;
+            evict_source_cache_to(&task_app, &library, protected, None);
+            Ok(())
+        })
+        .await?;
+    }
     Ok(())
 }
+
+/// The smallest cache size a setting can ask for; below it a single long
+/// track would not fit.
+const MIN_CACHE_LIMIT_MB: u64 = 64;
 
 #[tauri::command]
 pub async fn get_auto_lyrics_download(
@@ -2301,13 +2333,15 @@ pub async fn index_music_library(
     playlist_name: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<Vec<Track>, String> {
-    let app = app.clone();
-    blocking(move || {
-        let library = app.state::<LibraryState>();
+    let task_app = app.clone();
+    let tracks = blocking(move || {
+        let library = task_app.state::<LibraryState>();
         let lib = library.0.lock().map_err(|e| e.to_string())?;
         lib.index_directory(profile_id, playlist_name, directory)
     })
-    .await
+    .await?;
+    crate::remote::commands::after_local_library_change(&app);
+    Ok(tracks)
 }
 
 #[tauri::command]
@@ -2575,8 +2609,11 @@ pub async fn remove_track_from_playlist_by_id(
 pub async fn remove_track_from_library(
     path: String,
     library: tauri::State<'_, LibraryState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    lock_library(&library)?.remove_track_from_library(&path)
+    lock_library(&library)?.remove_track_from_library(&path)?;
+    crate::remote::commands::after_local_library_change(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -3501,7 +3538,7 @@ pub async fn import_scanned_audio(
     app: tauri::AppHandle,
 ) -> Result<ScanImportResult, String> {
     let app_clone = app.clone();
-    blocking(move || {
+    let result = blocking(move || {
         let library = app_clone.state::<LibraryState>();
         let mut errors = Vec::new();
         let mut imported = 0u32;
@@ -3582,7 +3619,9 @@ pub async fn import_scanned_audio(
 
         Ok(ScanImportResult { imported, errors })
     })
-    .await
+    .await;
+    crate::remote::commands::after_local_library_change(&app);
+    result
 }
 
 #[derive(serde::Serialize)]
@@ -3657,7 +3696,7 @@ pub async fn sync_playlist_folder(
 
     let app_clone = app.clone();
     let playlist_id_clone = playlist_id.clone();
-    blocking(move || {
+    let result = blocking(move || {
         let library = app_clone.state::<LibraryState>();
 
         let sync_folder = {
@@ -3839,7 +3878,9 @@ pub async fn sync_playlist_folder(
             errors,
         })
     })
-    .await
+    .await;
+    crate::remote::commands::after_local_library_change(&app);
+    result
 }
 
 #[tauri::command]
@@ -4240,7 +4281,18 @@ fn fetch_source_artwork(app: &tauri::AppHandle, source: &SourceTrack) -> Option<
 /// `protected` is the currently playing track plus the live queue. Deleting
 /// one of those would pull a file out from under an open decoder. Remote
 /// tracks share the cap: evicting one deletes its cache file but keeps its row.
-fn evict_source_cache(app: &tauri::AppHandle, library: &Library, mut protected: Vec<String>) {
+fn evict_source_cache(app: &tauri::AppHandle, library: &Library, protected: Vec<String>) {
+    evict_source_cache_to(app, library, protected, None);
+}
+
+/// [`evict_source_cache`] down to `cap_bytes`, or the configured cap when
+/// `None`. Returns the bytes freed.
+pub(crate) fn evict_source_cache_to(
+    app: &tauri::AppHandle,
+    library: &Library,
+    mut protected: Vec<String>,
+    cap_bytes: Option<u64>,
+) -> u64 {
     use crate::remote::stream::{active_paths, remote_cache_files_for};
     use crate::remote::uri::RemoteUri;
 
@@ -4255,7 +4307,7 @@ fn evict_source_cache(app: &tauri::AppHandle, library: &Library, mut protected: 
         })
         .unwrap_or((512, false));
     let Ok(mut candidates) = library.cached_source_tracks() else {
-        return;
+        return 0;
     };
 
     // Remote candidates are keyed by their URI, which no track id can be.
@@ -4292,9 +4344,10 @@ fn evict_source_cache(app: &tauri::AppHandle, library: &Library, mut protected: 
     let doomed = source_cache::plan_eviction(
         &candidates,
         &sizes,
-        cap_mb.saturating_mul(1024 * 1024),
+        cap_bytes.unwrap_or_else(|| cap_mb.saturating_mul(1024 * 1024)),
         &protected,
     );
+    let freed = doomed.iter().map(|c| sizes(&c.path)).sum();
     let mut evicted_remote = false;
     for candidate in doomed {
         let Some((uri, extension, _)) = remote.get(&candidate.track_id) else {
@@ -4318,6 +4371,14 @@ fn evict_source_cache(app: &tauri::AppHandle, library: &Library, mut protected: 
             tracing::warn!("Could not update which remote tracks show: {e}");
         }
     }
+    freed
+}
+
+/// [`protected_cache_paths`] from an app handle.
+pub(crate) fn queued_paths(app: &tauri::AppHandle) -> Vec<String> {
+    app.try_state::<PlayerState>()
+        .map(|player| protected_cache_paths(&player))
+        .unwrap_or_default()
 }
 
 /// Paths that must survive eviction: what is playing, and what is queued.

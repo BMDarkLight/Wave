@@ -15,26 +15,22 @@ use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
-#[allow(dead_code)]
 pub enum GateState {
     Allowed,
     Disabled,
     Cellular,
 }
 
-#[allow(dead_code)]
 pub struct NetworkGate {
     enabled: AtomicBool,
     cellular_allowed: AtomicBool,
     cellular_probe: RwLock<fn() -> bool>,
 }
 
-#[allow(dead_code)]
 fn not_cellular() -> bool {
     false
 }
 
-#[allow(dead_code)]
 impl NetworkGate {
     fn new() -> Self {
         Self {
@@ -60,6 +56,7 @@ impl NetworkGate {
             .store(cellular_allowed, Ordering::Relaxed);
     }
 
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub fn set_cellular_probe(&self, probe: fn() -> bool) {
         *self.cellular_probe.write() = probe;
     }
