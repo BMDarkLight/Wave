@@ -13,7 +13,6 @@ use super::gate::GateState;
 /// One track of a remote catalog, normalized so the store never needs to know
 /// which backend produced it.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub struct RemoteTrackMeta {
     pub remote_id: String,
     pub title: String,
@@ -35,7 +34,6 @@ pub struct RemoteTrackMeta {
 /// One page of a remote catalog. `next` is the cursor for the following page,
 /// `None` once the catalog is exhausted.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub struct CatalogPage {
     pub tracks: Vec<RemoteTrackMeta>,
     pub total: Option<usize>,
@@ -45,7 +43,6 @@ pub struct CatalogPage {
 /// Unreachable messages are short sentences fit for a toast and never carry a
 /// URL that contains a token.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub enum RemoteError {
     Unreachable(String),
     Unauthorized,
@@ -80,6 +77,12 @@ pub trait RemoteBackend: Send + Sync {
     fn open_bytes(&self, part_key: &str, offset: u64) -> Result<Box<dyn ByteStream>, RemoteError>;
     fn check_reachable(&self) -> Result<(), RemoteError>;
     fn fetch_artwork(&self, art_ref: &str) -> Result<Vec<u8>, RemoteError>;
+
+    /// The source config to store when the backend learned something worth
+    /// keeping, such as the connection that worked. `None` when unchanged.
+    fn updated_config(&self) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(test)]

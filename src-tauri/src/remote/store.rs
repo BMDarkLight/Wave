@@ -49,7 +49,6 @@ pub struct RemoteSourceRow {
 /// [`Library::finish_remote_walk`] tombstones, so dropping a walk early
 /// changes nothing beyond the upserts.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct RemoteWalk {
     source_id: String,
     seen: HashSet<String>,
@@ -59,7 +58,6 @@ pub struct RemoteWalk {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[allow(dead_code)]
 pub struct WalkSummary {
     pub upserted: usize,
     pub tombstoned: usize,
