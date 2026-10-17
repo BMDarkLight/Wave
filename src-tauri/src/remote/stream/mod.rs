@@ -77,7 +77,7 @@ pub fn fill_for(uri: &RemoteUri) -> Result<Arc<Fill>, String> {
 
 pub(crate) fn fill_for_with(
     rt: &'static RemoteRuntime,
-    gate: &NetworkGate,
+    gate: &'static NetworkGate,
     uri: &RemoteUri,
 ) -> Result<Arc<Fill>, String> {
     let mut fills = registry();
@@ -98,7 +98,7 @@ pub(crate) fn fill_for_with(
     let backend = rt
         .backend(&uri.source_id)
         .ok_or("This server is not set up")?;
-    let fill = Fill::spawn(rt, info, backend);
+    let fill = Fill::spawn_with(rt, gate, info, backend);
     if let Some(error) = fill.error() {
         return Err(error);
     }
@@ -116,7 +116,7 @@ pub fn resolve_play_target(path: &str) -> Result<PlayTarget, String> {
 
 pub(crate) fn resolve_play_target_with(
     rt: &'static RemoteRuntime,
-    gate: &NetworkGate,
+    gate: &'static NetworkGate,
     path: &str,
 ) -> Result<PlayTarget, String> {
     if !is_remote(path) {
@@ -146,7 +146,7 @@ pub fn prepare_for_play(path: &str, timeout: Duration) -> Result<(), String> {
 
 fn prepare_for_play_with(
     rt: &'static RemoteRuntime,
-    gate: &NetworkGate,
+    gate: &'static NetworkGate,
     path: &str,
     timeout: Duration,
 ) -> Result<(), String> {
@@ -295,6 +295,7 @@ pub(crate) mod testkit {
     use crate::remote::RemoteEvent;
     use crate::sources::cache::{remote_cache_root, sanitize};
     use std::io::{self, Read};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     use std::time::Instant;
     use uuid::Uuid;
@@ -349,7 +350,9 @@ pub(crate) mod testkit {
         delay: Duration,
         fail_at: Option<u64>,
         silent: bool,
+        refuse: Option<RemoteError>,
         opens: Mutex<Vec<u64>>,
+        reads: Arc<AtomicUsize>,
     }
 
     impl FakeBackend {
@@ -359,7 +362,9 @@ pub(crate) mod testkit {
                 delay,
                 fail_at: None,
                 silent: false,
+                refuse: None,
                 opens: Mutex::new(Vec::new()),
+                reads: Arc::default(),
             }
         }
 
@@ -375,8 +380,19 @@ pub(crate) mod testkit {
             self
         }
 
+        /// Every `open_bytes` fails with `error`.
+        pub fn refusing(mut self, error: RemoteError) -> Self {
+            self.refuse = Some(error);
+            self
+        }
+
         pub fn opens(&self) -> Vec<u64> {
             self.opens.lock().unwrap().clone()
+        }
+
+        /// Reads that delivered bytes, across every stream.
+        pub fn reads(&self) -> usize {
+            self.reads.load(Ordering::SeqCst)
         }
     }
 
@@ -386,6 +402,7 @@ pub(crate) mod testkit {
         delay: Duration,
         fail_at: Option<usize>,
         silent: bool,
+        reads: Arc<AtomicUsize>,
     }
 
     impl Read for FakeStream {
@@ -402,6 +419,7 @@ pub(crate) mod testkit {
             let n = buf.len().min(PIECE).min(stop.saturating_sub(self.pos));
             buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
             self.pos += n;
+            self.reads.fetch_add(1, Ordering::SeqCst);
             Ok(n)
         }
     }
@@ -417,12 +435,17 @@ pub(crate) mod testkit {
 
         fn open_bytes(&self, _: &str, offset: u64) -> Result<Box<dyn ByteStream>, RemoteError> {
             self.opens.lock().unwrap().push(offset);
+            if let Some(error) = &self.refuse {
+                std::thread::sleep(self.delay);
+                return Err(error.clone());
+            }
             Ok(Box::new(FakeStream {
                 data: self.data.clone(),
                 pos: offset as usize,
                 delay: self.delay,
                 fail_at: self.fail_at.map(|at| at as usize),
                 silent: self.silent,
+                reads: self.reads.clone(),
             }))
         }
 
@@ -435,10 +458,11 @@ pub(crate) mod testkit {
         }
     }
 
-    /// One remote track of `len` bytes in its own source and library. Its
-    /// cache directory is removed on drop.
+    /// One remote track of `len` bytes in its own source and library, behind
+    /// its own open gate. Its cache directory is removed on drop.
     pub struct Harness {
         pub rt: &'static RemoteRuntime,
+        pub gate: &'static NetworkGate,
         pub uri: RemoteUri,
         pub data: Arc<Vec<u8>>,
         events: Arc<Mutex<Vec<RemoteEvent>>>,
@@ -482,6 +506,7 @@ pub(crate) mod testkit {
             )));
             Self {
                 rt,
+                gate: gate(true),
                 uri: RemoteUri::new(&source, "1"),
                 data: sample(len),
                 events,
@@ -510,14 +535,24 @@ pub(crate) mod testkit {
         pub fn spawn(&self, backend: Arc<FakeBackend>) -> Arc<Fill> {
             self.rt
                 .insert_backend_for_test(&self.uri.source_id, backend.clone());
-            Fill::spawn(self.rt, self.info(), backend)
+            Fill::spawn_with(self.rt, self.gate, self.info(), backend)
         }
     }
 
     impl Drop for Harness {
+        /// Closing the gate stops this harness's workers within one read; a
+        /// sidecar one of them saves while the directory goes is removed on
+        /// the next pass.
         fn drop(&mut self) {
-            let _ =
-                std::fs::remove_dir_all(remote_cache_root().join(sanitize(&self.uri.source_id)));
+            self.gate.set_policy(false, true);
+            let dir = remote_cache_root().join(sanitize(&self.uri.source_id));
+            for _ in 0..20 {
+                let _ = std::fs::remove_dir_all(&dir);
+                std::thread::sleep(Duration::from_millis(25));
+                if !dir.exists() {
+                    break;
+                }
+            }
         }
     }
 
@@ -589,7 +624,7 @@ mod tests {
             &h.uri.source_id,
             Arc::new(FakeBackend::new(h.data.clone(), FAST)),
         );
-        match resolve_play_target_with(h.rt, gate(true), &h.uri.to_path()).unwrap() {
+        match resolve_play_target_with(h.rt, h.gate, &h.uri.to_path()).unwrap() {
             PlayTarget::Progressive(fill, extension) => {
                 assert_eq!(extension, "flac");
                 assert_eq!(fill.path, h.cache_path());
@@ -598,9 +633,29 @@ mod tests {
             other => panic!("expected a fill, got {other:?}"),
         }
         assert!(matches!(
-            resolve_play_target_with(h.rt, gate(true), "/music/a.flac"),
+            resolve_play_target_with(h.rt, h.gate, "/music/a.flac"),
             Ok(PlayTarget::File(p)) if p == "/music/a.flac"
         ));
+    }
+
+    #[test]
+    fn a_complete_row_without_its_file_streams_again_as_partial() {
+        let h = Harness::new(MIB as usize);
+        h.rt.insert_backend_for_test(
+            &h.uri.source_id,
+            Arc::new(FakeBackend::new(h.data.clone(), SLOW).failing_at(64 * 1024)),
+        );
+        h.rt.with_library(|l| l.set_remote_cache_state(&h.uri, Some("complete")))
+            .unwrap();
+
+        let target = resolve_play_target_with(h.rt, h.gate, &h.uri.to_path()).unwrap();
+        let PlayTarget::Progressive(fill, _) = target else {
+            panic!("a missing file cannot play from disk");
+        };
+        assert_eq!(h.info().cache_state.as_deref(), Some("partial"));
+        assert!(!is_ready_with(h.rt, &h.uri.to_path()));
+        assert_eq!(cache_file_if_complete_with(h.rt, &h.uri.to_path()), None);
+        assert!(wait_until(LONG, || fill.error().is_some()));
     }
 
     #[test]
@@ -610,7 +665,7 @@ mod tests {
             &h.uri.source_id,
             Arc::new(FakeBackend::new(h.data.clone(), SLOW).failing_at(256 * 1024)),
         );
-        let open = gate(true);
+        let open = h.gate;
         let first = fill_for_with(h.rt, open, &h.uri).unwrap();
         let joined = fill_for_with(h.rt, open, &h.uri).unwrap();
         assert!(Arc::ptr_eq(&first, &joined));
@@ -632,7 +687,7 @@ mod tests {
         );
         let path = h.uri.to_path();
         assert!(!is_ready_with(h.rt, &path));
-        prepare_for_play_with(h.rt, gate(true), &path, LONG).unwrap();
+        prepare_for_play_with(h.rt, h.gate, &path, LONG).unwrap();
         assert!(is_ready_with(h.rt, &path));
         assert!(prepare_for_play_with(h.rt, gate(false), "/music/a.flac", LONG).is_ok());
         assert!(is_ready_with(h.rt, "/music/a.flac"));

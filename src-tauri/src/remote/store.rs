@@ -230,7 +230,8 @@ fn upsert_one(
             .filter(|r| !r.downloaded && r.cache_state.is_some())
             .map(|r| RemoteUri::new(source_id, &r.old_remote_id));
         // A download is a local file now: its path, name, format and size
-        // describe that file and stay as they are.
+        // describe that file and stay as they are. Otherwise a new part or
+        // size means new bytes behind the same URI, so the cache starts over.
         tx.execute(
             "UPDATE tracks SET
                 path = CASE WHEN source_state = 'downloaded' THEN path ELSE ?2 END,
@@ -244,8 +245,12 @@ fn upsert_one(
                 source_state = CASE WHEN source_state = 'downloaded'
                                     THEN source_state ELSE 'remote' END,
                 remote_updated_at = ?18, remote_art_ref = ?19, remote_missing = 0,
-                cache_state = CASE WHEN ?20 THEN NULL ELSE cache_state END,
-                source_fetched_at = CASE WHEN ?20 THEN NULL ELSE source_fetched_at END
+                cache_state = CASE WHEN ?20 OR (source_state IS NOT 'downloaded'
+                        AND (source_url IS NOT ?17 OR file_size IS NOT ?14))
+                    THEN NULL ELSE cache_state END,
+                source_fetched_at = CASE WHEN ?20 OR (source_state IS NOT 'downloaded'
+                        AND (source_url IS NOT ?17 OR file_size IS NOT ?14))
+                    THEN NULL ELSE source_fetched_at END
              WHERE id = ?1",
             params![
                 id,
@@ -1405,6 +1410,65 @@ mod tests {
         assert_eq!(state, "downloaded");
         assert_eq!(genre.as_deref(), Some("Rock"));
         assert_eq!(url, "/library/parts/9/file.flac");
+    }
+
+    #[test]
+    fn a_changed_part_or_size_resets_the_cache_state() {
+        let library = test_library();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
+        let uri = RemoteUri::new(&source, "1");
+        let state = |library: &Library| {
+            library
+                .read_connection()
+                .query_row(
+                    "SELECT cache_state, source_fetched_at FROM tracks WHERE source_id = '1'",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, Option<i64>>(1)?,
+                        ))
+                    },
+                )
+                .unwrap()
+        };
+        let original = meta("1", "One", "Band", "Album", 100.0);
+        walk(&library, &source, std::slice::from_ref(&original));
+
+        library
+            .set_remote_cache_state(&uri, Some("complete"))
+            .unwrap();
+        walk(&library, &source, std::slice::from_ref(&original));
+        let (cache, fetched) = state(&library);
+        assert_eq!(cache.as_deref(), Some("complete"));
+        assert!(fetched.is_some());
+
+        let mut resized = original.clone();
+        resized.size = 2000;
+        walk(&library, &source, std::slice::from_ref(&resized));
+        assert_eq!(state(&library), (None, None));
+
+        library
+            .set_remote_cache_state(&uri, Some("partial"))
+            .unwrap();
+        let mut moved = resized.clone();
+        moved.part_key = "/library/parts/9/file.flac".into();
+        walk(&library, &source, std::slice::from_ref(&moved));
+        assert_eq!(state(&library), (None, None));
+
+        // A download keeps its own size, so a different server size is normal.
+        library
+            .write_connection()
+            .execute(
+                "UPDATE tracks SET source_state = 'downloaded', cache_state = 'complete',
+                        file_size = 1 WHERE source_id = '1'",
+                [],
+            )
+            .unwrap();
+        walk(&library, &source, std::slice::from_ref(&moved));
+        assert_eq!(state(&library).0.as_deref(), Some("complete"));
     }
 
     #[test]
