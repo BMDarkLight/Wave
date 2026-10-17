@@ -90,6 +90,8 @@ pub struct PlexBackend {
     headers: PlexHeaders,
     gate: &'static NetworkGate,
     active: Mutex<Option<String>>,
+    /// Item count across the selected sections, measured when a walk starts.
+    catalog_total: Mutex<Option<usize>>,
 }
 
 fn with_token(url: String, token: &str) -> String {
@@ -114,6 +116,7 @@ impl PlexBackend {
             headers,
             gate,
             active,
+            catalog_total: Mutex::new(None),
         }
     }
 
@@ -165,6 +168,20 @@ impl PlexBackend {
         }
     }
 
+    /// Sums each selected section's size, asking for zero items so only the
+    /// count comes back. `None` when any section does not report one.
+    fn measure_catalog(&self) -> Result<Option<usize>, RemoteError> {
+        let mut sum = Some(0usize);
+        for section in &self.config.sections {
+            let body = self.get_json(&format!(
+                "/library/sections/{}/all?type=10&X-Plex-Container-Start=0&X-Plex-Container-Size=0",
+                percent_encode(&section.key)
+            ))?;
+            sum = sum.zip(parse_page(&body)?.total).map(|(a, b)| a + b);
+        }
+        Ok(sum)
+    }
+
     fn get_json(&self, path_and_query: &str) -> Result<String, RemoteError> {
         let token = &self.config.server_token;
         let resp = self.send(&|base| {
@@ -182,6 +199,10 @@ impl RemoteBackend for PlexBackend {
 
     fn catalog_page(&self, cursor: usize) -> Result<CatalogPage, RemoteError> {
         self.gate.check()?;
+        if cursor == 0 {
+            let total = self.measure_catalog()?;
+            *self.catalog_total.lock() = total;
+        }
         let section_index = cursor / CURSOR_STRIDE;
         let offset = cursor % CURSOR_STRIDE;
         let Some(section) = self.config.sections.get(section_index) else {
@@ -217,7 +238,7 @@ impl RemoteBackend for PlexBackend {
 
         Ok(CatalogPage {
             tracks: page.tracks,
-            total: page.total,
+            total: *self.catalog_total.lock(),
             next,
         })
     }
@@ -559,6 +580,8 @@ mod tests {
         let third = r#"{"MediaContainer":{"size":1,"totalSize":1,"Metadata":[
           {"ratingKey":"3","title":"C","Media":[{"Part":[{"key":"/p/3","container":"mp3"}]}]}]}}"#;
         let (port, seen) = fake_server(vec![
+            http("200 OK", r#"{"MediaContainer":{"size":0,"totalSize":2}}"#),
+            http("200 OK", r#"{"MediaContainer":{"size":0,"totalSize":1}}"#),
             http("200 OK", first),
             http("200 OK", second),
             http("200 OK", third),
@@ -571,7 +594,7 @@ mod tests {
 
         let p1 = backend.catalog_page(0).unwrap();
         assert_eq!(p1.tracks[0].remote_id, "1");
-        assert_eq!(p1.total, Some(2));
+        assert_eq!(p1.total, Some(3));
         let c2 = p1.next.expect("more tracks in the same section");
         let p2 = backend.catalog_page(c2).unwrap();
         assert_eq!(p2.tracks[0].remote_id, "2");
@@ -581,11 +604,48 @@ mod tests {
         assert_eq!(p3.next, None);
 
         let log = seen.lock().unwrap();
-        assert!(log[0].starts_with(
+        assert!(log[2].starts_with(
             "GET /library/sections/3/all?type=10&X-Plex-Container-Start=0&X-Plex-Container-Size=500&X-Plex-Token=secret-token "
         ));
-        assert!(log[1].contains("/library/sections/3/all?type=10&X-Plex-Container-Start=1&"));
-        assert!(log[2].contains("/library/sections/4/all?type=10&X-Plex-Container-Start=0&"));
+        assert!(log[3].contains("/library/sections/3/all?type=10&X-Plex-Container-Start=1&"));
+        assert!(log[4].contains("/library/sections/4/all?type=10&X-Plex-Container-Start=0&"));
+    }
+
+    #[test]
+    fn catalog_total_is_the_sum_of_section_sizes_on_every_page() {
+        let size = |n: usize| format!(r#"{{"MediaContainer":{{"size":0,"totalSize":{n}}}}}"#);
+        let page = |id: &str, total: usize| {
+            format!(
+                r#"{{"MediaContainer":{{"size":1,"totalSize":{total},"Metadata":[
+              {{"ratingKey":"{id}","title":"T","Media":[{{"Part":[{{"key":"/p/{id}","container":"mp3"}}]}}]}}]}}}}"#
+            )
+        };
+        let (port, seen) = fake_server(vec![
+            http("200 OK", &size(1)),
+            http("200 OK", &size(1)),
+            http("200 OK", &page("1", 1)),
+            http("200 OK", &page("2", 1)),
+        ]);
+        let backend = PlexBackend::with_gate(
+            config_for(&format!("http://127.0.0.1:{port}")),
+            headers(),
+            open_gate(),
+        );
+
+        let p1 = backend.catalog_page(0).unwrap();
+        assert_eq!(p1.total, Some(2));
+        let p2 = backend.catalog_page(p1.next.unwrap()).unwrap();
+        assert_eq!(p2.total, Some(2));
+        assert_eq!(p2.next, None);
+
+        let log = seen.lock().unwrap();
+        assert!(log[0].starts_with(
+            "GET /library/sections/3/all?type=10&X-Plex-Container-Start=0&X-Plex-Container-Size=0&"
+        ));
+        assert!(log[1].contains(
+            "/library/sections/4/all?type=10&X-Plex-Container-Start=0&X-Plex-Container-Size=0&"
+        ));
+        assert_eq!(log.len(), 4);
     }
 
     #[test]
