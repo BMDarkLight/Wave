@@ -155,8 +155,14 @@ fn now_ms() -> i64 {
 }
 
 fn path_is_restorable(path: &str) -> bool {
-    if path.starts_with("content://") || crate::remote::uri::is_remote(path) {
+    if path.starts_with("content://") {
         return true;
+    }
+    // Restoring happens while the app starts, under the player lock: a remote
+    // track comes back only when its whole file is cached, so nothing waits
+    // on the network. It stays in the queue either way.
+    if crate::remote::uri::is_remote(path) {
+        return crate::remote::stream::cache_file_if_complete(path).is_some();
     }
     Path::new(path).exists()
 }
@@ -4555,8 +4561,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remote_tracks_are_restorable_without_a_file() {
-        assert!(path_is_restorable("wave-remote://s1/1"));
+    fn remote_tracks_restore_only_from_a_finished_cache() {
+        // Without a finished cache file, restoring would wait on the network
+        // while the app starts.
+        assert!(!path_is_restorable("wave-remote://s1/1"));
         assert!(!path_is_restorable("/definitely/not/here.flac"));
     }
 

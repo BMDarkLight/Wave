@@ -229,17 +229,28 @@ fn upsert_one(
         let orphaned = rekey
             .filter(|r| !r.downloaded && r.cache_state.is_some())
             .map(|r| RemoteUri::new(source_id, &r.old_remote_id));
-        // A download is a local file now: its path, name, format and size
-        // describe that file and stay as they are. Otherwise a new part or
-        // size means new bytes behind the same URI, so the cache starts over.
+        // A download is the user's own file now: its path, name, format, size
+        // and tags describe that file and stay as they are, so a sync never
+        // undoes their edits. Otherwise a new part or size means new bytes
+        // behind the same URI, so the cache starts over.
         tx.execute(
             "UPDATE tracks SET
                 path = CASE WHEN source_state = 'downloaded' THEN path ELSE ?2 END,
                 name = CASE WHEN source_state = 'downloaded' THEN name ELSE ?3 END,
-                title = ?4, artist = ?5, album = ?6, album_artist = ?7, genre = ?8,
-                year = ?9, track_number = ?10, disc_number = ?11,
+                title = CASE WHEN source_state = 'downloaded' THEN title ELSE ?4 END,
+                artist = CASE WHEN source_state = 'downloaded' THEN artist ELSE ?5 END,
+                album = CASE WHEN source_state = 'downloaded' THEN album ELSE ?6 END,
+                album_artist = CASE WHEN source_state = 'downloaded'
+                                    THEN album_artist ELSE ?7 END,
+                genre = CASE WHEN source_state = 'downloaded' THEN genre ELSE ?8 END,
+                year = CASE WHEN source_state = 'downloaded' THEN year ELSE ?9 END,
+                track_number = CASE WHEN source_state = 'downloaded'
+                                    THEN track_number ELSE ?10 END,
+                disc_number = CASE WHEN source_state = 'downloaded'
+                                   THEN disc_number ELSE ?11 END,
                 format = CASE WHEN source_state = 'downloaded' THEN format ELSE ?12 END,
-                duration_seconds = ?13,
+                duration_seconds = CASE WHEN source_state = 'downloaded'
+                                        THEN duration_seconds ELSE ?13 END,
                 file_size = CASE WHEN source_state = 'downloaded' THEN file_size ELSE ?14 END,
                 source_provider = ?15, source_id = ?16, source_url = ?17,
                 source_state = CASE WHEN source_state = 'downloaded'
@@ -1419,23 +1430,42 @@ mod tests {
         library
             .promote_source_track(&id, "/downloads/song.flac")
             .unwrap();
+        // The user retitles the downloaded file.
+        library
+            .write_connection()
+            .execute(
+                "UPDATE tracks SET title = 'My Title' WHERE id = ?1",
+                params![id],
+            )
+            .unwrap();
 
         let mut changed = meta("1", "Song", "Band", "Album", 100.0);
         changed.genre = Some("Rock".to_string());
         changed.part_key = "/library/parts/9/file.flac".to_string();
         walk(&library, &source, &[changed]);
 
-        let (path, state, genre, url): (String, String, Option<String>, String) = library
-            .read_connection()
-            .query_row(
-                "SELECT path, source_state, genre, source_url FROM tracks WHERE id = ?1",
-                params![id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .unwrap();
+        let (path, state, title, genre, url): (String, String, String, Option<String>, String) =
+            library
+                .read_connection()
+                .query_row(
+                    "SELECT path, source_state, title, genre, source_url FROM tracks WHERE id = ?1",
+                    params![id],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .unwrap();
         assert_eq!(path, "/downloads/song.flac");
         assert_eq!(state, "downloaded");
-        assert_eq!(genre.as_deref(), Some("Rock"));
+        // A download is the user's own file now: a sync never rewrites its tags.
+        assert_eq!(title, "My Title");
+        assert_eq!(genre, None);
         assert_eq!(url, "/library/parts/9/file.flac");
     }
 
