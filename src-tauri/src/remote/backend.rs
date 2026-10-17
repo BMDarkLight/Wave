@@ -8,6 +8,8 @@
 
 //! The contract a remote library backend fulfils.
 
+use super::gate::GateState;
+
 /// One track of a remote catalog, normalized so the store never needs to know
 /// which backend produced it.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,4 +30,38 @@ pub struct RemoteTrackMeta {
     pub part_key: String,
     pub art_ref: Option<String>,
     pub updated_at: Option<i64>,
+}
+
+/// One page of a remote catalog. `next` is the cursor for the following page,
+/// `None` once the catalog is exhausted.
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+pub struct CatalogPage {
+    pub tracks: Vec<RemoteTrackMeta>,
+    pub total: Option<usize>,
+    pub next: Option<usize>,
+}
+
+/// Unreachable messages are short sentences fit for a toast and never carry a
+/// URL that contains a token.
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+pub enum RemoteError {
+    Unreachable(String),
+    Unauthorized,
+    Blocked(GateState),
+    Parse(String),
+    Http(u16),
+}
+
+pub trait ByteStream: std::io::Read + Send {}
+impl<T: std::io::Read + Send> ByteStream for T {}
+
+#[allow(dead_code)]
+pub trait RemoteBackend: Send + Sync {
+    fn kind(&self) -> &'static str;
+    fn catalog_page(&self, cursor: usize) -> Result<CatalogPage, RemoteError>;
+    fn open_bytes(&self, part_key: &str, offset: u64) -> Result<Box<dyn ByteStream>, RemoteError>;
+    fn check_reachable(&self) -> Result<(), RemoteError>;
+    fn fetch_artwork(&self, art_ref: &str) -> Result<Vec<u8>, RemoteError>;
 }
