@@ -54,6 +54,8 @@ public final class WaveExoPlayer {
     };
 
     private static volatile WaveExoPlayer INSTANCE;
+    /** The loopback server's base URL that wave-remote:// tracks stream from. */
+    private static volatile String remoteStreamBase;
 
     private final Context appContext;
     private final Handler mainHandler;
@@ -65,6 +67,7 @@ public final class WaveExoPlayer {
     private int crossfadeEqSessionId = C.AUDIO_SESSION_ID_UNSET;
     private volatile boolean ended;
     private volatile boolean playingCached;
+    private volatile boolean bufferingCached;
     private volatile long positionMsCached;
     private volatile long durationMsCached;
     /** Media id (the path Rust passed in) of the item the cache describes. */
@@ -576,6 +579,7 @@ public final class WaveExoPlayer {
         MediaItem item = source.getCurrentMediaItem();
         mediaIdCached = item != null ? item.mediaId : null;
         playingCached = source == crossfadePlayer || player.isPlaying();
+        bufferingCached = player.getPlaybackState() == Player.STATE_BUFFERING;
         positionMsCached = source.getCurrentPosition();
         positionCachedAtMs = SystemClock.elapsedRealtime();
         long d = source.getDuration();
@@ -962,6 +966,18 @@ public final class WaveExoPlayer {
         return ended && !crossfadeActive;
     }
 
+    /** True while the player waits for data, such as a remote track streaming in. */
+    public boolean isBuffering() {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            refreshCacheFromPlayer();
+        }
+        return player != null && bufferingCached;
+    }
+
+    public static void setRemoteStreamBase(String base) {
+        remoteStreamBase = base;
+    }
+
     /**
      * Playback position in ms of the item Rust knows as {@code mediaId}, or
      * -1 when the cache describes another item (a gapless or crossfade
@@ -1017,6 +1033,12 @@ public final class WaveExoPlayer {
                 || uriString.startsWith("http://")
                 || uriString.startsWith("https://")) {
             return uriString;
+        }
+        // The media id keeps the wave-remote:// path; only the fetch goes
+        // through the loopback server.
+        if (uriString.startsWith("wave-remote://")) {
+            String base = remoteStreamBase;
+            return base != null ? base + Uri.encode(uriString) : uriString;
         }
         if (uriString.startsWith("/")) {
             return Uri.fromFile(new java.io.File(uriString)).toString();

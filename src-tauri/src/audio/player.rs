@@ -1018,7 +1018,23 @@ impl AudioPlayer {
         }
         let generation = self.normalization_generation.clone();
         std::thread::spawn(move || {
-            let levels = analyze_track_levels(&path).unwrap_or_else(|error| {
+            // A remote track is analyzed from its finished cache file. Until
+            // there is one it keeps the neutral gain it started with.
+            let source = if crate::remote::uri::is_remote(&path) {
+                match stream::cache_file_if_complete(&path) {
+                    Some(file) => file,
+                    None => {
+                        normalizer
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .end_analysis();
+                        return;
+                    }
+                }
+            } else {
+                path.clone()
+            };
+            let levels = analyze_track_levels(&source).unwrap_or_else(|error| {
                 tracing::warn!("Level analysis failed for \"{path}\": {error}");
                 super::normalization::AudioLevels {
                     peak: 0.5,
@@ -2066,11 +2082,12 @@ impl AudioPlayer {
         if self.stop_after_current || self.repeat == RepeatMode::One {
             return None;
         }
+        let next = self.queue.peek_next(&self.repeat);
         // A remote track that can't start yet would block whoever opens it.
-        self.queue
-            .peek_next(&self.repeat)
-            .filter(|next| stream::is_ready(next))
-            .map(str::to_string)
+        // ExoPlayer streams it through the loopback instead, so Android keeps it.
+        #[cfg(not(target_os = "android"))]
+        let next = next.filter(|next| stream::is_ready(next));
+        next.map(str::to_string)
     }
 
     fn stall_now(&self) -> u64 {
@@ -2081,7 +2098,7 @@ impl AudioPlayer {
     pub fn is_buffering(&self) -> bool {
         #[cfg(target_os = "android")]
         {
-            false
+            crate::android::audio::exo_is_buffering().unwrap_or(false)
         }
         #[cfg(not(target_os = "android"))]
         {
@@ -3674,6 +3691,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "android"))]
     fn uncached_remote_next_is_not_preloaded() {
         let mut player = AudioPlayer::new_deferred();
         player

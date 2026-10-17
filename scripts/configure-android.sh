@@ -73,9 +73,10 @@ fi
 cp -R "$RES_SRC"/. "$RES_DEST"/
 echo "Applied Wave launcher icons into $RES_DEST"
 
-# App resources (status bar / media notification icon)
+# App resources (status bar / media notification icon, network security config)
 # Without drawable/ic_notification the media notification falls
 # back to the template's ic_launcher_foreground, the Android robot.
+# xml/wave_network_security.xml is referenced from <application> below.
 cp -R src-tauri/android-src/res/. "$RES_DEST"/
 echo "Applied Wave Android resources into $RES_DEST"
 
@@ -90,6 +91,8 @@ text = path.read_text(encoding="utf-8")
 
 permissions = [
     "android.permission.INTERNET",
+    # Lets remote music tell mobile data from Wi-Fi.
+    "android.permission.ACCESS_NETWORK_STATE",
     "android.permission.WAKE_LOCK",
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
@@ -202,6 +205,25 @@ if update_provider not in text:
     print("Registered UpdateFileProvider in AndroidManifest.xml")
 else:
     print("UpdateFileProvider already present in AndroidManifest.xml")
+
+# Network security config: cleartext only to the loopback stream server.
+text = path.read_text(encoding="utf-8")
+if "android:networkSecurityConfig=" not in text:
+    app_open = re.search(r"<application\b[^>]*>", text, flags=re.IGNORECASE | re.DOTALL)
+    if not app_open:
+        print("::error::could not find <application> open tag for networkSecurityConfig", file=sys.stderr)
+        sys.exit(1)
+    tag = app_open.group(0)
+    attr = 'android:networkSecurityConfig="@xml/wave_network_security"'
+    if tag.endswith("/>"):
+        patched_tag = tag[:-2].rstrip() + f"\n        {attr} />"
+    else:
+        patched_tag = tag[:-1].rstrip() + f"\n        {attr}>"
+    text = text[:app_open.start()] + patched_tag + text[app_open.end():]
+    path.write_text(text, encoding="utf-8")
+    print("Set networkSecurityConfig on <application>")
+else:
+    print("networkSecurityConfig already set in AndroidManifest.xml")
 PY
 
 # Media3 / ExoPlayer deps for WaveExoPlayer

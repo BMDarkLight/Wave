@@ -25,6 +25,10 @@
     public static boolean isDark(android.content.Context);
     public static void setLightBars(android.app.Activity, boolean);
 }
+-keep class app.bmdarklight.wave.NetworkState { *; }
+-keepclassmembers class app.bmdarklight.wave.NetworkState {
+    public static boolean isCellularOrMetered(android.content.Context);
+}
 -keep class app.bmdarklight.wave.AppUpdater { *; }
 -keepclassmembers class app.bmdarklight.wave.AppUpdater {
     public static void install(android.app.Activity, java.lang.String);
@@ -52,6 +56,7 @@
     public static app.bmdarklight.wave.audio.WaveExoPlayer getOrCreate(android.content.Context);
     public static float[] analyzeLevels(android.content.Context, java.lang.String);
     public static boolean isPlayingActive();
+    public static void setRemoteStreamBase(java.lang.String);
     public void playUri(java.lang.String);
     public void playMediaItems(java.lang.String[], int);
     public void prepareUriAt(java.lang.String, long);
@@ -71,4 +76,5 @@
     public long durationFor(java.lang.String);
     public boolean isPlaying();
     public boolean isEnded();
+    public boolean isBuffering();
 }

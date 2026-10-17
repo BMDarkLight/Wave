@@ -11,6 +11,7 @@
 //! from where it is, and a [`reader::ProgressiveReader`] reads it while it fills.
 
 pub mod fill;
+pub mod loopback;
 pub mod ranges;
 pub mod reader;
 

@@ -175,11 +175,24 @@ pub fn run() {
 
             #[cfg(target_os = "android")]
             {
+                remote::gate::NetworkGate::global()
+                    .set_cellular_probe(crate::android::network::is_cellular);
                 // Best-effort ExoPlayer warm-up once the Activity exists.
                 let exo_app = app_handle.clone();
                 let _ = app.run_on_main_thread(move || {
                     if let Err(e) = crate::android::audio::ensure_initialized() {
                         tracing::warn!("ExoPlayer init deferred: {e}");
+                    }
+                    // ExoPlayer streams remote tracks from this local server.
+                    match remote::stream::loopback::start_loopback() {
+                        Ok(loopback) => {
+                            if let Err(e) =
+                                crate::android::audio::exo_set_remote_stream_base(&loopback.base)
+                            {
+                                tracing::warn!("Could not set the remote stream address: {e}");
+                            }
+                        }
+                        Err(e) => tracing::warn!("Remote stream server did not start: {e}"),
                     }
                     commands::restore_saved_playback(&exo_app);
                 });

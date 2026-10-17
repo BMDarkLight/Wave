@@ -22,6 +22,7 @@ const PLAYER_CLASS: &str = "app.bmdarklight.wave.audio.WaveExoPlayer";
 
 static EXO_READY: AtomicBool = AtomicBool::new(false);
 static EXO_PLAYER: Mutex<Option<ExoHandle>> = Mutex::new(None);
+static REMOTE_STREAM_BASE: Mutex<Option<String>> = Mutex::new(None);
 
 struct ExoHandle {
     /// Process JVM. Must not Drop, that would call DestroyJavaVM.
@@ -185,6 +186,12 @@ pub fn ensure_initialized() -> Result<(), String> {
         vm: ManuallyDrop::new(vm),
         instance: global,
     };
+    let base = REMOTE_STREAM_BASE.lock().ok().and_then(|base| base.clone());
+    if let Some(base) = base {
+        if let Err(e) = push_remote_stream_base(&handle, &base) {
+            tracing::warn!("Could not give ExoPlayer the remote stream address: {e}");
+        }
+    }
     *EXO_PLAYER
         .lock()
         .map_err(|_| "ExoPlayer mutex poisoned".to_string())? = Some(handle);
@@ -525,6 +532,48 @@ pub fn exo_duration_for(path: &str) -> Result<Option<i64>, String> {
 
 pub fn exo_is_playing() -> Result<bool, String> {
     with_player(|p| p.call_bool("isPlaying"))
+}
+
+/// True while ExoPlayer waits for data, such as a remote track streaming in.
+pub fn exo_is_buffering() -> Result<bool, String> {
+    with_player(|p| p.call_bool("isBuffering"))
+}
+
+/// Where ExoPlayer fetches `wave-remote://` tracks from: the loopback
+/// server's base URL. It holds the server's secret, so it is never logged.
+/// Kept here as well, so a player created later still gets it.
+pub fn exo_set_remote_stream_base(base: &str) -> Result<(), String> {
+    *REMOTE_STREAM_BASE
+        .lock()
+        .map_err(|_| "remote stream base mutex poisoned".to_string())? = Some(base.to_string());
+    if !is_exo_ready() {
+        return Ok(());
+    }
+    with_player(|p| push_remote_stream_base(p, base))
+}
+
+fn push_remote_stream_base(p: &ExoHandle, base: &str) -> Result<(), String> {
+    p.with_env(|env| {
+        let class = env
+            .get_object_class(p.instance.as_obj())
+            .map_err(|e| format!("player class: {e}"))?;
+        let j_base = env
+            .new_string(base)
+            .map_err(|e| format!("base string: {e}"))?;
+        env.call_static_method(
+            &class,
+            "setRemoteStreamBase",
+            "(Ljava/lang/String;)V",
+            &[JValue::Object(&j_base)],
+        )
+        .map_err(|e| format!("setRemoteStreamBase: {e}"))?;
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+            return Err("setRemoteStreamBase threw".into());
+        }
+        Ok(())
+    })
 }
 
 /// True when ExoPlayer reached end-of-media for the current item.
