@@ -810,7 +810,12 @@ impl Library {
     }
 
     /// Remove a track from the library (and every playlist). Desktop and Android.
+    /// A remote track is only hidden: it reappears on the next sync, and its
+    /// playlists and listening history are kept.
     pub fn remove_track_from_library(&self, path: &str) -> Result<(), String> {
+        if crate::remote::uri::is_remote(path) && self.tombstone_remote_track(path)? {
+            return Ok(());
+        }
         let mut connection = self.lock_connection()?;
         let tx = connection
             .transaction()
@@ -1725,7 +1730,7 @@ impl Library {
             .prepare(
                 "SELECT t.path FROM playlist_tracks pt
                  JOIN tracks t ON t.id = pt.track_id
-                 WHERE pt.playlist_id = ?1
+                 WHERE pt.playlist_id = ?1 AND t.remote_source_id IS NULL
                  ORDER BY pt.position",
             )
             .map_err(|e| format!("Failed to prepare playlist path query: {e}"))?;
@@ -2405,6 +2410,7 @@ impl Library {
     /// Only the columns the edit names are touched, so lyrics, listen stats
     /// and artwork all survive a change of title.
     pub fn update_track_tags(&self, path: &str, edit: &ResolvedEdit) -> Result<Track, String> {
+        crate::remote::ensure_editable(path)?;
         let mut assignments: Vec<String> = Vec::new();
         let mut values: Vec<Value> = Vec::new();
 

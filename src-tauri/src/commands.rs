@@ -155,7 +155,7 @@ fn now_ms() -> i64 {
 }
 
 fn path_is_restorable(path: &str) -> bool {
-    if path.starts_with("content://") {
+    if path.starts_with("content://") || crate::remote::uri::is_remote(path) {
         return true;
     }
     Path::new(path).exists()
@@ -2782,6 +2782,7 @@ fn write_track_metadata(
     path: &str,
     edit: &ResolvedEdit,
 ) -> Result<(), String> {
+    crate::remote::ensure_editable(path)?;
     let track = library
         .get_track_details(path)?
         .ok_or_else(|| "Track is not in the library".to_string())?;
@@ -2830,12 +2831,21 @@ pub async fn check_metadata_write_access(
     app: tauri::AppHandle,
 ) -> Result<bool, String> {
     blocking(move || {
-        Ok(paths
-            .iter()
-            .filter(|path| is_android_content_uri(path))
-            .all(|uri| crate::android::saf_io::can_write_uri(&app, uri)))
+        Ok(paths_writable(&paths, |uri| {
+            crate::android::saf_io::can_write_uri(&app, uri)
+        }))
     })
     .await
+}
+
+/// Whether every track in an edit can be written: no remote track, and every
+/// Android document URI granted for writing.
+fn paths_writable(paths: &[String], can_write_uri: impl Fn(&str) -> bool) -> bool {
+    !paths.iter().any(|path| crate::remote::uri::is_remote(path))
+        && paths
+            .iter()
+            .filter(|path| is_android_content_uri(path))
+            .all(|uri| can_write_uri(uri))
 }
 
 /// Extract full embedded cover art as a one-shot data URL (not persisted).
@@ -4482,6 +4492,38 @@ pub async fn download_source_track(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_tracks_are_restorable_without_a_file() {
+        assert!(path_is_restorable("wave-remote://s1/1"));
+        assert!(!path_is_restorable("/definitely/not/here.flac"));
+    }
+
+    #[test]
+    fn a_remote_track_makes_an_edit_unwritable() {
+        let always = |_: &str| true;
+        assert!(paths_writable(&["/music/a.flac".to_string()], always));
+        assert!(!paths_writable(
+            &[
+                "/music/a.flac".to_string(),
+                "wave-remote://s1/1".to_string()
+            ],
+            always
+        ));
+        assert!(!paths_writable(
+            &["content://doc/1".to_string()],
+            |_: &str| false
+        ));
+    }
+
+    #[test]
+    fn remote_tracks_are_never_editable() {
+        assert_eq!(
+            crate::remote::ensure_editable("wave-remote://s1/1").unwrap_err(),
+            crate::remote::REMOTE_EDIT_REFUSED
+        );
+        assert!(crate::remote::ensure_editable("/music/a.flac").is_ok());
+    }
 
     #[test]
     fn placeholder_for_a_content_uri_shows_the_file_name() {

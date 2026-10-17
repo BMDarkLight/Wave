@@ -123,7 +123,12 @@ pub fn run() {
             let save_handle = app_handle.clone();
             let ready_handle = app_handle.clone();
             waveforms.spawn_worker(
-                |path| audio::waveform::compute_waveform(path).map_err(|e| e.to_string()),
+                |path| {
+                    // A remote track is analyzed from its finished cache file.
+                    let file = remote::stream::local_file_for(path)
+                        .ok_or_else(|| "The track has not finished downloading".to_string())?;
+                    audio::waveform::compute_waveform(&file).map_err(|e| e.to_string())
+                },
                 move |path, bins| commands::save_waveform(&save_handle, path, bins),
                 move |path| {
                     let _ = ready_handle.emit("waveform-ready", path);

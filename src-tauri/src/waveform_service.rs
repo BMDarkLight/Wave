@@ -41,7 +41,10 @@ pub fn can_analyze(path: &str) -> bool {
     if path.starts_with("http://") || path.starts_with("https://") {
         return false;
     }
-    std::path::Path::new(path).is_file()
+    match crate::remote::stream::local_file_for(path) {
+        Some(file) => std::path::Path::new(&file).is_file(),
+        None => false,
+    }
 }
 
 impl WaveformService {
@@ -172,6 +175,14 @@ mod tests {
         service.lookup("https://example.com/a.mp3", None);
         service.lookup("/definitely/not/here.flac", None);
         assert!(service.queue.pending.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn waveform_for_uncached_remote_is_none_not_error() {
+        let service = WaveformService::default();
+        assert_eq!(service.lookup("wave-remote://s1/1", None), None);
+        assert!(service.queue.pending.lock().unwrap().is_none());
+        assert!(!can_analyze("wave-remote://s1/1"));
     }
 
     #[test]

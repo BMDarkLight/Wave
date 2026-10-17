@@ -582,6 +582,10 @@ pub fn extract_full_cover_data_url(
     app: Option<&tauri::AppHandle>,
     path: &str,
 ) -> Result<Option<String>, String> {
+    let Some(path) = crate::remote::stream::local_file_for(path) else {
+        return Ok(None);
+    };
+    let path = path.as_str();
     if path.starts_with("content://") {
         let Some(app_handle) = app else {
             return Err("content:// cover requires an app handle".into());
@@ -597,7 +601,10 @@ pub fn extract_full_cover_data_url(
 
 /// The cover embedded in a local file, at full size, with its MIME type.
 pub fn extract_embedded_cover(path: &str) -> Result<Option<(Vec<u8>, String)>, String> {
-    Ok(embedded_cover(path)?.map(|art| (art.data, art.mime)))
+    let Some(path) = crate::remote::stream::local_file_for(path) else {
+        return Ok(None);
+    };
+    Ok(embedded_cover(&path)?.map(|art| (art.data, art.mime)))
 }
 
 fn embedded_cover(path: &str) -> Result<Option<CoverArt>, String> {
@@ -924,6 +931,18 @@ fn timestamp(system_time: SystemTime) -> i64 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_remote_track_without_a_finished_file_has_no_cover_yet() {
+        assert_eq!(
+            super::extract_embedded_cover("wave-remote://s1/1"),
+            Ok(None)
+        );
+        assert_eq!(
+            super::extract_full_cover_data_url(None, "wave-remote://s1/1"),
+            Ok(None)
+        );
+    }
 
     #[test]
     fn sidecar_lyrics_prefer_word_level_formats() {

@@ -539,6 +539,32 @@ impl Library {
         })
     }
 
+    /// Hide one remote track the user removed. It stays a row, so playlists
+    /// and history keep it, and the next sync brings it back. Returns whether
+    /// `path` named a remote track. Visibility is not recomputed here.
+    pub fn tombstone_remote_track(&self, path: &str) -> Result<bool, String> {
+        let connection = self.write_connection();
+        let id: Option<String> = connection
+            .query_row(
+                "SELECT id FROM tracks WHERE path = ?1 AND source_state = 'remote'",
+                params![path],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sql_error("look up remote track"))?;
+        let Some(id) = id else {
+            return Ok(false);
+        };
+        connection
+            .execute(
+                "UPDATE tracks SET remote_missing = 1, remote_visible = 0 WHERE id = ?1",
+                params![id],
+            )
+            .map_err(sql_error("hide remote track"))?;
+        let _ = connection.execute("DELETE FROM tracks_fts WHERE track_id = ?1", params![id]);
+        Ok(true)
+    }
+
     /// Remove a source: its rows become tombstones, except downloads, which
     /// stay as local files. Returns the rows that had cached audio so the
     /// caller can delete those files. Visibility is not recomputed here, so a
@@ -1820,5 +1846,138 @@ mod tests {
             library.list_remote_sources().unwrap()[0].last_sync_error,
             None
         );
+    }
+
+    fn remote_path(library: &Library, source: &str, remote_id: &str) -> String {
+        library
+            .read_connection()
+            .query_row(
+                "SELECT path FROM tracks WHERE remote_source_id = ?1 AND source_id = ?2",
+                params![source, remote_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn metadata_edit_rejects_remote_path() {
+        let library = test_library();
+        let s1 = library
+            .insert_remote_source("plex", "s1", "s1", "{}")
+            .unwrap();
+        walk(
+            &library,
+            &s1,
+            &[meta("1", "Song", "Artist", "Album", 200.0)],
+        );
+        let path = remote_path(&library, &s1, "1");
+        let edit = crate::tag_edit::ResolvedEdit {
+            title: Some("Renamed".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            library.update_track_tags(&path, &edit).unwrap_err(),
+            crate::remote::REMOTE_EDIT_REFUSED
+        );
+        library.recompute_remote_visibility(true).unwrap();
+        assert_eq!(library_titles(&library), vec!["Song".to_string()]);
+    }
+
+    #[test]
+    fn removing_remote_track_tombstones_instead_of_deleting() {
+        let library = test_library();
+        let s1 = library
+            .insert_remote_source("plex", "s1", "s1", "{}")
+            .unwrap();
+        walk(
+            &library,
+            &s1,
+            &[meta("1", "Song", "Artist", "Album", 200.0)],
+        );
+        let id = track_id(&library, &s1, "1");
+        let path = remote_path(&library, &s1, "1");
+        let playlist = library.create_playlist("Mix", None).unwrap();
+        library
+            .add_track_to_playlist(&playlist.id, path.clone())
+            .unwrap();
+
+        library.remove_track_from_library(&path).unwrap();
+        library.recompute_remote_visibility(true).unwrap();
+
+        let missing: i64 = library
+            .read_connection()
+            .query_row(
+                "SELECT remote_missing FROM tracks WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(missing, 1);
+        assert!(library_titles(&library).is_empty());
+        let members = library.get_playlist_tracks(&playlist.id).unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].id, id);
+    }
+
+    #[test]
+    fn playlist_export_import_round_trips_remote_uri() {
+        let library = test_library();
+        let s1 = library
+            .insert_remote_source("plex", "s1", "s1", "{}")
+            .unwrap();
+        walk(
+            &library,
+            &s1,
+            &[meta("1", "Song", "Artist", "Album", 200.0)],
+        );
+        let id = track_id(&library, &s1, "1");
+        let path = remote_path(&library, &s1, "1");
+        let playlist = library.create_playlist("Mix", None).unwrap();
+        library.add_track_to_playlist(&playlist.id, path).unwrap();
+
+        let dir = std::env::temp_dir().join(format!("wave-test-m3u-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("mix.m3u");
+        library
+            .export_playlist_m3u(&playlist.id, file.to_str().unwrap())
+            .unwrap();
+        let (imported, added) = library
+            .import_playlist_file(file.to_str().unwrap(), Some("Mix again"))
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(added, 1);
+        let members = library.get_playlist_tracks(&imported).unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].id, id);
+    }
+
+    #[test]
+    fn folder_sync_keeps_remote_members_of_a_user_playlist() {
+        let library = test_library();
+        let s1 = library
+            .insert_remote_source("plex", "s1", "s1", "{}")
+            .unwrap();
+        walk(
+            &library,
+            &s1,
+            &[meta("1", "Song", "Artist", "Album", 200.0)],
+        );
+        let remote = remote_path(&library, &s1, "1");
+        let folder = std::env::temp_dir().join(format!("wave-test-sync-{}", Uuid::new_v4()));
+        let playlist = library
+            .create_playlist("Synced", Some(folder.to_str().unwrap()))
+            .unwrap();
+        library
+            .add_track_to_playlist(&playlist.id, remote.clone())
+            .unwrap();
+
+        let (to_remove, _) = library.diff_playlist_paths(&playlist.id, &[]).unwrap();
+        assert!(!to_remove.contains(&remote), "{to_remove:?}");
+        library
+            .apply_playlist_sync(&playlist.id, &to_remove, &[], &[])
+            .unwrap();
+        let members = library.get_playlist_tracks(&playlist.id).unwrap();
+        assert_eq!(members.len(), 1);
     }
 }

@@ -208,9 +208,18 @@ pub fn active_paths() -> Vec<PathBuf> {
         .collect()
 }
 
+/// A file that can be read for `path`: the path itself for a local track, or
+/// a remote track's finished cache file. `None` while a remote track is not
+/// fully downloaded.
+pub fn local_file_for(path: &str) -> Option<String> {
+    if !is_remote(path) {
+        return Some(path.to_string());
+    }
+    cache_file_if_complete(path)
+}
+
 /// The finished cache file behind a remote path, for code that needs a real
 /// file rather than a stream.
-#[allow(dead_code)]
 pub fn cache_file_if_complete(path: &str) -> Option<String> {
     let rt = RemoteRuntime::global()?;
     cache_file_if_complete_with(rt, path)
@@ -575,6 +584,15 @@ mod tests {
     use uuid::Uuid;
 
     const LONG: Duration = Duration::from_secs(20);
+
+    #[test]
+    fn local_file_for_passes_local_paths_and_waits_for_remote_files() {
+        assert_eq!(
+            local_file_for("/music/a.flac").as_deref(),
+            Some("/music/a.flac")
+        );
+        assert_eq!(local_file_for("wave-remote://nowhere/1"), None);
+    }
 
     #[test]
     fn closed_gate_refuses_uncached_but_allows_complete() {

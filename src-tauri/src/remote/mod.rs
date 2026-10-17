@@ -25,6 +25,18 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
 
+/// Why a remote track's tags and artwork can't be changed: there is no local
+/// file to write until the user downloads it.
+pub const REMOTE_EDIT_REFUSED: &str = "Remote tracks can't be edited until they're downloaded";
+
+/// Refuses an edit of a remote track, before anything is written.
+pub fn ensure_editable(path: &str) -> Result<(), String> {
+    if uri::is_remote(path) {
+        return Err(REMOTE_EDIT_REFUSED.to_string());
+    }
+    Ok(())
+}
+
 /// Where a source stands as far as the UI is concerned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
