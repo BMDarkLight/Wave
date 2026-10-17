@@ -752,6 +752,10 @@ img.track-thumb {
 
 .home-header {
   padding-top: 4px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .home-header h1 {
@@ -8435,4 +8439,56 @@ div.album-hero-cover {
 .remote-source-signin {
   margin-top: 4px;
   align-self: flex-start;
+}
+
+/* Refreshing the library: a button on desktop Home, a pull on mobile. */
+.home-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(var(--ink), 0.06);
+  color: inherit;
+  font-size: 1.15rem;
+  cursor: pointer;
+}
+
+.home-refresh-btn:hover:not(:disabled) {
+  background: rgba(var(--ink), 0.12);
+}
+
+.home-refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.spinning {
+  animation: spin 0.8s linear infinite;
+}
+
+.ptr-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  transition: height 0.15s ease;
+}
+
+.ptr-arrow {
+  font-size: 1.4rem;
+  color: rgba(var(--ink), 0.5);
+  transition: transform 0.15s ease;
+}
+
+.ptr-arrow.ready {
+  transform: rotate(180deg);
+}
+
+.ptr-message {
+  font-size: 0.85rem;
+  color: rgba(var(--ink), 0.65);
 }

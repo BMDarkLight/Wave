@@ -132,6 +132,7 @@ import {
   MobileArtistsPage,
 } from "./components/MobileCollectionPages";
 import { useRemoteStatus } from "./hooks/useRemoteStatus";
+import { useLibraryRefresh } from "./hooks/useLibraryRefresh";
 import RemoteSourceSetupDialog from "./components/dialogs/RemoteSourceSetupDialog";
 import {
   RemoteStatusContext,
@@ -815,6 +816,18 @@ function App() {
       clearAudioImports().catch(() => {});
     }
   };
+
+  // Pull to refresh and the desktop Home button: rescan folders and sync
+  // remote sources, then reload what the lists show.
+  const [homeRefreshKey, setHomeRefreshKey] = useState(0);
+  const libraryRefresh = useLibraryRefresh({
+    runLocalRescan: () => syncFolderPlaylists(playlists, androidHost),
+    onFinished: () => {
+      setBrowseRefresh((count) => count + 1);
+      setHomeRefreshKey((count) => count + 1);
+      loadPlaylists().catch(() => {});
+    },
+  });
 
   const {
     lyricsPanelTrack,
@@ -2204,6 +2217,10 @@ function App() {
               onOpenLibrary={() => {
                 if (libraryPlaylist) handleSelectPlaylist(libraryPlaylist.id);
               }}
+              refreshKey={homeRefreshKey}
+              onRefresh={() => void libraryRefresh.refresh()}
+              refreshing={libraryRefresh.refreshing}
+              refreshCooldownSeconds={libraryRefresh.cooldownSeconds}
             />
           ) : (mainView === "recently_played" || mainView === "most_played") &&
             !mainSearchQuery.trim() ? (
@@ -2248,6 +2265,9 @@ function App() {
               onOpenSettings={handleOpenMobileSettings}
               onImportPlaylist={() => void handleImportPlaylist()}
               onCreatePlaylist={openCreatePlaylistDialog}
+              onRefresh={() => void libraryRefresh.refresh()}
+              refreshing={libraryRefresh.refreshing}
+              refreshCooldownSeconds={libraryRefresh.cooldownSeconds}
             />
           ) : mainView === "settings" && !mainSearchQuery.trim() ? (
             <MobileSettings

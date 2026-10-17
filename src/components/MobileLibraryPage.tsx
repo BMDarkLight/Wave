@@ -13,6 +13,7 @@
 // instead of being split between the tabs and a drawer.
 
 import type { ReactNode } from "react";
+import PullToRefresh from "./PullToRefresh";
 import {
   BiAlbum,
   BiBarChartAlt2,
@@ -41,6 +42,9 @@ interface MobileLibraryPageProps {
   onOpenSettings: () => void;
   onImportPlaylist: () => void;
   onCreatePlaylist: () => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+  refreshCooldownSeconds: number;
 }
 
 function Row({
@@ -97,100 +101,109 @@ export default function MobileLibraryPage({
   onOpenSettings,
   onImportPlaylist,
   onCreatePlaylist,
+  onRefresh,
+  refreshing,
+  refreshCooldownSeconds,
 }: MobileLibraryPageProps) {
   return (
     <main className="main-content mobile-library-page">
-      <div className="mlib-header">
-        <h1>Your Library</h1>
-        <div className="mlib-header-actions">
-          <button
-            className="mlib-icon-btn"
-            onClick={onImportPlaylist}
-            type="button"
-            title="Import playlist"
-            aria-label="Import playlist"
-          >
-            <BiImport />
-          </button>
-          <button
-            className="mlib-icon-btn"
-            onClick={onCreatePlaylist}
-            type="button"
-            title="Create playlist"
-            aria-label="Create playlist"
-          >
-            <BiPlus />
-          </button>
-          <button
-            className="mlib-icon-btn"
-            onClick={onOpenSettings}
-            type="button"
-            title="Settings"
-            aria-label="Settings"
-          >
-            <BiCog />
-          </button>
-        </div>
-      </div>
-
-      <div className="mlib-list">
-        {libraryPlaylist && (
-          <Row
-            icon={<BiMusic />}
-            label="All songs"
-            count={libraryPlaylist.track_count}
-            onClick={() => onSelectPlaylist(libraryPlaylist.id)}
-          />
-        )}
-        {favoritesPlaylist && (
-          <Row
-            icon={<BiSolidHeart />}
-            tone="favorites"
-            label="Favorites"
-            count={favoritesPlaylist.track_count}
-            onClick={() => onSelectPlaylist(favoritesPlaylist.id)}
-          />
-        )}
-        <Row icon={<BiAlbum />} label="Albums" onClick={onGoAlbums} />
-        <Row icon={<BiUser />} label="Artists" onClick={onGoArtists} />
-        <Row
-          icon={<BiHistory />}
-          label="Recently Played"
-          onClick={onGoRecentlyPlayed}
-        />
-        <Row
-          icon={<BiBarChartAlt2 />}
-          label="Most Played"
-          onClick={onGoMostPlayed}
-        />
-      </div>
-
-      <h2 className="mlib-section-title">Playlists</h2>
-      <div className="mlib-list">
-        {userPlaylists.length === 0 ? (
-          <div className="mlib-empty">
-            <p>No playlists yet</p>
+      <PullToRefresh
+        onRefresh={onRefresh}
+        refreshing={refreshing}
+        cooldownSeconds={refreshCooldownSeconds}
+      >
+        <div className="mlib-header">
+          <h1>Your Library</h1>
+          <div className="mlib-header-actions">
             <button
-              className="btn-ghost btn-sm"
+              className="mlib-icon-btn"
+              onClick={onImportPlaylist}
+              type="button"
+              title="Import playlist"
+              aria-label="Import playlist"
+            >
+              <BiImport />
+            </button>
+            <button
+              className="mlib-icon-btn"
               onClick={onCreatePlaylist}
               type="button"
+              title="Create playlist"
+              aria-label="Create playlist"
             >
-              Create one
+              <BiPlus />
+            </button>
+            <button
+              className="mlib-icon-btn"
+              onClick={onOpenSettings}
+              type="button"
+              title="Settings"
+              aria-label="Settings"
+            >
+              <BiCog />
             </button>
           </div>
-        ) : (
-          userPlaylists.map((playlist) => (
+        </div>
+
+        <div className="mlib-list">
+          {libraryPlaylist && (
             <Row
-              key={playlist.id}
-              icon={<BiListUl />}
-              label={playlist.name}
-              count={playlist.track_count}
-              synced={!!playlist.sync_folder}
-              onClick={() => onSelectPlaylist(playlist.id)}
+              icon={<BiMusic />}
+              label="All songs"
+              count={libraryPlaylist.track_count}
+              onClick={() => onSelectPlaylist(libraryPlaylist.id)}
             />
-          ))
-        )}
-      </div>
+          )}
+          {favoritesPlaylist && (
+            <Row
+              icon={<BiSolidHeart />}
+              tone="favorites"
+              label="Favorites"
+              count={favoritesPlaylist.track_count}
+              onClick={() => onSelectPlaylist(favoritesPlaylist.id)}
+            />
+          )}
+          <Row icon={<BiAlbum />} label="Albums" onClick={onGoAlbums} />
+          <Row icon={<BiUser />} label="Artists" onClick={onGoArtists} />
+          <Row
+            icon={<BiHistory />}
+            label="Recently Played"
+            onClick={onGoRecentlyPlayed}
+          />
+          <Row
+            icon={<BiBarChartAlt2 />}
+            label="Most Played"
+            onClick={onGoMostPlayed}
+          />
+        </div>
+
+        <h2 className="mlib-section-title">Playlists</h2>
+        <div className="mlib-list">
+          {userPlaylists.length === 0 ? (
+            <div className="mlib-empty">
+              <p>No playlists yet</p>
+              <button
+                className="btn-ghost btn-sm"
+                onClick={onCreatePlaylist}
+                type="button"
+              >
+                Create one
+              </button>
+            </div>
+          ) : (
+            userPlaylists.map((playlist) => (
+              <Row
+                key={playlist.id}
+                icon={<BiListUl />}
+                label={playlist.name}
+                count={playlist.track_count}
+                synced={!!playlist.sync_folder}
+                onClick={() => onSelectPlaylist(playlist.id)}
+              />
+            ))
+          )}
+        </div>
+      </PullToRefresh>
     </main>
   );
 }
