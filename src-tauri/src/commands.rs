@@ -1000,8 +1000,7 @@ pub(crate) fn handle_native_media_action(
             Ok(())
         }
         "next" => {
-            let path =
-                with_app_player(app, |player| player.play_next().map_err(|e| e.to_string()))?;
+            let path = skip_track(app, true)?;
             if let Some(path) = path {
                 let track = match app.state::<LibraryState>().0.lock() {
                     Ok(lib) => resolve_track(&lib, &path),
@@ -1013,9 +1012,7 @@ pub(crate) fn handle_native_media_action(
             Ok(())
         }
         "previous" => {
-            let path = with_app_player(app, |player| {
-                player.play_previous().map_err(|e| e.to_string())
-            })?;
+            let path = skip_track(app, false)?;
             if let Some(path) = path {
                 let track = match app.state::<LibraryState>().0.lock() {
                     Ok(lib) => resolve_track(&lib, &path),
@@ -1222,6 +1219,45 @@ pub async fn scan_saf_folder(uri: String, app: tauri::AppHandle) -> Result<Vec<S
 fn prepare_remote_for_play(path: &str) -> Result<(), String> {
     crate::remote::stream::prepare_for_play(path, std::time::Duration::from_secs(10))
         .map_err(|e| format!("Playback failed: {e}"))
+}
+
+/// Skips to the next or previous track. A remote target is buffered first,
+/// outside the player lock, so other commands don't wait on the network.
+pub(crate) fn skip_track(app: &tauri::AppHandle, forward: bool) -> Result<Option<String>, String> {
+    skip_via(
+        |step| with_app_player(app, |player| step(player)),
+        prepare_remote_for_play,
+        forward,
+    )
+}
+
+type SkipStep<'a> = &'a mut dyn FnMut(&mut AudioPlayer) -> Result<Option<String>, String>;
+
+/// The skip apart from Tauri: look under one lock, buffer outside it, then
+/// advance under another.
+fn skip_via(
+    mut with_player: impl FnMut(SkipStep<'_>) -> Result<Option<String>, String>,
+    prepare: impl FnOnce(&str) -> Result<(), String>,
+    forward: bool,
+) -> Result<Option<String>, String> {
+    let target = with_player(&mut |player| {
+        Ok(if forward {
+            player.peek_next_path()
+        } else {
+            player.peek_previous_path()
+        })
+    })?;
+    if let Some(target) = target {
+        prepare(&target)?;
+    }
+    with_player(&mut |player| {
+        if forward {
+            player.play_next()
+        } else {
+            player.play_previous()
+        }
+        .map_err(|e| e.to_string())
+    })
 }
 
 #[tauri::command]
@@ -2306,16 +2342,7 @@ pub async fn get_queue(state: tauri::State<'_, PlayerState>) -> Result<QueueStat
 #[tauri::command]
 pub async fn play_next(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let app_clone = app.clone();
-    let path = blocking(move || {
-        let target = with_app_player(&app_clone, |guard| Ok(guard.peek_next_path()))?;
-        if let Some(target) = target {
-            prepare_remote_for_play(&target)?;
-        }
-        with_app_player(&app_clone, |guard| {
-            guard.play_next().map_err(|e| e.to_string())
-        })
-    })
-    .await?;
+    let path = blocking(move || skip_track(&app_clone, true)).await?;
 
     if let Some(ref p) = path {
         let p = p.clone();
@@ -2336,16 +2363,7 @@ pub async fn play_next(app: tauri::AppHandle) -> Result<Option<String>, String> 
 #[tauri::command]
 pub async fn play_previous(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let app_clone = app.clone();
-    let path = blocking(move || {
-        let target = with_app_player(&app_clone, |guard| Ok(guard.peek_previous_path()))?;
-        if let Some(target) = target {
-            prepare_remote_for_play(&target)?;
-        }
-        with_app_player(&app_clone, |guard| {
-            guard.play_previous().map_err(|e| e.to_string())
-        })
-    })
-    .await?;
+    let path = blocking(move || skip_track(&app_clone, false)).await?;
 
     if let Some(ref p) = path {
         let p = p.clone();
@@ -4492,6 +4510,77 @@ mod tests {
             std::time::Duration::from_secs(2),
         );
         assert!((state.position_seconds - 13.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_skip_buffers_the_track_a_direct_skip_would_play() {
+        use crate::audio::player::RepeatMode;
+
+        // Missing files: playing fails, but only after the queue has moved,
+        // so where it moved to says what each skip picked.
+        let paths: Vec<String> = (0..4)
+            .map(|i| format!("/nonexistent/wave-skip-{i}.flac"))
+            .collect();
+        for repeat in [RepeatMode::Off, RepeatMode::All] {
+            for shuffle in [false, true] {
+                for forward in [true, false] {
+                    for start in [0, 3] {
+                        let case =
+                            format!("{repeat:?} shuffle={shuffle} forward={forward} {start}");
+                        let mut player = AudioPlayer::new_deferred();
+                        player.repeat = repeat.clone();
+                        player.queue.set_tracks(paths.clone());
+                        player.queue.jump(start);
+                        player.set_shuffle(shuffle);
+
+                        let mut twin = AudioPlayer::new_deferred();
+                        twin.repeat = repeat.clone();
+                        twin.queue = player.queue.clone();
+                        let before = twin.queue.current_index();
+                        let _ = if forward {
+                            twin.play_next()
+                        } else {
+                            twin.play_previous()
+                        };
+                        let after = twin.queue.current_index();
+                        let expected = (after != before)
+                            .then(|| after.map(|i| twin.queue.tracks()[i].clone()))
+                            .flatten();
+
+                        let player = Mutex::new(player);
+                        let mut prepared = None;
+                        let _ = skip_via(
+                            |step| step(&mut player.lock().unwrap()),
+                            |path| {
+                                prepared = Some(path.to_string());
+                                Ok(())
+                            },
+                            forward,
+                        );
+                        let player = player.into_inner().unwrap();
+                        assert_eq!(prepared, expected, "{case}");
+                        assert_eq!(player.queue.current_index(), after, "{case}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_skip_that_cannot_buffer_does_not_move() {
+        let mut player = AudioPlayer::new_deferred();
+        player
+            .queue
+            .set_tracks(vec!["/music/a.flac".into(), "wave-remote://s/1".into()]);
+        player.queue.jump(0);
+        let player = Mutex::new(player);
+        let result = skip_via(
+            |step| step(&mut player.lock().unwrap()),
+            |_| Err("Playback failed: offline".to_string()),
+            true,
+        );
+        assert_eq!(result, Err("Playback failed: offline".to_string()));
+        assert_eq!(player.into_inner().unwrap().queue.current_index(), Some(0));
     }
 
     #[test]

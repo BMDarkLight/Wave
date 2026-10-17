@@ -182,9 +182,7 @@ mod inner {
             return;
         }
         if id == "tray_prev" {
-            if let Some(path) =
-                with_player(app, |p| p.play_previous().map_err(|e| e.to_string())).flatten()
-            {
+            if let Some(path) = crate::commands::skip_track(app, false).ok().flatten() {
                 crate::commands::listen_switch_track(
                     app,
                     &path,
@@ -194,9 +192,7 @@ mod inner {
             return;
         }
         if id == "tray_next" {
-            if let Some(path) =
-                with_player(app, |p| p.play_next().map_err(|e| e.to_string())).flatten()
-            {
+            if let Some(path) = crate::commands::skip_track(app, true).ok().flatten() {
                 crate::commands::listen_switch_track(
                     app,
                     &path,

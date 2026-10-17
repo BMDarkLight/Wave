@@ -585,6 +585,13 @@ fn handle_ipc_connection(
 
     let request = envelope.request;
     let should_shutdown = matches!(request, DaemonRequest::Shutdown | DaemonRequest::Stop);
+    if let DaemonRequest::Next | DaemonRequest::Previous = request {
+        let forward = matches!(request, DaemonRequest::Next);
+        if let Err(e) = prepare_skip(&state, forward) {
+            let _ = write_response(&mut stream, &DaemonResponse::err(e));
+            return;
+        }
+    }
     let response = {
         let mut guard = match state.lock() {
             Ok(g) => g,
@@ -611,6 +618,26 @@ fn handle_ipc_connection(
         }
         remove_daemon_state();
         std::process::exit(0);
+    }
+}
+
+/// Buffers the track a skip would start, without the state lock held, so
+/// other requests don't wait on the network while it arrives.
+fn prepare_skip(state: &Mutex<DaemonState>, forward: bool) -> Result<(), String> {
+    let target = {
+        let guard = match state.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if forward {
+            guard.player.peek_next_path()
+        } else {
+            guard.player.peek_previous_path()
+        }
+    };
+    match target {
+        Some(target) => crate::remote::stream::prepare_for_play(&target, Duration::from_secs(10)),
+        None => Ok(()),
     }
 }
 
@@ -1307,6 +1334,10 @@ fn handle_menu_event(shared: &SharedState, id: &str) {
         return;
     }
     if id == "next" || id == "prev" {
+        if let Err(e) = prepare_skip(&shared.0, id == "next") {
+            tracing::warn!("Could not skip: {e}");
+            return;
+        }
         let mut guard = match shared.0.lock() {
             Ok(g) => g,
             Err(poisoned) => {
