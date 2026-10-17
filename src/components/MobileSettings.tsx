@@ -64,6 +64,19 @@ import type {
   ThemeMode,
 } from "../utils/player";
 import { isAndroid } from "../utils/platform";
+import { formatBytes } from "../utils/format";
+import { clearSourceCache, getSourceCacheUsage } from "../utils/remote";
+import AddSourceChooser from "./AddSourceChooser";
+import RemoteSourceList from "./RemoteSourceList";
+import RemoteSourceSetupDialog from "./dialogs/RemoteSourceSetupDialog";
+
+const CACHE_SIZES = [
+  { mb: 512, label: "512 MB" },
+  { mb: 1024, label: "1 GB" },
+  { mb: 2048, label: "2 GB" },
+  { mb: 5120, label: "5 GB" },
+  { mb: 10240, label: "10 GB" },
+];
 import type { AppUpdate } from "../hooks/useAppUpdate";
 
 const THEME_CHOICES: { mode: ThemeMode; label: string; Icon: IconType }[] = [
@@ -417,6 +430,9 @@ export default function MobileSettings({
   const keyIdPrefix = useId();
   const [mediaFolders, setMediaFolders] = useState<string[]>([]);
   const [addingSource, setAddingSource] = useState(false);
+  const [choosingSource, setChoosingSource] = useState(false);
+  const [settingUpRemote, setSettingUpRemote] = useState(false);
+  const [cacheUsage, setCacheUsage] = useState<number | null>(null);
   const [outputDevices, setOutputDevices] = useState<string[]>([]);
   const [showAudioOutput, setShowAudioOutput] = useState(false);
   const [entered, setEntered] = useState(false);
@@ -482,6 +498,19 @@ export default function MobileSettings({
       refreshMediaFolders();
     }
   };
+
+  const refreshCacheUsage = () => {
+    getSourceCacheUsage()
+      .then(setCacheUsage)
+      .catch(() => setCacheUsage(null));
+  };
+
+  const cacheShown =
+    sourceSettings.outside_sourcing_enabled ||
+    sourceSettings.remote_sources_enabled;
+  useEffect(() => {
+    if (cacheShown) refreshCacheUsage();
+  }, [cacheShown, sourceSettings.cache_limit_mb]);
 
   const handleAddExtraSource = async () => {
     setAddingSource(true);
@@ -566,7 +595,13 @@ export default function MobileSettings({
               <div className="mset-section-header-actions">
                 <button
                   className="mset-icon-btn"
-                  onClick={() => void handleAddExtraSource()}
+                  onClick={() => {
+                    if (sourceSettings.remote_sources_enabled) {
+                      setChoosingSource(true);
+                    } else {
+                      void handleAddExtraSource();
+                    }
+                  }}
                   disabled={addingSource || isScanningFolder}
                   type="button"
                   title="Add media source"
@@ -635,6 +670,7 @@ export default function MobileSettings({
                 ))}
               </div>
             )}
+            {sourceSettings.remote_sources_enabled && <RemoteSourceList />}
           </section>
         )}
 
@@ -860,8 +896,131 @@ export default function MobileSettings({
                 </p>
               </>
             )}
+
+            <div className="mset-playback-divider" role="separator" />
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={sourceSettings.remote_sources_enabled}
+                onChange={(event) =>
+                  onSourceSettingsChange({
+                    ...sourceSettings,
+                    remote_sources_enabled: event.target.checked,
+                  })
+                }
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Outside Sourcing</span>
+                <span className="mset-gapless-hint">
+                  Stream music from your own servers, like Plex. Nothing is
+                  contacted while this is off.
+                </span>
+              </span>
+            </label>
+
+            {sourceSettings.remote_sources_enabled && onAndroid && (
+              <label className="mset-gapless-row mset-nested-row">
+                <input
+                  type="checkbox"
+                  checked={sourceSettings.remote_cellular_enabled}
+                  onChange={(event) =>
+                    onSourceSettingsChange({
+                      ...sourceSettings,
+                      remote_cellular_enabled: event.target.checked,
+                    })
+                  }
+                />
+                <span className="mset-gapless-copy">
+                  <span className="mset-gapless-label">Use cellular data</span>
+                  <span className="mset-gapless-hint">
+                    Off means remote music only loads on Wi-Fi.
+                  </span>
+                </span>
+              </label>
+            )}
+
+            {sourceSettings.remote_sources_enabled && embedded && (
+              <RemoteSourceList />
+            )}
+
+            {(sourceSettings.outside_sourcing_enabled ||
+              sourceSettings.remote_sources_enabled) && (
+              <>
+                <div className="mset-playback-divider" role="separator" />
+                <div className="mset-row mset-cache-row">
+                  <label
+                    className="mset-row-label"
+                    htmlFor={`${keyIdPrefix}cache-size`}
+                  >
+                    Cache size
+                  </label>
+                  <select
+                    id={`${keyIdPrefix}cache-size`}
+                    className="mset-select"
+                    value={sourceSettings.cache_limit_mb}
+                    onChange={(event) =>
+                      onSourceSettingsChange({
+                        ...sourceSettings,
+                        cache_limit_mb: Number(event.target.value),
+                      })
+                    }
+                  >
+                    {CACHE_SIZES.some(
+                      (size) => size.mb === sourceSettings.cache_limit_mb,
+                    ) ? null : (
+                      <option value={sourceSettings.cache_limit_mb}>
+                        {formatBytes(
+                          sourceSettings.cache_limit_mb * 1024 * 1024,
+                        )}
+                      </option>
+                    )}
+                    {CACHE_SIZES.map((size) => (
+                      <option key={size.mb} value={size.mb}>
+                        {size.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="mset-row mset-cache-row">
+                  <span className="mset-row-value">
+                    {cacheUsage === null
+                      ? "Checking cache…"
+                      : `${formatBytes(cacheUsage)} used`}
+                  </span>
+                  <button
+                    className="btn-secondary"
+                    type="button"
+                    onClick={() => {
+                      void clearSourceCache()
+                        .catch(() => 0)
+                        .then(refreshCacheUsage);
+                    }}
+                  >
+                    Clear cache
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </section>
+
+        {choosingSource && (
+          <AddSourceChooser
+            onCancel={() => setChoosingSource(false)}
+            onLocalFolder={() => {
+              setChoosingSource(false);
+              void handleAddExtraSource();
+            }}
+            onRemoteSource={() => {
+              setChoosingSource(false);
+              setSettingUpRemote(true);
+            }}
+          />
+        )}
+
+        {settingUpRemote && (
+          <RemoteSourceSetupDialog onClose={() => setSettingUpRemote(false)} />
+        )}
 
         <section className="mset-section">
           <h2>Listening</h2>

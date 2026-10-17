@@ -8,7 +8,7 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { BiFolderOpen, BiPlus } from "react-icons/bi";
+import { BiCloud, BiFolderOpen, BiPlus } from "react-icons/bi";
 import ContextMenu from "./ContextMenu";
 
 export default function AddTrackMenu({
@@ -18,6 +18,8 @@ export default function AddTrackMenu({
   onAddFiles,
   onAddFolder,
   onAddFolderAsPlaylist,
+  remoteSourcesEnabled,
+  onAddRemoteSource,
 }: {
   anchor: { top: number; left: number };
   onClose: () => void;
@@ -25,6 +27,8 @@ export default function AddTrackMenu({
   onAddFiles: () => void;
   onAddFolder: () => void;
   onAddFolderAsPlaylist: () => void;
+  remoteSourcesEnabled: boolean;
+  onAddRemoteSource: () => void;
 }) {
   return (
     <ContextMenu anchor={anchor} onClose={onClose} className="add-track-menu">
@@ -39,6 +43,11 @@ export default function AddTrackMenu({
           <button type="button" onClick={onAddFolderAsPlaylist}>
             <BiFolderOpen /> Add folder as playlist
           </button>
+          {remoteSourcesEnabled && (
+            <button type="button" onClick={onAddRemoteSource}>
+              <BiCloud /> Add remote source
+            </button>
+          )}
         </>
       )}
       {androidHost && (

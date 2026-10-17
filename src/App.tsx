@@ -132,6 +132,7 @@ import {
   MobileArtistsPage,
 } from "./components/MobileCollectionPages";
 import { useRemoteStatus } from "./hooks/useRemoteStatus";
+import RemoteSourceSetupDialog from "./components/dialogs/RemoteSourceSetupDialog";
 import {
   RemoteStatusContext,
   downloadRemoteTrack,
@@ -145,6 +146,7 @@ import "./touch-hover.css";
 function App() {
   useSoftKeyboard();
   const remoteStatus = useRemoteStatus();
+  const [settingUpRemote, setSettingUpRemote] = useState(false);
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [sourceSettings, setSourceSettingsState] = useState<SourceSettings>({
@@ -2457,6 +2459,18 @@ function App() {
               onAddFiles={() => void handleAddTrack(true)}
               onAddFolder={() => void handleAddFolder()}
               onAddFolderAsPlaylist={() => void handleAddFolderAsPlaylist()}
+              remoteSourcesEnabled={sourceSettings.remote_sources_enabled}
+              onAddRemoteSource={() => {
+                setShowAddTrackMenu(false);
+                setAddTrackMenuAnchor(null);
+                setSettingUpRemote(true);
+              }}
+            />
+          )}
+
+          {settingUpRemote && (
+            <RemoteSourceSetupDialog
+              onClose={() => setSettingUpRemote(false)}
             />
           )}
 
