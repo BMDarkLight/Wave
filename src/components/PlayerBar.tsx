@@ -298,7 +298,16 @@ export default function PlayerBar({
           type="button"
           title="Play/Pause"
         >
-          {playbackState.is_playing ? <BiPause /> : <BiPlay />}
+          {playbackState.is_buffering ? (
+            <span
+              className="spinner buffering-spinner"
+              aria-label="Buffering"
+            />
+          ) : playbackState.is_playing ? (
+            <BiPause />
+          ) : (
+            <BiPlay />
+          )}
         </button>
         <button
           className="control-btn"

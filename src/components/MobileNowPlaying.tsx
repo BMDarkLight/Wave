@@ -404,6 +404,8 @@ export type MobileNowPlayingView = "cover" | "lyrics" | "queue";
 interface MobileNowPlayingProps {
   track: Track;
   isPlaying: boolean;
+  /** A remote track is waiting on the network. */
+  isBuffering: boolean;
   isFavorite: boolean;
   onToggleFavorite: () => void;
   displayPosition: number;
@@ -462,6 +464,7 @@ const HOLD_SLOP_PX = 12;
 export default function MobileNowPlaying({
   track,
   isPlaying,
+  isBuffering,
   isFavorite,
   onToggleFavorite,
   displayPosition,
@@ -1286,7 +1289,16 @@ export default function MobileNowPlaying({
           type="button"
           title="Play/Pause"
         >
-          {isPlaying ? <BiPause /> : <BiPlay />}
+          {isBuffering ? (
+            <span
+              className="spinner buffering-spinner"
+              aria-label="Buffering"
+            />
+          ) : isPlaying ? (
+            <BiPause />
+          ) : (
+            <BiPlay />
+          )}
         </button>
         <button
           className="control-btn"

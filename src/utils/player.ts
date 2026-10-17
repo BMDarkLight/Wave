@@ -40,7 +40,7 @@ const tauriInitialized = initTauri();
 // declared Promise<void>/Promise<SomeType> return types; `unknown` would
 // break every such call site's return-type inference.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const safeInvoke = async <T = any>(
+export const safeInvoke = async <T = any>(
   cmd: string,
   args?: Record<string, unknown>,
 ): Promise<T> => {
@@ -51,6 +51,19 @@ const safeInvoke = async <T = any>(
   }
 
   return await invokeFn<T>(cmd, args);
+};
+
+/** Subscribe to a backend event; resolves to the unsubscribe function. */
+export const listenTo = async <T>(
+  event: string,
+  handler: (payload: T) => void,
+): Promise<() => void> => {
+  await tauriInitialized;
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await listen<T>(event, (e) => handler(e.payload));
+  return () => {
+    unlisten();
+  };
 };
 
 export const safeInvokeHostOs = (): Promise<string> =>
@@ -87,6 +100,8 @@ export interface PlaybackState {
   output_device_name: string;
   sleep_timer: SleepTimerStatus;
   speed: number;
+  /** Playing silence while a remote track catches up with the network. */
+  is_buffering?: boolean;
 }
 
 export interface SleepTimerStatus {
@@ -139,8 +154,15 @@ export interface Track {
   album_art_id?: string | null;
   /** Remote provider this track came from; null for local files. */
   source_provider?: string | null;
-  /** null local, "cached" streamed only, "downloaded" kept. */
+  /** null local, "cached" streamed only, "downloaded" kept, "remote" lives
+   * on a server such as Plex. */
   source_state?: string | null;
+  /** The remote source a "remote" track belongs to. */
+  remote_source_id?: string | null;
+  /** How much of a remote track is in the cache. */
+  cache_state?: "partial" | "complete" | null;
+  /** The server no longer lists this remote track. */
+  remote_missing?: boolean;
   fingerprint_sha256: string | null;
   acoustid_fingerprint: string | null;
   musicbrainz_recording_id: string | null;
@@ -714,6 +736,12 @@ export interface SourceSettings {
    * audio, so this powers catalogue search and playlist import only.
    */
   spotify_client_id: string;
+  /** "Outside Sourcing": music from the user's own servers, such as Plex. */
+  remote_sources_enabled: boolean;
+  /** Android only: let remote music use mobile data. */
+  remote_cellular_enabled: boolean;
+  /** Size cap of the shared audio cache. */
+  cache_limit_mb: number;
 }
 
 export const getSourceSettings = (): Promise<SourceSettings> =>

@@ -8314,3 +8314,46 @@ div.album-hero-cover {
 :root[data-theme="light"] .no-glass .sleep-popover {
   background: var(--menu-solid);
 }
+
+/* Remote tracks: a cloud next to the title, greyed out while they can't play. */
+.track-remote-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  font-size: 0.85em;
+  color: rgba(var(--ink), 0.5);
+  vertical-align: -0.1em;
+}
+
+.track-unavailable {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.buffering-spinner {
+  width: 1em;
+  height: 1em;
+}
+
+.library-filter-chips {
+  display: flex;
+  gap: 8px;
+  padding: 0 24px 8px;
+}
+
+.filter-chip {
+  border: 1px solid rgba(var(--ink), 0.18);
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.filter-chip.active {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}

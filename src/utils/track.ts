@@ -40,7 +40,7 @@ export const isLibraryPlaylistName = (name?: string | null) =>
  * the dialog checks it on open rather than hiding the option here.
  */
 export const canEditMetadata = (track: Track) =>
-  track.source_state !== "cached";
+  track.source_state !== "cached" && track.source_state !== "remote";
 
 export const getTrackTitle = (
   track?: Track | null,

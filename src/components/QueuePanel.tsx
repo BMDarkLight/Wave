@@ -8,6 +8,7 @@
  * https://github.com/BMDarkLight/Wave
  */
 
+import { useContext } from "react";
 import { BiDotsHorizontalRounded, BiX } from "react-icons/bi";
 import Artwork from "./Artwork";
 import VirtualizedList from "./VirtualizedList";
@@ -15,6 +16,8 @@ import type { ContextMenuAnchor } from "./ContextMenu";
 import { formatTime } from "../utils/format";
 import { getTrackTitle } from "../utils/track";
 import type { Track } from "../utils/player";
+import { RemoteStatusContext, unavailableReason } from "../utils/remote";
+import RemoteBadge from "./RemoteBadge";
 
 export default function QueuePanel({
   tracks,
@@ -37,6 +40,7 @@ export default function QueuePanel({
   onCloseMenu: () => void;
   onRemove: (index: number) => void;
 }) {
+  const remoteStatus = useContext(RemoteStatusContext);
   return (
     <div className="right-panel-content">
       <div className="right-panel-header">
@@ -78,9 +82,11 @@ export default function QueuePanel({
             {(index) => {
               const track = tracks[index];
               if (!track) return null;
+              const unavailable = unavailableReason(track, remoteStatus);
               return (
                 <div
-                  className={`queue-item ${currentIndex === index ? "active" : ""} ${menuIndex === index ? "menu-open" : ""}`}
+                  className={`queue-item ${currentIndex === index ? "active" : ""} ${menuIndex === index ? "menu-open" : ""} ${unavailable ? "track-unavailable" : ""}`}
+                  title={unavailable ?? undefined}
                   onClick={() => onPlayFromQueue(index)}
                   onContextMenu={(event) => {
                     event.preventDefault();
@@ -100,6 +106,7 @@ export default function QueuePanel({
                   <div className="queue-item-info">
                     <div className="queue-item-name">
                       {getTrackTitle(track)}
+                      <RemoteBadge track={track} />
                     </div>
                     <div className="queue-item-artist">{track.artist}</div>
                   </div>

@@ -8,7 +8,7 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 import { BiPlay, BiMusic } from "react-icons/bi";
 import {
   getHomeSuggestions,
@@ -19,6 +19,7 @@ import {
 } from "../utils/player";
 import type { AlbumSummary, HomeSuggestions, Track } from "../utils/player";
 import { splitRemasterTag } from "../utils/track";
+import { RemoteStatusContext, unavailableReason } from "../utils/remote";
 
 const getTrackTitle = (track?: Track | null) => {
   if (track?.title) return track.title;
@@ -251,6 +252,7 @@ export default function HomePage({
   onOpenArtist,
   onOpenLibrary,
 }: HomePageProps) {
+  const remoteStatus = useContext(RemoteStatusContext);
   const initialCache = readHomeCache(libraryPlaylistId);
   const [suggestions, setSuggestions] = useState<HomeSuggestions | null>(
     initialCache?.suggestions ?? null,
@@ -487,8 +489,10 @@ export default function HomePage({
             {mixRow.map((track) => (
               <button
                 key={`mix-${track.path}`}
-                className="home-track-card"
+                className={`home-track-card ${unavailableReason(track, remoteStatus) ? "track-unavailable" : ""}`}
                 type="button"
+                title={unavailableReason(track, remoteStatus) ?? undefined}
+                disabled={unavailableReason(track, remoteStatus) !== null}
                 onClick={() =>
                   onPlayTrack(track.path, [
                     track,

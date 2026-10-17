@@ -10,6 +10,7 @@
 
 import {
   BiAlbum,
+  BiDownload,
   BiEditAlt,
   BiListPlus,
   BiLink,
@@ -24,6 +25,7 @@ import {
 import ContextMenu, { type ContextMenuAnchor } from "./ContextMenu";
 import { canEditMetadata } from "../utils/track";
 import type { SongCouple, Track } from "../utils/player";
+import { isRemote } from "../utils/remote";
 
 export default function TrackContextMenu({
   track,
@@ -37,6 +39,7 @@ export default function TrackContextMenu({
   onAddToQueue,
   onAddToPlaylist,
   onEditMetadata,
+  onDownload,
   onGoToAlbum,
   onGoToArtist,
   onRemoveFromPlaylist,
@@ -56,6 +59,8 @@ export default function TrackContextMenu({
   onAddToQueue: (path: string) => void;
   onAddToPlaylist: (path: string) => void;
   onEditMetadata: (track: Track) => void;
+  /** Keep a remote track for good. */
+  onDownload: (track: Track) => void;
   onGoToAlbum: (album: string, albumArtist: string | null) => void;
   onGoToArtist: (artist: string) => void;
   onRemoveFromPlaylist: (path: string) => void;
@@ -146,6 +151,18 @@ export default function TrackContextMenu({
             <BiUnlink /> Uncouple from {partnerTitle}
           </button>
         </>
+      )}
+      {isRemote(track) && (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onClose();
+            onDownload(track);
+          }}
+        >
+          <BiDownload /> Download
+        </button>
       )}
       {canEditMetadata(track) && (
         <button

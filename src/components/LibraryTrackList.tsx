@@ -9,6 +9,7 @@
  */
 
 import {
+  useContext,
   useMemo,
   useState,
   type CSSProperties,
@@ -50,6 +51,30 @@ import {
 import type { PlaybackState, PlaylistInfo, Track } from "../utils/player";
 import { hasTimestamps } from "../utils/lyrics";
 import CoupleMarker from "./CoupleMarker";
+import RemoteBadge from "./RemoteBadge";
+import {
+  RemoteStatusContext,
+  isRemote,
+  unavailableReason,
+} from "../utils/remote";
+
+const LOCAL_ONLY_KEY = "wave.libraryLocalOnly";
+
+function readLocalOnly(): boolean {
+  try {
+    return localStorage.getItem(LOCAL_ONLY_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeLocalOnly(value: boolean) {
+  try {
+    localStorage.setItem(LOCAL_ONLY_KEY, value ? "1" : "0");
+  } catch {
+    // Storage can be unavailable; the filter just won't be remembered.
+  }
+}
 
 export type SortColumn = "index" | "title" | "album";
 export type SortDirection = "asc" | "desc" | "none";
@@ -96,6 +121,7 @@ export default function LibraryTrackList({
   onSyncPlaylist,
   isCurrentTrack,
   onPlayTrack,
+  onUnavailableTrack,
   onOpenArtist,
   onOpenAlbum,
   onOpenTrackContextMenu,
@@ -146,6 +172,8 @@ export default function LibraryTrackList({
   onSyncPlaylist: (playlistId: string) => void;
   isCurrentTrack: (track: Track) => boolean;
   onPlayTrack: (index: number) => void;
+  /** A track that can't play right now was picked; `reason` says why. */
+  onUnavailableTrack: (reason: string) => void;
   onOpenArtist: (artist: string) => void;
   onOpenAlbum: (album: string, albumArtist: string | null) => void;
   onOpenTrackContextMenu: (track: Track, anchor: ContextMenuAnchor) => void;
@@ -176,13 +204,26 @@ export default function LibraryTrackList({
   // keeps its position in the full list so playing it starts from there.
   const [filtering, setFiltering] = useState(false);
   const [filter, setFilter] = useState("");
+  const remoteStatus = useContext(RemoteStatusContext);
+  const isLibrary = isLibraryPlaylistName(selectedPlaylist?.name);
+  const hasRemote = useMemo(() => playlist.some(isRemote), [playlist]);
+  const [localOnlyChoice, setLocalOnlyChoice] = useState(readLocalOnly);
+  const localOnly = isLibrary && hasRemote && localOnlyChoice;
+  const toggleLocalOnly = () => {
+    setLocalOnlyChoice((current) => {
+      writeLocalOnly(!current);
+      return !current;
+    });
+  };
   const shownRows = useMemo(() => {
-    const rows = sortedPlaylist.map((track, index) => ({ track, index }));
+    const rows = sortedPlaylist
+      .map((track, index) => ({ track, index }))
+      .filter(({ track }) => !localOnly || !isRemote(track));
     if (!filter.trim()) return rows;
     return rows.filter(({ track }) =>
       matchesQuery(filter, getTrackTitle(track), track.artist, track.album),
     );
-  }, [sortedPlaylist, filter]);
+  }, [sortedPlaylist, filter, localOnly]);
   const closeFilter = () => {
     setFilter("");
     setFiltering(false);
@@ -422,6 +463,19 @@ export default function LibraryTrackList({
         onClose={closeFilter}
       />
 
+      {isLibrary && hasRemote && !mainSearchQuery.trim() && (
+        <div className="library-filter-chips">
+          <button
+            type="button"
+            className={`filter-chip ${localOnly ? "active" : ""}`}
+            aria-pressed={localOnly}
+            onClick={toggleLocalOnly}
+          >
+            Local only
+          </button>
+        </div>
+      )}
+
       <section className="playlist-container">
         {mainSearchQuery.trim() ? (
           mainSearchResultsPanel
@@ -530,11 +584,17 @@ export default function LibraryTrackList({
                 const shownRow = shownRows[row];
                 if (!shownRow) return null;
                 const { track, index } = shownRow;
+                const unavailable = unavailableReason(track, remoteStatus);
                 return (
                   <div
                     key={track.id}
-                    className={`track-item ${isCurrentTrack(track) ? "active" : ""}`}
-                    onClick={() => onPlayTrack(index)}
+                    className={`track-item ${isCurrentTrack(track) ? "active" : ""} ${unavailable ? "track-unavailable" : ""}`}
+                    title={unavailable ?? undefined}
+                    onClick={() =>
+                      unavailable
+                        ? onUnavailableTrack(unavailable)
+                        : onPlayTrack(index)
+                    }
                     onContextMenu={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -576,7 +636,10 @@ export default function LibraryTrackList({
                         )}
                       </span>
                       <div>
-                        <div className="track-name">{getTrackTitle(track)}</div>
+                        <div className="track-name">
+                          {getTrackTitle(track)}
+                          <RemoteBadge track={track} />
+                        </div>
                         <div className="track-meta">
                           <button
                             className="track-meta-link"

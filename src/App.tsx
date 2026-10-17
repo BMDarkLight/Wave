@@ -131,11 +131,20 @@ import {
   MobileAlbumsPage,
   MobileArtistsPage,
 } from "./components/MobileCollectionPages";
+import { useRemoteStatus } from "./hooks/useRemoteStatus";
+import {
+  RemoteStatusContext,
+  downloadRemoteTrack,
+  listenToLibraryChanged,
+  listenToRemoteStreamFailed,
+  listenToRemoteTrackCached,
+} from "./utils/remote";
 import "./App.css";
 import "./touch-hover.css";
 
 function App() {
   useSoftKeyboard();
+  const remoteStatus = useRemoteStatus();
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [sourceSettings, setSourceSettingsState] = useState<SourceSettings>({
@@ -143,6 +152,9 @@ function App() {
     outside_sourcing_enabled: false,
     jamendo_client_id: "",
     spotify_client_id: "",
+    remote_sources_enabled: false,
+    remote_cellular_enabled: false,
+    cache_limit_mb: 2048,
   });
   const [crashReport, setCrashReport] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -1657,6 +1669,70 @@ function App() {
     };
   }, []);
 
+  // A sync, a download or a finished cache changes what the lists show. Bursts
+  // (a sync finishing several sources) are folded into one reload.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const reload = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        loadPlaylists().catch(() => {});
+        const id = selectedPlaylistIdRef.current;
+        if (id) {
+          getPlaylistTracksById(id)
+            .then((tracks) => {
+              if (selectedPlaylistIdRef.current === id) setPlaylist(tracks);
+            })
+            .catch(() => {});
+        }
+        setBrowseRefresh((count) => count + 1);
+      }, 500);
+    };
+    const stops: (() => void)[] = [];
+    let cancelled = false;
+    for (const subscribe of [
+      listenToLibraryChanged(reload),
+      listenToRemoteTrackCached(reload),
+    ]) {
+      void subscribe
+        .then((fn) => {
+          if (cancelled) fn();
+          else stops.push(fn);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      stops.forEach((stop) => stop());
+    };
+    // Registered once; the handlers read current state through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A remote track that stops downloading mid-song says why, but only when
+  // it is the one playing; a background prefetch failing is not news.
+  const currentPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    currentPathRef.current = playbackState.current_path;
+  }, [playbackState.current_path]);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenToRemoteStreamFailed(({ path, message }) => {
+      if (path === currentPathRef.current) setError(message);
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   /** Play a remote result, streaming it first unless the user already owns it. */
   const handleSourcePlay = useCallback(
     async (track: SourceTrack) => {
@@ -1971,845 +2047,866 @@ function App() {
     .toUpperCase();
 
   return (
-    <SongCouplingContext.Provider value={activeCouples}>
-      <div
-        className={`app-container${mobileNavOpen ? " nav-open" : ""}${rightPanelOpen || rightPanelClosing ? " panel-open" : ""}${rightPanelClosing ? " panel-closing" : ""}${mobilePlayerOpen && currentTrack && !mobilePlayerClosing ? " now-playing-open" : ""}`}
-        style={
-          {
-            "--sidebar-width": `${sidebarWidth}px`,
-            "--right-panel-width":
-              rightPanelOpen || rightPanelClosing
-                ? `${rightPanelWidth}px`
-                : "0px",
-            "--right-handle-width":
-              rightPanelOpen || rightPanelClosing
-                ? "var(--section-inset)"
-                : "0px",
-          } as React.CSSProperties
-        }
-      >
-        {/* Narrow layout: no top bar, just a fade under the status bar. */}
-        <div className="mobile-status-fade" ref={statusFadeRef} aria-hidden />
-
-        <button
-          className={`nav-backdrop${mobileNavOpen || rightPanelOpen || rightPanelClosing ? " nav-backdrop-open" : ""}${rightPanelClosing ? " nav-backdrop-closing" : ""}`}
-          onClick={() => {
-            setMobileNavOpen(false);
-            closeRightPanelDelayed();
-          }}
-          type="button"
-          aria-label="Close panel"
-        />
-
-        <Sidebar
-          isScanningFolder={isScanningFolder}
-          folderScanIsSync={folderScanIsSync}
-          isBrowsing={!!viewingAlbum || !!viewingArtist}
-          mainView={mainView}
-          selectedPlaylistId={selectedPlaylistId}
-          libraryPlaylist={libraryPlaylist}
-          favoritesPlaylist={favoritesPlaylist}
-          userPlaylists={userPlaylists}
-          onGoHome={goHome}
-          onGoRecentlyPlayed={goRecentlyPlayed}
-          onGoMostPlayed={goMostPlayed}
-          onSelectPlaylist={handleSelectPlaylist}
-          onImportPlaylist={() => void handleImportPlaylist()}
-          onCreatePlaylist={openCreatePlaylistDialog}
-          onSyncPlaylist={(id) => void handleSyncPlaylistFolder(id)}
-          onExportPlaylist={handleExportPlaylistById}
-          onRenamePlaylist={openRenamePlaylistDialog}
-          onDeletePlaylist={handleDeletePlaylist}
-          onOpenSettings={handleOpenMobileSettings}
-        />
-
+    <RemoteStatusContext.Provider value={remoteStatus}>
+      <SongCouplingContext.Provider value={activeCouples}>
         <div
-          className="drag-handle drag-handle-sidebar"
-          onMouseDown={onDragStart("sidebar")}
-        />
+          className={`app-container${mobileNavOpen ? " nav-open" : ""}${rightPanelOpen || rightPanelClosing ? " panel-open" : ""}${rightPanelClosing ? " panel-closing" : ""}${mobilePlayerOpen && currentTrack && !mobilePlayerClosing ? " now-playing-open" : ""}`}
+          style={
+            {
+              "--sidebar-width": `${sidebarWidth}px`,
+              "--right-panel-width":
+                rightPanelOpen || rightPanelClosing
+                  ? `${rightPanelWidth}px`
+                  : "0px",
+              "--right-handle-width":
+                rightPanelOpen || rightPanelClosing
+                  ? "var(--section-inset)"
+                  : "0px",
+            } as React.CSSProperties
+          }
+        >
+          {/* Narrow layout: no top bar, just a fade under the status bar. */}
+          <div className="mobile-status-fade" ref={statusFadeRef} aria-hidden />
 
-        {mainSearchOpen && isMobileLayout() ? (
-          <MobileSearchPage
-            inputRef={mobileSearchInputRef}
-            query={mainSearchQuery}
-            onQueryChange={setMainSearchQuery}
-            results={mainSearchResultsPanel}
+          <button
+            className={`nav-backdrop${mobileNavOpen || rightPanelOpen || rightPanelClosing ? " nav-backdrop-open" : ""}${rightPanelClosing ? " nav-backdrop-closing" : ""}`}
+            onClick={() => {
+              setMobileNavOpen(false);
+              closeRightPanelDelayed();
+            }}
+            type="button"
+            aria-label="Close panel"
           />
-        ) : mainSearchQuery.trim() && (viewingAlbum || viewingArtist) ? (
-          <main className="main-content">
-            <div className="hero-copy">
-              <h1>Search</h1>
-              <p>{mainSearchResultsSubtitle}</p>
-            </div>
-            <section className="playlist-container">
-              {mainSearchResultsPanel}
-            </section>
-          </main>
-        ) : viewingAlbum ? (
-          <AlbumPage
-            album={viewingAlbum.name}
-            albumArtist={viewingAlbum.albumArtist}
-            onBack={browseBack}
-            onPlayTrack={(path, tracks) => {
-              const index = Math.max(
-                0,
-                tracks.findIndex((t) => t.path === path),
-              );
-              void playTracks(
-                tracks.map((t) => t.path),
-                index,
-              ).then(() => {
-                updatePlaybackState();
-                loadQueueTracks();
-              });
-            }}
-            onArtistClick={(name) => {
-              openArtistPage(name);
-            }}
-            onEditMetadata={setEditingMetadata}
-            onOpenTrackMenu={openTrackContextMenu}
-            onCloseTrackMenu={closeTrackContextMenu}
-            menuTrackPath={menuTrackPath}
-            refreshKey={browseRefresh}
-            playbackState={playbackState}
-          />
-        ) : viewingArtist ? (
-          <ArtistPage
-            artist={viewingArtist}
-            onBack={browseBack}
-            onPlayTrack={(path, tracks) => {
-              const index = Math.max(
-                0,
-                tracks.findIndex((t) => t.path === path),
-              );
-              void playTracks(
-                tracks.map((t) => t.path),
-                index,
-              ).then(() => {
-                updatePlaybackState();
-                loadQueueTracks();
-              });
-            }}
-            onAlbumClick={(name, albumArtist) => {
-              // Keep artist underneath so hardware/UI back returns to it.
-              openAlbumPage(name, albumArtist);
-            }}
-            onOpenTrackMenu={openTrackContextMenu}
-            onCloseTrackMenu={closeTrackContextMenu}
-            menuTrackPath={menuTrackPath}
-            refreshKey={browseRefresh}
-            playbackState={playbackState}
-          />
-        ) : mainView === "home" && !mainSearchQuery.trim() ? (
-          <HomePage
-            libraryPlaylistId={libraryPlaylist?.id ?? null}
-            onPlayTrack={(path, tracks) => {
-              const index = Math.max(
-                0,
-                tracks.findIndex((t) => t.path === path),
-              );
-              void playTracks(
-                tracks.map((t) => t.path),
-                index,
-              ).then(() => {
-                updatePlaybackState();
-                loadQueueTracks();
-              });
-            }}
-            onOpenAlbum={(name, albumArtist) => {
-              openAlbumPage(name, albumArtist);
-            }}
-            onOpenArtist={(name) => {
-              openArtistPage(name);
-            }}
-            onOpenLibrary={() => {
-              if (libraryPlaylist) handleSelectPlaylist(libraryPlaylist.id);
-            }}
-          />
-        ) : (mainView === "recently_played" || mainView === "most_played") &&
-          !mainSearchQuery.trim() ? (
-          <PlayedTracksPage
-            mode={mainView}
-            onBack={goLibrary}
-            playbackState={playbackState}
-            onOpenTrackMenu={openTrackContextMenu}
-            onCloseTrackMenu={closeTrackContextMenu}
-            menuTrackPath={menuTrackPath}
-            onPlayTrack={(path, tracks) => {
-              const index = Math.max(
-                0,
-                tracks.findIndex((t) => t.path === path),
-              );
-              void playTracks(
-                tracks.map((t) => t.path),
-                index,
-              ).then(() => {
-                updatePlaybackState();
-                loadQueueTracks();
-              });
-            }}
-          />
-        ) : mainView === "albums" && !mainSearchQuery.trim() ? (
-          <MobileAlbumsPage onOpenAlbum={openAlbumPage} onBack={goLibrary} />
-        ) : mainView === "artists" && !mainSearchQuery.trim() ? (
-          <MobileArtistsPage onOpenArtist={openArtistPage} onBack={goLibrary} />
-        ) : mainView === "library" && !mainSearchQuery.trim() ? (
-          <MobileLibraryPage
+
+          <Sidebar
+            isScanningFolder={isScanningFolder}
+            folderScanIsSync={folderScanIsSync}
+            isBrowsing={!!viewingAlbum || !!viewingArtist}
+            mainView={mainView}
+            selectedPlaylistId={selectedPlaylistId}
             libraryPlaylist={libraryPlaylist}
             favoritesPlaylist={favoritesPlaylist}
             userPlaylists={userPlaylists}
-            onSelectPlaylist={handleSelectPlaylist}
+            onGoHome={goHome}
             onGoRecentlyPlayed={goRecentlyPlayed}
             onGoMostPlayed={goMostPlayed}
-            onGoAlbums={goAlbums}
-            onGoArtists={goArtists}
-            onOpenSettings={handleOpenMobileSettings}
+            onSelectPlaylist={handleSelectPlaylist}
             onImportPlaylist={() => void handleImportPlaylist()}
             onCreatePlaylist={openCreatePlaylistDialog}
-          />
-        ) : mainView === "settings" && !mainSearchQuery.trim() ? (
-          <MobileSettings
-            embedded
-            onClose={handleCloseMobileSettings}
-            playlists={playlists}
-            isScanningFolder={isScanningFolder}
-            onCreatePlaylist={openCreatePlaylistDialog}
-            onImportPlaylist={handleImportPlaylist}
-            onRenamePlaylist={openRenamePlaylistDialog}
-            onDeletePlaylist={handleDeletePlaylist}
-            onExportPlaylist={handleExportPlaylistById}
-            onSyncPlaylist={handleSyncPlaylistFolder}
-            onAddMediaSource={handleAddMediaSource}
-            onAddExtraMediaSource={handleAddExtraMediaSource}
-            onRemoveMediaSource={handleRemoveMediaSource}
-            onExportLyrics={handleExportLyrics}
-            onImportLyrics={handleImportLyrics}
-            autoLyricsDownload={autoLyricsDownload}
-            onAutoLyricsDownloadChange={(enabled) =>
-              void handleAutoLyricsDownloadChange(enabled)
-            }
-            waveformSeekEnabled={waveformSeekEnabled}
-            onWaveformSeekChange={(enabled) =>
-              void handleWaveformSeekChange(enabled)
-            }
-            themeMode={themeMode}
-            onThemeModeChange={(mode) => void handleThemeModeChange(mode)}
-            glassEffectsEnabled={glassEffectsEnabled}
-            onGlassEffectsChange={(enabled) =>
-              void handleGlassEffectsChange(enabled)
-            }
-            animationsEnabled={animationsEnabled}
-            onAnimationsChange={(enabled) =>
-              void handleAnimationsChange(enabled)
-            }
-            reduceMotionEnabled={reduceMotionEnabled}
-            onReduceMotionChange={(enabled) =>
-              void handleReduceMotionChange(enabled)
-            }
-            eqSettings={eqSettings}
-            onEqEnabledChange={handleEqEnabled}
-            onEqBandChange={handleEqBandChange}
-            onEqPreset={handleEqPreset}
-            onEqReset={handleEqReset}
-            crossfadeDuration={crossfadeDuration}
-            onCrossfadeChange={handleCrossfadeChange}
-            gaplessEnabled={gaplessEnabled}
-            onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
-            volumeNormalizationEnabled={volumeNormalizationEnabled}
-            onVolumeNormalizationChange={(enabled) =>
-              void handleVolumeNormalizationChange(enabled)
-            }
-            songCouplingEnabled={songCoupling.enabled}
-            onSongCouplingChange={(enabled) =>
-              void handleSongCouplingChange(enabled)
-            }
-            sourceSettings={sourceSettings}
-            onSourceSettingsChange={handleSourceSettingsChange}
-            currentOutputDevice={playbackState.output_device_name}
-            onSelectOutputDevice={handleSelectOutputDeviceSettings}
-            onResetApp={handleResetApp}
-            update={appUpdate}
-          />
-        ) : (
-          <LibraryTrackList
-            // A new playlist is a new page: it fades in and starts at the top.
-            key={selectedPlaylistId ?? "library"}
-            mainSearchQuery={mainSearchQuery}
-            onMainSearchQueryChange={setMainSearchQuery}
-            mainSearchOpen={mainSearchOpen}
-            onOpenMainSearch={openMainSearch}
-            onCloseMainSearch={closeMainSearch}
-            mainSearchInputRef={mainSearchInputRef}
-            mainSearchResultsSubtitle={mainSearchResultsSubtitle}
-            mainSearchResultsPanel={mainSearchResultsPanel}
-            selectedPlaylist={selectedPlaylist}
-            playlist={playlist}
-            sortedPlaylist={sortedPlaylist}
-            isLoadingPlaylist={isLoadingPlaylist}
-            isScanningFolder={isScanningFolder}
-            isImporting={isImporting}
-            isAddingTracks={isAddingTracks}
-            importingPlaylistId={importingPlaylistId}
-            selectedPlaylistId={selectedPlaylistId}
-            importedCount={importedCount}
-            playbackState={playbackState}
-            androidHost={androidHost}
-            addTrackBtnRef={addTrackBtnRef}
-            trackGridCols={trackGridCols}
-            sortColumn={sortColumn}
-            sortDirection={sortDirection}
-            favoritePaths={favoritePaths}
-            menuTrackPath={menuTrackPath}
-            onPlayPause={handlePlayPause}
-            onAddFolderAndroid={() => void handleAddFolderAndroid()}
-            onOpenAddFromLibrary={openAddFromLibrary}
-            onOpenAddTrackMenu={() => {
-              if (addTrackBtnRef.current) {
-                const rect = addTrackBtnRef.current.getBoundingClientRect();
-                setAddTrackMenuAnchor({
-                  top: rect.bottom + 6,
-                  left: rect.left,
-                });
-              }
-              setShowAddTrackMenu((v) => !v);
-            }}
-            onAddTrack={() => void handleAddTrack(false)}
-            onClearPlaylist={handleClearPlaylist}
-            onRenamePlaylist={openRenamePlaylistDialog}
-            onExportPlaylist={handleExportPlaylistById}
-            onDeletePlaylist={handleDeletePlaylist}
-            onBack={goLibrary}
-            onSort={handleSort}
-            onResizeAlbumColumn={handleAlbumColResizeStart}
             onSyncPlaylist={(id) => void handleSyncPlaylistFolder(id)}
-            isCurrentTrack={isCurrentTrack}
-            onPlayTrack={handlePlayTrack}
-            onOpenArtist={openArtistPage}
-            onOpenAlbum={openAlbumPage}
-            onOpenTrackContextMenu={openTrackContextMenu}
-            onCloseTrackMenu={closeTrackContextMenu}
-            onRemoveFromPlaylist={(path) => void handleRemoveFromPlaylist(path)}
-            onRemoveFromLibrary={(path) => {
-              const track = playlist.find((t) => t.path === path);
-              setRemoveFromLibraryTrack({
-                path,
-                title: track ? getTrackTitle(track) : "This song",
-              });
-            }}
-            onToggleFavorite={handleToggleFavorite}
+            onExportPlaylist={handleExportPlaylistById}
+            onRenamePlaylist={openRenamePlaylistDialog}
+            onDeletePlaylist={handleDeletePlaylist}
+            onOpenSettings={handleOpenMobileSettings}
           />
-        )}
 
-        {(rightPanelOpen || rightPanelClosing) && (
           <div
-            className="drag-handle drag-handle-right"
-            onMouseDown={onDragStart("right")}
+            className="drag-handle drag-handle-sidebar"
+            onMouseDown={onDragStart("sidebar")}
           />
-        )}
 
-        <aside className="right-panel">
-          {showQueue && (
-            <QueuePanel
-              tracks={queueData.tracks}
-              currentIndex={queueData.current_index}
-              menuIndex={queueMenuIndex}
-              onClose={closeRightPanelDelayed}
-              onClear={handleClearQueue}
-              onPlayFromQueue={handlePlayFromQueue}
-              onOpenMenu={openQueueContextMenu}
-              onCloseMenu={closeQueueContextMenu}
+          {mainSearchOpen && isMobileLayout() ? (
+            <MobileSearchPage
+              inputRef={mobileSearchInputRef}
+              query={mainSearchQuery}
+              onQueryChange={setMainSearchQuery}
+              results={mainSearchResultsPanel}
+            />
+          ) : mainSearchQuery.trim() && (viewingAlbum || viewingArtist) ? (
+            <main className="main-content">
+              <div className="hero-copy">
+                <h1>Search</h1>
+                <p>{mainSearchResultsSubtitle}</p>
+              </div>
+              <section className="playlist-container">
+                {mainSearchResultsPanel}
+              </section>
+            </main>
+          ) : viewingAlbum ? (
+            <AlbumPage
+              album={viewingAlbum.name}
+              albumArtist={viewingAlbum.albumArtist}
+              onBack={browseBack}
+              onPlayTrack={(path, tracks) => {
+                const index = Math.max(
+                  0,
+                  tracks.findIndex((t) => t.path === path),
+                );
+                void playTracks(
+                  tracks.map((t) => t.path),
+                  index,
+                ).then(() => {
+                  updatePlaybackState();
+                  loadQueueTracks();
+                });
+              }}
+              onArtistClick={(name) => {
+                openArtistPage(name);
+              }}
+              onEditMetadata={setEditingMetadata}
+              onOpenTrackMenu={openTrackContextMenu}
+              onCloseTrackMenu={closeTrackContextMenu}
+              menuTrackPath={menuTrackPath}
+              refreshKey={browseRefresh}
+              playbackState={playbackState}
+            />
+          ) : viewingArtist ? (
+            <ArtistPage
+              artist={viewingArtist}
+              onBack={browseBack}
+              onPlayTrack={(path, tracks) => {
+                const index = Math.max(
+                  0,
+                  tracks.findIndex((t) => t.path === path),
+                );
+                void playTracks(
+                  tracks.map((t) => t.path),
+                  index,
+                ).then(() => {
+                  updatePlaybackState();
+                  loadQueueTracks();
+                });
+              }}
+              onAlbumClick={(name, albumArtist) => {
+                // Keep artist underneath so hardware/UI back returns to it.
+                openAlbumPage(name, albumArtist);
+              }}
+              onOpenTrackMenu={openTrackContextMenu}
+              onCloseTrackMenu={closeTrackContextMenu}
+              menuTrackPath={menuTrackPath}
+              refreshKey={browseRefresh}
+              playbackState={playbackState}
+            />
+          ) : mainView === "home" && !mainSearchQuery.trim() ? (
+            <HomePage
+              libraryPlaylistId={libraryPlaylist?.id ?? null}
+              onPlayTrack={(path, tracks) => {
+                const index = Math.max(
+                  0,
+                  tracks.findIndex((t) => t.path === path),
+                );
+                void playTracks(
+                  tracks.map((t) => t.path),
+                  index,
+                ).then(() => {
+                  updatePlaybackState();
+                  loadQueueTracks();
+                });
+              }}
+              onOpenAlbum={(name, albumArtist) => {
+                openAlbumPage(name, albumArtist);
+              }}
+              onOpenArtist={(name) => {
+                openArtistPage(name);
+              }}
+              onOpenLibrary={() => {
+                if (libraryPlaylist) handleSelectPlaylist(libraryPlaylist.id);
+              }}
+            />
+          ) : (mainView === "recently_played" || mainView === "most_played") &&
+            !mainSearchQuery.trim() ? (
+            <PlayedTracksPage
+              mode={mainView}
+              onBack={goLibrary}
+              playbackState={playbackState}
+              onOpenTrackMenu={openTrackContextMenu}
+              onCloseTrackMenu={closeTrackContextMenu}
+              menuTrackPath={menuTrackPath}
+              onPlayTrack={(path, tracks) => {
+                const index = Math.max(
+                  0,
+                  tracks.findIndex((t) => t.path === path),
+                );
+                void playTracks(
+                  tracks.map((t) => t.path),
+                  index,
+                ).then(() => {
+                  updatePlaybackState();
+                  loadQueueTracks();
+                });
+              }}
+            />
+          ) : mainView === "albums" && !mainSearchQuery.trim() ? (
+            <MobileAlbumsPage onOpenAlbum={openAlbumPage} onBack={goLibrary} />
+          ) : mainView === "artists" && !mainSearchQuery.trim() ? (
+            <MobileArtistsPage
+              onOpenArtist={openArtistPage}
+              onBack={goLibrary}
+            />
+          ) : mainView === "library" && !mainSearchQuery.trim() ? (
+            <MobileLibraryPage
+              libraryPlaylist={libraryPlaylist}
+              favoritesPlaylist={favoritesPlaylist}
+              userPlaylists={userPlaylists}
+              onSelectPlaylist={handleSelectPlaylist}
+              onGoRecentlyPlayed={goRecentlyPlayed}
+              onGoMostPlayed={goMostPlayed}
+              onGoAlbums={goAlbums}
+              onGoArtists={goArtists}
+              onOpenSettings={handleOpenMobileSettings}
+              onImportPlaylist={() => void handleImportPlaylist()}
+              onCreatePlaylist={openCreatePlaylistDialog}
+            />
+          ) : mainView === "settings" && !mainSearchQuery.trim() ? (
+            <MobileSettings
+              embedded
+              onClose={handleCloseMobileSettings}
+              playlists={playlists}
+              isScanningFolder={isScanningFolder}
+              onCreatePlaylist={openCreatePlaylistDialog}
+              onImportPlaylist={handleImportPlaylist}
+              onRenamePlaylist={openRenamePlaylistDialog}
+              onDeletePlaylist={handleDeletePlaylist}
+              onExportPlaylist={handleExportPlaylistById}
+              onSyncPlaylist={handleSyncPlaylistFolder}
+              onAddMediaSource={handleAddMediaSource}
+              onAddExtraMediaSource={handleAddExtraMediaSource}
+              onRemoveMediaSource={handleRemoveMediaSource}
+              onExportLyrics={handleExportLyrics}
+              onImportLyrics={handleImportLyrics}
+              autoLyricsDownload={autoLyricsDownload}
+              onAutoLyricsDownloadChange={(enabled) =>
+                void handleAutoLyricsDownloadChange(enabled)
+              }
+              waveformSeekEnabled={waveformSeekEnabled}
+              onWaveformSeekChange={(enabled) =>
+                void handleWaveformSeekChange(enabled)
+              }
+              themeMode={themeMode}
+              onThemeModeChange={(mode) => void handleThemeModeChange(mode)}
+              glassEffectsEnabled={glassEffectsEnabled}
+              onGlassEffectsChange={(enabled) =>
+                void handleGlassEffectsChange(enabled)
+              }
+              animationsEnabled={animationsEnabled}
+              onAnimationsChange={(enabled) =>
+                void handleAnimationsChange(enabled)
+              }
+              reduceMotionEnabled={reduceMotionEnabled}
+              onReduceMotionChange={(enabled) =>
+                void handleReduceMotionChange(enabled)
+              }
+              eqSettings={eqSettings}
+              onEqEnabledChange={handleEqEnabled}
+              onEqBandChange={handleEqBandChange}
+              onEqPreset={handleEqPreset}
+              onEqReset={handleEqReset}
+              crossfadeDuration={crossfadeDuration}
+              onCrossfadeChange={handleCrossfadeChange}
+              gaplessEnabled={gaplessEnabled}
+              onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
+              volumeNormalizationEnabled={volumeNormalizationEnabled}
+              onVolumeNormalizationChange={(enabled) =>
+                void handleVolumeNormalizationChange(enabled)
+              }
+              songCouplingEnabled={songCoupling.enabled}
+              onSongCouplingChange={(enabled) =>
+                void handleSongCouplingChange(enabled)
+              }
+              sourceSettings={sourceSettings}
+              onSourceSettingsChange={handleSourceSettingsChange}
+              currentOutputDevice={playbackState.output_device_name}
+              onSelectOutputDevice={handleSelectOutputDeviceSettings}
+              onResetApp={handleResetApp}
+              update={appUpdate}
+            />
+          ) : (
+            <LibraryTrackList
+              // A new playlist is a new page: it fades in and starts at the top.
+              key={selectedPlaylistId ?? "library"}
+              mainSearchQuery={mainSearchQuery}
+              onMainSearchQueryChange={setMainSearchQuery}
+              mainSearchOpen={mainSearchOpen}
+              onOpenMainSearch={openMainSearch}
+              onCloseMainSearch={closeMainSearch}
+              mainSearchInputRef={mainSearchInputRef}
+              mainSearchResultsSubtitle={mainSearchResultsSubtitle}
+              mainSearchResultsPanel={mainSearchResultsPanel}
+              selectedPlaylist={selectedPlaylist}
+              playlist={playlist}
+              sortedPlaylist={sortedPlaylist}
+              isLoadingPlaylist={isLoadingPlaylist}
+              isScanningFolder={isScanningFolder}
+              isImporting={isImporting}
+              isAddingTracks={isAddingTracks}
+              importingPlaylistId={importingPlaylistId}
+              selectedPlaylistId={selectedPlaylistId}
+              importedCount={importedCount}
+              playbackState={playbackState}
+              androidHost={androidHost}
+              addTrackBtnRef={addTrackBtnRef}
+              trackGridCols={trackGridCols}
+              sortColumn={sortColumn}
+              sortDirection={sortDirection}
+              favoritePaths={favoritePaths}
+              menuTrackPath={menuTrackPath}
+              onPlayPause={handlePlayPause}
+              onAddFolderAndroid={() => void handleAddFolderAndroid()}
+              onOpenAddFromLibrary={openAddFromLibrary}
+              onOpenAddTrackMenu={() => {
+                if (addTrackBtnRef.current) {
+                  const rect = addTrackBtnRef.current.getBoundingClientRect();
+                  setAddTrackMenuAnchor({
+                    top: rect.bottom + 6,
+                    left: rect.left,
+                  });
+                }
+                setShowAddTrackMenu((v) => !v);
+              }}
+              onAddTrack={() => void handleAddTrack(false)}
+              onClearPlaylist={handleClearPlaylist}
+              onRenamePlaylist={openRenamePlaylistDialog}
+              onExportPlaylist={handleExportPlaylistById}
+              onDeletePlaylist={handleDeletePlaylist}
+              onBack={goLibrary}
+              onSort={handleSort}
+              onResizeAlbumColumn={handleAlbumColResizeStart}
+              onSyncPlaylist={(id) => void handleSyncPlaylistFolder(id)}
+              isCurrentTrack={isCurrentTrack}
+              onPlayTrack={handlePlayTrack}
+              onUnavailableTrack={setError}
+              onOpenArtist={openArtistPage}
+              onOpenAlbum={openAlbumPage}
+              onOpenTrackContextMenu={openTrackContextMenu}
+              onCloseTrackMenu={closeTrackContextMenu}
+              onRemoveFromPlaylist={(path) =>
+                void handleRemoveFromPlaylist(path)
+              }
+              onRemoveFromLibrary={(path) => {
+                const track = playlist.find((t) => t.path === path);
+                setRemoveFromLibraryTrack({
+                  path,
+                  title: track ? getTrackTitle(track) : "This song",
+                });
+              }}
+              onToggleFavorite={handleToggleFavorite}
+            />
+          )}
+
+          {(rightPanelOpen || rightPanelClosing) && (
+            <div
+              className="drag-handle drag-handle-right"
+              onMouseDown={onDragStart("right")}
+            />
+          )}
+
+          <aside className="right-panel">
+            {showQueue && (
+              <QueuePanel
+                tracks={queueData.tracks}
+                currentIndex={queueData.current_index}
+                menuIndex={queueMenuIndex}
+                onClose={closeRightPanelDelayed}
+                onClear={handleClearQueue}
+                onPlayFromQueue={handlePlayFromQueue}
+                onOpenMenu={openQueueContextMenu}
+                onCloseMenu={closeQueueContextMenu}
+                onRemove={handleRemoveFromQueue}
+              />
+            )}
+            {lyricsPanelTrack && (
+              <LyricsPanel
+                track={lyricsPanelTrack}
+                fullCover={lyricsFullCover}
+                onClose={closeRightPanelDelayed}
+                onOpenArtist={openArtistPage}
+                onOpenAlbum={openAlbumPage}
+                timedLyrics={timedLyrics}
+                activeLyricIndex={activeLyricIndex}
+                activeLyricLineRef={activeLyricLineRef}
+                position={displayPosition}
+                isPlaying={playbackState.is_playing}
+                isCurrentTrack={isLyricsPanelOnCurrentTrack}
+                onSeek={(time) => void handleSeek(time)}
+                scrollHandlers={lyricsScrollHandlers}
+              />
+            )}
+            {showDeviceList && (
+              <DeviceListPanel
+                devices={outputDevices}
+                currentDeviceName={playbackState.output_device_name}
+                onClose={closeRightPanelDelayed}
+                onSelectDevice={(name) => {
+                  void (async () => {
+                    try {
+                      await setOutputDevice(name);
+                      await updatePlaybackState();
+                      setShowDeviceList(false);
+                    } catch (err) {
+                      setError(
+                        err instanceof Error
+                          ? err.message
+                          : "Failed to change audio device",
+                      );
+                      setShowDeviceList(false);
+                    }
+                  })();
+                }}
+              />
+            )}
+          </aside>
+
+          {showAddTrackMenu && addTrackMenuAnchor && (
+            <AddTrackMenu
+              anchor={addTrackMenuAnchor}
+              onClose={() => {
+                setShowAddTrackMenu(false);
+                setAddTrackMenuAnchor(null);
+              }}
+              androidHost={androidHost}
+              onAddFiles={() => void handleAddTrack(true)}
+              onAddFolder={() => void handleAddFolder()}
+              onAddFolderAsPlaylist={() => void handleAddFolderAsPlaylist()}
+            />
+          )}
+
+          {menuTrack &&
+            menuAnchor &&
+            (() => {
+              const addToPlaylistOptions = playlists.filter(
+                (p) => p.id !== selectedPlaylistId && p.name !== "Favorites",
+              );
+              // Album and artist pages are not a playlist you can take a track out
+              // of, so that entry only belongs to the playlist view.
+              const browsing = !!viewingAlbum || !!viewingArtist;
+              return (
+                <TrackContextMenu
+                  track={menuTrack}
+                  anchor={menuAnchor}
+                  onClose={closeTrackContextMenu}
+                  canAddToPlaylist={addToPlaylistOptions.length > 0}
+                  canRemoveFromPlaylist={
+                    !browsing && !isLibraryPlaylistName(selectedPlaylist?.name)
+                  }
+                  // Already on that album or artist page, unless the menu came
+                  // from Now Playing on top of it.
+                  canGoToAlbum={!viewingAlbum || mobilePlayerOpen}
+                  canGoToArtist={!viewingArtist || mobilePlayerOpen}
+                  onPlayNext={handlePlayNext}
+                  onAddToQueue={handleAddToQueue}
+                  onAddToPlaylist={setAddToPlaylistTrack}
+                  onEditMetadata={(track) => setEditingMetadata([track])}
+                  onDownload={(track) => {
+                    void downloadRemoteTrack(track.path).catch((err) =>
+                      setError(
+                        formatInvokeError(err, "Could not download the track"),
+                      ),
+                    );
+                  }}
+                  onGoToAlbum={openAlbumPage}
+                  onGoToArtist={openArtistPage}
+                  onRemoveFromPlaylist={(path) =>
+                    void handleRemoveFromPlaylist(path)
+                  }
+                  onRemoveFromLibrary={(path) =>
+                    setRemoveFromLibraryTrack({
+                      path,
+                      title: getTrackTitle(menuTrack),
+                    })
+                  }
+                  songCoupling={
+                    songCoupling.enabled
+                      ? {
+                          couple:
+                            songCoupling.couples.find(
+                              (c) =>
+                                c.first === menuTrack.path ||
+                                c.second === menuTrack.path,
+                            ) ?? null,
+                          onCoupleWith: setCouplingTrack,
+                          onCouple: (first, second) =>
+                            void handleCoupleSongs(first, second),
+                          onUncouple: (path) => void handleUncoupleSong(path),
+                        }
+                      : undefined
+                  }
+                />
+              );
+            })()}
+
+          {queueMenuIndex != null && queueMenuAnchor && (
+            <QueueContextMenu
+              index={queueMenuIndex}
+              queueLength={queueData.tracks.length}
+              anchor={queueMenuAnchor}
+              onClose={closeQueueContextMenu}
+              onMove={handleMoveQueueTrack}
               onRemove={handleRemoveFromQueue}
             />
           )}
-          {lyricsPanelTrack && (
-            <LyricsPanel
-              track={lyricsPanelTrack}
-              fullCover={lyricsFullCover}
-              onClose={closeRightPanelDelayed}
-              onOpenArtist={openArtistPage}
-              onOpenAlbum={openAlbumPage}
-              timedLyrics={timedLyrics}
-              activeLyricIndex={activeLyricIndex}
-              activeLyricLineRef={activeLyricLineRef}
-              position={displayPosition}
-              isPlaying={playbackState.is_playing}
-              isCurrentTrack={isLyricsPanelOnCurrentTrack}
-              onSeek={(time) => void handleSeek(time)}
-              scrollHandlers={lyricsScrollHandlers}
+
+          {playlistDialog && (
+            <CreatePlaylistDialog
+              dialog={playlistDialog}
+              onClose={closePlaylistDialog}
+              onSubmit={submitPlaylistDialog}
+              nameInputRef={playlistNameInputRef}
+              name={playlistNameInput}
+              onNameChange={setPlaylistNameInput}
+              androidHost={androidHost}
+              syncFolder={playlistSyncFolder}
+              onClearSyncFolder={() => setPlaylistSyncFolderInput(null)}
+              onPickSyncFolder={() => void pickPlaylistSyncFolder()}
+              error={playlistDialogError}
             />
           )}
-          {showDeviceList && (
-            <DeviceListPanel
-              devices={outputDevices}
-              currentDeviceName={playbackState.output_device_name}
-              onClose={closeRightPanelDelayed}
-              onSelectDevice={(name) => {
-                void (async () => {
-                  try {
-                    await setOutputDevice(name);
-                    await updatePlaybackState();
-                    setShowDeviceList(false);
-                  } catch (err) {
-                    setError(
-                      err instanceof Error
-                        ? err.message
-                        : "Failed to change audio device",
-                    );
-                    setShowDeviceList(false);
-                  }
-                })();
+
+          {showClearConfirm && (
+            <ClearPlaylistDialog
+              onCancel={() => setShowClearConfirm(false)}
+              onConfirm={confirmClearPlaylist}
+            />
+          )}
+
+          {couplingTrack && (
+            <CoupleSongDialog
+              track={couplingTrack}
+              onClose={() => setCouplingTrack(null)}
+              onCouple={(first, second) => {
+                setCouplingTrack(null);
+                void handleCoupleSongs(first, second);
               }}
             />
           )}
-        </aside>
 
-        {showAddTrackMenu && addTrackMenuAnchor && (
-          <AddTrackMenu
-            anchor={addTrackMenuAnchor}
-            onClose={() => {
-              setShowAddTrackMenu(false);
-              setAddTrackMenuAnchor(null);
-            }}
-            androidHost={androidHost}
-            onAddFiles={() => void handleAddTrack(true)}
-            onAddFolder={() => void handleAddFolder()}
-            onAddFolderAsPlaylist={() => void handleAddFolderAsPlaylist()}
-          />
-        )}
+          {showAddFromLibrary && (
+            <AddFromLibraryDialog
+              onClose={closeAddFromLibrary}
+              query={librarySearchQuery}
+              onQueryChange={setLibrarySearchQuery}
+              loading={librarySearchLoading}
+              adding={librarySearchAdding}
+              results={librarySearchResults}
+              selected={librarySearchSelected}
+              onToggleSelect={toggleLibrarySearchSelect}
+              onPickFile={() => void handlePickFileFromLibraryModal()}
+              onAddSelected={() => void handleAddSelectedFromLibrary()}
+            />
+          )}
 
-        {menuTrack &&
-          menuAnchor &&
-          (() => {
-            const addToPlaylistOptions = playlists.filter(
-              (p) => p.id !== selectedPlaylistId && p.name !== "Favorites",
-            );
-            // Album and artist pages are not a playlist you can take a track out
-            // of, so that entry only belongs to the playlist view.
-            const browsing = !!viewingAlbum || !!viewingArtist;
-            return (
-              <TrackContextMenu
-                track={menuTrack}
-                anchor={menuAnchor}
-                onClose={closeTrackContextMenu}
-                canAddToPlaylist={addToPlaylistOptions.length > 0}
-                canRemoveFromPlaylist={
-                  !browsing && !isLibraryPlaylistName(selectedPlaylist?.name)
-                }
-                // Already on that album or artist page, unless the menu came
-                // from Now Playing on top of it.
-                canGoToAlbum={!viewingAlbum || mobilePlayerOpen}
-                canGoToArtist={!viewingArtist || mobilePlayerOpen}
-                onPlayNext={handlePlayNext}
-                onAddToQueue={handleAddToQueue}
-                onAddToPlaylist={setAddToPlaylistTrack}
-                onEditMetadata={(track) => setEditingMetadata([track])}
-                onGoToAlbum={openAlbumPage}
-                onGoToArtist={openArtistPage}
-                onRemoveFromPlaylist={(path) =>
-                  void handleRemoveFromPlaylist(path)
-                }
-                onRemoveFromLibrary={(path) =>
-                  setRemoveFromLibraryTrack({
-                    path,
-                    title: getTrackTitle(menuTrack),
-                  })
-                }
-                songCoupling={
-                  songCoupling.enabled
-                    ? {
-                        couple:
-                          songCoupling.couples.find(
-                            (c) =>
-                              c.first === menuTrack.path ||
-                              c.second === menuTrack.path,
-                          ) ?? null,
-                        onCoupleWith: setCouplingTrack,
-                        onCouple: (first, second) =>
-                          void handleCoupleSongs(first, second),
-                        onUncouple: (path) => void handleUncoupleSong(path),
-                      }
-                    : undefined
-                }
-              />
-            );
-          })()}
+          {removeFromLibraryTrack && (
+            <RemoveFromLibraryDialog
+              title={removeFromLibraryTrack.title}
+              onCancel={() => setRemoveFromLibraryTrack(null)}
+              onConfirm={() => {
+                const { path } = removeFromLibraryTrack;
+                setRemoveFromLibraryTrack(null);
+                void handleRemoveFromLibrary(path).then(() =>
+                  setBrowseRefresh((count) => count + 1),
+                );
+              }}
+            />
+          )}
 
-        {queueMenuIndex != null && queueMenuAnchor && (
-          <QueueContextMenu
-            index={queueMenuIndex}
-            queueLength={queueData.tracks.length}
-            anchor={queueMenuAnchor}
-            onClose={closeQueueContextMenu}
-            onMove={handleMoveQueueTrack}
-            onRemove={handleRemoveFromQueue}
-          />
-        )}
+          {deletePlaylistConfirm && (
+            <DeletePlaylistDialog
+              name={deletePlaylistConfirm.name}
+              onCancel={() => setDeletePlaylistConfirm(null)}
+              onConfirm={() => {
+                // On a phone the deleted playlist was the page on screen, so go
+                // back to the library it was opened from.
+                const leaving =
+                  isMobileLayout() &&
+                  mainView === "playlist" &&
+                  deletePlaylistConfirm.id === selectedPlaylistId;
+                void confirmDeletePlaylist();
+                if (leaving) goLibrary();
+              }}
+            />
+          )}
 
-        {playlistDialog && (
-          <CreatePlaylistDialog
-            dialog={playlistDialog}
-            onClose={closePlaylistDialog}
-            onSubmit={submitPlaylistDialog}
-            nameInputRef={playlistNameInputRef}
-            name={playlistNameInput}
-            onNameChange={setPlaylistNameInput}
-            androidHost={androidHost}
-            syncFolder={playlistSyncFolder}
-            onClearSyncFolder={() => setPlaylistSyncFolderInput(null)}
-            onPickSyncFolder={() => void pickPlaylistSyncFolder()}
-            error={playlistDialogError}
-          />
-        )}
+          {editingMetadata && (
+            <EditMetadataDialog
+              tracks={editingMetadata}
+              onClose={() => setEditingMetadata(null)}
+              onSave={handleSaveMetadata}
+              onGrantWriteAccess={() => {
+                setEditingMetadata(null);
+                void handleAddFolderAndroid();
+              }}
+            />
+          )}
 
-        {showClearConfirm && (
-          <ClearPlaylistDialog
-            onCancel={() => setShowClearConfirm(false)}
-            onConfirm={confirmClearPlaylist}
-          />
-        )}
+          {addToPlaylistTrack && (
+            <AddToPlaylistDialog
+              playlists={playlists}
+              excludePlaylistId={selectedPlaylistId}
+              onClose={() => setAddToPlaylistTrack(null)}
+              onSelect={(playlistId) =>
+                handleAddTrackToPlaylist(playlistId, addToPlaylistTrack)
+              }
+            />
+          )}
 
-        {couplingTrack && (
-          <CoupleSongDialog
-            track={couplingTrack}
-            onClose={() => setCouplingTrack(null)}
-            onCouple={(first, second) => {
-              setCouplingTrack(null);
-              void handleCoupleSongs(first, second);
-            }}
-          />
-        )}
-
-        {showAddFromLibrary && (
-          <AddFromLibraryDialog
-            onClose={closeAddFromLibrary}
-            query={librarySearchQuery}
-            onQueryChange={setLibrarySearchQuery}
-            loading={librarySearchLoading}
-            adding={librarySearchAdding}
-            results={librarySearchResults}
-            selected={librarySearchSelected}
-            onToggleSelect={toggleLibrarySearchSelect}
-            onPickFile={() => void handlePickFileFromLibraryModal()}
-            onAddSelected={() => void handleAddSelectedFromLibrary()}
-          />
-        )}
-
-        {removeFromLibraryTrack && (
-          <RemoveFromLibraryDialog
-            title={removeFromLibraryTrack.title}
-            onCancel={() => setRemoveFromLibraryTrack(null)}
-            onConfirm={() => {
-              const { path } = removeFromLibraryTrack;
-              setRemoveFromLibraryTrack(null);
-              void handleRemoveFromLibrary(path).then(() =>
-                setBrowseRefresh((count) => count + 1),
-              );
-            }}
-          />
-        )}
-
-        {deletePlaylistConfirm && (
-          <DeletePlaylistDialog
-            name={deletePlaylistConfirm.name}
-            onCancel={() => setDeletePlaylistConfirm(null)}
-            onConfirm={() => {
-              // On a phone the deleted playlist was the page on screen, so go
-              // back to the library it was opened from.
-              const leaving =
-                isMobileLayout() &&
-                mainView === "playlist" &&
-                deletePlaylistConfirm.id === selectedPlaylistId;
-              void confirmDeletePlaylist();
-              if (leaving) goLibrary();
-            }}
-          />
-        )}
-
-        {editingMetadata && (
-          <EditMetadataDialog
-            tracks={editingMetadata}
-            onClose={() => setEditingMetadata(null)}
-            onSave={handleSaveMetadata}
-            onGrantWriteAccess={() => {
-              setEditingMetadata(null);
-              void handleAddFolderAndroid();
-            }}
-          />
-        )}
-
-        {addToPlaylistTrack && (
-          <AddToPlaylistDialog
-            playlists={playlists}
-            excludePlaylistId={selectedPlaylistId}
-            onClose={() => setAddToPlaylistTrack(null)}
-            onSelect={(playlistId) =>
-              handleAddTrackToPlaylist(playlistId, addToPlaylistTrack)
-            }
-          />
-        )}
-
-        {/* Mobile only: one glass layer behind both the mini player and the
+          {/* Mobile only: one glass layer behind both the mini player and the
           tabs, so the two read as a single surface. */}
-        <div
-          className={`mobile-dock-glass${playbackState.current_path ? " is-extended" : ""}`}
-          aria-hidden
-        />
+          <div
+            className={`mobile-dock-glass${playbackState.current_path ? " is-extended" : ""}`}
+            aria-hidden
+          />
 
-        <PlayerBar
-          currentTrack={currentTrack}
-          playbackState={playbackState}
-          playbackMode={playbackMode}
-          displayPosition={displayPosition}
-          displayDuration={displayDuration}
-          canSkip={canSkip}
-          showQueue={showQueue}
-          showEqPanel={showEqPanel}
-          eqSettings={eqSettings}
-          volumeValue={volumeValue}
-          lyricsPanelTrack={lyricsPanelTrack}
-          coverLetters={coverLetters}
-          isMobileLayout={isMobileLayout}
-          mobilePlayerOpenRef={mobilePlayerOpenRef}
-          mobilePlayerClosingRef={mobilePlayerClosingRef}
-          mobilePlayerClosing={mobilePlayerClosing}
-          volumeIconRef={volumeIconRef}
-          onOpenMobilePlayer={handleOpenMobilePlayer}
-          onOpenNowPlaying={handleOpenNowPlaying}
-          onOpenArtist={openArtistPage}
-          onOpenAlbum={openAlbumPage}
-          onToggleShuffle={handleToggleShuffle}
-          onPrevious={handlePrevious}
-          onStop={handleStop}
-          onPlayPause={handlePlayPause}
-          onNext={handleNext}
-          onCycleRepeat={handleCycleRepeat}
-          onSeekChange={setSeekValue}
-          onSeekCommit={(value) => void handleSeek(value)}
-          onToggleLyrics={handleToggleLyrics}
-          onToggleQueue={handleToggleQueue}
-          onToggleEqPanel={() => void handleToggleEqPanel()}
-          onVolumeChange={(value) => void handleVolume(value)}
-          onToggleDevice={handleToggleDevice}
-          onRefreshOutputDevices={() =>
-            listOutputDevices().then(setOutputDevices).catch(console.error)
-          }
-          waveformEnabled={waveformSeekEnabled}
-        />
-
-        <MobileTabBar
-          active={mobileTab}
-          onHome={goHome}
-          onSearch={openMainSearch}
-          onLibrary={goLibrary}
-          librarySyncLabel={
-            isScanningFolder
-              ? folderScanIsSync
-                ? "Syncing"
-                : "Importing"
-              : null
-          }
-        />
-
-        {mobilePlayerOpen && currentTrack && (
-          <MobileNowPlaying
-            key={mobilePlayerKey}
-            track={currentTrack}
-            isPlaying={playbackState.is_playing}
-            isFavorite={favoritePaths.has(currentTrack.path)}
-            onToggleFavorite={() => handleToggleFavorite(currentTrack.path)}
+          <PlayerBar
+            currentTrack={currentTrack}
+            playbackState={playbackState}
+            playbackMode={playbackMode}
             displayPosition={displayPosition}
             displayDuration={displayDuration}
-            onSeekChange={setSeekValue}
-            onSeekCommit={handleSeek}
-            playbackMode={playbackMode}
             canSkip={canSkip}
-            onPlayPause={handlePlayPause}
-            onPrevious={handlePrevious}
-            onNext={handleNext}
-            onToggleShuffle={handleToggleShuffle}
-            onCycleRepeat={handleCycleRepeat}
-            sleepTimer={playbackState.sleep_timer}
-            onSetSleepTimer={(request) => void handleSetSleepTimer(request)}
-            speed={playbackState.speed}
-            onSpeedChange={(speed) => void handleSetSpeed(speed)}
-            closing={mobilePlayerClosing}
-            onClose={handleCloseMobilePlayer}
-            onDragClose={handleDragCloseMobilePlayer}
-            onOpenArtist={(name) => {
-              armDragDismissGhostClickGuard();
-              forceCloseMobilePlayer();
-              openArtistPage(name);
-            }}
-            onOpenAlbum={(name, albumArtist) => {
-              armDragDismissGhostClickGuard();
-              forceCloseMobilePlayer();
-              openAlbumPage(name, albumArtist);
-            }}
-            volumeValue={volumeValue}
-            onVolumeChange={handleVolume}
-            hideVolume={androidHost}
+            showQueue={showQueue}
+            showEqPanel={showEqPanel}
             eqSettings={eqSettings}
-            onEqEnabledChange={handleEqEnabled}
-            onEqBandChange={handleEqBandChange}
-            onEqBandsChange={handleEqBandsChange}
-            onEqPreset={handleEqPreset}
-            onEqReset={handleEqReset}
-            view={mobilePlayerView}
-            onViewChange={setMobilePlayerView}
-            menuOpen={mobilePlayerMenuOpen}
-            onMenuOpenChange={setMobilePlayerMenuOpen}
-            queueTracks={queueData.tracks}
-            queueCurrentIndex={queueData.current_index}
-            onPlayFromQueue={handlePlayFromQueue}
-            onRemoveFromQueue={handleRemoveFromQueue}
-            onReorderQueue={handleMoveQueueTrack}
-            onClearQueue={handleClearQueue}
+            volumeValue={volumeValue}
+            lyricsPanelTrack={lyricsPanelTrack}
+            coverLetters={coverLetters}
+            isMobileLayout={isMobileLayout}
+            mobilePlayerOpenRef={mobilePlayerOpenRef}
+            mobilePlayerClosingRef={mobilePlayerClosingRef}
+            mobilePlayerClosing={mobilePlayerClosing}
+            volumeIconRef={volumeIconRef}
+            onOpenMobilePlayer={handleOpenMobilePlayer}
+            onOpenNowPlaying={handleOpenNowPlaying}
+            onOpenArtist={openArtistPage}
+            onOpenAlbum={openAlbumPage}
+            onToggleShuffle={handleToggleShuffle}
+            onPrevious={handlePrevious}
+            onStop={handleStop}
+            onPlayPause={handlePlayPause}
+            onNext={handleNext}
+            onCycleRepeat={handleCycleRepeat}
+            onSeekChange={setSeekValue}
+            onSeekCommit={(value) => void handleSeek(value)}
+            onToggleLyrics={handleToggleLyrics}
+            onToggleQueue={handleToggleQueue}
+            onToggleEqPanel={() => void handleToggleEqPanel()}
+            onVolumeChange={(value) => void handleVolume(value)}
+            onToggleDevice={handleToggleDevice}
+            onRefreshOutputDevices={() =>
+              listOutputDevices().then(setOutputDevices).catch(console.error)
+            }
             waveformEnabled={waveformSeekEnabled}
           />
-        )}
 
-        {mobileSettingsOpen && (
-          <MobileSettings
-            closing={mobileSettingsClosing}
-            onClose={handleCloseMobileSettings}
-            playlists={playlists}
-            isScanningFolder={isScanningFolder}
-            onCreatePlaylist={openCreatePlaylistDialog}
-            onImportPlaylist={handleImportPlaylist}
-            onRenamePlaylist={openRenamePlaylistDialog}
-            onDeletePlaylist={handleDeletePlaylist}
-            onExportPlaylist={handleExportPlaylistById}
-            onSyncPlaylist={handleSyncPlaylistFolder}
-            onAddMediaSource={handleAddMediaSource}
-            onAddExtraMediaSource={handleAddExtraMediaSource}
-            onRemoveMediaSource={handleRemoveMediaSource}
-            onExportLyrics={handleExportLyrics}
-            onImportLyrics={handleImportLyrics}
-            autoLyricsDownload={autoLyricsDownload}
-            onAutoLyricsDownloadChange={(enabled) =>
-              void handleAutoLyricsDownloadChange(enabled)
+          <MobileTabBar
+            active={mobileTab}
+            onHome={goHome}
+            onSearch={openMainSearch}
+            onLibrary={goLibrary}
+            librarySyncLabel={
+              isScanningFolder
+                ? folderScanIsSync
+                  ? "Syncing"
+                  : "Importing"
+                : null
             }
-            waveformSeekEnabled={waveformSeekEnabled}
-            onWaveformSeekChange={(enabled) =>
-              void handleWaveformSeekChange(enabled)
-            }
-            themeMode={themeMode}
-            onThemeModeChange={(mode) => void handleThemeModeChange(mode)}
-            glassEffectsEnabled={glassEffectsEnabled}
-            onGlassEffectsChange={(enabled) =>
-              void handleGlassEffectsChange(enabled)
-            }
-            animationsEnabled={animationsEnabled}
-            onAnimationsChange={(enabled) =>
-              void handleAnimationsChange(enabled)
-            }
-            reduceMotionEnabled={reduceMotionEnabled}
-            onReduceMotionChange={(enabled) =>
-              void handleReduceMotionChange(enabled)
-            }
-            eqSettings={eqSettings}
-            onEqEnabledChange={handleEqEnabled}
-            onEqBandChange={handleEqBandChange}
-            onEqPreset={handleEqPreset}
-            onEqReset={handleEqReset}
-            crossfadeDuration={crossfadeDuration}
-            onCrossfadeChange={handleCrossfadeChange}
-            gaplessEnabled={gaplessEnabled}
-            onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
-            volumeNormalizationEnabled={volumeNormalizationEnabled}
-            onVolumeNormalizationChange={(enabled) =>
-              void handleVolumeNormalizationChange(enabled)
-            }
-            songCouplingEnabled={songCoupling.enabled}
-            onSongCouplingChange={(enabled) =>
-              void handleSongCouplingChange(enabled)
-            }
-            sourceSettings={sourceSettings}
-            onSourceSettingsChange={handleSourceSettingsChange}
-            currentOutputDevice={playbackState.output_device_name}
-            onSelectOutputDevice={handleSelectOutputDeviceSettings}
-            onResetApp={handleResetApp}
-            update={appUpdate}
           />
-        )}
 
-        {showEqPanel && eqAnchor && (
-          <EqPanel
-            anchor={eqAnchor}
-            onClose={() => {
-              setShowEqPanel(false);
-              setEqAnchor(null);
-            }}
-            settings={eqSettings}
-            onEnabledChange={handleEqEnabled}
-            onPresetSelect={(presetId) => void handleEqPreset(presetId)}
-            onReset={handleEqReset}
-            onBandChange={handleEqBandChange}
-            crossfadeDuration={crossfadeDuration}
-            onCrossfadeChange={handleCrossfadeChange}
-            gaplessEnabled={gaplessEnabled}
-            onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
-            sleepTimer={playbackState.sleep_timer}
-            onSleepTimerChange={(request) => void handleSetSleepTimer(request)}
-            speed={playbackState.speed}
-            onSpeedChange={(speed) => void handleSetSpeed(speed)}
-          />
-        )}
+          {mobilePlayerOpen && currentTrack && (
+            <MobileNowPlaying
+              key={mobilePlayerKey}
+              track={currentTrack}
+              isPlaying={playbackState.is_playing}
+              isBuffering={playbackState.is_buffering ?? false}
+              isFavorite={favoritePaths.has(currentTrack.path)}
+              onToggleFavorite={() => handleToggleFavorite(currentTrack.path)}
+              displayPosition={displayPosition}
+              displayDuration={displayDuration}
+              onSeekChange={setSeekValue}
+              onSeekCommit={handleSeek}
+              playbackMode={playbackMode}
+              canSkip={canSkip}
+              onPlayPause={handlePlayPause}
+              onPrevious={handlePrevious}
+              onNext={handleNext}
+              onToggleShuffle={handleToggleShuffle}
+              onCycleRepeat={handleCycleRepeat}
+              sleepTimer={playbackState.sleep_timer}
+              onSetSleepTimer={(request) => void handleSetSleepTimer(request)}
+              speed={playbackState.speed}
+              onSpeedChange={(speed) => void handleSetSpeed(speed)}
+              closing={mobilePlayerClosing}
+              onClose={handleCloseMobilePlayer}
+              onDragClose={handleDragCloseMobilePlayer}
+              onOpenArtist={(name) => {
+                armDragDismissGhostClickGuard();
+                forceCloseMobilePlayer();
+                openArtistPage(name);
+              }}
+              onOpenAlbum={(name, albumArtist) => {
+                armDragDismissGhostClickGuard();
+                forceCloseMobilePlayer();
+                openAlbumPage(name, albumArtist);
+              }}
+              volumeValue={volumeValue}
+              onVolumeChange={handleVolume}
+              hideVolume={androidHost}
+              eqSettings={eqSettings}
+              onEqEnabledChange={handleEqEnabled}
+              onEqBandChange={handleEqBandChange}
+              onEqBandsChange={handleEqBandsChange}
+              onEqPreset={handleEqPreset}
+              onEqReset={handleEqReset}
+              view={mobilePlayerView}
+              onViewChange={setMobilePlayerView}
+              menuOpen={mobilePlayerMenuOpen}
+              onMenuOpenChange={setMobilePlayerMenuOpen}
+              queueTracks={queueData.tracks}
+              queueCurrentIndex={queueData.current_index}
+              onPlayFromQueue={handlePlayFromQueue}
+              onRemoveFromQueue={handleRemoveFromQueue}
+              onReorderQueue={handleMoveQueueTrack}
+              onClearQueue={handleClearQueue}
+              waveformEnabled={waveformSeekEnabled}
+            />
+          )}
 
-        {showFolderSetup && androidHost && (
-          <div className="modal-backdrop" onClick={() => {}}>
-            <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-              <h2>Welcome to Wave</h2>
-              <p className="modal-desc">
-                Select a folder containing your music to get started. Wave
-                indexes the files in place (no copies) and lists them in your
-                Library.
-              </p>
-              <div className="modal-actions">
-                <button
-                  className="btn-ghost"
-                  onClick={() => void skipFolderSetup()}
-                  type="button"
-                >
-                  Skip for now
-                </button>
-                <button
-                  className="btn-primary"
-                  onClick={() =>
-                    void handleAddFolderAndroid({ showProgress: true })
-                  }
-                  type="button"
-                >
-                  <BiFolderOpen /> Select Media Source
-                </button>
+          {mobileSettingsOpen && (
+            <MobileSettings
+              closing={mobileSettingsClosing}
+              onClose={handleCloseMobileSettings}
+              playlists={playlists}
+              isScanningFolder={isScanningFolder}
+              onCreatePlaylist={openCreatePlaylistDialog}
+              onImportPlaylist={handleImportPlaylist}
+              onRenamePlaylist={openRenamePlaylistDialog}
+              onDeletePlaylist={handleDeletePlaylist}
+              onExportPlaylist={handleExportPlaylistById}
+              onSyncPlaylist={handleSyncPlaylistFolder}
+              onAddMediaSource={handleAddMediaSource}
+              onAddExtraMediaSource={handleAddExtraMediaSource}
+              onRemoveMediaSource={handleRemoveMediaSource}
+              onExportLyrics={handleExportLyrics}
+              onImportLyrics={handleImportLyrics}
+              autoLyricsDownload={autoLyricsDownload}
+              onAutoLyricsDownloadChange={(enabled) =>
+                void handleAutoLyricsDownloadChange(enabled)
+              }
+              waveformSeekEnabled={waveformSeekEnabled}
+              onWaveformSeekChange={(enabled) =>
+                void handleWaveformSeekChange(enabled)
+              }
+              themeMode={themeMode}
+              onThemeModeChange={(mode) => void handleThemeModeChange(mode)}
+              glassEffectsEnabled={glassEffectsEnabled}
+              onGlassEffectsChange={(enabled) =>
+                void handleGlassEffectsChange(enabled)
+              }
+              animationsEnabled={animationsEnabled}
+              onAnimationsChange={(enabled) =>
+                void handleAnimationsChange(enabled)
+              }
+              reduceMotionEnabled={reduceMotionEnabled}
+              onReduceMotionChange={(enabled) =>
+                void handleReduceMotionChange(enabled)
+              }
+              eqSettings={eqSettings}
+              onEqEnabledChange={handleEqEnabled}
+              onEqBandChange={handleEqBandChange}
+              onEqPreset={handleEqPreset}
+              onEqReset={handleEqReset}
+              crossfadeDuration={crossfadeDuration}
+              onCrossfadeChange={handleCrossfadeChange}
+              gaplessEnabled={gaplessEnabled}
+              onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
+              volumeNormalizationEnabled={volumeNormalizationEnabled}
+              onVolumeNormalizationChange={(enabled) =>
+                void handleVolumeNormalizationChange(enabled)
+              }
+              songCouplingEnabled={songCoupling.enabled}
+              onSongCouplingChange={(enabled) =>
+                void handleSongCouplingChange(enabled)
+              }
+              sourceSettings={sourceSettings}
+              onSourceSettingsChange={handleSourceSettingsChange}
+              currentOutputDevice={playbackState.output_device_name}
+              onSelectOutputDevice={handleSelectOutputDeviceSettings}
+              onResetApp={handleResetApp}
+              update={appUpdate}
+            />
+          )}
+
+          {showEqPanel && eqAnchor && (
+            <EqPanel
+              anchor={eqAnchor}
+              onClose={() => {
+                setShowEqPanel(false);
+                setEqAnchor(null);
+              }}
+              settings={eqSettings}
+              onEnabledChange={handleEqEnabled}
+              onPresetSelect={(presetId) => void handleEqPreset(presetId)}
+              onReset={handleEqReset}
+              onBandChange={handleEqBandChange}
+              crossfadeDuration={crossfadeDuration}
+              onCrossfadeChange={handleCrossfadeChange}
+              gaplessEnabled={gaplessEnabled}
+              onGaplessChange={(enabled) => void handleGaplessChange(enabled)}
+              sleepTimer={playbackState.sleep_timer}
+              onSleepTimerChange={(request) =>
+                void handleSetSleepTimer(request)
+              }
+              speed={playbackState.speed}
+              onSpeedChange={(speed) => void handleSetSpeed(speed)}
+            />
+          )}
+
+          {showFolderSetup && androidHost && (
+            <div className="modal-backdrop" onClick={() => {}}>
+              <div
+                className="modal-dialog"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h2>Welcome to Wave</h2>
+                <p className="modal-desc">
+                  Select a folder containing your music to get started. Wave
+                  indexes the files in place (no copies) and lists them in your
+                  Library.
+                </p>
+                <div className="modal-actions">
+                  <button
+                    className="btn-ghost"
+                    onClick={() => void skipFolderSetup()}
+                    type="button"
+                  >
+                    Skip for now
+                  </button>
+                  <button
+                    className="btn-primary"
+                    onClick={() =>
+                      void handleAddFolderAndroid({ showProgress: true })
+                    }
+                    type="button"
+                  >
+                    <BiFolderOpen /> Select Media Source
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {importProgress && (
-          <ImportProgressDialog
-            progress={importProgress}
-            onClose={closeImportProgress}
+          {importProgress && (
+            <ImportProgressDialog
+              progress={importProgress}
+              onClose={closeImportProgress}
+            />
+          )}
+
+          <StatusToasts
+            showExitToast={showExitToast}
+            crashReport={crashReport}
+            onDismissCrashReport={() => {
+              void clearAndroidCrashReport().catch(() => {});
+              setCrashReport(null);
+            }}
+            error={error}
+            onDismissError={() => setError(null)}
+            lyricsFetchPath={lyricsFetchPath}
+            onCancelLyricsFetch={cancelLyricsFetch}
+            isLoading={isLoading}
           />
-        )}
-
-        <StatusToasts
-          showExitToast={showExitToast}
-          crashReport={crashReport}
-          onDismissCrashReport={() => {
-            void clearAndroidCrashReport().catch(() => {});
-            setCrashReport(null);
-          }}
-          error={error}
-          onDismissError={() => setError(null)}
-          lyricsFetchPath={lyricsFetchPath}
-          onCancelLyricsFetch={cancelLyricsFetch}
-          isLoading={isLoading}
-        />
-        <UpdateToast update={appUpdate} />
-      </div>
-    </SongCouplingContext.Provider>
+          <UpdateToast update={appUpdate} />
+        </div>
+      </SongCouplingContext.Provider>
+    </RemoteStatusContext.Provider>
   );
 }
 
