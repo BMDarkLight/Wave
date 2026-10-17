@@ -78,9 +78,9 @@ pub trait RemoteBackend: Send + Sync {
     fn check_reachable(&self) -> Result<(), RemoteError>;
     fn fetch_artwork(&self, art_ref: &str) -> Result<Vec<u8>, RemoteError>;
 
-    /// The source config to store when the backend learned something worth
-    /// keeping, such as the connection that worked. `None` when unchanged.
-    fn updated_config(&self) -> Option<String> {
+    /// The connection last known to work, for the caller to store as the
+    /// source's `preferred_uri`.
+    fn working_uri(&self) -> Option<String> {
         None
     }
 }

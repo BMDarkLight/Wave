@@ -270,14 +270,8 @@ impl RemoteBackend for PlexBackend {
         self.repick().map(|_| ())
     }
 
-    fn updated_config(&self) -> Option<String> {
-        let active = self.active_uri()?;
-        if self.config.preferred_uri.as_deref() == Some(active.as_str()) {
-            return None;
-        }
-        let mut config = self.config.clone();
-        config.preferred_uri = Some(active);
-        serde_json::to_string(&config).ok()
+    fn working_uri(&self) -> Option<String> {
+        self.active_uri()
     }
 
     fn fetch_artwork(&self, art_ref: &str) -> Result<Vec<u8>, RemoteError> {
@@ -680,21 +674,16 @@ mod tests {
     }
 
     #[test]
-    fn updated_config_carries_a_new_working_connection() {
+    fn working_uri_follows_the_connection_that_answered() {
         let (port, _) = fake_server(vec![http("200 OK", "{}")]);
         let live = format!("http://127.0.0.1:{port}");
         let mut config = config_for("http://127.0.0.1:9");
         config.connections = vec![conn(&live, false, false, "127.0.0.1", port, "http")];
         let backend = PlexBackend::with_gate(config, headers(), open_gate());
-        assert_eq!(backend.updated_config(), None);
+        assert_eq!(backend.working_uri().as_deref(), Some("http://127.0.0.1:9"));
 
         backend.check_reachable().unwrap();
-        let json = backend.updated_config().expect("preferred uri changed");
-        let stored: PlexSourceConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(stored.preferred_uri.as_deref(), Some(live.as_str()));
-
-        let unchanged = PlexBackend::with_gate(stored, headers(), open_gate());
-        assert_eq!(unchanged.updated_config(), None);
+        assert_eq!(backend.working_uri().as_deref(), Some(live.as_str()));
     }
 
     #[test]

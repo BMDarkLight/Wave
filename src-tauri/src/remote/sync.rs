@@ -69,23 +69,23 @@ pub fn sync_source(
 
     rt.set_status(source_id, SourceState::Syncing);
     let result = walk_catalog(rt, source_id, backend.as_ref());
+    let message = result.as_ref().err().map(|e| e.to_string());
     let recorded = rt.with_library(|library| {
-        let message = result.as_ref().err().map(|e| e.to_string());
-        let recorded = library.record_remote_sync(source_id, now_timestamp(), message.as_deref());
-        // A failed walk may still have upserted pages that need a visibility pass.
-        recorded.and(library.recompute_remote_visibility(remote_enabled))
+        library.record_remote_sync(source_id, now_timestamp(), message.as_deref())
     });
     if let Err(detail) = recorded {
         tracing::warn!("Remote sync could not record its result: {detail}");
     }
+    // A failed walk may still have upserted pages that need a visibility pass.
+    let visibility = rt.with_library(|library| library.recompute_remote_visibility(remote_enabled));
+    if let Err(detail) = visibility {
+        tracing::warn!("Remote sync could not refresh visibility: {detail}");
+    }
 
     match &result {
         Ok(_) => {
-            if let Some(config) = backend.updated_config() {
-                let stored = rt.with_library(|library| {
-                    library.update_remote_source_config(source_id, &config)
-                });
-                if let Err(detail) = stored {
+            if let Some(uri) = backend.working_uri() {
+                if let Err(detail) = store_working_uri(rt, source_id, &uri) {
                     tracing::warn!("Could not store the working connection: {detail}");
                 }
             }
@@ -102,6 +102,32 @@ pub fn sync_source(
         artwork_pass(rt, source_id);
     }
     result
+}
+
+/// Sets `preferred_uri` in the stored config and nothing else. The row is read
+/// again here, because a sign-in during a long sync may have rewritten it, and
+/// it is written only when the value changes.
+fn store_working_uri(rt: &RemoteRuntime, source_id: &str, uri: &str) -> Result<(), String> {
+    rt.with_library(|library| {
+        let Some(row) = library
+            .list_remote_sources()?
+            .into_iter()
+            .find(|row| row.id == source_id)
+        else {
+            return Ok(());
+        };
+        let mut config: serde_json::Value =
+            serde_json::from_str(&row.config_json).map_err(|e| e.to_string())?;
+        let Some(object) = config.as_object_mut() else {
+            return Ok(());
+        };
+        let preferred = serde_json::Value::String(uri.to_string());
+        if object.get("preferred_uri") == Some(&preferred) {
+            return Ok(());
+        }
+        object.insert("preferred_uri".to_string(), preferred);
+        library.update_remote_source_config(source_id, &config.to_string())
+    })
 }
 
 fn walk_catalog(
@@ -178,28 +204,56 @@ pub fn sync_all_in_background(
     remote_enabled: bool,
     done: Box<dyn FnOnce() + Send>,
 ) {
-    let spawned = std::thread::Builder::new()
-        .name("remote-sync".into())
-        .spawn(move || {
+    spawn_then_done(
+        |job| {
+            std::thread::Builder::new()
+                .name("remote-sync".into())
+                .spawn(job)
+                .map(|_| ())
+        },
+        move || {
             let workers: Vec<_> = rt
                 .source_ids()
                 .into_iter()
                 .filter_map(|id| {
-                    std::thread::Builder::new()
+                    let spawned = std::thread::Builder::new()
                         .name(format!("remote-sync-{id}"))
                         .spawn(move || {
                             let _ = sync_source(rt, &id, remote_enabled);
-                        })
+                        });
+                    spawned
+                        .map_err(|e| tracing::warn!("Could not start a remote sync thread: {e}"))
                         .ok()
                 })
                 .collect();
             for worker in workers {
                 let _ = worker.join();
             }
+        },
+        done,
+    );
+}
+
+/// Runs `work` through `spawner` and then `done`. If the spawner cannot start
+/// the job, `done` runs right away so whoever waits on it never hangs.
+fn spawn_then_done(
+    spawner: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+    work: impl FnOnce() + Send + 'static,
+    done: Box<dyn FnOnce() + Send>,
+) {
+    let done = Arc::new(parking_lot::Mutex::new(Some(done)));
+    let in_thread = done.clone();
+    let job: Box<dyn FnOnce() + Send> = Box::new(move || {
+        work();
+        if let Some(done) = in_thread.lock().take() {
             done();
-        });
-    if let Err(e) = spawned {
+        }
+    });
+    if let Err(e) = spawner(job) {
         tracing::warn!("Could not start the remote sync thread: {e}");
+        if let Some(done) = done.lock().take() {
+            done();
+        }
     }
 }
 
@@ -219,7 +273,8 @@ mod tests {
         pages: Vec<Result<CatalogPage, RemoteError>>,
         art: Result<Vec<u8>, RemoteError>,
         art_calls: Mutex<Vec<String>>,
-        config: Option<String>,
+        working: Option<String>,
+        during_walk: Option<Box<dyn Fn() + Send + Sync>>,
     }
 
     impl FakeBackend {
@@ -228,7 +283,8 @@ mod tests {
                 pages,
                 art: Ok(png_bytes()),
                 art_calls: Mutex::new(Vec::new()),
-                config: None,
+                working: None,
+                during_walk: None,
             }
         }
     }
@@ -239,6 +295,9 @@ mod tests {
         }
 
         fn catalog_page(&self, cursor: usize) -> Result<CatalogPage, RemoteError> {
+            if let Some(hook) = &self.during_walk {
+                hook();
+            }
             self.pages[cursor].clone()
         }
 
@@ -255,8 +314,8 @@ mod tests {
             self.art.clone()
         }
 
-        fn updated_config(&self) -> Option<String> {
-            self.config.clone()
+        fn working_uri(&self) -> Option<String> {
+            self.working.clone()
         }
     }
 
@@ -506,17 +565,106 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_connection_is_stored_with_the_source() {
+    fn sync_stores_only_the_working_uri_in_the_current_config() {
+        let library = test_library();
+        let source = library
+            .insert_remote_source(
+                "plex",
+                "srv",
+                "Home",
+                r#"{"server_token":"old","preferred_uri":null}"#,
+            )
+            .unwrap();
+        // Another connection rewrites the config while the walk is running,
+        // as a re-sign-in would.
+        let db_path = library.db_path();
+        let id = source.clone();
+        let mut backend = FakeBackend::new(vec![page(vec![meta("1", "Album", None)], None, None)]);
+        backend.working = Some("http://nas:32400".to_string());
+        backend.during_walk = Some(Box::new(move || {
+            let other = Library::new_with_path(std::path::Path::new(&db_path)).unwrap();
+            other
+                .update_remote_source_config(
+                    &id,
+                    r#"{"server_token":"fresh","preferred_uri":null}"#,
+                )
+                .unwrap();
+        }));
+        let (rt, _) = runtime(library, &source, backend);
+
+        sync_source(&rt, &source, true).unwrap();
+        let row = rt.with_library(|l| l.list_remote_sources().unwrap().remove(0));
+        let stored: serde_json::Value = serde_json::from_str(&row.config_json).unwrap();
+        assert_eq!(
+            stored,
+            serde_json::json!({"server_token": "fresh", "preferred_uri": "http://nas:32400"})
+        );
+    }
+
+    #[test]
+    fn an_unchanged_working_uri_leaves_the_stored_config_alone() {
+        let library = test_library();
+        let config = r#"{"b":1,"preferred_uri":"http://nas:32400"}"#;
+        let source = library
+            .insert_remote_source("plex", "srv", "Home", config)
+            .unwrap();
+        let mut backend = FakeBackend::new(vec![page(vec![meta("1", "Album", None)], None, None)]);
+        backend.working = Some("http://nas:32400".to_string());
+        let (rt, _) = runtime(library, &source, backend);
+        sync_source(&rt, &source, true).unwrap();
+        let row = rt.with_library(|l| l.list_remote_sources().unwrap().remove(0));
+        assert_eq!(row.config_json, config);
+    }
+
+    #[test]
+    fn a_failed_record_does_not_skip_the_visibility_pass() {
         let library = test_library();
         let source = library
             .insert_remote_source("plex", "srv", "Home", "{}")
             .unwrap();
+        let db_path = library.db_path();
+        let id = source.clone();
         let mut backend = FakeBackend::new(vec![page(vec![meta("1", "Album", None)], None, None)]);
-        backend.config = Some(r#"{"preferred":"http://nas"}"#.to_string());
+        // Break only the sync bookkeeping: the record update then fails.
+        backend.during_walk = Some(Box::new(move || {
+            let other = Library::new_with_path(std::path::Path::new(&db_path)).unwrap();
+            other
+                .write_connection()
+                .execute_batch(&format!(
+                    "CREATE TRIGGER fail_record BEFORE UPDATE OF last_sync_at ON remote_sources
+                     WHEN NEW.id = '{id}' BEGIN SELECT RAISE(ABORT, 'no'); END"
+                ))
+                .unwrap();
+        }));
         let (rt, _) = runtime(library, &source, backend);
         sync_source(&rt, &source, true).unwrap();
-        let row = rt.with_library(|l| l.list_remote_sources().unwrap().remove(0));
-        assert_eq!(row.config_json, r#"{"preferred":"http://nas"}"#);
+        assert_eq!(count(&rt, "SELECT COUNT(*) FROM library_tracks"), 1);
+    }
+
+    #[test]
+    fn the_done_callback_runs_when_the_thread_cannot_start() {
+        let called = Arc::new(AtomicBool::new(false));
+        let flag = called.clone();
+        spawn_then_done(
+            |_| Err(std::io::Error::other("no threads")),
+            || {},
+            Box::new(move || flag.store(true, Ordering::Release)),
+        );
+        assert!(called.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn the_done_callback_runs_once_after_the_work() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let order = tx.clone();
+        spawn_then_done(
+            |job| std::thread::Builder::new().spawn(job).map(|_| ()),
+            move || order.send("work").unwrap(),
+            Box::new(move || tx.send("done").unwrap()),
+        );
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "work");
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "done");
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
     }
 
     #[test]

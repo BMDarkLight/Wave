@@ -78,14 +78,23 @@ impl RemoteRuntime {
     }
 
     /// Opens the runtime's own connection to `db_path`. A second call keeps
-    /// the first runtime and drops its arguments.
+    /// the first runtime and drops its arguments. An unopenable database is an
+    /// error for the caller to log: remote sources are optional.
     #[allow(dead_code)]
-    pub fn init_runtime(db_path: PathBuf, events: EventSink) -> &'static RemoteRuntime {
-        RUNTIME.get_or_init(|| {
-            let library = Library::new_with_path(&db_path)
-                .expect("open the library database for remote sources");
-            Self::from_library(library, events)
-        })
+    pub fn init_runtime(
+        db_path: PathBuf,
+        events: EventSink,
+    ) -> Result<&'static RemoteRuntime, String> {
+        if let Some(existing) = RUNTIME.get() {
+            return Ok(existing);
+        }
+        let runtime = Self::open_runtime(&db_path, events)?;
+        Ok(RUNTIME.get_or_init(|| runtime))
+    }
+
+    fn open_runtime(db_path: &std::path::Path, events: EventSink) -> Result<Self, String> {
+        let library = Library::new_with_path(db_path)?;
+        Ok(Self::from_library(library, events))
     }
 
     fn from_library(library: Library, events: EventSink) -> Self {
@@ -284,6 +293,16 @@ mod tests {
         assert!(rt.backend(&other).is_none());
         assert!(rt.backend(&broken).is_none());
         assert_eq!(rt.statuses(), vec![(plex, SourceState::Ok)]);
+    }
+
+    #[test]
+    fn an_unopenable_database_is_an_error_not_a_panic() {
+        let dir = std::env::temp_dir().join(format!("wave-test-runtime-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("not-a-directory");
+        std::fs::write(&file, b"x").unwrap();
+        let (events, _) = collector();
+        assert!(RemoteRuntime::open_runtime(&file.join("library.db"), events).is_err());
     }
 
     #[test]
