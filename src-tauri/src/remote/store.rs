@@ -306,20 +306,28 @@ struct Candidate {
 
 #[allow(dead_code)]
 impl Library {
+    /// The id comes from the server's own stable key, so removing a server and
+    /// adding it again gives the same id and its tombstones re-match.
     pub fn insert_remote_source(
         &self,
         kind: &str,
+        stable_key: &str,
         display_name: &str,
         config_json: &str,
     ) -> Result<String, String> {
-        let id = Uuid::new_v4().to_string();
-        self.write_connection()
+        let id = format!("{kind}-{}", crate::remote::uri::percent_encode(stable_key));
+        let added = self
+            .write_connection()
             .execute(
-                "INSERT INTO remote_sources (id, kind, display_name, config_json, created_at)
+                "INSERT OR IGNORE INTO remote_sources
+                    (id, kind, display_name, config_json, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![id, kind, display_name, config_json, now_timestamp()],
             )
             .map_err(sql_error("add remote source"))?;
+        if added == 0 {
+            return Err("This server is already added".to_string());
+        }
         Ok(id)
     }
 
@@ -903,7 +911,9 @@ mod tests {
     #[test]
     fn walk_upserts_and_finish_tombstones_unseen() {
         let library = test_library();
-        let source = library.insert_remote_source("plex", "Home", "{}").unwrap();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
         let three = [
             meta("1", "One", "Band", "Album", 100.0),
             meta("2", "Two", "Band", "Album", 110.0),
@@ -937,7 +947,9 @@ mod tests {
     #[test]
     fn unfinished_walk_tombstones_nothing() {
         let library = test_library();
-        let source = library.insert_remote_source("plex", "Home", "{}").unwrap();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
         walk(
             &library,
             &source,
@@ -970,7 +982,9 @@ mod tests {
     #[test]
     fn changed_rating_keys_revive_rows_and_keep_ids() {
         let library = test_library();
-        let source = library.insert_remote_source("plex", "Home", "{}").unwrap();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
         walk(
             &library,
             &source,
@@ -1029,7 +1043,9 @@ mod tests {
     #[test]
     fn tombstoned_rows_revive_only_on_a_matching_duration() {
         let library = test_library();
-        let source = library.insert_remote_source("plex", "Home", "{}").unwrap();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
         walk(
             &library,
             &source,
@@ -1068,7 +1084,9 @@ mod tests {
     #[test]
     fn local_copy_hides_remote_copy() {
         let library = test_library();
-        let source = library.insert_remote_source("plex", "Home", "{}").unwrap();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
         insert_local(&library, "local", "Song", "Band", "Album");
         walk(
             &library,
@@ -1091,8 +1109,12 @@ mod tests {
     #[test]
     fn cached_remote_beats_uncached_and_older_source_beats_newer() {
         let library = test_library();
-        let s1 = library.insert_remote_source("plex", "Old", "{}").unwrap();
-        let s2 = library.insert_remote_source("plex", "New", "{}").unwrap();
+        let s1 = library
+            .insert_remote_source("plex", "Old", "Old", "{}")
+            .unwrap();
+        let s2 = library
+            .insert_remote_source("plex", "New", "New", "{}")
+            .unwrap();
         walk(&library, &s1, &[meta("1", "Song", "Band", "Album", 100.0)]);
         walk(&library, &s2, &[meta("1", "Song", "Band", "Album", 100.0)]);
 
@@ -1126,7 +1148,9 @@ mod tests {
     #[test]
     fn disabled_outside_sourcing_hides_all_remote() {
         let library = test_library();
-        let source = library.insert_remote_source("plex", "Home", "{}").unwrap();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
         walk(
             &library,
             &source,
@@ -1151,7 +1175,9 @@ mod tests {
     #[test]
     fn remote_rows_in_search_only_when_visible() {
         let library = test_library();
-        let source = library.insert_remote_source("plex", "Home", "{}").unwrap();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
         walk(
             &library,
             &source,
@@ -1168,7 +1194,9 @@ mod tests {
     #[test]
     fn tombstone_source_keeps_downloads() {
         let library = test_library();
-        let source = library.insert_remote_source("plex", "Home", "{}").unwrap();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
         walk(
             &library,
             &source,
@@ -1211,7 +1239,9 @@ mod tests {
     #[test]
     fn local_indexing_never_touches_remote_rows() {
         let library = test_library();
-        let source = library.insert_remote_source("plex", "Home", "{}").unwrap();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
         walk(
             &library,
             &source,
@@ -1276,7 +1306,9 @@ mod tests {
     #[test]
     fn upsert_updates_metadata_and_keeps_downloads_local() {
         let library = test_library();
-        let source = library.insert_remote_source("plex", "Home", "{}").unwrap();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
         walk(
             &library,
             &source,
@@ -1309,7 +1341,9 @@ mod tests {
     #[test]
     fn stream_info_cache_state_and_eviction_order() {
         let library = test_library();
-        let source = library.insert_remote_source("plex", "Home", "{}").unwrap();
+        let source = library
+            .insert_remote_source("plex", "Home", "Home", "{}")
+            .unwrap();
         walk(
             &library,
             &source,
@@ -1406,8 +1440,12 @@ mod tests {
     #[test]
     fn album_art_applies_to_the_whole_album_in_one_source() {
         let library = test_library();
-        let s1 = library.insert_remote_source("plex", "A", "{}").unwrap();
-        let s2 = library.insert_remote_source("plex", "B", "{}").unwrap();
+        let s1 = library
+            .insert_remote_source("plex", "A", "A", "{}")
+            .unwrap();
+        let s2 = library
+            .insert_remote_source("plex", "B", "B", "{}")
+            .unwrap();
         let with_art = |id: &str, title: &str, album: &str, art: Option<&str>| {
             let mut m = meta(id, title, "Band", album, 100.0);
             m.art_ref = art.map(str::to_string);
@@ -1454,10 +1492,89 @@ mod tests {
     }
 
     #[test]
+    fn readding_a_removed_source_revives_its_rows() {
+        let library = test_library();
+        let source = library
+            .insert_remote_source("plex", "srv1", "Home", "{}")
+            .unwrap();
+        let two = [
+            meta("1", "One", "Band", "Album", 100.0),
+            meta("2", "Two", "Band", "Album", 110.0),
+        ];
+        walk(&library, &source, &two);
+        let before = [
+            track_id(&library, &source, "1"),
+            track_id(&library, &source, "2"),
+        ];
+        let playlist = library.create_playlist("Mix", None).unwrap();
+        add_to_playlist(&library, &playlist.id, &before[0]);
+        let path = RemoteUri::new(&source, "1").to_path();
+        library
+            .record_listen(&path, 30.0, true, false, None)
+            .unwrap();
+
+        library.tombstone_remote_source(&source).unwrap();
+        assert_eq!(
+            count(
+                &library,
+                "SELECT COUNT(*) FROM tracks WHERE remote_missing = 1"
+            ),
+            2
+        );
+
+        let again = library
+            .insert_remote_source("plex", "srv1", "Home", "{}")
+            .unwrap();
+        assert_eq!(again, source);
+        let summary = walk(&library, &again, &two);
+        assert_eq!(summary.revived, 2);
+
+        assert_eq!(track_id(&library, &again, "1"), before[0]);
+        assert_eq!(track_id(&library, &again, "2"), before[1]);
+        assert_eq!(count(&library, "SELECT COUNT(*) FROM tracks"), 2);
+        assert_eq!(
+            count(
+                &library,
+                "SELECT COUNT(*) FROM tracks WHERE remote_missing = 0"
+            ),
+            2
+        );
+        let in_playlist = library.get_playlist_tracks(&playlist.id).unwrap();
+        assert_eq!(in_playlist.len(), 1);
+        assert_eq!(in_playlist[0].id, before[0]);
+        let plays: i64 = library
+            .read_connection()
+            .query_row(
+                "SELECT play_count FROM listen_stats WHERE track_id = ?1",
+                params![before[0]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(plays, 1);
+    }
+
+    #[test]
+    fn adding_the_same_server_twice_is_refused() {
+        let library = test_library();
+        let id = library
+            .insert_remote_source("plex", "srv1", "Home", "{}")
+            .unwrap();
+        let error = library
+            .insert_remote_source("plex", "srv1", "Other name", "{}")
+            .unwrap_err();
+        assert_eq!(error, "This server is already added");
+        assert_eq!(library.list_remote_sources().unwrap().len(), 1);
+        let other = library
+            .insert_remote_source("plex", "srv2", "Office", "{}")
+            .unwrap();
+        assert_ne!(other, id);
+    }
+
+    #[test]
     fn source_rows_round_trip() {
         let library = test_library();
         let id = library
-            .insert_remote_source("plex", "Home", "{\"a\":1}")
+            .insert_remote_source("plex", "Home", "Home", "{\"a\":1}")
             .unwrap();
         library
             .update_remote_source_config(&id, "{\"a\":2}")
