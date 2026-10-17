@@ -40,7 +40,7 @@ const SUPPORTED_EXTENSIONS: &[&str] = &[
     "mp4", "oga", "ogg", "opus", "wav", "wave", "weba",
 ];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Track {
     pub id: String,
     pub path: String,
@@ -85,6 +85,16 @@ pub struct Track {
     /// preview badge and the download affordance in the UI.
     #[serde(default)]
     pub source_state: Option<String>,
+    /// Remote library source this track belongs to; `None` for local files
+    /// and search-source rows.
+    #[serde(default)]
+    pub remote_source_id: Option<String>,
+    /// Remote tracks only: `None` not cached, `"partial"` or `"complete"`.
+    #[serde(default)]
+    pub cache_state: Option<String>,
+    /// The remote server no longer lists this track.
+    #[serde(default)]
+    pub remote_missing: bool,
 }
 
 #[derive(Default)]
@@ -288,6 +298,9 @@ pub fn extract_track_with_options(
         indexed_at,
         source_provider: None,
         source_state: None,
+        remote_source_id: None,
+        cache_state: None,
+        remote_missing: false,
         is_saf_uri: path.starts_with("content://"),
     };
 
@@ -360,6 +373,9 @@ fn extract_track_content_uri(
         indexed_at,
         source_provider: None,
         source_state: None,
+        remote_source_id: None,
+        cache_state: None,
+        remote_missing: false,
         is_saf_uri: true,
     };
 

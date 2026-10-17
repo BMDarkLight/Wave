@@ -654,6 +654,9 @@ fn placeholder_track(path: &str) -> Track {
         indexed_at: 0,
         source_provider: None,
         source_state: None,
+        remote_source_id: None,
+        cache_state: None,
+        remote_missing: false,
         is_saf_uri,
     }
 }
@@ -4137,6 +4140,9 @@ fn source_track_to_track(
         is_saf_uri: false,
         source_provider: Some(source.provider.clone()),
         source_state: None,
+        remote_source_id: None,
+        cache_state: None,
+        remote_missing: false,
     }
 }
 

@@ -36,7 +36,8 @@ pub(crate) const TRACK_SELECT_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.
                         t.source_provider, t.source_state,
                         (t.lyrics GLOB '*[[][0-9]:[0-9][0-9]*' OR t.lyrics GLOB '*[[][0-9][0-9]:[0-9][0-9]*'
                          OR t.lyrics GLOB '*[[][0-9][0-9][0-9]:[0-9][0-9]*'
-                         OR t.lyrics LIKE '%begin=%') IS 1 AS has_synced_lyrics";
+                         OR t.lyrics LIKE '%begin=%') IS 1 AS has_synced_lyrics,
+                        t.remote_source_id, t.cache_state, t.remote_missing";
 
 /// Full track row including lyrics (lyrics panel / detail).
 pub(crate) const TRACK_DETAIL_COLUMNS: &str =
@@ -49,7 +50,8 @@ pub(crate) const TRACK_DETAIL_COLUMNS: &str =
                         t.source_provider, t.source_state,
                         (t.lyrics GLOB '*[[][0-9]:[0-9][0-9]*' OR t.lyrics GLOB '*[[][0-9][0-9]:[0-9][0-9]*'
                          OR t.lyrics GLOB '*[[][0-9][0-9][0-9]:[0-9][0-9]*'
-                         OR t.lyrics LIKE '%begin=%') IS 1 AS has_synced_lyrics";
+                         OR t.lyrics LIKE '%begin=%') IS 1 AS has_synced_lyrics,
+                        t.remote_source_id, t.cache_state, t.remote_missing";
 
 pub(crate) const TRACK_FROM: &str = "tracks t LEFT JOIN album_art aa ON aa.id = t.album_art_id";
 
@@ -421,6 +423,15 @@ impl Library {
         ensure_track_column(&connection, "source_url", "TEXT")?;
         ensure_track_column(&connection, "source_state", "TEXT")?;
         ensure_track_column(&connection, "source_fetched_at", "INTEGER")?;
+        // Remote-library rows. `source_provider` / `source_id` hold the backend
+        // kind and the id on that server; `remote_source_id` names which
+        // configured server, so two servers may reuse one id.
+        ensure_track_column(&connection, "remote_source_id", "TEXT")?;
+        ensure_track_column(&connection, "remote_visible", "INTEGER NOT NULL DEFAULT 0")?;
+        ensure_track_column(&connection, "remote_missing", "INTEGER NOT NULL DEFAULT 0")?;
+        ensure_track_column(&connection, "cache_state", "TEXT")?;
+        ensure_track_column(&connection, "remote_updated_at", "INTEGER")?;
+        ensure_track_column(&connection, "remote_art_ref", "TEXT")?;
         // Which analysis made a saved waveform. Rows from before the column
         // existed are version 1 and get recomputed.
         ensure_table_column(
@@ -438,9 +449,22 @@ impl Library {
         connection
             .execute_batch(
                 "
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_source
+                DROP INDEX IF EXISTS idx_tracks_source;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_source_v2
                     ON tracks(source_provider, source_id)
-                    WHERE source_provider IS NOT NULL;
+                    WHERE source_provider IS NOT NULL AND remote_source_id IS NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_remote
+                    ON tracks(remote_source_id, source_id)
+                    WHERE remote_source_id IS NOT NULL;
+                CREATE TABLE IF NOT EXISTS remote_sources (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    config_json TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    last_sync_at INTEGER,
+                    last_sync_error TEXT
+                );
                 CREATE INDEX IF NOT EXISTS idx_tracks_source_state
                     ON tracks(source_state, source_fetched_at);
                 ",
@@ -844,7 +868,7 @@ impl Library {
             let mut statement = connection
                 .prepare(&format!(
                     "SELECT {TRACK_SELECT_COLUMNS}
-                     FROM {TRACK_FROM}
+                     FROM {LIBRARY_TRACK_FROM}
                      ORDER BY t.name"
                 ))
                 .map_err(|error| format!("Failed to prepare all-local-files query: {error}"))?;
@@ -1687,7 +1711,7 @@ impl Library {
             .is_some_and(|id| id == playlist_id)
         {
             let mut statement = connection
-                .prepare("SELECT path FROM tracks ORDER BY path")
+                .prepare("SELECT path FROM tracks WHERE remote_source_id IS NULL ORDER BY path")
                 .map_err(|e| format!("Failed to prepare path query: {e}"))?;
             let paths = statement
                 .query_map([], |row| row.get(0))
@@ -3783,6 +3807,9 @@ pub(crate) fn row_to_track(row: &rusqlite::Row<'_>, cover_root: &Path) -> rusqli
         album_art_id,
         source_provider: row.get(29)?,
         source_state: row.get(30)?,
+        remote_source_id: row.get(32)?,
+        cache_state: row.get(33)?,
+        remote_missing: row.get(34)?,
     })
 }
 
@@ -4047,7 +4074,8 @@ fn resolve_track_id_by_path(conn: &impl Queryable, path: &str) -> Result<Option<
 
 /// Definition of the `library_tracks` view, exactly as SQLite stores it.
 const LIBRARY_TRACKS_VIEW_SQL: &str = "CREATE VIEW library_tracks AS \
-     SELECT * FROM tracks WHERE source_state IS NULL OR source_state = 'downloaded'";
+     SELECT * FROM tracks WHERE source_state IS NULL OR source_state = 'downloaded' \
+     OR (source_state = 'remote' AND remote_visible = 1)";
 
 /// Create or update the `library_tracks` view, but only when it is missing or
 /// out of date. Every process that opens the library runs this, and the CLI is
@@ -5794,6 +5822,9 @@ mod tests {
             indexed_at: 1,
             source_provider: None,
             source_state: None,
+            remote_source_id: None,
+            cache_state: None,
+            remote_missing: false,
             is_saf_uri: false,
         }
     }
@@ -7776,6 +7807,113 @@ mod tests {
         ensure_library_tracks_view(&connection).unwrap();
         assert_eq!(stored(&connection), LIBRARY_TRACKS_VIEW_SQL);
         ensure_library_tracks_view(&connection).unwrap();
+    }
+
+    fn insert_remote_row(
+        library: &Library,
+        remote_source_id: &str,
+        remote_id: &str,
+        visible: bool,
+    ) -> rusqlite::Result<usize> {
+        let connection = library.lock_connection().unwrap();
+        connection.execute(
+            "INSERT INTO tracks (id, path, name, title, artist, album, format, file_size,
+                                 modified_at, indexed_at, source_provider, source_id,
+                                 source_state, remote_source_id, remote_visible)
+             VALUES (?1, ?2, 'r.flac', 'Remote Song', 'Remote Artist', 'Remote Album', 'FLAC',
+                     1, 1, 1, 'plex', ?3, 'remote', ?4, ?5)",
+            params![
+                format!("{remote_source_id}-{remote_id}"),
+                format!("wave-remote://{remote_source_id}/{remote_id}"),
+                remote_id,
+                remote_source_id,
+                visible as i64,
+            ],
+        )
+    }
+
+    #[test]
+    fn library_folder_sync_never_deletes_remote_rows() {
+        let library = open_test_library().unwrap();
+        let default_id = library.default_playlist_id().unwrap();
+        {
+            let connection = library.lock_connection().unwrap();
+            upsert_track(&*connection, &sample_track("local", "/m/a.mp3")).unwrap();
+        }
+        insert_remote_row(&library, "s1", "1", true).unwrap();
+
+        let (to_remove, _) = library
+            .diff_playlist_paths(&default_id, &["/m/a.mp3".to_string()])
+            .unwrap();
+        assert!(
+            !to_remove.iter().any(|p| p.starts_with("wave-remote://")),
+            "{to_remove:?}"
+        );
+
+        library
+            .apply_playlist_sync(&default_id, &to_remove, &[], &[])
+            .unwrap();
+        let connection = library.lock_connection().unwrap();
+        let remote_rows: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM tracks WHERE path = 'wave-remote://s1/1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remote_rows, 1);
+    }
+
+    #[test]
+    fn two_sources_may_share_a_remote_id() {
+        let library = open_test_library().unwrap();
+        insert_remote_row(&library, "s1", "100", true).unwrap();
+        insert_remote_row(&library, "s2", "100", true).unwrap();
+
+        // The same source cannot hold one remote id twice.
+        let connection = library.lock_connection().unwrap();
+        let duplicate = connection.execute(
+            "INSERT INTO tracks (id, path, name, title, artist, album, format, file_size,
+                                 modified_at, indexed_at, source_provider, source_id,
+                                 source_state, remote_source_id)
+             VALUES ('dup', 'wave-remote://s1/dup', 'r', 'r', 'r', 'r', 'FLAC', 1, 1, 1,
+                     'plex', '100', 'remote', 's1')",
+            [],
+        );
+        assert!(duplicate.is_err());
+
+        // Search-source rows still conflict on (source_provider, source_id).
+        let search_row = |id: &str| {
+            connection.execute(
+                "INSERT INTO tracks (id, path, name, title, artist, album, format, file_size,
+                                     modified_at, indexed_at, source_provider, source_id,
+                                     source_state)
+                 VALUES (?1, ?2, 'r', 'r', 'r', 'r', 'MP3', 1, 1, 1, 'deezer', '7', 'cached')",
+                params![id, format!("/cache/{id}.mp3")],
+            )
+        };
+        search_row("a").unwrap();
+        assert!(search_row("b").is_err());
+    }
+
+    #[test]
+    fn hidden_remote_rows_stay_out_of_library_listing() {
+        let library = open_test_library().unwrap();
+        insert_remote_row(&library, "s1", "1", false).unwrap();
+
+        let listed = |library: &Library| {
+            let tracks = library.get_default_playlist_tracks().unwrap();
+            let albums = library.list_albums().unwrap();
+            (tracks.len(), albums.len())
+        };
+        assert_eq!(listed(&library), (0, 0));
+
+        library
+            .lock_connection()
+            .unwrap()
+            .execute("UPDATE tracks SET remote_visible = 1", [])
+            .unwrap();
+        assert_eq!(listed(&library), (1, 1));
     }
 
     #[test]

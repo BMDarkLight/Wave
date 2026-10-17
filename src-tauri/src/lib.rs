@@ -23,6 +23,7 @@ mod metadata;
 mod os_media;
 mod path_validation;
 pub mod playback_daemon;
+mod remote;
 mod sources;
 mod tag_edit;
 mod waveform_service;

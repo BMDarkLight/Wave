@@ -856,6 +856,9 @@ mod tests {
             indexed_at: 0,
             source_provider: None,
             source_state: None,
+            remote_source_id: None,
+            cache_state: None,
+            remote_missing: false,
             is_saf_uri: false,
         }
     }

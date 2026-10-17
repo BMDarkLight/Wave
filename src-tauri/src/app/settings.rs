@@ -84,6 +84,17 @@ pub struct AppSettings {
     /// is protected (playing or queued).
     #[serde(default = "default_source_cache_limit_mb")]
     pub source_cache_limit_mb: u64,
+    /// Master switch for the remote library (Plex and later backends). Off
+    /// hides every remote source and keeps the app from contacting them.
+    #[serde(default)]
+    pub remote_sources_enabled: bool,
+    /// Allow remote streaming and caching over a metered connection.
+    #[serde(default)]
+    pub remote_cellular_enabled: bool,
+    /// Plex client identifier, generated once and then kept so the server
+    /// sees the same device across launches.
+    #[serde(default)]
+    pub plex_client_identifier: Option<String>,
     /// Keep coupled songs back to back in the queue.
     #[serde(default)]
     pub song_coupling_enabled: bool,
@@ -105,8 +116,15 @@ pub struct SongCouple {
     pub second: String,
 }
 
+/// The old default, replaced because remote-library tracks share this cache.
+const LEGACY_SOURCE_CACHE_LIMIT_MB: u64 = 512;
+
 fn default_source_cache_limit_mb() -> u64 {
-    512
+    if cfg!(target_os = "android") {
+        1024
+    } else {
+        2048
+    }
 }
 
 fn default_outside_sourcing_enabled() -> bool {
@@ -163,6 +181,9 @@ impl Default for AppSettings {
             spotify_client_id: None,
             jamendo_client_id: None,
             source_cache_limit_mb: default_source_cache_limit_mb(),
+            remote_sources_enabled: false,
+            remote_cellular_enabled: false,
+            plex_client_identifier: None,
             song_coupling_enabled: false,
             song_couples: Vec::new(),
             auto_update_enabled: default_auto_update_enabled(),
@@ -266,6 +287,9 @@ impl AppSettings {
             self.last_position_seconds = 0.0;
         }
         self.last_position_seconds = self.last_position_seconds.max(0.0);
+        if self.source_cache_limit_mb == LEGACY_SOURCE_CACHE_LIMIT_MB {
+            self.source_cache_limit_mb = default_source_cache_limit_mb();
+        }
     }
 }
 
@@ -384,6 +408,27 @@ mod tests {
         assert_eq!(
             settings.active_song_couples(),
             [("a".to_string(), "b".to_string())]
+        );
+    }
+
+    #[test]
+    fn legacy_cache_limit_migrates_to_new_default() {
+        let load = |json: &str| {
+            let mut settings: AppSettings = serde_json::from_str(json).unwrap();
+            settings.normalize();
+            settings
+        };
+        assert_eq!(
+            load(r#"{"source_cache_limit_mb":512}"#).source_cache_limit_mb,
+            if cfg!(target_os = "android") {
+                1024
+            } else {
+                2048
+            }
+        );
+        assert_eq!(
+            load(r#"{"source_cache_limit_mb":4096}"#).source_cache_limit_mb,
+            4096
         );
     }
 }
