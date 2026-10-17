@@ -460,6 +460,7 @@ function App() {
     displayDuration,
     displayPosition,
     updatePlaybackState,
+    pollPlaybackState,
     loadPlaybackMode,
     loadQueueTracks,
     handlePlayTrack,
@@ -1061,7 +1062,7 @@ function App() {
 
     initApp();
     const interval = setInterval(
-      () => updatePlaybackState().catch(() => {}),
+      () => pollPlaybackState().catch(() => {}),
       500,
     );
     const queueInterval = setInterval(

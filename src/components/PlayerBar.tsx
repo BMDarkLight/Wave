@@ -29,6 +29,7 @@ import WaveformSeek from "./WaveformSeek";
 import { formatTime } from "../utils/format";
 import { getTrackTitle } from "../utils/track";
 import { formatSpeed } from "../utils/player";
+import { beginSeekGesture, endSeekGesture } from "../utils/seekGesture";
 import type {
   EqSettings,
   PlaybackMode,
@@ -128,8 +129,8 @@ export default function PlayerBar({
       step="1"
       value={displayPosition}
       disabled={!playbackState.current_path}
-      onPointerDown={() => document.body.classList.add("is-seeking")}
-      onPointerCancel={() => document.body.classList.remove("is-seeking")}
+      onPointerDown={beginSeekGesture}
+      onPointerCancel={endSeekGesture}
       onChange={(event) => onSeekChange(Number(event.target.value))}
       onPointerUp={(event) => onSeekCommit(Number(event.currentTarget.value))}
     />

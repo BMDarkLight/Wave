@@ -43,6 +43,7 @@ import {
 } from "../utils/player";
 import { formatInvokeError } from "../utils/errors";
 import { emptyPlaybackState } from "../utils/track";
+import { endSeekGesture, isSeeking } from "../utils/seekGesture";
 import type { ContextMenuAnchor } from "../components/ContextMenu";
 import type { SortDirection } from "../components/LibraryTrackList";
 
@@ -127,8 +128,29 @@ export function usePlaybackController({
     playbackState.duration_seconds ?? currentTrack?.duration_seconds ?? 0;
   const displayPosition = Math.min(seekValue, displayDuration || seekValue);
 
+  // Answers to playback polls can come back out of order when the backend is
+  // busy, and one sent before a seek still carries the old position. Either
+  // used to drag the seek bar back until the next poll. `pollSeq` numbers the
+  // requests, `appliedSeq` is the newest one shown, and `seekEpoch` counts
+  // seeks so a position read before the latest one is dropped.
+  const pollSeqRef = useRef(0);
+  const appliedSeqRef = useRef(0);
+  const seekEpochRef = useRef(0);
+  const pollsInFlightRef = useRef(0);
+
   const updatePlaybackState = async () => {
-    const state = await getPlaybackState();
+    const seq = ++pollSeqRef.current;
+    const seekEpoch = seekEpochRef.current;
+    pollsInFlightRef.current += 1;
+    let state: PlaybackState;
+    try {
+      state = await getPlaybackState();
+    } finally {
+      pollsInFlightRef.current -= 1;
+    }
+    if (seq < appliedSeqRef.current) return;
+    appliedSeqRef.current = seq;
+    const positionIsCurrent = seekEpoch === seekEpochRef.current;
     setPlaybackState({ ...emptyPlaybackState, ...state });
     if (androidHostRef.current) {
       if ((state.volume ?? 1) !== 1) {
@@ -138,18 +160,25 @@ export function usePlaybackController({
     } else {
       setVolumeValue(state.volume ?? 0.8);
     }
-    if (!document.body.classList.contains("is-seeking")) {
+    if (positionIsCurrent && !isSeeking()) {
       setSeekValue(state.position_seconds ?? 0);
     }
     // Keep the OS media controls position in sync during playback and pause.
     // Never clear the session just because a poll saw no path — that tears down
     // the live notification / FGS and causes flicker + empty "wave" cards during
     // startup and folder sync. Backend stop/auto-advance already call clear.
-    if (state.current_path) {
+    if (state.current_path && positionIsCurrent) {
       updateMediaPosition(state.position_seconds, state.is_playing).catch(
         console.error,
       );
     }
+  };
+
+  /** The timer's poll. It waits its turn rather than piling up requests
+   * behind a busy backend. */
+  const pollPlaybackState = async () => {
+    if (pollsInFlightRef.current > 0) return;
+    await updatePlaybackState();
   };
 
   const loadPlaybackMode = async () => {
@@ -291,6 +320,7 @@ export function usePlaybackController({
   };
 
   const handleSeek = async (value: number) => {
+    seekEpochRef.current += 1;
     try {
       setSeekValue(value);
       if (playbackState.current_path) {
@@ -300,7 +330,7 @@ export function usePlaybackController({
     } catch (err) {
       setError(formatInvokeError(err, "Failed to seek track"));
     } finally {
-      document.body.classList.remove("is-seeking");
+      endSeekGesture();
     }
   };
 
@@ -554,6 +584,7 @@ export function usePlaybackController({
     displayDuration,
     displayPosition,
     updatePlaybackState,
+    pollPlaybackState,
     loadPlaybackMode,
     loadQueueTracks,
     handlePlayTrack,

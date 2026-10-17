@@ -83,6 +83,14 @@ impl PlaybackClock {
     }
 }
 
+#[cfg(target_os = "android")]
+fn android_duration_of(path: &str) -> Option<Duration> {
+    crate::android::audio::exo_duration_for(path)
+        .ok()
+        .flatten()
+        .map(|ms| Duration::from_millis(ms as u64))
+}
+
 // ── Queue ─────────────────────────────────────────────────────────────────────
 
 /// In-memory playback queue (separate from the library's persisted playlist).
@@ -1238,10 +1246,9 @@ impl AudioPlayer {
         let _ = crate::android::audio::exo_set_volume(self.output_volume());
         self.sync_android_eq();
 
-        let duration = crate::android::audio::exo_get_duration()
-            .ok()
-            .filter(|&ms| ms > 0)
-            .map(|ms| Duration::from_millis(ms as u64));
+        // Only this track's own length: the cache can still hold the last
+        // one's, and the clock would stop at it.
+        let duration = android_duration_of(path);
 
         self.sink = None;
         self.prefetched_next = None;
@@ -1319,10 +1326,9 @@ impl AudioPlayer {
         if let Some(idx) = self.queue.tracks().iter().position(|p| p == &path) {
             let _ = self.queue.jump(idx);
         }
-        let duration = crate::android::audio::exo_get_duration()
-            .ok()
-            .filter(|&ms| ms > 0)
-            .map(|ms| Duration::from_millis(ms as u64));
+        // Only this track's own length: the cache can still hold the last
+        // one's, and the clock would stop at it.
+        let duration = android_duration_of(&path);
         // ExoPlayer auto-advanced within a playlist built entirely up front
         // (see `play_via_exo`), which only ever set gain for the first item.
         // Without this, every later track in a gapless run keeps whatever
@@ -1336,6 +1342,37 @@ impl AudioPlayer {
             speed: self.speed(),
         };
         true
+    }
+
+    /// ExoPlayer's duration of the current track, once it knows it.
+    #[cfg(target_os = "android")]
+    fn android_exo_duration(&self) -> Option<i64> {
+        let path = self.current_path.as_deref()?.to_str()?;
+        crate::android::audio::exo_duration_for(path).ok().flatten()
+    }
+
+    /// Move the transport clock to where ExoPlayer is. The clock still says
+    /// whether Wave counts as playing and feeds the media session, listening
+    /// stats and the saved position, so it must not drift from what is heard.
+    #[cfg(target_os = "android")]
+    fn sync_android_clock_to_exo(&mut self) {
+        let Some(path) = self
+            .current_path
+            .as_deref()
+            .and_then(|p| p.to_str())
+            .map(str::to_string)
+        else {
+            return;
+        };
+        if let Ok(Some(ms)) = crate::android::audio::exo_position_for(&path) {
+            self.clock.elapsed_before_start = Duration::from_millis(ms as u64);
+            if self.clock.started_at.is_some() {
+                self.clock.started_at = Some(Instant::now());
+            }
+        }
+        if let Some(duration) = android_duration_of(&path) {
+            self.clock.duration = Some(duration);
+        }
     }
 
     #[cfg(target_os = "android")]
@@ -1381,10 +1418,9 @@ impl AudioPlayer {
             let _ = self.queue.jump(idx);
         }
 
-        let duration = crate::android::audio::exo_get_duration()
-            .ok()
-            .filter(|&ms| ms > 0)
-            .map(|ms| Duration::from_millis(ms as u64));
+        // Only this track's own length: the cache can still hold the last
+        // one's, and the clock would stop at it.
+        let duration = android_duration_of(&next_path);
 
         self.current_path = Some(new_path_buf);
         self.clock = PlaybackClock {
@@ -1562,10 +1598,9 @@ impl AudioPlayer {
         let _ = crate::android::audio::exo_set_volume(self.output_volume());
         self.sync_android_eq();
 
-        let duration = crate::android::audio::exo_get_duration()
-            .ok()
-            .filter(|&ms| ms > 0)
-            .map(|ms| Duration::from_millis(ms as u64));
+        // Only this track's own length: the cache can still hold the last
+        // one's, and the clock would stop at it.
+        let duration = android_duration_of(path);
 
         self.sink = None;
         self.prefetched_next = None;
@@ -2208,11 +2243,15 @@ impl AudioPlayer {
     pub fn position_seconds(&self) -> f64 {
         #[cfg(target_os = "android")]
         {
-            if self.current_path.is_some() {
-                // Always prefer the Rust clock for loaded tracks. Exo position
-                // JNI reads a cache that is only refreshed on the main looper,
-                // so polls from Rust worker / Tauri command threads freeze after
-                // seek while the MediaSession notification keeps extrapolating.
+            if let Some(path) = self.current_path.as_deref().and_then(|p| p.to_str()) {
+                // ExoPlayer knows where playback really is. A wall clock runs
+                // on through buffering, a stalled read or a late start, and
+                // one restarted on a handoff tick starts behind. Its position
+                // only counts for the track Rust thinks is playing; until a
+                // handoff is picked up, the clock stands in.
+                if let Ok(Some(ms)) = crate::android::audio::exo_position_for(path) {
+                    return ms as f64 / 1000.0;
+                }
                 return self.clock.position().as_secs_f64();
             }
         }
@@ -2222,10 +2261,8 @@ impl AudioPlayer {
     pub fn duration_seconds(&self) -> Option<f64> {
         #[cfg(target_os = "android")]
         {
-            if let Ok(ms) = crate::android::audio::exo_get_duration() {
-                if ms > 0 {
-                    return Some(ms as f64 / 1000.0);
-                }
+            if let Some(ms) = self.android_exo_duration() {
+                return Some(ms as f64 / 1000.0);
             }
         }
         self.clock.duration.map(|duration| duration.as_secs_f64())
@@ -2237,10 +2274,10 @@ impl AudioPlayer {
     pub fn check_crossfade_track_switch(&mut self) -> bool {
         #[cfg(target_os = "android")]
         {
-            if self.check_android_gapless_handoff() {
-                return true;
-            }
-            return self.check_android_crossfade_handoff();
+            let switched =
+                self.check_android_gapless_handoff() || self.check_android_crossfade_handoff();
+            self.sync_android_clock_to_exo();
+            return switched;
         }
 
         #[cfg(not(target_os = "android"))]

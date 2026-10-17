@@ -5,6 +5,7 @@ import android.media.audiofx.Equalizer;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 
 import androidx.media3.common.AudioAttributes;
@@ -31,7 +32,10 @@ import java.nio.ByteOrder;
  *
  * Play/pause/stop/uri load run on the main looper and block the JNI caller
  * briefly so transport state is consistent when Rust returns. Position is
- * cached from player listeners and a 250ms ticker while playing.
+ * cached from player listeners and a 250ms ticker while playing, with the
+ * time it was read, so callers on other threads can carry it forward. Each
+ * media item carries the path Rust gave for it as its media id, which tells
+ * Rust whose position the cache holds.
  *
  * Crossfade uses a second ExoPlayer instance: the incoming track starts
  * during the fade window while the outgoing track ramps down.
@@ -63,6 +67,10 @@ public final class WaveExoPlayer {
     private volatile boolean playingCached;
     private volatile long positionMsCached;
     private volatile long durationMsCached;
+    /** Media id (the path Rust passed in) of the item the cache describes. */
+    private volatile String mediaIdCached;
+    /** {@link SystemClock#elapsedRealtime()} when the position was cached. */
+    private volatile long positionCachedAtMs;
     private volatile float crossfadeDurationSec = 0f;
     private volatile String upcomingUri = null;
     private volatile boolean crossfadeActive = false;
@@ -243,6 +251,9 @@ public final class WaveExoPlayer {
                 return;
             }
             attachEqualizerForPlayer(player, /* crossfade= */ false);
+            // The ticker can be most of a tick away. Until it runs, the cache
+            // would pair the new item with the old one's position and length.
+            refreshCacheFromPlayer();
             if (!gaplessEnabled || crossfadeActive) {
                 return;
             }
@@ -482,7 +493,7 @@ public final class WaveExoPlayer {
             java.util.ArrayList<MediaItem> items = new java.util.ArrayList<>();
             for (String uriString : uriStrings) {
                 if (uriString != null && !uriString.isEmpty()) {
-                    items.add(MediaItem.fromUri(Uri.parse(normalizeUri(uriString))));
+                    items.add(mediaItemFor(uriString));
                 }
             }
             if (items.isEmpty()) {
@@ -524,7 +535,7 @@ public final class WaveExoPlayer {
             if (uriStrings != null) {
                 for (String uriString : uriStrings) {
                     if (uriString != null && !uriString.isEmpty()) {
-                        items.add(MediaItem.fromUri(Uri.parse(normalizeUri(uriString))));
+                        items.add(mediaItemFor(uriString));
                     }
                 }
             }
@@ -557,16 +568,17 @@ public final class WaveExoPlayer {
         if (player == null) {
             return;
         }
-        if (crossfadeActive && crossfadePlayer != null && crossfadePlayer.isPlaying()) {
-            playingCached = true;
-            positionMsCached = crossfadePlayer.getCurrentPosition();
-            long d = crossfadePlayer.getDuration();
-            durationMsCached = d == C.TIME_UNSET ? 0L : d;
-            return;
-        }
-        playingCached = player.isPlaying();
-        positionMsCached = player.getCurrentPosition();
-        long d = player.getDuration();
+        ExoPlayer source = crossfadeActive && crossfadePlayer != null && crossfadePlayer.isPlaying()
+                ? crossfadePlayer
+                : player;
+        // Id first: a reader that sees the new id with the old position
+        // only gets a position that is a tick stale, never another track's.
+        MediaItem item = source.getCurrentMediaItem();
+        mediaIdCached = item != null ? item.mediaId : null;
+        playingCached = source == crossfadePlayer || player.isPlaying();
+        positionMsCached = source.getCurrentPosition();
+        positionCachedAtMs = SystemClock.elapsedRealtime();
+        long d = source.getDuration();
         durationMsCached = d == C.TIME_UNSET ? 0L : d;
     }
 
@@ -636,7 +648,7 @@ public final class WaveExoPlayer {
         ExoPlayer incoming = ensureCrossfadePlayer();
         incoming.stop();
         incoming.clearMediaItems();
-        incoming.setMediaItem(MediaItem.fromUri(Uri.parse(normalizeUri(nextUri))));
+        incoming.setMediaItem(mediaItemFor(nextUri));
         incoming.prepare();
         incoming.setVolume(0f);
         incoming.play();
@@ -713,10 +725,9 @@ public final class WaveExoPlayer {
             initPlayer();
             cancelCrossfadeInternal();
             ended = false;
-            Uri uri = Uri.parse(normalizeUri(uriString));
             player.stop();
             player.clearMediaItems();
-            player.setMediaItem(MediaItem.fromUri(uri));
+            player.setMediaItem(mediaItemFor(uriString));
             player.setVolume(effectiveVolume(trackNormalizationGain));
             player.prepare();
             player.play();
@@ -738,10 +749,9 @@ public final class WaveExoPlayer {
             initPlayer();
             cancelCrossfadeInternal();
             ended = false;
-            Uri uri = Uri.parse(normalizeUri(uriString));
             player.stop();
             player.clearMediaItems();
-            player.setMediaItem(MediaItem.fromUri(uri));
+            player.setMediaItem(mediaItemFor(uriString));
             player.setVolume(effectiveVolume(trackNormalizationGain));
             player.prepare();
             long clamped = Math.max(0L, positionMs);
@@ -795,6 +805,7 @@ public final class WaveExoPlayer {
                 playingCached = false;
                 positionMsCached = 0L;
                 durationMsCached = 0L;
+                mediaIdCached = null;
             }
         });
     }
@@ -807,7 +818,6 @@ public final class WaveExoPlayer {
                 long clamped = Math.max(0L, positionMs);
                 player.seekTo(clamped);
                 refreshCacheFromPlayer();
-                positionMsCached = player.getCurrentPosition();
             }
         });
     }
@@ -950,6 +960,55 @@ public final class WaveExoPlayer {
 
     public boolean isEnded() {
         return ended && !crossfadeActive;
+    }
+
+    /**
+     * Playback position in ms of the item Rust knows as {@code mediaId}, or
+     * -1 when the cache describes another item (a gapless or crossfade
+     * handoff Rust has not picked up yet, or nothing loaded). While playing,
+     * the cached position is carried forward by the time since it was read,
+     * so it keeps moving even when the main looper is too busy to tick, and
+     * stops while ExoPlayer buffers or is held for a call.
+     */
+    public long positionFor(String mediaId) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            refreshCacheFromPlayer();
+        }
+        String id = mediaIdCached;
+        if (mediaId == null || id == null || !id.equals(mediaId)) {
+            return -1L;
+        }
+        long position = positionMsCached;
+        if (playingCached) {
+            long since = Math.max(0L, SystemClock.elapsedRealtime() - positionCachedAtMs);
+            position += (long) (since * playbackSpeed);
+        }
+        long duration = durationMsCached;
+        if (duration > 0L && position > duration) {
+            position = duration;
+        }
+        return Math.max(0L, position);
+    }
+
+    /** Duration in ms of the item Rust knows as {@code mediaId}, or -1 when unknown. */
+    public long durationFor(String mediaId) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            refreshCacheFromPlayer();
+        }
+        String id = mediaIdCached;
+        long duration = durationMsCached;
+        if (mediaId == null || id == null || !id.equals(mediaId) || duration <= 0L) {
+            return -1L;
+        }
+        return duration;
+    }
+
+    /** A media item whose id is the path exactly as Rust passed it. */
+    private static MediaItem mediaItemFor(String uriString) {
+        return new MediaItem.Builder()
+                .setUri(Uri.parse(normalizeUri(uriString)))
+                .setMediaId(uriString)
+                .build();
     }
 
     private static String normalizeUri(String uriString) {

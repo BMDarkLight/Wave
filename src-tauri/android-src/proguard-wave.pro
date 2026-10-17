@@ -67,6 +67,8 @@
     public void setUpcomingUri(java.lang.String);
     public long getCurrentPosition();
     public long getDuration();
+    public long positionFor(java.lang.String);
+    public long durationFor(java.lang.String);
     public boolean isPlaying();
     public boolean isEnded();
 }

@@ -53,6 +53,7 @@ import VirtualizedList from "./VirtualizedList";
 import SleepTimerButton from "./SleepTimerButton";
 import WaveformSeek from "./WaveformSeek";
 import SpeedRow from "./SpeedRow";
+import { beginSeekGesture, endSeekGesture } from "../utils/seekGesture";
 
 const formatTime = (seconds?: number | null) => {
   if (!seconds || !Number.isFinite(seconds)) return "0:00";
@@ -512,8 +513,8 @@ export default function MobileNowPlaying({
       max={Math.max(displayDuration, 1)}
       step="1"
       value={displayPosition}
-      onPointerDown={() => document.body.classList.add("is-seeking")}
-      onPointerCancel={() => document.body.classList.remove("is-seeking")}
+      onPointerDown={beginSeekGesture}
+      onPointerCancel={endSeekGesture}
       onChange={(e) => onSeekChange(Number(e.target.value))}
       onPointerUp={(e) => onSeekCommit(Number(e.currentTarget.value))}
     />

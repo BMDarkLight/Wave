@@ -1371,13 +1371,60 @@ pub async fn stop_track(
     Ok(())
 }
 
+/// The state the last poll returned and when, for polls that land while
+/// another command holds the player.
+fn last_playback_state() -> &'static Mutex<Option<(PlaybackStateDto, std::time::Instant)>> {
+    static LAST: Mutex<Option<(PlaybackStateDto, std::time::Instant)>> = Mutex::new(None);
+    &LAST
+}
+
+/// `state` moved on by `elapsed` of playback, as the player would report it.
+fn carried_forward(mut state: PlaybackStateDto, elapsed: std::time::Duration) -> PlaybackStateDto {
+    if state.is_playing {
+        let mut position = state.position_seconds + elapsed.as_secs_f64() * f64::from(state.speed);
+        if let Some(duration) = state.duration_seconds.filter(|d| *d > 0.0) {
+            position = position.min(duration);
+        }
+        state.position_seconds = position;
+    }
+    state
+}
+
 #[tauri::command]
 pub async fn get_playback_state(
     state: tauri::State<'_, PlayerState>,
 ) -> Result<PlaybackStateDto, String> {
-    let guard = lock_player_state(&state);
-    let Some(player) = guard.as_ref() else {
-        return Ok(PlaybackStateDto {
+    // Loading a track or skipping past unreadable ones can hold the player for
+    // seconds. A poll that waited for it froze the seek bar and, every half
+    // second, tied up one more runtime thread. While the player is busy, the
+    // last answer carried forward is as good as a fresh one.
+    let guard = match state.0.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            let last = last_playback_state()
+                .lock()
+                .ok()
+                .and_then(|last| last.clone());
+            // An old answer (polls pause while the app is in the background)
+            // says nothing about now, so wait for the player instead.
+            match last.filter(|(_, at)| at.elapsed() < std::time::Duration::from_secs(5)) {
+                Some((last, at)) => return Ok(carried_forward(last, at.elapsed())),
+                None => lock_player_state(&state),
+            }
+        }
+    };
+    let fresh = playback_state_of(guard.as_ref());
+    drop(guard);
+    if let Ok(mut last) = last_playback_state().lock() {
+        *last = Some((fresh.clone(), std::time::Instant::now()));
+    }
+    Ok(fresh)
+}
+
+fn playback_state_of(player: Option<&AudioPlayer>) -> PlaybackStateDto {
+    let Some(player) = player else {
+        return PlaybackStateDto {
             is_playing: false,
             is_paused: false,
             current_path: None,
@@ -1387,9 +1434,9 @@ pub async fn get_playback_state(
             output_device_name: AudioPlayer::current_output_name(),
             sleep_timer: SleepTimerStatus::default(),
             speed: 1.0,
-        });
+        };
     };
-    Ok(PlaybackStateDto {
+    PlaybackStateDto {
         is_playing: player.is_playing(),
         is_paused: player.is_paused(),
         current_path: player
@@ -1402,7 +1449,7 @@ pub async fn get_playback_state(
         output_device_name: AudioPlayer::current_output_name(),
         sleep_timer: player.sleep_timer_status(),
         speed: player.speed(),
-    })
+    }
 }
 
 #[tauri::command]
@@ -4323,6 +4370,47 @@ mod tests {
         assert_eq!(track.album, "Telegram");
         assert_eq!(track.format, "MP3");
         assert!(track.is_saf_uri);
+    }
+
+    fn playing_at(position: f64, duration: Option<f64>, speed: f32) -> PlaybackStateDto {
+        PlaybackStateDto {
+            is_playing: true,
+            is_paused: false,
+            current_path: Some("/music/a.mp3".into()),
+            position_seconds: position,
+            duration_seconds: duration,
+            volume: 1.0,
+            output_device_name: String::new(),
+            sleep_timer: SleepTimerStatus::default(),
+            speed,
+        }
+    }
+
+    #[test]
+    fn a_busy_poll_carries_the_position_forward_at_the_playback_speed() {
+        let state = carried_forward(
+            playing_at(10.0, Some(200.0), 1.5),
+            std::time::Duration::from_secs(2),
+        );
+        assert!((state.position_seconds - 13.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_busy_poll_stops_at_the_end_of_the_track() {
+        let state = carried_forward(
+            playing_at(199.0, Some(200.0), 1.0),
+            std::time::Duration::from_secs(5),
+        );
+        assert_eq!(state.position_seconds, 200.0);
+    }
+
+    #[test]
+    fn a_busy_poll_leaves_a_paused_position_alone() {
+        let mut paused = playing_at(42.0, Some(200.0), 1.0);
+        paused.is_playing = false;
+        paused.is_paused = true;
+        let state = carried_forward(paused, std::time::Duration::from_secs(5));
+        assert_eq!(state.position_seconds, 42.0);
     }
 
     #[test]

@@ -22,6 +22,11 @@ import {
   smoothLevel,
 } from "../utils/waveform";
 import { lessMotion } from "../utils/appearance";
+import {
+  beginSeekGesture,
+  endSeekGesture,
+  isSeeking,
+} from "../utils/seekGesture";
 
 /** Height of a bar at rest before it grows, matching the plain slider. */
 const MIN_BAR = 2;
@@ -219,7 +224,7 @@ function WaveformCanvas({
 
       const now = frame.current;
       let seconds = now.position;
-      if (now.playing && !document.body.classList.contains("is-seeking")) {
+      if (now.playing && !isSeeking()) {
         seconds += ((performance.now() - now.at) / 1000) * now.speed;
       }
       const fraction =
@@ -329,7 +334,7 @@ function WaveformCanvas({
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
         dragging.current = true;
-        document.body.classList.add("is-seeking");
+        beginSeekGesture();
         onSeekChange(secondsAt(event.clientX));
       }}
       onPointerMove={(event) => {
@@ -352,7 +357,7 @@ function WaveformCanvas({
       }}
       onPointerCancel={() => {
         dragging.current = false;
-        document.body.classList.remove("is-seeking");
+        endSeekGesture();
       }}
     />
   );

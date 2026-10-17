@@ -63,10 +63,18 @@ impl ExoHandle {
         })
     }
 
-    fn call_long(&self, method: &str) -> Result<i64, String> {
+    fn call_long_with_string(&self, method: &str, arg: &str) -> Result<i64, String> {
         self.with_env(|env| {
+            let j_arg = env
+                .new_string(arg)
+                .map_err(|e| format!("{method} argument: {e}"))?;
             let result = env
-                .call_method(self.instance.as_obj(), method, "()J", &[])
+                .call_method(
+                    self.instance.as_obj(),
+                    method,
+                    "(Ljava/lang/String;)J",
+                    &[JValue::Object(&j_arg)],
+                )
                 .map_err(|e| format!("{method}: {e}"))?;
             if env.exception_check().unwrap_or(false) {
                 let _ = env.exception_describe();
@@ -504,12 +512,15 @@ pub fn exo_consume_crossfade_handoff() -> Result<Option<String>, String> {
     })
 }
 
-pub fn exo_get_position() -> Result<i64, String> {
-    with_player(|p| p.call_long("getCurrentPosition"))
+/// Position of `path` in ms, or `None` while ExoPlayer is on another item
+/// (a handoff Rust has not picked up yet) or has nothing loaded.
+pub fn exo_position_for(path: &str) -> Result<Option<i64>, String> {
+    with_player(|p| p.call_long_with_string("positionFor", path)).map(|ms| (ms >= 0).then_some(ms))
 }
 
-pub fn exo_get_duration() -> Result<i64, String> {
-    with_player(|p| p.call_long("getDuration"))
+/// Duration of `path` in ms, or `None` until ExoPlayer knows it.
+pub fn exo_duration_for(path: &str) -> Result<Option<i64>, String> {
+    with_player(|p| p.call_long_with_string("durationFor", path)).map(|ms| (ms > 0).then_some(ms))
 }
 
 pub fn exo_is_playing() -> Result<bool, String> {
