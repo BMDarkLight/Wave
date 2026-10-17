@@ -999,28 +999,15 @@ pub(crate) fn handle_native_media_action(
             app.state::<MediaBridgeState>().0.set_paused(position);
             Ok(())
         }
-        "next" => {
-            let path = skip_track(app, true)?;
-            if let Some(path) = path {
+        "next" | "previous" => {
+            spawn_skip(app, action == "next", |app, path| {
                 let track = match app.state::<LibraryState>().0.lock() {
                     Ok(lib) => resolve_track(&lib, &path),
                     Err(_) => placeholder_track(&path),
                 };
                 listen_switch_track(app, &track.path, ListenEndReason::Skipped);
                 sync_bridge_now_playing(app, &track);
-            }
-            Ok(())
-        }
-        "previous" => {
-            let path = skip_track(app, false)?;
-            if let Some(path) = path {
-                let track = match app.state::<LibraryState>().0.lock() {
-                    Ok(lib) => resolve_track(&lib, &path),
-                    Err(_) => placeholder_track(&path),
-                };
-                listen_switch_track(app, &track.path, ListenEndReason::Skipped);
-                sync_bridge_now_playing(app, &track);
-            }
+            });
             Ok(())
         }
         "shuffle" => {
@@ -1229,6 +1216,27 @@ pub(crate) fn skip_track(app: &tauri::AppHandle, forward: bool) -> Result<Option
         prepare_remote_for_play,
         forward,
     )
+}
+
+/// Runs a skip and the caller's follow-up on a thread of its own, so the
+/// thread a tray or media event arrives on never waits for a remote track
+/// to buffer.
+pub(crate) fn spawn_skip(
+    app: &tauri::AppHandle,
+    forward: bool,
+    then: impl FnOnce(&tauri::AppHandle, String) + Send + 'static,
+) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("wave-skip".into())
+        .spawn(move || match skip_track(&app, forward) {
+            Ok(Some(path)) => then(&app, path),
+            Ok(None) => {}
+            Err(e) => tracing::warn!("Could not skip: {e}"),
+        });
+    if let Err(e) = spawned {
+        tracing::warn!("Could not start a skip: {e}");
+    }
 }
 
 type SkipStep<'a> = &'a mut dyn FnMut(&mut AudioPlayer) -> Result<Option<String>, String>;

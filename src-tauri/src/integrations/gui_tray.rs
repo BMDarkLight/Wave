@@ -181,24 +181,14 @@ mod inner {
             toggle_play_pause(app);
             return;
         }
-        if id == "tray_prev" {
-            if let Some(path) = crate::commands::skip_track(app, false).ok().flatten() {
+        if id == "tray_prev" || id == "tray_next" {
+            crate::commands::spawn_skip(app, id == "tray_next", |app, path| {
                 crate::commands::listen_switch_track(
                     app,
                     &path,
                     crate::listen::ListenEndReason::Skipped,
                 );
-            }
-            return;
-        }
-        if id == "tray_next" {
-            if let Some(path) = crate::commands::skip_track(app, true).ok().flatten() {
-                crate::commands::listen_switch_track(
-                    app,
-                    &path,
-                    crate::listen::ListenEndReason::Skipped,
-                );
-            }
+            });
             return;
         }
         if id == "tray_stop" {
