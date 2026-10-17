@@ -8,6 +8,7 @@
 
 pub mod backend;
 pub mod gate;
+pub mod plex;
 pub mod refresh;
 pub mod store;
 pub mod uri;

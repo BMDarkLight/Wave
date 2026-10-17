@@ -391,12 +391,12 @@ pub fn open_repository() -> Result<(), String> {
 }
 
 #[cfg(target_os = "android")]
-fn open_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
     crate::android::app_updater::open_url(url)
 }
 
 #[cfg(not(target_os = "android"))]
-fn open_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
     use std::process::Command;
 
     #[cfg(target_os = "macos")]

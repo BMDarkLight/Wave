@@ -54,6 +54,22 @@ pub enum RemoteError {
     Http(u16),
 }
 
+impl std::fmt::Display for RemoteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RemoteError::Unreachable(msg) => f.write_str(msg),
+            RemoteError::Unauthorized => f.write_str("Sign in to Plex again"),
+            RemoteError::Blocked(GateState::Disabled) => f.write_str("Outside Sourcing is off"),
+            RemoteError::Blocked(GateState::Cellular) => {
+                f.write_str("Remote music is set to Wi-Fi only")
+            }
+            RemoteError::Blocked(GateState::Allowed) => f.write_str("Remote music is unavailable"),
+            RemoteError::Parse(_) => f.write_str("Unexpected response from the server"),
+            RemoteError::Http(code) => write!(f, "The server answered with an error ({code})"),
+        }
+    }
+}
+
 pub trait ByteStream: std::io::Read + Send {}
 impl<T: std::io::Read + Send> ByteStream for T {}
 
@@ -64,4 +80,41 @@ pub trait RemoteBackend: Send + Sync {
     fn open_bytes(&self, part_key: &str, offset: u64) -> Result<Box<dyn ByteStream>, RemoteError>;
     fn check_reachable(&self) -> Result<(), RemoteError>;
     fn fetch_artwork(&self, art_ref: &str) -> Result<Vec<u8>, RemoteError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_messages_are_user_facing() {
+        assert_eq!(
+            RemoteError::Unreachable("Can't reach Home".into()).to_string(),
+            "Can't reach Home"
+        );
+        assert_eq!(
+            RemoteError::Unauthorized.to_string(),
+            "Sign in to Plex again"
+        );
+        assert_eq!(
+            RemoteError::Blocked(GateState::Disabled).to_string(),
+            "Outside Sourcing is off"
+        );
+        assert_eq!(
+            RemoteError::Blocked(GateState::Cellular).to_string(),
+            "Remote music is set to Wi-Fi only"
+        );
+        assert_eq!(
+            RemoteError::Blocked(GateState::Allowed).to_string(),
+            "Remote music is unavailable"
+        );
+        assert_eq!(
+            RemoteError::Parse("token abc".into()).to_string(),
+            "Unexpected response from the server"
+        );
+        assert_eq!(
+            RemoteError::Http(503).to_string(),
+            "The server answered with an error (503)"
+        );
+    }
 }
