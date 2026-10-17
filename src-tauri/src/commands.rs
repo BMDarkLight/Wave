@@ -771,7 +771,7 @@ pub(crate) fn tick_auto_advance(app: &tauri::AppHandle) {
         let Some(player) = slot.as_mut() else {
             return;
         };
-        if !player.should_auto_advance() {
+        if !player.should_auto_advance() || !player.ready_to_auto_advance() {
             return;
         }
 
@@ -2307,6 +2307,10 @@ pub async fn get_queue(state: tauri::State<'_, PlayerState>) -> Result<QueueStat
 pub async fn play_next(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let app_clone = app.clone();
     let path = blocking(move || {
+        let target = with_app_player(&app_clone, |guard| Ok(guard.peek_next_path()))?;
+        if let Some(target) = target {
+            prepare_remote_for_play(&target)?;
+        }
         with_app_player(&app_clone, |guard| {
             guard.play_next().map_err(|e| e.to_string())
         })
@@ -2333,6 +2337,10 @@ pub async fn play_next(app: tauri::AppHandle) -> Result<Option<String>, String> 
 pub async fn play_previous(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let app_clone = app.clone();
     let path = blocking(move || {
+        let target = with_app_player(&app_clone, |guard| Ok(guard.peek_previous_path()))?;
+        if let Some(target) = target {
+            prepare_remote_for_play(&target)?;
+        }
         with_app_player(&app_clone, |guard| {
             guard.play_previous().map_err(|e| e.to_string())
         })

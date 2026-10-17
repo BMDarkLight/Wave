@@ -1075,7 +1075,7 @@ fn playback_tick_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>
             }
         }
 
-        if !guard.player.should_auto_advance() {
+        if !guard.player.should_auto_advance() || !guard.player.ready_to_auto_advance() {
             // keep waiting
         } else if guard.player.sleep_after_current_track() {
             match guard.player.finish_held_track() {

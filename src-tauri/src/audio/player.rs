@@ -105,6 +105,33 @@ fn android_duration_of(path: &str) -> Option<Duration> {
         .map(|ms| Duration::from_millis(ms as u64))
 }
 
+/// How long auto-advance waits for a remote next track to be able to start.
+const ADVANCE_WAIT: Duration = Duration::from_secs(10);
+
+/// Lets auto-advance go once `next` is ready, or once it has waited
+/// [`ADVANCE_WAIT`] for it. `wait` holds the track waited on and since when.
+fn advance_gate(
+    wait: &mut Option<(String, Instant)>,
+    next: &str,
+    ready: bool,
+    now: Instant,
+) -> bool {
+    if !ready {
+        let since = match wait {
+            Some((path, since)) if path == next => *since,
+            _ => {
+                *wait = Some((next.to_string(), now));
+                now
+            }
+        };
+        if now.duration_since(since) < ADVANCE_WAIT {
+            return false;
+        }
+    }
+    *wait = None;
+    true
+}
+
 // ── Queue ─────────────────────────────────────────────────────────────────────
 
 /// In-memory playback queue (separate from the library's persisted playlist).
@@ -349,19 +376,30 @@ impl Queue {
 
     /// Go back to the previous track.
     pub fn previous(&mut self, repeat: &RepeatMode) -> Option<&str> {
+        let prev_idx = self.peek_previous_index(repeat)?;
+        self.current_index = Some(prev_idx);
+        self.tracks.get(prev_idx).map(String::as_str)
+    }
+
+    /// Index that `previous` would select, without mutating queue state.
+    fn peek_previous_index(&self, repeat: &RepeatMode) -> Option<usize> {
         if self.tracks.is_empty() {
             return None;
         }
         let current = self.current_index.unwrap_or(0);
         // At the start of the queue there is nothing to go back to, and the
         // current track keeps playing, so its index has to stay put.
-        let prev_idx = match (current, repeat) {
-            (0, RepeatMode::All) => self.tracks.len() - 1,
-            (0, _) => return None,
-            (idx, _) => idx - 1,
-        };
-        self.current_index = Some(prev_idx);
-        self.tracks.get(prev_idx).map(String::as_str)
+        match (current, repeat) {
+            (0, RepeatMode::All) => Some(self.tracks.len() - 1),
+            (0, _) => None,
+            (idx, _) => Some(idx - 1),
+        }
+    }
+
+    /// Peek at the previous track path without moving back.
+    pub fn peek_previous(&self, repeat: &RepeatMode) -> Option<&str> {
+        self.peek_previous_index(repeat)
+            .and_then(|i| self.tracks.get(i).map(String::as_str))
     }
 
     /// Turning shuffle on reshuffles the queue around the current track;
@@ -610,6 +648,16 @@ pub struct AudioPlayer {
     stall: SharedStall,
     /// Set while a stream plays silence waiting for the network.
     buffering: SharedBuffering,
+    /// When `tick_remote_prefetch` last looked, so it looks once a second.
+    prefetch_checked_at: Option<Instant>,
+    /// The remote next track last asked to warm, so it is asked once.
+    warmed: Option<String>,
+    /// The remote next track auto-advance is waiting on, and since when.
+    advance_wait: Option<(String, Instant)>,
+    #[cfg(test)]
+    prefetch_checks: usize,
+    #[cfg(test)]
+    warm_requests: usize,
     /// Bumped on every track change; a background analysis result that
     /// arrives for a stale generation is dropped instead of being applied to
     /// whatever now-current track it no longer matches. Only Android defers
@@ -655,6 +703,13 @@ impl AudioPlayer {
             level: shared_level(),
             stall: Arc::new(AtomicU64::new(0)),
             buffering: Arc::new(AtomicBool::new(false)),
+            prefetch_checked_at: None,
+            warmed: None,
+            advance_wait: None,
+            #[cfg(test)]
+            prefetch_checks: 0,
+            #[cfg(test)]
+            warm_requests: 0,
             #[cfg(target_os = "android")]
             normalization_generation: Arc::new(AtomicU64::new(0)),
             #[cfg(target_os = "android")]
@@ -785,6 +840,13 @@ impl AudioPlayer {
                 level: shared_level(),
                 stall: Arc::new(AtomicU64::new(0)),
                 buffering: Arc::new(AtomicBool::new(false)),
+                prefetch_checked_at: None,
+                warmed: None,
+                advance_wait: None,
+                #[cfg(test)]
+                prefetch_checks: 0,
+                #[cfg(test)]
+                warm_requests: 0,
                 #[cfg(target_os = "android")]
                 normalization_generation: Arc::new(AtomicU64::new(0)),
                 #[cfg(target_os = "android")]
@@ -1184,6 +1246,7 @@ impl AudioPlayer {
     }
 
     pub fn play(&mut self, path: &str) -> Result<(), AudioError> {
+        self.advance_wait = None;
         #[cfg(target_os = "android")]
         {
             return self.play_via_exo(path);
@@ -2027,8 +2090,21 @@ impl AudioPlayer {
     }
 
     /// Gets a remote next track ready before the current one ends: start
-    /// buffering it near the end, and preload it once it can start.
+    /// buffering it near the end, and preload it once it can start. Looks at
+    /// most once a second, since readiness can mean a database lookup.
     pub fn tick_remote_prefetch(&mut self) {
+        let now = Instant::now();
+        if self
+            .prefetch_checked_at
+            .is_some_and(|at| now.duration_since(at) < Duration::from_secs(1))
+        {
+            return;
+        }
+        self.prefetch_checked_at = Some(now);
+        #[cfg(test)]
+        {
+            self.prefetch_checks += 1;
+        }
         if self.stop_after_current || self.repeat == RepeatMode::One {
             return;
         }
@@ -2047,7 +2123,7 @@ impl AudioPlayer {
                 _ => true,
             };
             if near_end {
-                stream::warm(&next);
+                self.warm_once(&next);
             }
             return;
         }
@@ -2068,6 +2144,56 @@ impl AudioPlayer {
         }
     }
 
+    /// Starts buffering a remote track, unless it was the last one asked.
+    fn warm_once(&mut self, path: &str) {
+        if self.warmed.as_deref() == Some(path) {
+            return;
+        }
+        self.warmed = Some(path.to_string());
+        #[cfg(test)]
+        {
+            self.warm_requests += 1;
+        }
+        stream::warm(path);
+    }
+
+    /// The track `play_next` would start, without changing anything.
+    pub fn peek_next_path(&self) -> Option<String> {
+        if self.repeat == RepeatMode::One {
+            if let Some(current) = self.current_path.as_ref().and_then(|p| p.to_str()) {
+                return Some(current.to_string());
+            }
+        }
+        self.queue.peek_next(&self.repeat).map(str::to_string)
+    }
+
+    /// The track `play_previous` would start, without changing anything.
+    pub fn peek_previous_path(&self) -> Option<String> {
+        if self.position_seconds() > 3.0 {
+            return self
+                .current_path
+                .as_ref()
+                .and_then(|p| p.to_str())
+                .map(str::to_string);
+        }
+        self.queue.peek_previous(&self.repeat).map(str::to_string)
+    }
+
+    /// Whether auto-advance can go ahead. Opening a remote track that can't
+    /// start yet would wait on the network under the player lock, so this
+    /// warms it and holds off, for at most [`ADVANCE_WAIT`], after which the
+    /// usual error path gets its turn.
+    pub fn ready_to_auto_advance(&mut self) -> bool {
+        let Some(next) = self.peek_next_path() else {
+            self.advance_wait = None;
+            return true;
+        };
+        let ready = !crate::remote::uri::is_remote(&next) || stream::is_ready(&next);
+        if !ready {
+            self.warm_once(&next);
+        }
+        advance_gate(&mut self.advance_wait, &next, ready, Instant::now())
+    }
     /// Loudness of what is playing right now, 0.0 to 1.0. Zero while paused or
     /// stopped.
     pub fn output_level(&self) -> f32 {
@@ -3564,6 +3690,109 @@ mod tests {
             player.upcoming_for_preload().as_deref(),
             Some("/music/b.flac")
         );
+    }
+
+    #[test]
+    fn peeks_match_what_next_and_previous_pick() {
+        let paths: Vec<String> = (0..5).map(|i| format!("/music/{i}.flac")).collect();
+        for repeat in [RepeatMode::Off, RepeatMode::All] {
+            for shuffle in [false, true] {
+                for start in [0, 2, 4] {
+                    let mut player = AudioPlayer::new_deferred();
+                    player.repeat = repeat.clone();
+                    player.queue.set_tracks(paths.clone());
+                    player.queue.jump(start);
+                    player.set_shuffle(shuffle);
+
+                    let mut forward = player.queue.clone();
+                    let mut back = player.queue.clone();
+                    let case = format!("{repeat:?} shuffle={shuffle} start={start}");
+                    assert_eq!(
+                        player.peek_next_path().as_deref(),
+                        forward.next(&repeat),
+                        "{case}"
+                    );
+                    assert_eq!(
+                        player.peek_previous_path().as_deref(),
+                        back.previous(&repeat),
+                        "{case}"
+                    );
+                }
+            }
+        }
+
+        let mut player = AudioPlayer::new_deferred();
+        player.queue.set_tracks(paths.clone());
+        player.queue.jump(2);
+        player.current_path = Some(PathBuf::from("/music/2.flac"));
+        player.repeat = RepeatMode::One;
+        assert_eq!(player.peek_next_path().as_deref(), Some("/music/2.flac"));
+        player.repeat = RepeatMode::Off;
+        player.clock.elapsed_before_start = Duration::from_secs(10);
+        assert_eq!(
+            player.peek_previous_path().as_deref(),
+            Some("/music/2.flac")
+        );
+    }
+
+    #[test]
+    fn auto_advance_waits_for_a_remote_next_then_gives_up() {
+        let start = Instant::now();
+        let at = |secs: u64| start + Duration::from_secs(secs);
+        let remote = "wave-remote://s/1";
+        let mut wait = None;
+        assert!(!advance_gate(&mut wait, remote, false, start));
+        assert!(!advance_gate(&mut wait, remote, false, at(9)));
+        assert!(advance_gate(&mut wait, remote, false, at(10)));
+        assert!(wait.is_none());
+
+        assert!(!advance_gate(&mut wait, remote, false, at(20)));
+        assert!(advance_gate(&mut wait, remote, true, at(21)));
+        assert!(wait.is_none());
+
+        // Another next track waits from scratch.
+        assert!(!advance_gate(&mut wait, remote, false, at(30)));
+        assert!(!advance_gate(&mut wait, "wave-remote://s/2", false, at(39)));
+        assert!(!advance_gate(&mut wait, "wave-remote://s/2", false, at(48)));
+        assert!(advance_gate(&mut wait, "wave-remote://s/2", false, at(49)));
+
+        let mut player = AudioPlayer::new_deferred();
+        player
+            .queue
+            .set_tracks(vec!["/music/a.flac".into(), remote.into()]);
+        player.queue.jump(0);
+        assert!(!player.ready_to_auto_advance());
+        assert!(!player.ready_to_auto_advance());
+        assert_eq!(player.warm_requests, 1);
+        player.queue.jump(1);
+        assert!(player.ready_to_auto_advance());
+    }
+
+    #[test]
+    fn remote_prefetch_looks_once_a_second_and_warms_each_track_once() {
+        let mut player = AudioPlayer::new_deferred();
+        player.queue.set_tracks(vec![
+            "/music/a.flac".into(),
+            "wave-remote://s/1".into(),
+            "wave-remote://s/2".into(),
+        ]);
+        player.queue.jump(0);
+        player.tick_remote_prefetch();
+        player.tick_remote_prefetch();
+        assert_eq!(player.prefetch_checks, 1);
+        assert_eq!(player.warm_requests, 1);
+
+        player.prefetch_checked_at = Some(Instant::now() - Duration::from_secs(2));
+        player.tick_remote_prefetch();
+        assert_eq!(player.prefetch_checks, 2);
+        assert_eq!(player.warm_requests, 1);
+
+        player.queue.jump(1);
+        player.prefetch_checked_at = None;
+        player.tick_remote_prefetch();
+        assert_eq!(player.prefetch_checks, 3);
+        assert_eq!(player.warm_requests, 2);
+        assert_eq!(player.warmed.as_deref(), Some("wave-remote://s/2"));
     }
 
     /// `seconds` of a 440 Hz tone, as a mono WAV.
