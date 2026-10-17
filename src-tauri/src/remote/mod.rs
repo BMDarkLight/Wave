@@ -6,4 +6,6 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
+pub mod backend;
+pub mod store;
 pub mod uri;

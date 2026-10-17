@@ -3884,7 +3884,7 @@ fn row_to_listen_rank(row: &rusqlite::Row<'_>) -> rusqlite::Result<ListenRankDto
 
 /// A trait that abstracts over `Connection` and `Transaction` so that our
 /// helpers can be called in both contexts without duplicating code.
-trait Queryable {
+pub(crate) trait Queryable {
     fn exec<P: rusqlite::Params>(&self, sql: &str, params: P) -> rusqlite::Result<usize>;
     fn query_opt<T, P, F>(&self, sql: &str, params: P, f: F) -> rusqlite::Result<Option<T>>
     where
@@ -4958,7 +4958,7 @@ fn number_value(change: &Change<i32>) -> Value {
     }
 }
 
-fn now_timestamp() -> i64 {
+pub(crate) fn now_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
@@ -5014,7 +5014,7 @@ fn fts_table_ready(connection: &Connection) -> bool {
         .is_ok()
 }
 
-fn sync_track_fts(conn: &impl Queryable, track: &Track) -> Result<(), String> {
+pub(crate) fn sync_track_fts(conn: &impl Queryable, track: &Track) -> Result<(), String> {
     let _ = conn.exec(
         "DELETE FROM tracks_fts WHERE track_id = ?1",
         params![track.id],
