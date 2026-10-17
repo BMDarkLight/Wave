@@ -43,7 +43,8 @@ Important behaviors:
 - **`play_track_from_playlist`** loads the library playlist into the playback queue, sets the current index, and starts playback. Call this (not `play_track`) when the user picks a song from the library UI so next/previous/shuffle/repeat work correctly.
 - **`play_track`** plays a single file by path without updating the queue.
 - On Android, `content://` URIs play directly through ExoPlayer (no copy required for playback). See [Android playback](./android.md).
-- **Remote audio becomes a file before it plays.** The engine only understands paths, so a streamed track is fetched into the source cache and handed over as a path. Nothing in the playback stack is aware of URLs. See [Song sourcing](./sources.md).
+- **Remote audio becomes a file before it plays.** The engine only understands paths, so a streamed search result is fetched into the source cache and handed over as a path. Nothing in the playback stack is aware of URLs. See [Song sourcing](./sources.md).
+- **Remote library tracks (Plex) have `wave-remote://` paths.** They play progressively from a sparse cache file while it downloads: a worker-thread decoder on desktop, a `127.0.0.1` loopback server for ExoPlayer on Android. See [Remote Library](./remote-library.md).
 - **`search_library` and `search_library_collections` read the `library_tracks` view**, not the `tracks` table. Tracks streamed but not downloaded are deliberately absent from browse, search, and counts until the user saves them.
 
 ## Documentation index
@@ -56,6 +57,7 @@ Important behaviors:
 | [DSP](./dsp.md) | Digital Signal Processing (equalizer, biquad filters) |
 | [Android playback](./android.md) | ExoPlayer backend, SAF import, media session bridge |
 | [Song sourcing](./sources.md) | Remote search tier, streaming cache, downloads |
+| [Remote Library](./remote-library.md) | Plex sources, progressive streaming, the network gate, refresh |
 
 ## Command summary
 
@@ -98,8 +100,16 @@ Important behaviors:
 | `search_sources` | Tier 3 — query remote providers concurrently (explicit user action only) |
 | `stream_source_track` | Fetch a remote result into the cache and return a playable `Track` |
 | `download_source_track` | Keep a remote track: copy to the download folder and index it |
-| `get_source_settings` | Read the master switch and provider credentials |
-| `set_source_settings` | Persist the master switch and provider credentials |
+| `get_source_settings` | Read the source switches, provider credentials and cache size |
+| `set_source_settings` | Persist the source switches, provider credentials and cache size |
+| `plex_begin_sign_in`, `plex_poll_sign_in` | Sign in to Plex through the browser |
+| `plex_list_servers`, `plex_list_libraries`, `plex_add_source` | Set up a Plex server as a remote source |
+| `plex_reauthorize_source` | Sign a remote source in again |
+| `list_remote_sources`, `remove_remote_source` | The remote sources in Settings |
+| `get_remote_status` | Network gate state and each source's state |
+| `request_library_refresh` | Rescan and sync, at most every 30 seconds |
+| `clear_source_cache`, `get_source_cache_usage` | The shared audio cache |
+| `download_remote_track` | Keep a remote library track as a local file |
 
 ### Favorites
 

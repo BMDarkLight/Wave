@@ -137,4 +137,90 @@ mod tests {
         assert_eq!(settings.plex_client_identifier.as_deref(), Some(&*first));
         assert_eq!(client_identifier(&mut settings), first);
     }
+
+    /// Streams one real track from a Plex server and decodes all of it
+    /// through the playback decoder, so a passing run means the bytes really
+    /// play, not just that a response looked right.
+    #[test]
+    #[ignore = "needs WAVE_PLEX_URL, WAVE_PLEX_TOKEN and WAVE_PLEX_SECTION"]
+    fn live_plex_fetch_and_decode() {
+        use crate::audio::symphonia_source::SymphoniaSource;
+        use crate::library::Library;
+        use crate::remote::backend::RemoteBackend;
+        use crate::remote::gate::NetworkGate;
+        use crate::remote::plex::auth::PlexSection;
+        use crate::remote::plex::connection::{PlexBackend, PlexSourceConfig};
+        use crate::remote::stream::{fill_for_with, reader::ProgressiveReader};
+        use crate::remote::uri::RemoteUri;
+        use crate::remote::RemoteRuntime;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let (Ok(url), Ok(token), Ok(section)) = (
+            std::env::var("WAVE_PLEX_URL"),
+            std::env::var("WAVE_PLEX_TOKEN"),
+            std::env::var("WAVE_PLEX_SECTION"),
+        ) else {
+            eprintln!("Skipped: set WAVE_PLEX_URL, WAVE_PLEX_TOKEN and WAVE_PLEX_SECTION");
+            return;
+        };
+
+        let gate: &'static NetworkGate = Box::leak(Box::new(NetworkGate::new_for_test()));
+        gate.set_policy(true, true);
+        let config = PlexSourceConfig {
+            server_id: "live".into(),
+            server_name: "Live".into(),
+            server_token: token,
+            account_token: String::new(),
+            sections: vec![PlexSection {
+                key: section,
+                title: "Music".into(),
+            }],
+            connections: Vec::new(),
+            preferred_uri: Some(url),
+        };
+        let backend = Arc::new(PlexBackend::with_gate(config, headers(), gate));
+        let page = backend
+            .catalog_page(0)
+            .expect("the first catalog page loads");
+        let first = page
+            .tracks
+            .first()
+            .expect("the section has at least one track")
+            .clone();
+        eprintln!(
+            "Streaming \"{}\" by {} ({} bytes, {})",
+            first.title, first.artist, first.size, first.extension
+        );
+
+        let dir = std::env::temp_dir().join(format!("wave-live-plex-{}", uuid::Uuid::new_v4()));
+        let library = Library::new_with_path(&dir.join("library.db")).unwrap();
+        let source = library
+            .insert_remote_source("plex", "live", "Live", "{}")
+            .unwrap();
+        let mut walk = library.begin_remote_walk(&source).unwrap();
+        library
+            .upsert_remote_page(&mut walk, "plex", std::slice::from_ref(&first))
+            .unwrap();
+        library.finish_remote_walk(walk).unwrap();
+        let rt: &'static RemoteRuntime = Box::leak(Box::new(RemoteRuntime::new_for_test(
+            library,
+            Box::new(|_| {}),
+        )));
+        rt.insert_backend_for_test(&source, backend);
+
+        let uri = RemoteUri::new(&source, &first.remote_id);
+        let fill = fill_for_with(rt, gate, &uri).expect("the stream starts");
+        let reader = ProgressiveReader::new(fill, Duration::from_secs(60)).unwrap();
+        let decoder = SymphoniaSource::from_media_source(
+            Box::new(reader),
+            Some(&first.extension),
+            &uri.to_path(),
+        )
+        .expect("the stream probes");
+        let samples = decoder.count();
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("Decoded {samples} samples");
+        assert!(samples > 0);
+    }
 }

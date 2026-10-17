@@ -204,7 +204,9 @@ interrupted fetch can never leave a half-written file that Symphonia would fail
 to probe.
 
 Eviction is LRU by `source_fetched_at`, bounded by `source_cache_limit_mb`
-(default 512). The currently playing track and everything in the live queue are
+(default 2 GB on desktop, 1 GB on Android, set under **Cache size** in Settings;
+an install still on the old 512 MB default moves to the new one). Remote library
+tracks share this cache; see [Remote Library](./remote-library.md). The currently playing track and everything in the live queue are
 never evicted — deleting one would pull a file out from under an open decoder.
 When every cached file is protected the cap is exceeded rather than violating
 that rule. Only `source_state = 'cached'` rows are ever touched, so a download
@@ -272,11 +274,11 @@ seeks. See `audio/symphonia_source.rs`.
 
 ## Known limits
 
-- **No progressive playback.** A track downloads fully before it starts. That is
-  imperceptible for a 480 KB preview and fine for a typical Jamendo track, but a
-  167 MB Archive concert takes over a minute before the first note. The cache
-  layout was designed so progressive playback can be added without reworking
-  eviction or naming.
+- **No progressive playback for search results.** A search result downloads
+  fully before it starts. That is imperceptible for a 480 KB preview and fine
+  for a typical Jamendo track, but a 167 MB Archive concert takes over a minute
+  before the first note. Remote library tracks (Plex) do stream progressively;
+  see [Remote Library](./remote-library.md).
 - **Archive results are item-level**, so a result is the first audio file in an
   item rather than a specific track.
 - **Android SAF writes are not implemented.** Downloads reach the primary media

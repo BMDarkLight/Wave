@@ -28,6 +28,7 @@ catalogs — in a single portable app built on Rust + Tauri + React.
   - [Library, albums & artists](#library-albums--artists)
   - [Metadata editor](#metadata-editor)
   - [Three-tier search](#three-tier-search)
+  - [Your own server (Plex)](#your-own-server-plex)
   - [Queue & playback](#queue--playback)
   - [Lyrics](#lyrics)
   - [Audio engine & DSP](#audio-engine--dsp)
@@ -86,6 +87,7 @@ live.
 | 🎚️ **Real DSP** | 10-band biquad equalizer, crossfade, gapless playback, and loudness normalization. |
 | 📝 **Synced lyrics** | Auto-fetched from LRCLIB, highlighted line by line, importable and exportable. |
 | 🌐 **Free catalogs** | Stream or download full-length tracks from Internet Archive and Jamendo. Off by default. |
+| 🗄️ **Your own server** | Add a Plex server and its music joins your library, streaming as it plays and cached for offline. Off by default. |
 | 📱 **One codebase** | Windows, macOS, Linux, and Android — desktop and touch layouts from the same UI. |
 | 🪶 **Portable** | A single native binary; no Electron, no heavy runtime. |
 
@@ -171,6 +173,28 @@ are never written to disk. A provider that fails degrades to an "unavailable"
 section instead of breaking the search.
 
 <img src="docs/screenshots/desktop-sources.png" alt="Remote source results grouped by provider" width="100%">
+
+### Your own server (Plex)
+
+Turn on **Outside Sourcing** in Settings and add a Plex server: sign in through
+your browser, pick the server, pick its music libraries. Its tracks join your
+library, albums, artists and search, marked with a small cloud.
+
+- Playback starts while the track is still downloading, then the whole file is
+  kept in the cache, so the next play is instant and works offline. Seeking
+  ahead fetches that part first.
+- A song you also have as a local file shows once, and the local copy plays.
+- If the server can't be reached, its tracks grey out, except the ones already
+  cached, which keep playing.
+- **Download** keeps a server track for good as a local file.
+- The shared cache size is a setting (2 GB on desktop, 1 GB on Android by
+  default), with a button to clear it.
+- On Android, remote music only loads on Wi-Fi unless you turn on **Use
+  cellular data**.
+- Pull down on Home or Library (or press refresh on desktop Home) to rescan
+  your folders and sync your servers, at most once every 30 seconds.
+
+How it works: [`docs/backend/remote-library.md`](docs/backend/remote-library.md).
 
 ### Queue & playback
 
@@ -284,6 +308,8 @@ directly — no copying your music into app storage.
   panels for solid ones and make every transition instant, for slower phones.
   With animations on, **Reduce motion** fades pages and sheets in place
   instead of sliding them.
+- **Your Plex server streams over Wi-Fi only** unless you allow mobile data
+  in Settings. Add a server from the + in Media Source Folders.
 - **SAF folder picker** and scanning — grant a folder once, keep your files where
   they are.
 - **Background playback that behaves like a music player.** Music keeps
@@ -732,6 +758,9 @@ Deezer and Internet Archive need no setup. Jamendo needs a free client ID from
 
 Deezer's API only serves 30-second previews; previews play but are never saved to
 your library. Full-length audio comes from Internet Archive and Jamendo.
+
+Streaming from your own Plex server is a separate switch, **Outside Sourcing**.
+Nothing contacts Plex while it is off.
 
 ---
 
