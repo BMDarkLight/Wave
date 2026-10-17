@@ -92,6 +92,7 @@ import { usePlaybackController } from "./hooks/usePlaybackController";
 import { useMediaImport } from "./hooks/useMediaImport";
 import { useAndroidBackTrap } from "./hooks/useAndroidBackTrap";
 import { armDragDismissGhostClickGuard } from "./hooks/useDragDismiss";
+import { useSoftKeyboard } from "./hooks/useSoftKeyboard";
 import AlbumPage from "./components/AlbumPage";
 import ArtistPage from "./components/ArtistPage";
 import HomePage from "./components/HomePage";
@@ -134,6 +135,7 @@ import "./App.css";
 import "./touch-hover.css";
 
 function App() {
+  useSoftKeyboard();
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [sourceSettings, setSourceSettingsState] = useState<SourceSettings>({

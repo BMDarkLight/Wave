@@ -8067,6 +8067,24 @@ div.album-hero-cover {
   }
 }
 
+/* The on-screen keyboard is up (useSoftKeyboard). The page already ends at
+   the top of the keyboard, so the docked tabs and mini player would sit on
+   it and crowd whatever is being typed into. Tuck them away until it closes,
+   and give their space back to the page. */
+@media (max-width: 900px) {
+  :root.keyboard-open {
+    --mobile-tabbar-height: 0px;
+    --player-height: 0px;
+  }
+
+  .keyboard-open .player-bar,
+  .keyboard-open .mobile-tabbar,
+  .keyboard-open .mobile-dock-glass,
+  .keyboard-open .mini-progress {
+    display: none !important;
+  }
+}
+
 /* Wide layout: undo the mini player's phone-only states outright, so
    widening the window from the phone layout never leaves the playback bar
    clipped, faded or mid-transition. */
