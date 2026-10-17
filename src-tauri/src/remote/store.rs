@@ -55,6 +55,7 @@ pub struct RemoteWalk {
     seen: HashSet<String>,
     upserted: usize,
     revived: usize,
+    rekeyed: Vec<RemoteUri>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -63,6 +64,9 @@ pub struct WalkSummary {
     pub upserted: usize,
     pub tombstoned: usize,
     pub revived: usize,
+    /// Old URIs of rows that were re-keyed while holding cached audio. Their
+    /// cache state is cleared; the caller deletes the orphaned files.
+    pub rekeyed: Vec<RemoteUri>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +86,19 @@ enum Outcome {
     Inserted,
     Updated,
     Revived,
+}
+
+/// A row taken over under a new server id.
+struct Rekey {
+    old_remote_id: String,
+    cache_state: Option<String>,
+    downloaded: bool,
+}
+
+struct RowMatch {
+    id: String,
+    outcome: Outcome,
+    rekey: Option<Rekey>,
 }
 
 fn sql_error(what: &str) -> impl Fn(rusqlite::Error) -> String + '_ {
@@ -122,7 +139,7 @@ fn find_row_to_update(
     source_id: &str,
     meta: &RemoteTrackMeta,
     seen: &HashSet<String>,
-) -> Result<Option<(String, Outcome)>, String> {
+) -> Result<Option<RowMatch>, String> {
     let exact: Option<(String, bool)> = tx
         .query_row(
             "SELECT id, remote_missing FROM tracks
@@ -138,14 +155,20 @@ fn find_row_to_update(
         } else {
             Outcome::Updated
         };
-        return Ok(Some((id, outcome)));
+        return Ok(Some(RowMatch {
+            id,
+            outcome,
+            rekey: None,
+        }));
     }
 
     // Missing rows first. A row that is still listed but not yet seen in this
     // walk counts too: the server re-keyed it, and the old id will not show up.
     let mut statement = tx
         .prepare(
-            "SELECT id, source_id, remote_missing, duration_seconds FROM tracks
+            "SELECT id, source_id, remote_missing, duration_seconds, cache_state,
+                    source_state = 'downloaded'
+             FROM tracks
              WHERE remote_source_id = ?1
                AND lower(trim(artist)) = lower(trim(?2))
                AND lower(trim(album)) = lower(trim(?3))
@@ -162,18 +185,28 @@ fn find_row_to_update(
                     row.get::<_, String>(1)?,
                     row.get::<_, bool>(2)?,
                     row.get::<_, Option<f64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<bool>>(5)?.unwrap_or(false),
                 ))
             },
         )
         .map_err(sql_error("query remote re-match"))?;
     for candidate in candidates {
-        let (id, old_remote_id, missing, duration) =
+        let (id, old_remote_id, missing, duration, cache_state, downloaded) =
             candidate.map_err(sql_error("read remote re-match"))?;
         if !missing && seen.contains(&old_remote_id) {
             continue;
         }
         if durations_match(duration, meta.duration_seconds) {
-            return Ok(Some((id, Outcome::Revived)));
+            return Ok(Some(RowMatch {
+                id,
+                outcome: Outcome::Revived,
+                rekey: Some(Rekey {
+                    old_remote_id,
+                    cache_state,
+                    downloaded,
+                }),
+            }));
         }
     }
     Ok(None)
@@ -186,12 +219,18 @@ fn upsert_one(
     meta: &RemoteTrackMeta,
     seen: &HashSet<String>,
     now: i64,
-) -> Result<Outcome, String> {
+) -> Result<(Outcome, Option<RemoteUri>), String> {
     let path = RemoteUri::new(source_id, &meta.remote_id).to_path();
     let name = format!("{}.{}", meta.title, meta.extension);
     let file_size = i64::try_from(meta.size).unwrap_or(i64::MAX);
 
-    if let Some((id, outcome)) = find_row_to_update(tx, source_id, meta, seen)? {
+    if let Some(RowMatch { id, outcome, rekey }) = find_row_to_update(tx, source_id, meta, seen)? {
+        // The cache file is named by the old id, so a re-keyed row starts
+        // uncached; its old file is reported for the caller to delete.
+        let reset_cache = rekey.as_ref().is_some_and(|r| !r.downloaded);
+        let orphaned = rekey
+            .filter(|r| !r.downloaded && r.cache_state.is_some())
+            .map(|r| RemoteUri::new(source_id, &r.old_remote_id));
         // A download is a local file now: its path, name, format and size
         // describe that file and stay as they are.
         tx.execute(
@@ -206,7 +245,9 @@ fn upsert_one(
                 source_provider = ?15, source_id = ?16, source_url = ?17,
                 source_state = CASE WHEN source_state = 'downloaded'
                                     THEN source_state ELSE 'remote' END,
-                remote_updated_at = ?18, remote_art_ref = ?19, remote_missing = 0
+                remote_updated_at = ?18, remote_art_ref = ?19, remote_missing = 0,
+                cache_state = CASE WHEN ?20 THEN NULL ELSE cache_state END,
+                source_fetched_at = CASE WHEN ?20 THEN NULL ELSE source_fetched_at END
              WHERE id = ?1",
             params![
                 id,
@@ -228,10 +269,11 @@ fn upsert_one(
                 meta.part_key,
                 meta.updated_at,
                 meta.art_ref,
+                reset_cache,
             ],
         )
         .map_err(sql_error("update remote track"))?;
-        return Ok(outcome);
+        return Ok((outcome, orphaned));
     }
 
     tx.execute(
@@ -272,7 +314,7 @@ fn upsert_one(
         ],
     )
     .map_err(sql_error("insert remote track"))?;
-    Ok(Outcome::Inserted)
+    Ok((Outcome::Inserted, None))
 }
 
 /// Remote rows are only searchable while they are visible, so after any
@@ -405,6 +447,7 @@ impl Library {
             seen: HashSet::new(),
             upserted: 0,
             revived: 0,
+            rekeyed: Vec::new(),
         })
     }
 
@@ -423,16 +466,20 @@ impl Library {
             .transaction()
             .map_err(sql_error("begin remote page"))?;
         let mut revived = 0;
+        let mut rekeyed = Vec::new();
         for meta in page {
-            let outcome = upsert_one(&tx, &walk.source_id, provider, meta, &walk.seen, now)?;
+            let (outcome, orphaned) =
+                upsert_one(&tx, &walk.source_id, provider, meta, &walk.seen, now)?;
             if matches!(outcome, Outcome::Revived) {
                 revived += 1;
             }
+            rekeyed.extend(orphaned);
             walk.seen.insert(meta.remote_id.clone());
         }
         tx.commit().map_err(sql_error("commit remote page"))?;
         walk.upserted += page.len();
         walk.revived += revived;
+        walk.rekeyed.extend(rekeyed);
         Ok(())
     }
 
@@ -447,7 +494,8 @@ impl Library {
             let mut statement = tx
                 .prepare(
                     "SELECT id, source_id FROM tracks
-                     WHERE remote_source_id = ?1 AND remote_missing = 0",
+                     WHERE remote_source_id = ?1 AND remote_missing = 0
+                       AND source_state = 'remote'",
                 )
                 .map_err(sql_error("prepare remote walk finish"))?;
             let rows = statement
@@ -484,6 +532,7 @@ impl Library {
             upserted: walk.upserted,
             tombstoned: stale.len(),
             revived: walk.revived,
+            rekeyed: walk.rekeyed,
         })
     }
 
@@ -1489,6 +1538,93 @@ mod tests {
             ),
             2
         );
+    }
+
+    #[test]
+    fn a_download_missing_from_the_server_stays_a_searchable_local_file() {
+        let library = test_library();
+        let source = library
+            .insert_remote_source("plex", "srv1", "Home", "{}")
+            .unwrap();
+        walk(
+            &library,
+            &source,
+            &[
+                meta("1", "Zanzibar", "Band", "Album", 100.0),
+                meta("2", "Other", "Band", "Album", 110.0),
+            ],
+        );
+        library
+            .promote_source_track(&track_id(&library, &source, "1"), "/downloads/z.flac")
+            .unwrap();
+        library.recompute_remote_visibility(true).unwrap();
+
+        let summary = walk(
+            &library,
+            &source,
+            &[meta("2", "Other", "Band", "Album", 110.0)],
+        );
+        assert_eq!(summary.tombstoned, 0);
+        assert_eq!(
+            count(
+                &library,
+                "SELECT COUNT(*) FROM tracks WHERE remote_missing = 1"
+            ),
+            0
+        );
+        assert_eq!(library.search_tracks("Zanzibar").unwrap().len(), 1);
+        assert_eq!(library_titles(&library), ["Other", "Zanzibar"]);
+        library.recompute_remote_visibility(true).unwrap();
+        assert_eq!(library.search_tracks("Zanzibar").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rekeying_a_cached_row_clears_its_cache_and_reports_the_old_file() {
+        let library = test_library();
+        let source = library
+            .insert_remote_source("plex", "srv1", "Home", "{}")
+            .unwrap();
+        walk(
+            &library,
+            &source,
+            &[
+                meta("1", "One", "Band", "Album", 100.0),
+                meta("2", "Two", "Band", "Album", 110.0),
+            ],
+        );
+        library
+            .set_remote_cache_state(&RemoteUri::new(&source, "1"), Some("complete"))
+            .unwrap();
+        let id = track_id(&library, &source, "1");
+
+        let summary = walk(
+            &library,
+            &source,
+            &[
+                meta("10", "One", "Band", "Album", 100.0),
+                meta("20", "Two", "Band", "Album", 110.0),
+            ],
+        );
+        assert_eq!(summary.revived, 2);
+        // Only the row that held cached audio has an orphaned file.
+        assert_eq!(summary.rekeyed, vec![RemoteUri::new(&source, "1")]);
+        assert_eq!(track_id(&library, &source, "10"), id);
+
+        let info = library
+            .remote_stream_info(&RemoteUri::new(&source, "10"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(info.cache_state, None);
+        let fetched: Option<i64> = library
+            .read_connection()
+            .query_row(
+                "SELECT source_fetched_at FROM tracks WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fetched, None);
+        assert!(library.remote_eviction_candidates().unwrap().is_empty());
     }
 
     #[test]
