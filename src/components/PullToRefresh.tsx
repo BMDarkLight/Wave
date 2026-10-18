@@ -22,6 +22,8 @@ const DISC = 40;
 /** Movement before the gesture decides whether it is a pull at all. */
 const SLOP = 8;
 const MESSAGE_MS = 2000;
+/** How long a pull waits for its refresh to start before letting go. */
+const SETTLE_MS = 1500;
 
 /** The nearest ancestor that scrolls vertically, or the document. */
 function scrollParent(element: HTMLElement): HTMLElement {
@@ -59,6 +61,9 @@ export default function PullToRefresh({
   const disc = useRef<HTMLDivElement | null>(null);
   const icon = useRef<HTMLSpanElement | null>(null);
   const dragging = useRef(false);
+  /** Whether the refresh a pull asked for has actually started. */
+  const sawRefresh = useRef(false);
+  const settleTimer = useRef(0);
   const [message, setMessage] = useState<string | null>(null);
   const latest = useRef({ onRefresh, refreshing, cooldownSeconds });
 
@@ -88,9 +93,12 @@ export default function PullToRefresh({
   // A refresh started anywhere, or a message, holds the disc in view; when
   // both are over it slides away.
   useEffect(() => {
+    if (refreshing) sawRefresh.current = true;
     if (dragging.current) return;
     place(refreshing || message ? REST : 0, true);
   }, [refreshing, message]);
+
+  useEffect(() => () => window.clearTimeout(settleTimer.current), []);
 
   useEffect(() => {
     const element = root.current;
@@ -154,7 +162,20 @@ export default function PullToRefresh({
         if (cooldownSeconds > 0) {
           setMessage(`Just refreshed. Try again in ${cooldownSeconds}s.`);
         } else {
+          sawRefresh.current = false;
           onRefresh();
+          // The backend can still turn the refresh down (its cooldown clock
+          // is shared with other screens), and then `refreshing` never flips.
+          window.clearTimeout(settleTimer.current);
+          settleTimer.current = window.setTimeout(() => {
+            if (sawRefresh.current || dragging.current) return;
+            const { cooldownSeconds } = latest.current;
+            if (cooldownSeconds > 0) {
+              setMessage(`Just refreshed. Try again in ${cooldownSeconds}s.`);
+            } else {
+              place(0, true);
+            }
+          }, SETTLE_MS);
         }
         place(REST, true);
       } else {
