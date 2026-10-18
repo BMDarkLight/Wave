@@ -58,11 +58,13 @@ impl std::fmt::Display for RemoteError {
             RemoteError::Unauthorized => f.write_str("Sign in to this server again"),
             RemoteError::Blocked(GateState::Disabled) => f.write_str("Outside Sourcing is off"),
             RemoteError::Blocked(GateState::Cellular) => {
-                f.write_str("Remote music is set to Wi-Fi only")
+                f.write_str("Your servers are set to Wi-Fi only")
             }
-            RemoteError::Blocked(GateState::Allowed) => f.write_str("Remote music is unavailable"),
+            RemoteError::Blocked(GateState::Allowed) => {
+                f.write_str("Can't stream from your servers right now")
+            }
             RemoteError::Parse(_) => f.write_str("Unexpected response from the server"),
-            RemoteError::Http(code) => write!(f, "The server answered with an error ({code})"),
+            RemoteError::Http(code) => write!(f, "The server returned an error ({code})"),
         }
     }
 }
@@ -105,11 +107,11 @@ mod tests {
         );
         assert_eq!(
             RemoteError::Blocked(GateState::Cellular).to_string(),
-            "Remote music is set to Wi-Fi only"
+            "Your servers are set to Wi-Fi only"
         );
         assert_eq!(
             RemoteError::Blocked(GateState::Allowed).to_string(),
-            "Remote music is unavailable"
+            "Can't stream from your servers right now"
         );
         assert_eq!(
             RemoteError::Parse("token abc".into()).to_string(),
@@ -117,7 +119,7 @@ mod tests {
         );
         assert_eq!(
             RemoteError::Http(503).to_string(),
-            "The server answered with an error (503)"
+            "The server returned an error (503)"
         );
     }
 }

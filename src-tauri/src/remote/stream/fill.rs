@@ -598,10 +598,7 @@ mod tests {
     #[test]
     fn a_track_level_failure_leaves_the_source_alone() {
         let cases = [
-            (
-                RemoteError::Http(404),
-                "The server answered with an error (404)",
-            ),
+            (RemoteError::Http(404), "The server returned an error (404)"),
             (
                 RemoteError::Parse("bad".into()),
                 "Unexpected response from the server",

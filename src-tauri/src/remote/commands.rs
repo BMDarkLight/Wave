@@ -565,7 +565,7 @@ pub async fn plex_set_direct_token(
             .ok_or_else(|| "This source has no address".to_string())?;
         let probe = probe_direct_server(&url, &token, &headers)?;
         if probe.server_id != config.server_id {
-            return Err("A different server answers at that address now".to_string());
+            return Err("There's a different server at that address now".to_string());
         }
         config.server_token = token;
         let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
@@ -589,7 +589,7 @@ fn subsonic_error(error: RemoteError, url: &str) -> String {
             format!("Can't reach a server at {url}. Check the address and port.")
         }
         RemoteError::Parse(_) | RemoteError::Http(_) => {
-            "That address doesn't answer like a Subsonic server".to_string()
+            "There's no Subsonic server at that address".to_string()
         }
         other => remote_error(other),
     }
@@ -669,7 +669,7 @@ fn jellyfin_with_password(config_json: &str, password: &str) -> Result<String, S
     )
     .map_err(|e| jellyfin_error(e, &config.url))?;
     if auth.user.id != config.user_id {
-        return Err("That signs in a different user".to_string());
+        return Err("That password is for a different account".to_string());
     }
     config.token = auth.access_token;
     serde_json::to_string(&config).map_err(|e| e.to_string())
@@ -717,7 +717,7 @@ fn jellyfin_error(error: RemoteError, url: &str) -> String {
             format!("Can't reach a server at {url}. Check the address and port.")
         }
         RemoteError::Parse(_) | RemoteError::Http(_) => {
-            "That address doesn't answer like a Jellyfin or Emby server".to_string()
+            "There's no Jellyfin or Emby server at that address".to_string()
         }
         other => remote_error(other),
     }

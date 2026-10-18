@@ -237,11 +237,11 @@ export function unavailableReason(
   if (!isRemote(track) || track.cache_state === "complete") return null;
   if (track.remote_missing) return "Removed from the server";
   if (status?.gate === "disabled") return "Outside Sourcing is off";
-  if (status?.gate === "cellular") return "Remote music is set to Wi-Fi only";
+  if (status?.gate === "cellular") return "Your servers are set to Wi-Fi only";
   const state = status?.sources.find(
     (s) => s.id === track.remote_source_id,
   )?.state;
-  if (state === "signed_out") return "Sign in to the server again in Settings";
+  if (state === "signed_out") return "Sign in again in Settings";
   if (state === "unreachable") return "Can't reach the server";
   return null;
 }

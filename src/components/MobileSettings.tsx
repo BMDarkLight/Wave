@@ -912,8 +912,8 @@ export default function MobileSettings({
               <span className="mset-gapless-copy">
                 <span className="mset-gapless-label">Outside Sourcing</span>
                 <span className="mset-gapless-hint">
-                  Stream music from your own servers, like Plex, Jellyfin or
-                  Navidrome. Nothing is contacted while this is off.
+                  Play music from your own Plex, Jellyfin or Navidrome server.
+                  Wave won't connect to anything while this is off.
                 </span>
               </span>
             </label>
@@ -933,7 +933,7 @@ export default function MobileSettings({
                 <span className="mset-gapless-copy">
                   <span className="mset-gapless-label">Use cellular data</span>
                   <span className="mset-gapless-hint">
-                    Off means remote music only loads on Wi-Fi.
+                    When off, music from your servers only plays on Wi-Fi.
                   </span>
                 </span>
               </label>

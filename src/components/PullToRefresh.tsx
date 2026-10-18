@@ -152,7 +152,7 @@ export default function PullToRefresh({
       const { onRefresh, refreshing, cooldownSeconds } = latest.current;
       if (distance >= THRESHOLD && !refreshing) {
         if (cooldownSeconds > 0) {
-          setMessage(`Refreshed recently. Try again in ${cooldownSeconds}s.`);
+          setMessage(`Just refreshed. Try again in ${cooldownSeconds}s.`);
         } else {
           onRefresh();
         }

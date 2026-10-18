@@ -149,8 +149,8 @@ export default function RemoteSourceList() {
             }}
           >
             <p className="confirm-text">
-              Remove {removing.display_name}? Its cached music will be deleted.
-              Downloaded tracks stay.
+              Remove {removing.display_name}? Its offline copies will be
+              cleared, but anything you downloaded stays.
             </p>
             <div className="modal-actions">
               <button

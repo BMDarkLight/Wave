@@ -126,7 +126,7 @@ export default function RemoteSourceSetupDialog({
         await plexReauthorizeSource(reauthorizeSourceId, session);
         finish();
       } catch (err) {
-        fail(err, "Could not sign in again");
+        fail(err, "Couldn't sign in again");
         setStep("sign-in");
       }
       return;
@@ -139,7 +139,7 @@ export default function RemoteSourceSetupDialog({
       setServerId(found[0]?.id ?? null);
       setStep("server");
     } catch (err) {
-      fail(err, "Could not list your Plex servers");
+      fail(err, "Couldn't load your Plex servers");
     } finally {
       setBusy(false);
     }
@@ -160,13 +160,13 @@ export default function RemoteSourceSetupDialog({
         }
         if (state === "expired") {
           setWaiting(false);
-          setError("The sign-in timed out. Try again.");
+          setError("Sign-in timed out. Try again.");
           return;
         }
       } catch (err) {
         if (stopped) return;
         setWaiting(false);
-        fail(err, "Could not check the sign-in");
+        fail(err, "Couldn't check the sign-in");
         return;
       }
       timer = window.setTimeout(tick, POLL_MS);
@@ -190,7 +190,7 @@ export default function RemoteSourceSetupDialog({
       setSessionId(started.session_id);
       setWaiting(true);
     } catch (err) {
-      fail(err, "Could not start signing in to Plex");
+      fail(err, "Couldn't start the Plex sign-in");
     } finally {
       setBusy(false);
     }
@@ -207,7 +207,7 @@ export default function RemoteSourceSetupDialog({
       setChosen(new Set(found.map((library) => library.key)));
       setStep("libraries");
     } catch (err) {
-      fail(err, "Could not list the server's libraries");
+      fail(err, "Couldn't load the server's libraries");
     } finally {
       setBusy(false);
     }
@@ -225,7 +225,7 @@ export default function RemoteSourceSetupDialog({
         await subsonicAddSource(address, username, secret);
         finish();
       } catch (err) {
-        fail(err, "Could not add the server");
+        fail(err, "Couldn't add the server");
         setStep("form");
       }
       return;
@@ -246,7 +246,7 @@ export default function RemoteSourceSetupDialog({
       setChosen(new Set(server.libraries.map((library) => library.key)));
       setStep("libraries");
     } catch (err) {
-      fail(err, "Could not connect to the server");
+      fail(err, "Couldn't connect to the server");
     } finally {
       setBusy(false);
     }
@@ -268,9 +268,7 @@ export default function RemoteSourceSetupDialog({
     } catch (err) {
       fail(
         err,
-        back === "token"
-          ? "Could not use that token"
-          : "Could not sign in again",
+        back === "token" ? "That token didn't work" : "Couldn't sign in again",
       );
       setStep(back);
     }
@@ -289,7 +287,7 @@ export default function RemoteSourceSetupDialog({
       }
       finish();
     } catch (err) {
-      fail(err, "Could not add the server");
+      fail(err, "Couldn't add the server");
       setStep("libraries");
     }
   };
@@ -405,26 +403,22 @@ export default function RemoteSourceSetupDialog({
               />
             </label>
             {step === "password" ? (
-              <p className="mset-hint">
-                The password for this account on your server.
-              </p>
+              <p className="mset-hint">Enter your password for this server.</p>
             ) : kind === "subsonic" ? (
               <p className="mset-hint">
-                The account on your server. Wave keeps the password on this
-                device to sign in.
+                Use your login for this server. Wave saves the password on this
+                device.
               </p>
             ) : kind === "jellyfin" ? (
               <p className="mset-hint">
-                The account on your server. Wave signs in once and keeps the
-                server's sign-in token, not your password.
+                Use your login for this server. Wave doesn't save your password.
               </p>
             ) : (
               <p className="mset-hint">
-                No plex.tv needed. Leave the token empty if the server lets your
-                network in without signing in (Settings, Network, List of IP
-                addresses allowed without auth). Otherwise use the server's
-                PlexOnlineToken from its Preferences.xml, or the X-Plex-Token
-                shown when you view an item's XML in Plex.
+                Works without plex.tv. Leave the token blank if your server lets
+                your network in without signing in. Otherwise, in Plex open any
+                track, choose Get Info, then View XML, and copy the X-Plex-Token
+                from the end of the address.
               </p>
             )}
             {/* Submits on Enter; the visible button is in the actions row. */}
@@ -434,7 +428,9 @@ export default function RemoteSourceSetupDialog({
 
         {step === "sign-in" &&
           (waiting ? (
-            <p className="confirm-text">Finish signing in in your browser.</p>
+            <p className="confirm-text">
+              Finish signing in on the page that opened.
+            </p>
           ) : (
             <div className="add-source-options">
               <button
@@ -451,7 +447,7 @@ export default function RemoteSourceSetupDialog({
         {step === "server" &&
           (servers.length === 0 ? (
             <p className="confirm-text">
-              This Plex account has no servers Wave can use.
+              No servers found on this Plex account.
             </p>
           ) : (
             <div className="remote-setup-list" role="radiogroup">
@@ -474,7 +470,7 @@ export default function RemoteSourceSetupDialog({
 
         {step === "libraries" &&
           (libraries.length === 0 ? (
-            <p className="confirm-text">This server has no music libraries.</p>
+            <p className="confirm-text">No music libraries on this server.</p>
           ) : (
             <div className="remote-setup-list">
               {libraries.map((library) => (

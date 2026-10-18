@@ -275,7 +275,7 @@ function RefreshButton({
       aria-label="Refresh library"
       title={
         cooldownSeconds > 0
-          ? `Refreshed recently. Try again in ${cooldownSeconds}s.`
+          ? `Just refreshed. Try again in ${cooldownSeconds}s.`
           : "Refresh library"
       }
       disabled={refreshing || cooldownSeconds > 0}
@@ -501,8 +501,8 @@ export default function HomePage({
               <h1>{greeting}</h1>
               <p className="home-sub">
                 {curated
-                  ? "Curated from your listening history"
-                  : `Picked from ${trackCount.toLocaleString()} tracks in your library`}
+                  ? "Based on what you play"
+                  : `From the ${trackCount.toLocaleString()} tracks in your library`}
               </p>
             </div>
             {refreshButton}
@@ -523,7 +523,7 @@ export default function HomePage({
                   {curated && suggestions?.favorite_artist
                     ? `Because you listen to ${suggestions.favorite_artist.name}`
                     : curated
-                      ? "Picked from your listening"
+                      ? "Based on what you play"
                       : "Suggested for you"}
                 </p>
                 <h2 title={getTrackTitle(featured)}>
@@ -570,8 +570,8 @@ export default function HomePage({
                 <h3>Mix for you</h3>
                 <p>
                   {curated
-                    ? "Based on the songs you play to the end"
-                    : "Random cuts from your collection"}
+                    ? "Songs you play all the way through"
+                    : "A random mix from your library"}
                 </p>
               </div>
               <div className="home-card-row">
@@ -615,8 +615,8 @@ export default function HomePage({
                 <h3>Albums to explore</h3>
                 <p>
                   {curated
-                    ? "Records you’ve spent the most time with"
-                    : "Jump into a random record"}
+                    ? "Albums you play the most"
+                    : "A random album to start with"}
                 </p>
               </div>
               <div className="home-card-row">
@@ -646,8 +646,8 @@ export default function HomePage({
                 <h3>More to dig into</h3>
                 <p>
                   {curated
-                    ? "More picked from what you play"
-                    : "Another handful of random tracks"}
+                    ? "More based on what you play"
+                    : "More random tracks"}
                 </p>
               </div>
               <div className="home-suggest-grid">
