@@ -1,6 +1,6 @@
 [package]
 name = "Wave"
-version = "1.1.1"
+version = "1.1.2"
 description = "Lightweight Music Player"
 authors = ["BMDarkLight"]
 edition = "2021"
