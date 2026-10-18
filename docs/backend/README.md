@@ -105,6 +105,7 @@ Important behaviors:
 | `plex_begin_sign_in`, `plex_poll_sign_in` | Sign in to Plex through the browser |
 | `plex_list_servers`, `plex_list_libraries`, `plex_add_source` | Set up a Plex server as a remote source |
 | `plex_reauthorize_source` | Sign a remote source in again |
+| `plex_probe_direct`, `plex_add_direct_source`, `plex_set_direct_token` | Add a Plex server by address and token, without plex.tv |
 | `list_remote_sources`, `remove_remote_source` | The remote sources in Settings |
 | `get_remote_status` | Network gate state and each source's state |
 | `request_library_refresh` | Rescan and sync, at most every 30 seconds |

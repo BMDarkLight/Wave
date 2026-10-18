@@ -177,7 +177,10 @@ section instead of breaking the search.
 ### Your own server (Plex)
 
 Turn on **Outside Sourcing** in Settings and add a Plex server: sign in through
-your browser, pick the server, pick its music libraries. Its tracks join your
+your browser, pick the server, pick its music libraries. Where plex.tv can't be
+reached, choose **Plex server (connect by address)** instead and enter the
+server's address, plus its token unless the server lets your network in
+without one. Its tracks join your
 library, albums, artists and search, marked with a small cloud.
 
 - Playback starts while the track is still downloading, then the whole file is

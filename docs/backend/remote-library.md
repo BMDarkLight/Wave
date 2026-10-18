@@ -79,6 +79,19 @@ and polls the PIN until it returns a token. Pending sign-ins live in memory for
 15 minutes and the token never reaches the frontend. The user then picks a
 server (their own first, shared ones marked) and one or more music libraries.
 
+**Without plex.tv.** A server can also be added by its address, for networks
+where plex.tv can't be reached. Wave reads `/identity` (which answers without a
+token) for the server's id, tries `/` for its name, and lists its music
+libraries. The token is optional: a server that allows the local network in
+without signing in (Settings, Network, "List of IP addresses and networks that
+are allowed without auth") needs none, and Wave then sends no token at all,
+since some servers turn away an empty one. A bare address such as
+`192.168.1.10` becomes `http://192.168.1.10:32400`; an address with a scheme is
+kept as typed, so a reverse proxy works. A directly added server is stored with
+`direct: true` and gets the same source id it would get through plex.tv, so
+adding it both ways is refused as a duplicate. Signing in again means entering
+a new token, which is checked against the same server id.
+
 A server lists several addresses. Wave tries local HTTPS, then the plain local
 address (some routers block `plex.direct` names), then remote, then relay, and
 remembers the first that answers. The working address is written back after a
@@ -165,6 +178,8 @@ seconds left so the UI can say so.
 | `plex_list_servers` / `plex_list_libraries` | Choices for setup |
 | `plex_add_source` | Add a server and start its first sync |
 | `plex_reauthorize_source` | Sign a source in again after Plex rejected its token |
+| `plex_probe_direct` / `plex_add_direct_source` | Add a server by address and optional token, without plex.tv |
+| `plex_set_direct_token` | Give a directly added server a new token |
 | `list_remote_sources` / `remove_remote_source` | The settings list |
 | `get_remote_status` | Gate state and per-source state |
 | `request_library_refresh` | Start a refresh or report the cooldown |
