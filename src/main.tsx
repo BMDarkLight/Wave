@@ -16,6 +16,11 @@ import { initTouchHoverGuards } from "./utils/touchHover";
 // Defeat sticky :hover/:focus on Android WebView before first paint when possible.
 initTouchHoverGuards();
 
+// Wave draws its own menus; the system one (Reload, Inspect Element) never
+// shows. React handles right-clicks on the app root first, so Wave's menus
+// still open before this runs.
+document.addEventListener("contextmenu", (event) => event.preventDefault());
+
 // Render immediately - let the App component handle Tauri detection
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
