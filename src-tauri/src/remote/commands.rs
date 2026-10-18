@@ -18,7 +18,7 @@ use super::plex::{self, PlexHeaders};
 use super::refresh::RefreshCooldown;
 use super::store::RemoteSourceRow;
 use super::uri::RemoteUri;
-use super::{stream, subsonic, sync, RemoteEvent, RemoteRuntime, SourceState};
+use super::{jellyfin, stream, subsonic, sync, RemoteEvent, RemoteRuntime, SourceState};
 use crate::app::settings::AppSettingsState;
 use crate::commands::LibraryState;
 use crate::metadata::Track;
@@ -170,7 +170,7 @@ fn source_dto(row: &RemoteSourceRow, state: SourceState) -> RemoteSourceDto {
 /// How a source signs in again: through plex.tv, with a typed Plex token, or
 /// with its password.
 fn reauth_for(row: &RemoteSourceRow) -> &'static str {
-    if row.kind == "subsonic" {
+    if matches!(row.kind.as_str(), "subsonic" | "jellyfin") {
         return "password";
     }
     let direct = serde_json::from_str::<serde_json::Value>(&row.config_json)
@@ -642,10 +642,43 @@ pub async fn subsonic_add_source(
     .await
 }
 
-/// Gives a Subsonic source a new password, after the server stopped
-/// accepting the old one.
+/// A Subsonic config signed in with a new password, checked with the server.
+fn subsonic_with_password(config_json: &str, password: String) -> Result<String, String> {
+    let mut config: subsonic::SubsonicConfig =
+        serde_json::from_str(config_json).map_err(|e| e.to_string())?;
+    config.password = password;
+    config.plain_password = false;
+    let url = config.url.clone();
+    let probed = subsonic::SubsonicBackend::new(config)
+        .probe()
+        .map_err(|e| subsonic_error(e, &url))?;
+    serde_json::to_string(&probed).map_err(|e| e.to_string())
+}
+
+/// A Jellyfin or Emby config with a new token, from signing in again as the
+/// same user on the same device id.
+fn jellyfin_with_password(config_json: &str, password: &str) -> Result<String, String> {
+    let mut config: jellyfin::JellyfinConfig =
+        serde_json::from_str(config_json).map_err(|e| e.to_string())?;
+    let auth = jellyfin::authenticate(
+        NetworkGate::global(),
+        &config.url,
+        &config.device_id,
+        &config.username,
+        password,
+    )
+    .map_err(|e| jellyfin_error(e, &config.url))?;
+    if auth.user.id != config.user_id {
+        return Err("That signs in a different user".to_string());
+    }
+    config.token = auth.access_token;
+    serde_json::to_string(&config).map_err(|e| e.to_string())
+}
+
+/// Gives a source that signs in with a password (Subsonic, Jellyfin, Emby) a
+/// new one, after the server stopped accepting the old sign-in.
 #[tauri::command]
-pub async fn subsonic_set_password(
+pub async fn set_source_password(
     source_id: String,
     password: String,
     app: AppHandle,
@@ -659,15 +692,11 @@ pub async fn subsonic_set_password(
             .into_iter()
             .find(|row| row.id == source_id)
             .ok_or_else(|| "That source was removed".to_string())?;
-        let mut config: subsonic::SubsonicConfig =
-            serde_json::from_str(&row.config_json).map_err(|e| e.to_string())?;
-        config.password = password;
-        config.plain_password = false;
-        let url = config.url.clone();
-        let probed = subsonic::SubsonicBackend::new(config)
-            .probe()
-            .map_err(|e| subsonic_error(e, &url))?;
-        let json = serde_json::to_string(&probed).map_err(|e| e.to_string())?;
+        let json = match row.kind.as_str() {
+            "subsonic" => subsonic_with_password(&row.config_json, password)?,
+            "jellyfin" => jellyfin_with_password(&row.config_json, &password)?,
+            _ => return Err("This source doesn't sign in with a password".to_string()),
+        };
         rt.with_library(|library| {
             library.update_remote_source_config(&source_id, &json)?;
             rt.reload_sources(library);
@@ -676,6 +705,159 @@ pub async fn subsonic_set_password(
         rt.set_status(&source_id, SourceState::Ok);
         sync_one_in_background(&task_app, rt, source_id);
         Ok(())
+    })
+    .await
+}
+
+/// A Jellyfin or Emby check's failure, said the way a person can act on.
+fn jellyfin_error(error: RemoteError, url: &str) -> String {
+    match error {
+        RemoteError::Unauthorized => "Wrong username or password".to_string(),
+        RemoteError::Unreachable(_) => {
+            format!("Can't reach a server at {url}. Check the address and port.")
+        }
+        RemoteError::Parse(_) | RemoteError::Http(_) => {
+            "That address doesn't answer like a Jellyfin or Emby server".to_string()
+        }
+        other => remote_error(other),
+    }
+}
+
+struct PendingJellyfin {
+    config: jellyfin::JellyfinConfig,
+    libraries: Vec<jellyfin::JellyfinLibrary>,
+    created: Instant,
+}
+
+/// Jellyfin and Emby sign-ins waiting for the user to pick libraries, keyed
+/// by an id the frontend holds. The token never leaves the backend.
+fn pending_jellyfin() -> std::sync::MutexGuard<'static, HashMap<String, PendingJellyfin>> {
+    static PENDING: OnceLock<Mutex<HashMap<String, PendingJellyfin>>> = OnceLock::new();
+    let mut pending = PENDING
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let now = Instant::now();
+    pending.retain(|_, p| now.saturating_duration_since(p.created) < SESSION_TTL);
+    pending
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JellyfinServerDto {
+    pub session_id: String,
+    pub name: String,
+    pub libraries: Vec<PlexLibraryDto>,
+}
+
+/// Signs in to a Jellyfin or Emby server and lists the user's music
+/// libraries. Nothing is stored until [`jellyfin_add_source`].
+#[tauri::command]
+pub async fn jellyfin_sign_in(
+    url: String,
+    username: String,
+    password: String,
+) -> Result<JellyfinServerDto, String> {
+    NetworkGate::global().check().map_err(remote_error)?;
+    let url = jellyfin::normalize_url(&url)?;
+    let username = username.trim().to_string();
+    if username.is_empty() {
+        return Err("Enter your username".to_string());
+    }
+    blocking(move || {
+        let gate = NetworkGate::global();
+        let info = jellyfin::public_info(gate, &url).map_err(|e| jellyfin_error(e, &url))?;
+        let device_id = uuid::Uuid::new_v4().simple().to_string();
+        let auth = jellyfin::authenticate(gate, &url, &device_id, &username, &password)
+            .map_err(|e| jellyfin_error(e, &url))?;
+        let config = jellyfin::JellyfinConfig {
+            url: url.clone(),
+            server_name: info
+                .server_name
+                .clone()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| url.split("://").nth(1).unwrap_or(&url).to_string()),
+            product: info.product().to_string(),
+            server_id: info.id,
+            user_id: auth.user.id,
+            username,
+            token: auth.access_token,
+            device_id,
+            libraries: Vec::new(),
+        };
+        let libraries: Vec<jellyfin::JellyfinLibrary> =
+            jellyfin::JellyfinBackend::new(config.clone())
+                .music_libraries()
+                .map_err(|e| jellyfin_error(e, &url))?
+                .into_iter()
+                .map(|view| jellyfin::JellyfinLibrary {
+                    name: view.name.unwrap_or_else(|| "Music".to_string()),
+                    id: view.id,
+                })
+                .collect();
+        let name = jellyfin::display_name(&config);
+        let dto_libraries = libraries
+            .iter()
+            .map(|library| PlexLibraryDto {
+                key: library.id.clone(),
+                title: library.name.clone(),
+            })
+            .collect();
+        let session_id = uuid::Uuid::new_v4().simple().to_string();
+        pending_jellyfin().insert(
+            session_id.clone(),
+            PendingJellyfin {
+                config,
+                libraries,
+                created: Instant::now(),
+            },
+        );
+        Ok(JellyfinServerDto {
+            session_id,
+            name,
+            libraries: dto_libraries,
+        })
+    })
+    .await
+}
+
+/// Adds a signed-in Jellyfin or Emby server with the chosen libraries and
+/// starts its first sync.
+#[tauri::command]
+pub async fn jellyfin_add_source(
+    session_id: String,
+    library_ids: Vec<String>,
+    app: AppHandle,
+) -> Result<RemoteSourceDto, String> {
+    let rt = runtime()?;
+    let task_app = app.clone();
+    blocking(move || {
+        let pending = pending_jellyfin()
+            .remove(&session_id)
+            .ok_or_else(|| "The sign-in expired. Sign in again.".to_string())?;
+        let mut config = pending.config;
+        config.libraries = pending
+            .libraries
+            .into_iter()
+            .filter(|library| library_ids.contains(&library.id))
+            .collect();
+        if config.libraries.is_empty() {
+            return Err("Choose at least one library".to_string());
+        }
+        let name = jellyfin::display_name(&config);
+        let key = jellyfin::stable_key(&config);
+        let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+        let id = rt.with_library(|library| {
+            let id = library.insert_remote_source("jellyfin", &key, &name, &json)?;
+            rt.reload_sources(library);
+            Ok::<_, String>(id)
+        })?;
+        sync_one_in_background(&task_app, rt, id.clone());
+        let row = rt
+            .with_library(|library| library.list_remote_sources())?
+            .into_iter()
+            .find(|row| row.id == id)
+            .ok_or_else(|| "The new source went missing".to_string())?;
+        Ok(source_dto(&row, rt.status(&id)))
     })
     .await
 }
@@ -1114,6 +1296,10 @@ mod tests {
         );
         assert_eq!(
             source_dto(&row("subsonic", "{}"), SourceState::Ok).reauth,
+            "password"
+        );
+        assert_eq!(
+            source_dto(&row("jellyfin", "{}"), SourceState::Ok).reauth,
             "password"
         );
     }

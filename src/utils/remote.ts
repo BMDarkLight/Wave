@@ -143,11 +143,36 @@ export const subsonicAddSource = (
     password,
   });
 
-export const subsonicSetPassword = (
+/** Signs a Subsonic, Jellyfin or Emby source in again with its password. */
+export const setSourcePassword = (
   sourceId: string,
   password: string,
 ): Promise<void> =>
-  safeInvoke<void>("subsonic_set_password", { sourceId, password });
+  safeInvoke<void>("set_source_password", { sourceId, password });
+
+/** A Jellyfin or Emby server signed in to, waiting for libraries to be picked. */
+export interface JellyfinServer {
+  session_id: string;
+  name: string;
+  libraries: PlexLibrary[];
+}
+
+export const jellyfinSignIn = (
+  url: string,
+  username: string,
+  password: string,
+): Promise<JellyfinServer> =>
+  safeInvoke<JellyfinServer>("jellyfin_sign_in", {
+    url,
+    username: username.trim(),
+    password,
+  });
+
+export const jellyfinAddSource = (
+  sessionId: string,
+  libraryIds: string[],
+): Promise<RemoteSource> =>
+  safeInvoke<RemoteSource>("jellyfin_add_source", { sessionId, libraryIds });
 
 export const listRemoteSources = (): Promise<RemoteSource[]> =>
   safeInvoke<RemoteSource[]>("list_remote_sources");

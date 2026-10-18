@@ -10,6 +10,7 @@ pub mod backend;
 pub mod commands;
 pub mod gate;
 pub(crate) mod http;
+pub mod jellyfin;
 pub mod plex;
 pub mod refresh;
 pub mod store;
@@ -197,6 +198,15 @@ impl RemoteRuntime {
                         Err(_) => tracing::warn!("Unreadable config for remote source {}", row.id),
                     }
                 }
+                "jellyfin" => {
+                    match serde_json::from_str::<jellyfin::JellyfinConfig>(&row.config_json) {
+                        Ok(config) => {
+                            backends
+                                .insert(row.id, Arc::new(jellyfin::JellyfinBackend::new(config)));
+                        }
+                        Err(_) => tracing::warn!("Unreadable config for remote source {}", row.id),
+                    }
+                }
                 other => tracing::warn!("Unknown remote source kind {other}; skipping {}", row.id),
             }
         }
@@ -303,7 +313,7 @@ mod tests {
             .insert_remote_source("plex", "srv", "Home", &plex_config())
             .unwrap();
         let other = library
-            .insert_remote_source("jellyfin", "j", "Other", "{}")
+            .insert_remote_source("ampache", "j", "Other", "{}")
             .unwrap();
         let broken = library
             .insert_remote_source("plex", "bad", "Bad", "not json")
@@ -337,6 +347,25 @@ mod tests {
         let rt = RemoteRuntime::new_for_test(test_library(), events);
         rt.reload_sources(&library);
         assert_eq!(rt.backend(&subsonic).unwrap().kind(), "subsonic");
+    }
+
+    #[test]
+    fn reload_builds_jellyfin_backends_without_plex_headers() {
+        let library = test_library();
+        let jellyfin = library
+            .insert_remote_source(
+                "jellyfin",
+                "srv:u1",
+                "Home (Jellyfin)",
+                r#"{"url":"http://nas:8096","server_id":"srv","server_name":"Home",
+                    "product":"Jellyfin","user_id":"u1","username":"alice","token":"t",
+                    "device_id":"d","libraries":[{"id":"m","name":"Music"}]}"#,
+            )
+            .unwrap();
+        let (events, _) = collector();
+        let rt = RemoteRuntime::new_for_test(test_library(), events);
+        rt.reload_sources(&library);
+        assert_eq!(rt.backend(&jellyfin).unwrap().kind(), "jellyfin");
     }
 
     #[test]

@@ -20,14 +20,16 @@ import {
   plexProbeDirect,
   plexReauthorizeSource,
   plexSetDirectToken,
+  jellyfinAddSource,
+  jellyfinSignIn,
+  setSourcePassword,
   subsonicAddSource,
-  subsonicSetPassword,
   type PlexLibrary,
   type PlexServer,
 } from "../../utils/remote";
 
 /** The kinds of server a source can be added from. */
-type Kind = "plex_tv" | "plex_direct" | "subsonic";
+type Kind = "plex_tv" | "plex_direct" | "jellyfin" | "subsonic";
 
 type Step =
   | "kind"
@@ -44,6 +46,7 @@ const POLL_MS = 2000;
 const KINDS: { kind: Kind; label: string }[] = [
   { kind: "plex_tv", label: "Plex (sign in with plex.tv)" },
   { kind: "plex_direct", label: "Plex server (connect by address)" },
+  { kind: "jellyfin", label: "Jellyfin or Emby" },
   {
     kind: "subsonic",
     label: "Navidrome, Airsonic, Gonic and other Subsonic servers",
@@ -83,6 +86,7 @@ export default function RemoteSourceSetupDialog({
   const [username, setUsername] = useState("");
   // The Plex token or the Subsonic password, depending on the kind.
   const [secret, setSecret] = useState("");
+  const [jellyfinSession, setJellyfinSession] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -209,7 +213,10 @@ export default function RemoteSourceSetupDialog({
     }
   };
 
-  /** A Plex server shows its libraries next; a Subsonic server is added now. */
+  /**
+   * Plex and Jellyfin servers show their libraries next; a Subsonic server is
+   * added now.
+   */
   const submitForm = async () => {
     setError(null);
     if (kind === "subsonic") {
@@ -225,8 +232,16 @@ export default function RemoteSourceSetupDialog({
     }
     setBusy(true);
     try {
-      const server = await plexProbeDirect(address, secret);
-      if (closed.current) return;
+      let server;
+      if (kind === "jellyfin") {
+        const signedIn = await jellyfinSignIn(address, username, secret);
+        if (closed.current) return;
+        setJellyfinSession(signedIn.session_id);
+        server = signedIn;
+      } else {
+        server = await plexProbeDirect(address, secret);
+        if (closed.current) return;
+      }
       setLibraries(server.libraries);
       setChosen(new Set(server.libraries.map((library) => library.key)));
       setStep("libraries");
@@ -247,7 +262,7 @@ export default function RemoteSourceSetupDialog({
       if (back === "token") {
         await plexSetDirectToken(reauthorizeSourceId, secret);
       } else {
-        await subsonicSetPassword(reauthorizeSourceId, secret);
+        await setSourcePassword(reauthorizeSourceId, secret);
       }
       finish();
     } catch (err) {
@@ -267,6 +282,8 @@ export default function RemoteSourceSetupDialog({
     try {
       if (kind === "plex_direct") {
         await plexAddDirectSource(address, secret, [...chosen]);
+      } else if (kind === "jellyfin" && jellyfinSession) {
+        await jellyfinAddSource(jellyfinSession, [...chosen]);
       } else if (sessionId && serverId) {
         await plexAddSource(sessionId, serverId, [...chosen]);
       }
@@ -286,10 +303,11 @@ export default function RemoteSourceSetupDialog({
     });
   };
 
-  const usesPassword = step === "password" || kind === "subsonic";
+  const withAccount = kind === "subsonic" || kind === "jellyfin";
+  const usesPassword = step === "password" || withAccount;
   const formReady =
     address.trim() !== "" &&
-    (kind !== "subsonic" || (username.trim() !== "" && secret !== ""));
+    (!withAccount || (username.trim() !== "" && secret !== ""));
   const secretReady = step === "password" ? secret !== "" : !!secret.trim();
   const secretLabel = usesPassword
     ? "Password"
@@ -347,7 +365,9 @@ export default function RemoteSourceSetupDialog({
                   placeholder={
                     kind === "subsonic"
                       ? "192.168.1.10:4533"
-                      : "192.168.1.10:32400"
+                      : kind === "jellyfin"
+                        ? "192.168.1.10:8096"
+                        : "192.168.1.10:32400"
                   }
                   autoCapitalize="none"
                   autoCorrect="off"
@@ -356,7 +376,7 @@ export default function RemoteSourceSetupDialog({
                 />
               </label>
             )}
-            {step === "form" && kind === "subsonic" && (
+            {step === "form" && withAccount && (
               <label className="remote-setup-field">
                 <span>Username</span>
                 <input
@@ -384,10 +404,19 @@ export default function RemoteSourceSetupDialog({
                 autoFocus={step !== "form"}
               />
             </label>
-            {usesPassword ? (
+            {step === "password" ? (
+              <p className="mset-hint">
+                The password for this account on your server.
+              </p>
+            ) : kind === "subsonic" ? (
               <p className="mset-hint">
                 The account on your server. Wave keeps the password on this
                 device to sign in.
+              </p>
+            ) : kind === "jellyfin" ? (
+              <p className="mset-hint">
+                The account on your server. Wave signs in once and keeps the
+                server's sign-in token, not your password.
               </p>
             ) : (
               <p className="mset-hint">
@@ -490,7 +519,11 @@ export default function RemoteSourceSetupDialog({
               disabled={busy || !formReady}
               onClick={() => void submitForm()}
             >
-              {kind === "subsonic" ? "Add" : "Connect"}
+              {kind === "subsonic"
+                ? "Add"
+                : kind === "jellyfin"
+                  ? "Sign in"
+                  : "Connect"}
             </button>
           )}
           {(step === "token" || step === "password") && (
