@@ -1,9 +1,9 @@
-# Remote Library (Plex)
+# Remote Library
 
 A remote source is a music library that lives on another machine. Its tracks
 appear in Wave's library next to local files, stream on demand, and are kept in
-a cache so a second play is instant and works offline. Plex is the first
-backend. The pieces below are deliberately backend-agnostic: a later backend,
+a cache so a second play is instant and works offline. Plex and
+Subsonic-compatible servers (Navidrome, Airsonic, Gonic) are the backends. The pieces below are deliberately backend-agnostic: a later backend,
 such as a Wave peer reached through Radii, plugs into the same contract without
 touching the library merge, the stream cache, or the player.
 
@@ -23,6 +23,8 @@ With it off, Wave makes no remote request of any kind, including at startup.
 | `remote/refresh.rs` | The 30 second refresh cooldown |
 | `remote/sync.rs` | Catalog walks and the album artwork pass |
 | `remote/plex/` | Plex sign-in, server discovery, catalog paging, ranged audio |
+| `remote/subsonic/` | Subsonic API: signed requests, catalog paging, ranged audio |
+| `remote/http.rs` | The HTTP clients every backend shares |
 | `remote/stream/` | Stream cache, progressive reader, Android loopback server |
 | `remote/commands.rs` | Tauri commands, events and startup |
 | `audio/buffered_source.rs` | Decodes a remote track on a worker thread |
@@ -103,6 +105,34 @@ since Plex URLs carry the token.
 
 ---
 
+## Subsonic
+
+Navidrome, Airsonic, Gonic, Ampache and other servers that speak the Subsonic
+API are added with an address, a username and a password. A bare address gets
+`http://`; a pasted `/rest` or Navidrome `/app/#/...` path is dropped. Every
+request is signed with a fresh salt and `t = md5(password + salt)`, so the
+password itself never goes over the wire. A server that refuses token auth
+(error 41, as LDAP-backed ones do) gets the hex-encoded password instead, and
+the source remembers that choice. The password is stored in the
+source's config, because each signature needs it.
+
+`ping` checks the account when the source is added and reports the server type
+(OpenSubsonic servers name themselves), which goes into the display name such as
+"Navidrome (nas:4533)". The source id is built from the username and host, so
+the same account on the same server can't be added twice.
+
+The catalog is read with `search3` and an empty query, 500 songs a page, which
+Navidrome, Gonic and most others answer with every song. A server that returns
+nothing that way is walked album by album instead (`getAlbumList2` in batches of
+50, then `getAlbum` for each). `getScanStatus` gives the song count for the
+progress bar when the server reports one. Audio comes from `stream` with
+`format=raw`, so the server sends the original file, with HTTP Range requests;
+an error answered as JSON or XML in place of audio is reported as an error, not
+cached. Cover art comes from `getCoverArt`. Signing in again means entering the
+password, which is checked with `ping` before it is saved.
+
+---
+
 ## Stream cache and progressive playback
 
 Playing a remote track starts a **fill**: a background download into a sparse
@@ -180,6 +210,8 @@ seconds left so the UI can say so.
 | `plex_reauthorize_source` | Sign a source in again after Plex rejected its token |
 | `plex_probe_direct` / `plex_add_direct_source` | Add a server by address and optional token, without plex.tv |
 | `plex_set_direct_token` | Give a directly added server a new token |
+| `subsonic_add_source` | Add a Subsonic server by address, username and password |
+| `subsonic_set_password` | Give a Subsonic source a new password |
 | `list_remote_sources` / `remove_remote_source` | The settings list |
 | `get_remote_status` | Gate state and per-source state |
 | `request_library_refresh` | Start a refresh or report the cooldown |
@@ -194,7 +226,7 @@ Events: `remote-sync-progress`, `remote-sync-finished`, `remote-status-changed`,
 
 ## Testing
 
-The suite is offline. Plex responses are inline JSON fixtures and a loopback
+The suite is offline. Plex and Subsonic responses are inline JSON fixtures and a loopback
 fake server; the stream cache is tested against a throttled fake backend,
 including seek-ahead, resume, gate closure and decoding while the file is still
 downloading.

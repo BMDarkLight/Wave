@@ -28,7 +28,7 @@ catalogs — in a single portable app built on Rust + Tauri + React.
   - [Library, albums & artists](#library-albums--artists)
   - [Metadata editor](#metadata-editor)
   - [Three-tier search](#three-tier-search)
-  - [Your own server (Plex)](#your-own-server-plex)
+  - [Your own server (Plex, Navidrome)](#your-own-server-plex-navidrome)
   - [Queue & playback](#queue--playback)
   - [Lyrics](#lyrics)
   - [Audio engine & DSP](#audio-engine--dsp)
@@ -87,7 +87,7 @@ live.
 | 🎚️ **Real DSP** | 10-band biquad equalizer, crossfade, gapless playback, and loudness normalization. |
 | 📝 **Synced lyrics** | Auto-fetched from LRCLIB, highlighted line by line, importable and exportable. |
 | 🌐 **Free catalogs** | Stream or download full-length tracks from Internet Archive and Jamendo. Off by default. |
-| 🗄️ **Your own server** | Add a Plex server and its music joins your library, streaming as it plays and cached for offline. Off by default. |
+| 🗄️ **Your own server** | Add a Plex, Navidrome or other Subsonic server and its music joins your library, streaming as it plays and cached for offline. Off by default. |
 | 📱 **One codebase** | Windows, macOS, Linux, and Android — desktop and touch layouts from the same UI. |
 | 🪶 **Portable** | A single native binary; no Electron, no heavy runtime. |
 
@@ -174,14 +174,16 @@ section instead of breaking the search.
 
 <img src="docs/screenshots/desktop-sources.png" alt="Remote source results grouped by provider" width="100%">
 
-### Your own server (Plex)
+### Your own server (Plex, Navidrome)
 
 Turn on **Outside Sourcing** in Settings and add a Plex server: sign in through
 your browser, pick the server, pick its music libraries. Where plex.tv can't be
 reached, choose **Plex server (connect by address)** instead and enter the
 server's address, plus its token unless the server lets your network in
-without one. Its tracks join your
-library, albums, artists and search, marked with a small cloud.
+without one. For Navidrome, Airsonic, Gonic and other Subsonic servers, choose
+that option and enter the server's address, your username and password. The
+server's tracks join your library, albums, artists and search, marked with a
+small cloud.
 
 - Playback starts while the track is still downloading, then the whole file is
   kept in the cache, so the next play is instant and works offline. Seeking
@@ -311,7 +313,7 @@ directly — no copying your music into app storage.
   panels for solid ones and make every transition instant, for slower phones.
   With animations on, **Reduce motion** fades pages and sheets in place
   instead of sliding them.
-- **Your Plex server streams over Wi-Fi only** unless you allow mobile data
+- **Your own server streams over Wi-Fi only** unless you allow mobile data
   in Settings. Add a server from the + in Media Source Folders.
 - **SAF folder picker** and scanning — grant a folder once, keep your files where
   they are.
@@ -762,8 +764,8 @@ Deezer and Internet Archive need no setup. Jamendo needs a free client ID from
 Deezer's API only serves 30-second previews; previews play but are never saved to
 your library. Full-length audio comes from Internet Archive and Jamendo.
 
-Streaming from your own Plex server is a separate switch, **Outside Sourcing**.
-Nothing contacts Plex while it is off.
+Streaming from your own Plex or Subsonic server is a separate switch, **Outside
+Sourcing**. Nothing contacts your server while it is off.
 
 ---
 
