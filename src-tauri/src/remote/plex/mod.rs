@@ -11,6 +11,9 @@
 pub mod api;
 pub mod auth;
 pub mod connection;
+pub mod direct;
+#[cfg(test)]
+pub(crate) mod testkit;
 
 use crate::app::settings::AppSettings;
 use crate::remote::backend::RemoteError;
@@ -60,6 +63,16 @@ pub fn client_identifier(settings: &mut AppSettings) -> String {
         .plex_client_identifier
         .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
         .clone()
+}
+
+/// Adds the server token, unless there is none: a server that lets the local
+/// network in without signing in can turn away an empty token.
+pub(crate) fn with_server_token(req: RequestBuilder, token: &str) -> RequestBuilder {
+    if token.is_empty() {
+        req
+    } else {
+        req.header("X-Plex-Token", token)
+    }
 }
 
 /// Maps a failed response status. Never includes the URL, which can carry a
@@ -178,6 +191,7 @@ mod tests {
             }],
             connections: Vec::new(),
             preferred_uri: Some(url),
+            direct: true,
         };
         let backend = Arc::new(PlexBackend::with_gate(config, headers(), gate));
         let page = backend

@@ -8,7 +8,7 @@
 
 //! plex.tv sign-in by PIN, server discovery and music section listing.
 
-use super::{api_client, check_status, PlexHeaders};
+use super::{api_client, check_status, with_server_token, PlexHeaders};
 use crate::remote::backend::RemoteError;
 use crate::remote::uri::percent_encode;
 use serde::{Deserialize, Serialize};
@@ -202,11 +202,12 @@ pub fn list_music_sections(
     server_token: &str,
     h: &PlexHeaders,
 ) -> Result<Vec<PlexSection>, RemoteError> {
-    let resp = h
-        .apply(api_client().get(format!("{conn_uri}/library/sections")))
-        .header("X-Plex-Token", server_token)
-        .send()
-        .map_err(|_| RemoteError::Unreachable("Can't reach the Plex server".to_string()))?;
+    let resp = with_server_token(
+        h.apply(api_client().get(format!("{conn_uri}/library/sections"))),
+        server_token,
+    )
+    .send()
+    .map_err(|_| RemoteError::Unreachable("Can't reach the Plex server".to_string()))?;
     let body = check_status(resp)?
         .text()
         .map_err(|_| RemoteError::Unreachable("Can't reach the Plex server".to_string()))?;

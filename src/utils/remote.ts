@@ -33,6 +33,14 @@ export interface RemoteSource {
   track_count: number;
   last_sync_at: number | null;
   last_error: string | null;
+  /** How to sign in again: "plex_tv" or "plex_token". */
+  reauth: string;
+}
+
+export interface PlexDirectServer {
+  server_id: string;
+  name: string;
+  libraries: PlexLibrary[];
 }
 
 export interface PlexSignIn {
@@ -95,6 +103,33 @@ export const plexReauthorizeSource = (
   sessionId: string,
 ): Promise<void> =>
   safeInvoke<void>("plex_reauthorize_source", { sourceId, sessionId });
+
+/** Finds a Plex server at an address, without plex.tv. */
+export const plexProbeDirect = (
+  url: string,
+  token: string,
+): Promise<PlexDirectServer> =>
+  safeInvoke<PlexDirectServer>("plex_probe_direct", {
+    url,
+    token: token.trim() || null,
+  });
+
+export const plexAddDirectSource = (
+  url: string,
+  token: string,
+  libraryKeys: string[],
+): Promise<RemoteSource> =>
+  safeInvoke<RemoteSource>("plex_add_direct_source", {
+    url,
+    token: token.trim() || null,
+    libraryKeys,
+  });
+
+export const plexSetDirectToken = (
+  sourceId: string,
+  token: string,
+): Promise<void> =>
+  safeInvoke<void>("plex_set_direct_token", { sourceId, token });
 
 export const listRemoteSources = (): Promise<RemoteSource[]> =>
   safeInvoke<RemoteSource[]>("list_remote_sources");

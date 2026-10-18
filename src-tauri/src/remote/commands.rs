@@ -13,6 +13,7 @@ use super::backend::RemoteError;
 use super::gate::{GateState, NetworkGate};
 use super::plex::auth::{self, PlexServer};
 use super::plex::connection::{self as plex_connection, PlexSourceConfig};
+use super::plex::direct as plex_direct;
 use super::plex::{self, PlexHeaders};
 use super::refresh::RefreshCooldown;
 use super::store::RemoteSourceRow;
@@ -129,6 +130,8 @@ pub struct RemoteSourceDto {
     pub track_count: i64,
     pub last_sync_at: Option<i64>,
     pub last_error: Option<String>,
+    /// How to sign in again: `plex_tv` or `plex_token`.
+    pub reauth: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -160,6 +163,20 @@ fn source_dto(row: &RemoteSourceRow, state: SourceState) -> RemoteSourceDto {
         track_count: row.track_count,
         last_sync_at: row.last_sync_at,
         last_error: row.last_sync_error.clone(),
+        reauth: reauth_for(row).to_string(),
+    }
+}
+
+/// Whether a source signs in again through plex.tv or with a typed token.
+fn reauth_for(row: &RemoteSourceRow) -> &'static str {
+    let direct = serde_json::from_str::<serde_json::Value>(&row.config_json)
+        .ok()
+        .and_then(|config| config.get("direct").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false);
+    if direct {
+        "plex_token"
+    } else {
+        "plex_tv"
     }
 }
 
@@ -358,6 +375,7 @@ pub async fn plex_add_source(
             sections,
             connections: server.connections.clone(),
             preferred_uri: Some(uri),
+            direct: false,
         };
         let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
         let id = rt.with_library(|library| {
@@ -413,6 +431,145 @@ pub async fn plex_reauthorize_source(
             Ok::<_, String>(())
         })?;
         sessions().remove(&session_id);
+        rt.set_status(&source_id, SourceState::Ok);
+        sync_one_in_background(&task_app, rt, source_id);
+        Ok(())
+    })
+    .await
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlexDirectServerDto {
+    pub server_id: String,
+    pub name: String,
+    pub libraries: Vec<PlexLibraryDto>,
+}
+
+/// Probing a server by address, with the error a person can act on.
+fn probe_direct_server(
+    url: &str,
+    token: &str,
+    headers: &PlexHeaders,
+) -> Result<plex_direct::DirectProbe, String> {
+    plex_direct::probe_direct(url, token, headers).map_err(|e| match e {
+        RemoteError::Unauthorized if token.is_empty() => {
+            "This server needs a token. Add the server's X-Plex-Token.".to_string()
+        }
+        RemoteError::Unauthorized => "The server turned down this token".to_string(),
+        RemoteError::Unreachable(_) => {
+            format!("Can't reach a Plex server at {url}. Check the address and port.")
+        }
+        other => remote_error(other),
+    })
+}
+
+/// Looks for a Plex server at an address, without plex.tv, and lists its
+/// music libraries.
+#[tauri::command]
+pub async fn plex_probe_direct(
+    url: String,
+    token: Option<String>,
+    app: AppHandle,
+) -> Result<PlexDirectServerDto, String> {
+    NetworkGate::global().check().map_err(remote_error)?;
+    let url = plex_direct::normalize_server_url(&url)?;
+    let token = token.unwrap_or_default().trim().to_string();
+    let headers = plex_headers(&app)?;
+    blocking(move || {
+        let probe = probe_direct_server(&url, &token, &headers)?;
+        Ok(PlexDirectServerDto {
+            server_id: probe.server_id,
+            name: probe.name,
+            libraries: probe
+                .sections
+                .into_iter()
+                .map(|section| PlexLibraryDto {
+                    key: section.key,
+                    title: section.title,
+                })
+                .collect(),
+        })
+    })
+    .await
+}
+
+/// Adds a Plex server by its address, with the chosen libraries, and starts
+/// its first sync. No plex.tv account is involved.
+#[tauri::command]
+pub async fn plex_add_direct_source(
+    url: String,
+    token: Option<String>,
+    library_keys: Vec<String>,
+    app: AppHandle,
+) -> Result<RemoteSourceDto, String> {
+    NetworkGate::global().check().map_err(remote_error)?;
+    if library_keys.is_empty() {
+        return Err("Choose at least one music library".to_string());
+    }
+    let url = plex_direct::normalize_server_url(&url)?;
+    let token = token.unwrap_or_default().trim().to_string();
+    let headers = plex_headers(&app)?;
+    let rt = runtime()?;
+    let task_app = app.clone();
+    blocking(move || {
+        let probe = probe_direct_server(&url, &token, &headers)?;
+        let config = plex_direct::direct_config(&url, &token, &probe, &library_keys);
+        if config.sections.is_empty() {
+            return Err("Those libraries are no longer on the server".to_string());
+        }
+        let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+        let id = rt.with_library(|library| {
+            let id = library.insert_remote_source("plex", &probe.server_id, &probe.name, &json)?;
+            rt.reload_sources(library);
+            Ok::<_, String>(id)
+        })?;
+        sync_one_in_background(&task_app, rt, id.clone());
+        let row = rt
+            .with_library(|library| library.list_remote_sources())?
+            .into_iter()
+            .find(|row| row.id == id)
+            .ok_or_else(|| "The new source went missing".to_string())?;
+        Ok(source_dto(&row, rt.status(&id)))
+    })
+    .await
+}
+
+/// Gives a directly connected Plex server a new token, after it stopped
+/// accepting the old one.
+#[tauri::command]
+pub async fn plex_set_direct_token(
+    source_id: String,
+    token: String,
+    app: AppHandle,
+) -> Result<(), String> {
+    NetworkGate::global().check().map_err(remote_error)?;
+    let token = token.trim().to_string();
+    let headers = plex_headers(&app)?;
+    let rt = runtime()?;
+    let task_app = app.clone();
+    blocking(move || {
+        let row = rt
+            .with_library(|library| library.list_remote_sources())?
+            .into_iter()
+            .find(|row| row.id == source_id)
+            .ok_or_else(|| "That source was removed".to_string())?;
+        let mut config: PlexSourceConfig =
+            serde_json::from_str(&row.config_json).map_err(|e| e.to_string())?;
+        let url = config
+            .preferred_uri
+            .clone()
+            .ok_or_else(|| "This source has no address".to_string())?;
+        let probe = probe_direct_server(&url, &token, &headers)?;
+        if probe.server_id != config.server_id {
+            return Err("A different server answers at that address now".to_string());
+        }
+        config.server_token = token;
+        let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+        rt.with_library(|library| {
+            library.update_remote_source_config(&source_id, &json)?;
+            rt.reload_sources(library);
+            Ok::<_, String>(())
+        })?;
         rt.set_status(&source_id, SourceState::Ok);
         sync_one_in_background(&task_app, rt, source_id);
         Ok(())
@@ -826,6 +983,32 @@ mod tests {
             .pin(&id, start + Duration::from_secs(15 * 60))
             .is_none());
         assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn reauth_follows_how_the_source_was_added() {
+        let row = |kind: &str, config: &str| RemoteSourceRow {
+            id: "x".into(),
+            kind: kind.into(),
+            display_name: "X".into(),
+            config_json: config.into(),
+            created_at: 1,
+            last_sync_at: None,
+            last_sync_error: None,
+            track_count: 0,
+        };
+        assert_eq!(
+            source_dto(&row("plex", "{\"direct\":true}"), SourceState::Ok).reauth,
+            "plex_token"
+        );
+        assert_eq!(
+            source_dto(&row("plex", "{\"direct\":false}"), SourceState::Ok).reauth,
+            "plex_tv"
+        );
+        assert_eq!(
+            source_dto(&row("plex", "{}"), SourceState::Ok).reauth,
+            "plex_tv"
+        );
     }
 
     #[test]

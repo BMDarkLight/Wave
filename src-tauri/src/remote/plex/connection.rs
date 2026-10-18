@@ -81,6 +81,10 @@ pub struct PlexSourceConfig {
     pub sections: Vec<PlexSection>,
     pub connections: Vec<PlexConnection>,
     pub preferred_uri: Option<String>,
+    /// Added by address and token rather than through plex.tv, so signing in
+    /// again means entering a token, not opening plex.tv.
+    #[serde(default)]
+    pub direct: bool,
 }
 
 pub struct PlexBackend {
@@ -93,6 +97,9 @@ pub struct PlexBackend {
 }
 
 fn with_token(url: String, token: &str) -> String {
+    if token.is_empty() {
+        return url;
+    }
     let sep = if url.contains('?') { '&' } else { '?' };
     format!("{url}{sep}X-Plex-Token={}", percent_encode(token))
 }
@@ -292,11 +299,11 @@ impl RemoteBackend for PlexBackend {
 
 #[cfg(test)]
 mod tests {
+    use super::super::testkit::{fake_server, http};
     use super::*;
     use crate::remote::gate::GateState;
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
-    use std::sync::Arc;
+    use std::io::Read;
+    use std::net::TcpListener;
 
     fn conn(
         uri: &str,
@@ -349,47 +356,8 @@ mod tests {
             ],
             connections: Vec::new(),
             preferred_uri: Some(uri.into()),
+            direct: false,
         }
-    }
-
-    type Recorded = Arc<std::sync::Mutex<Vec<String>>>;
-
-    /// Serves each canned response to one connection in turn, then keeps the
-    /// last one. Records the raw request head of every connection.
-    fn fake_server(responses: Vec<String>) -> (u16, Recorded) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let seen: Recorded = Arc::default();
-        let log = seen.clone();
-        std::thread::spawn(move || {
-            for (n, stream) in listener.incoming().enumerate() {
-                let mut stream: TcpStream = match stream {
-                    Ok(s) => s,
-                    Err(_) => break,
-                };
-                let mut head = Vec::new();
-                let mut buf = [0u8; 512];
-                while !head.windows(4).any(|w| w == b"\r\n\r\n") {
-                    match stream.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
-                        Ok(k) => head.extend_from_slice(&buf[..k]),
-                    }
-                }
-                log.lock()
-                    .unwrap()
-                    .push(String::from_utf8_lossy(&head).into_owned());
-                let reply = &responses[n.min(responses.len() - 1)];
-                let _ = stream.write_all(reply.as_bytes());
-            }
-        });
-        (port, seen)
-    }
-
-    fn http(status: &str, body: &str) -> String {
-        format!(
-            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )
     }
 
     #[test]
@@ -490,6 +458,27 @@ mod tests {
         let head = &log[0];
         assert!(head.starts_with("GET /library/parts/9/1/file.flac?X-Plex-Token=secret-token "));
         assert!(head.to_ascii_lowercase().contains("range: bytes=1000-\r\n"));
+    }
+
+    #[test]
+    fn a_server_without_a_token_gets_requests_without_one() {
+        let (port, seen) = fake_server(vec![http("206 Partial Content", "hello")]);
+        let mut config = config_for(&format!("http://127.0.0.1:{port}"));
+        config.server_token = String::new();
+        config.direct = true;
+        let backend = PlexBackend::with_gate(config, headers(), open_gate());
+        let mut stream = backend
+            .open_bytes("/library/parts/9/1/file.flac", 0)
+            .unwrap();
+        let mut body = Vec::new();
+        stream.read_to_end(&mut body).unwrap();
+
+        let log = seen.lock().unwrap();
+        assert!(
+            log[0].starts_with("GET /library/parts/9/1/file.flac HTTP/1.1"),
+            "{}",
+            log[0]
+        );
     }
 
     #[test]

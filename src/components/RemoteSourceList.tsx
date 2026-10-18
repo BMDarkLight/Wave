@@ -50,7 +50,7 @@ export default function RemoteSourceList() {
   const [progress, setProgress] = useState<Record<string, RemoteSyncProgress>>(
     {},
   );
-  const [reauthorize, setReauthorize] = useState<string | null>(null);
+  const [reauthorize, setReauthorize] = useState<RemoteSource | null>(null);
   const [removing, setRemoving] = useState<RemoteSource | null>(null);
 
   useEffect(() => {
@@ -112,7 +112,7 @@ export default function RemoteSourceList() {
                 <button
                   className="btn-secondary remote-source-signin"
                   type="button"
-                  onClick={() => setReauthorize(source.id)}
+                  onClick={() => setReauthorize(source)}
                 >
                   Sign in again
                 </button>
@@ -133,7 +133,8 @@ export default function RemoteSourceList() {
 
       {reauthorize && (
         <RemoteSourceSetupDialog
-          reauthorizeSourceId={reauthorize}
+          reauthorizeSourceId={reauthorize.id}
+          reauthorizeMethod={reauthorize.reauth}
           onClose={() => setReauthorize(null)}
         />
       )}

@@ -264,6 +264,7 @@ mod tests {
             }],
             connections: Vec::new(),
             preferred_uri: None,
+            direct: false,
         };
         serde_json::to_string(&config).unwrap()
     }

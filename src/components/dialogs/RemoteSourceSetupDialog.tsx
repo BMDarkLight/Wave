@@ -11,36 +11,52 @@
 import { useEffect, useRef, useState } from "react";
 import { formatInvokeError } from "../../utils/errors";
 import {
+  plexAddDirectSource,
   plexAddSource,
   plexBeginSignIn,
   plexListLibraries,
   plexListServers,
   plexPollSignIn,
+  plexProbeDirect,
   plexReauthorizeSource,
+  plexSetDirectToken,
   type PlexLibrary,
   type PlexServer,
 } from "../../utils/remote";
 
-type Step = "kind" | "sign-in" | "server" | "libraries" | "adding";
+type Step =
+  "kind" | "sign-in" | "direct" | "token" | "server" | "libraries" | "adding";
 
 const POLL_MS = 2000;
 
 /**
- * Adds a remote source (Plex for now): sign in, pick a server, pick its music
- * libraries. With `reauthorizeSourceId` it only signs an existing source in
- * again.
+ * Adds a remote source: a Plex server through plex.tv sign-in, or by its
+ * address and token without plex.tv. Then pick its music libraries. With
+ * `reauthorizeSourceId` it only signs an existing source in again, the way
+ * `reauthorizeMethod` says.
  */
 export default function RemoteSourceSetupDialog({
   reauthorizeSourceId,
+  reauthorizeMethod = "plex_tv",
   onClose,
   onDone,
 }: {
   reauthorizeSourceId?: string;
+  reauthorizeMethod?: string;
   onClose: () => void;
   onDone?: () => void;
 }) {
   const reauthorizing = reauthorizeSourceId != null;
-  const [step, setStep] = useState<Step>(reauthorizing ? "sign-in" : "kind");
+  const [step, setStep] = useState<Step>(
+    reauthorizing
+      ? reauthorizeMethod === "plex_token"
+        ? "token"
+        : "sign-in"
+      : "kind",
+  );
+  const [address, setAddress] = useState("");
+  const [token, setToken] = useState("");
+  const [direct, setDirect] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -157,12 +173,47 @@ export default function RemoteSourceSetupDialog({
     }
   };
 
-  const add = async () => {
-    if (!sessionId || !serverId) return;
+  const connectDirect = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const server = await plexProbeDirect(address, token);
+      if (closed.current) return;
+      setDirect(true);
+      setLibraries(server.libraries);
+      setChosen(new Set(server.libraries.map((library) => library.key)));
+      setStep("libraries");
+    } catch (err) {
+      fail(err, "Could not connect to the server");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveToken = async () => {
+    if (!reauthorizeSourceId) return;
     setError(null);
     setStep("adding");
     try {
-      await plexAddSource(sessionId, serverId, [...chosen]);
+      await plexSetDirectToken(reauthorizeSourceId, token);
+      onDone?.();
+      onClose();
+    } catch (err) {
+      fail(err, "Could not use that token");
+      setStep("token");
+    }
+  };
+
+  const add = async () => {
+    if (!direct && (!sessionId || !serverId)) return;
+    setError(null);
+    setStep("adding");
+    try {
+      if (direct) {
+        await plexAddDirectSource(address, token, [...chosen]);
+      } else if (sessionId && serverId) {
+        await plexAddSource(sessionId, serverId, [...chosen]);
+      }
       onDone?.();
       onClose();
     } catch (err) {
@@ -202,9 +253,65 @@ export default function RemoteSourceSetupDialog({
               type="button"
               onClick={() => setStep("sign-in")}
             >
-              Plex
+              Plex (sign in with plex.tv)
+            </button>
+            <button
+              className="add-source-option"
+              type="button"
+              onClick={() => setStep("direct")}
+            >
+              Plex server (connect by address)
             </button>
           </div>
+        )}
+
+        {(step === "direct" || step === "token") && (
+          <form
+            className="remote-setup-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (step === "direct") void connectDirect();
+              else void saveToken();
+            }}
+          >
+            {step === "direct" && (
+              <label className="remote-setup-field">
+                <span>Server address</span>
+                <input
+                  type="text"
+                  value={address}
+                  onChange={(event) => setAddress(event.target.value)}
+                  placeholder="192.168.1.10:32400"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoFocus
+                />
+              </label>
+            )}
+            <label className="remote-setup-field">
+              <span>{step === "direct" ? "Token (optional)" : "Token"}</span>
+              <input
+                type="password"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                placeholder="X-Plex-Token"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                autoFocus={step === "token"}
+              />
+            </label>
+            <p className="mset-hint">
+              No plex.tv needed. Leave the token empty if the server lets your
+              network in without signing in (Settings, Network, List of IP
+              addresses allowed without auth). Otherwise use the server's
+              PlexOnlineToken from its Preferences.xml, or the X-Plex-Token
+              shown when you view an item's XML in Plex.
+            </p>
+            {/* Submits on Enter; the visible button is in the actions row. */}
+            <button type="submit" hidden />
+          </form>
         )}
 
         {step === "sign-in" &&
@@ -285,6 +392,26 @@ export default function RemoteSourceSetupDialog({
               onClick={() => void chooseServer()}
             >
               Continue
+            </button>
+          )}
+          {step === "direct" && (
+            <button
+              className="btn-primary"
+              type="button"
+              disabled={busy || !address.trim()}
+              onClick={() => void connectDirect()}
+            >
+              Connect
+            </button>
+          )}
+          {step === "token" && (
+            <button
+              className="btn-primary"
+              type="button"
+              disabled={!token.trim()}
+              onClick={() => void saveToken()}
+            >
+              Save
             </button>
           )}
           {step === "libraries" && (
