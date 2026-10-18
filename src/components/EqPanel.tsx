@@ -12,6 +12,7 @@ import { createPortal } from "react-dom";
 import { BiX } from "react-icons/bi";
 import { formatTime } from "../utils/format";
 import SpeedRow from "./SpeedRow";
+import Select from "./Select";
 import {
   EQ_BAND_LABELS,
   EQ_PRESETS,
@@ -103,23 +104,17 @@ export default function EqPanel({
           </button>
         </div>
         <div className="eq-panel-toolbar">
-          <select
+          <Select
             className="eq-preset-select"
             value=""
-            onChange={(event) => {
-              if (event.target.value) onPresetSelect(event.target.value);
-            }}
+            placeholder="Presets"
+            options={EQ_PRESETS.map((preset) => ({
+              value: preset.id,
+              label: preset.label,
+            }))}
+            onChange={onPresetSelect}
             aria-label="EQ preset"
-          >
-            <option value="" disabled>
-              Presets
-            </option>
-            {EQ_PRESETS.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
+          />
           <button className="btn-ghost btn-sm" onClick={onReset} type="button">
             Reset
           </button>
@@ -176,26 +171,20 @@ export default function EqPanel({
           <label className="eq-crossfade-label" htmlFor="eq-sleep-select">
             Sleep
           </label>
-          <select
+          <Select
             id="eq-sleep-select"
             className="eq-preset-select"
             value={sleepSelectValue(sleepTimer)}
-            onChange={(event) =>
-              onSleepTimerChange(sleepRequestFor(event.target.value))
-            }
-          >
-            <option value="off">Off</option>
-            {sleepTimer.mode === "countdown" && (
-              <option value="countdown" disabled hidden>
-                Counting down
-              </option>
-            )}
-            {SLEEP_CHOICES.map(({ label }, index) => (
-              <option key={label} value={index}>
-                {label}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: "off", label: "Off" },
+              { value: "countdown", label: "Counting down", hidden: true },
+              ...SLEEP_CHOICES.map(({ label }, index) => ({
+                value: String(index),
+                label,
+              })),
+            ]}
+            onChange={(value) => onSleepTimerChange(sleepRequestFor(value))}
+          />
           <span className="eq-crossfade-value">
             {sleepTimer.mode === "countdown"
               ? formatTime(Math.ceil(sleepTimer.remaining_seconds ?? 0))

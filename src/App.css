@@ -4005,13 +4005,6 @@ img.queue-thumb {
 .eq-preset-select {
   flex: 1;
   min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(var(--well), 0.35);
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
 }
 
 .eq-bands {
@@ -6476,6 +6469,7 @@ div.album-hero-cover {
 }
 
 .mset-row-text {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -6487,7 +6481,7 @@ div.album-hero-cover {
   align-items: center;
   gap: 6px;
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6671,14 +6665,15 @@ div.album-hero-cover {
 
 .mset-playback-divider {
   height: 1px;
-  margin: 0 14px;
-  background: rgba(var(--ink), 0.08);
+  background: var(--line);
 }
 
 .mset-gapless-row {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   padding: 14px;
   margin: 0;
   cursor: pointer;
@@ -6706,13 +6701,78 @@ div.album-hero-cover {
   color: var(--quiet);
 }
 
-.mset-gapless-row input[type="checkbox"] {
+.mset-gapless-copy {
+  flex: 1;
+}
+
+.mset-gapless-row input[type="checkbox"],
+.mobile-settings-page .eq-enable input {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 24px;
+  margin: 0;
+  border: 2px solid #8a8a8a;
+  border-radius: 12px;
+  background: var(--switch-track);
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.mset-gapless-row input[type="checkbox"]::before,
+.mobile-settings-page .eq-enable input::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #8a8a8a;
+  transform: translateY(-50%);
+  transition:
+    left 0.2s ease,
+    width 0.2s ease,
+    height 0.2s ease,
+    background 0.2s ease;
+}
+
+.mset-gapless-row input[type="checkbox"]:checked,
+.mobile-settings-page .eq-enable input:checked {
+  border-color: var(--green);
+  background: var(--green);
+}
+
+.mset-gapless-row input[type="checkbox"]:checked::before,
+.mobile-settings-page .eq-enable input:checked::before {
+  left: 18px;
   width: 16px;
   height: 16px;
-  margin: 2px 0 0;
-  flex-shrink: 0;
-  accent-color: var(--green);
-  cursor: pointer;
+  background: var(--panel);
+}
+
+.mset-gapless-row input[type="checkbox"]:disabled,
+.mobile-settings-page .eq-enable input:disabled {
+  opacity: 0.38;
+}
+
+.mset-gapless-row input[type="checkbox"]:focus-visible,
+.mobile-settings-page .eq-enable input:focus-visible {
+  outline: 2px solid rgba(var(--ink), 0.6);
+  outline-offset: 2px;
+}
+
+.mset-gapless-row:hover input[type="checkbox"]:not(:checked) {
+  border-color: #a3a3a3;
+}
+
+/* The switch says it on its own; "On" stays for screen readers. */
+.mobile-settings-page .eq-enable {
+  font-size: 0;
 }
 
 .mset-crossfade-row input[type="range"] {
@@ -6814,44 +6874,31 @@ div.album-hero-cover {
   color: var(--danger-soft);
 }
 
-.mset-danger-card {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
+.mset-danger-row {
+  flex-wrap: wrap;
+}
+
+.mset-danger-btn,
+.mset-danger-confirm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 999px;
+  font-weight: 800;
+  transition:
+    transform 0.16s ease,
+    background 0.16s ease;
 }
 
 .mset-danger-btn {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+  background: rgba(255, 80, 80, 0.12);
   color: var(--danger-text);
-  border: 1px solid rgba(255, 120, 120, 0.35);
 }
 
 .mset-danger-btn:hover {
-  background: rgba(255, 80, 80, 0.12);
+  background: rgba(255, 80, 80, 0.2);
   color: var(--danger-text-hot);
-}
-
-.mset-danger-confirm {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.mset-danger-warning {
-  margin: 0;
-  color: var(--danger-text);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.mset-danger-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 .mset-danger-confirm-btn {
@@ -6859,8 +6906,14 @@ div.album-hero-cover {
   color: #fff;
 }
 
-.mset-danger-confirm-btn:hover {
+.mset-danger-confirm-btn:hover:not(:disabled) {
   background: #e53935;
+}
+
+.mset-danger-btn:disabled,
+.mset-danger-confirm-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 @media (min-width: 901px) {
@@ -8427,13 +8480,122 @@ div.album-hero-cover {
   gap: 12px;
 }
 
-.mset-select {
+/* A compact button for the trailing edge of a settings row. */
+.mset-row-btn {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* A list that sits inside a settings card (remote sources on desktop) lies
+   flat in it rather than drawing a second card. */
+.mset-card .mset-card {
+  border: 0;
+  border-radius: 0;
   background: transparent;
-  color: inherit;
-  border: 1px solid rgba(var(--ink), 0.18);
-  border-radius: 8px;
-  padding: 4px 8px;
+}
+
+.mset-card .mset-card + .mset-card {
+  margin-top: 0;
+}
+
+.mset-card .mset-card .mset-row:first-child {
+  border-top: 1px solid var(--line);
+}
+
+/* Wave's dropdown: a field that opens the same menu as everything else. */
+.wave-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  min-width: 104px;
+  max-width: 100%;
+  padding: 7px 8px 7px 12px;
+  border: 1px solid rgba(var(--ink), 0.14);
+  border-radius: 10px;
+  background: rgba(var(--ink), 0.06);
+  color: var(--text);
   font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease;
+}
+
+.wave-select:hover:not(:disabled) {
+  background: rgba(var(--ink), 0.1);
+}
+
+.wave-select[aria-expanded="true"] {
+  border-color: rgba(var(--ink), 0.32);
+  background: rgba(var(--ink), 0.1);
+}
+
+.wave-select:focus-visible {
+  outline: 2px solid rgba(var(--ink), 0.6);
+  outline-offset: 2px;
+}
+
+.wave-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.wave-select-value,
+.wave-select-placeholder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wave-select-placeholder {
+  color: var(--muted);
+}
+
+.wave-select-chevron {
+  flex-shrink: 0;
+  font-size: 18px;
+  opacity: 0.7;
+  transition: transform 0.2s ease;
+}
+
+.wave-select[aria-expanded="true"] .wave-select-chevron {
+  transform: rotate(180deg);
+}
+
+/* Above the EQ panel and the mobile sheets a dropdown can open from. */
+.context-menu.wave-select-menu {
+  z-index: 240;
+  max-width: min(360px, calc(100vw - 16px));
+  overflow-x: hidden;
+}
+
+.context-menu-backdrop:has(+ .wave-select-menu) {
+  z-index: 235;
+}
+
+.wave-select-list {
+  display: grid;
+  gap: 2px;
+}
+
+.wave-select-menu .wave-select-check {
+  visibility: hidden;
+}
+
+.wave-select-menu button.selected .wave-select-check {
+  visibility: visible;
+}
+
+.mset-eq-preset.wave-select,
+.mnp-eq-preset.wave-select {
+  display: flex;
 }
 
 .remote-source-signin {

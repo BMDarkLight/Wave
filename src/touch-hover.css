@@ -257,11 +257,19 @@ html.wave-no-hover .mnp-action-btn:active {
   color: var(--text);
 }
 
-html.wave-no-hover .mset-icon-btn-danger:hover,
-html.wave-no-hover .mset-danger-btn:hover,
-html.wave-no-hover .mset-danger-confirm-btn:hover {
+html.wave-no-hover .mset-icon-btn-danger:hover {
   background: inherit !important;
   transform: none !important;
+}
+
+/* The reset buttons are filled, so a stuck hover keeps their resting fill. */
+html.wave-no-hover .mset-danger-btn:hover {
+  background: rgba(255, 80, 80, 0.12) !important;
+  color: var(--danger-text) !important;
+}
+
+html.wave-no-hover .mset-danger-confirm-btn:hover {
+  background: #c62828 !important;
 }
 
 /* Don't let stuck :hover suppress the real `.active` styling. */

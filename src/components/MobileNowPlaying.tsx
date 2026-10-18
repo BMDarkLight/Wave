@@ -53,6 +53,7 @@ import VirtualizedList from "./VirtualizedList";
 import SleepTimerButton from "./SleepTimerButton";
 import WaveformSeek from "./WaveformSeek";
 import SpeedRow from "./SpeedRow";
+import Select from "./Select";
 import { beginSeekGesture, endSeekGesture } from "../utils/seekGesture";
 
 const formatTime = (seconds?: number | null) => {
@@ -1419,23 +1420,17 @@ export default function MobileNowPlaying({
                     On
                   </label>
                 </div>
-                <select
+                <Select
                   className="eq-preset-select mnp-eq-preset"
                   value=""
-                  onChange={(e) => {
-                    if (e.target.value) onEqPreset(e.target.value);
-                  }}
+                  placeholder="Presets"
+                  options={EQ_PRESETS.map((preset) => ({
+                    value: preset.id,
+                    label: preset.label,
+                  }))}
+                  onChange={onEqPreset}
                   aria-label="EQ preset"
-                >
-                  <option value="" disabled>
-                    Presets
-                  </option>
-                  {EQ_PRESETS.map((preset) => (
-                    <option key={preset.id} value={preset.id}>
-                      {preset.label}
-                    </option>
-                  ))}
-                </select>
+                />
                 <div
                   className={`mnp-eq-bands ${eqSettings.enabled ? "" : "disabled"}`}
                 >

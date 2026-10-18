@@ -176,8 +176,10 @@ section instead of breaking the search.
 
 ### Your own server (Plex, Jellyfin, Navidrome)
 
-Turn on **Outside Sourcing** in Settings and add a Plex server: sign in through
-your browser, pick the server, pick its music libraries. Where plex.tv can't be
+Turn on **Outside Sourcing** in Settings, then choose **Add remote source**
+(under Outside Sourcing on desktop, or the + in Media Source Folders on
+mobile). For Plex, sign in through your browser, pick the server, pick its
+music libraries. Where plex.tv can't be
 reached, choose **Plex server** instead and enter the
 server's address, plus its token unless the server lets your network in
 without one. For Jellyfin or Emby, enter the server's address, your username

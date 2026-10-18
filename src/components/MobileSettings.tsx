@@ -19,7 +19,14 @@ import {
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { BiArrowBack, BiSearch } from "react-icons/bi";
+import {
+  BiArrowBack,
+  BiCloud,
+  BiFolder,
+  BiHeadphone,
+  BiListUl,
+  BiMicrophone,
+} from "react-icons/bi";
 import type { IconType } from "react-icons";
 import type { SourceSettings } from "../utils/player";
 import {
@@ -68,6 +75,7 @@ import { formatBytes } from "../utils/format";
 import { clearSourceCache, getSourceCacheUsage } from "../utils/remote";
 import AddSourceChooser from "./AddSourceChooser";
 import RemoteSourceList from "./RemoteSourceList";
+import Select from "./Select";
 import RemoteSourceSetupDialog from "./dialogs/RemoteSourceSetupDialog";
 
 const CACHE_SIZES = [
@@ -591,7 +599,9 @@ export default function MobileSettings({
         {!embedded && (
           <section className="mset-section">
             <div className="mset-section-header">
-              <h2>Media Source Folders</h2>
+              <h2>
+                <BiFolder /> Media Source Folders
+              </h2>
               <div className="mset-section-header-actions">
                 <button
                   className="mset-icon-btn"
@@ -676,7 +686,9 @@ export default function MobileSettings({
 
         <section className="mset-section">
           <div className="mset-section-header">
-            <h2>Playlists</h2>
+            <h2>
+              <BiListUl /> Playlists
+            </h2>
             <div className="mset-section-header-actions">
               <button
                 className="mset-icon-btn"
@@ -759,7 +771,9 @@ export default function MobileSettings({
         </section>
 
         <section className="mset-section">
-          <h2>Lyrics</h2>
+          <h2>
+            <BiMicrophone /> Lyrics
+          </h2>
           <div className="mset-card">
             <label className="mset-gapless-row">
               <input
@@ -814,7 +828,7 @@ export default function MobileSettings({
 
         <section className="mset-section">
           <h2>
-            <BiSearch /> Music sources
+            <BiCloud /> Music sources
           </h2>
           <div className="mset-card">
             <label className="mset-gapless-row">
@@ -943,10 +957,16 @@ export default function MobileSettings({
                 added here as well as from the Add menu. */}
             {sourceSettings.remote_sources_enabled && embedded && (
               <>
+                <div className="mset-playback-divider" role="separator" />
                 <div className="mset-row">
-                  <span className="mset-row-label">Remote sources</span>
+                  <span className="mset-row-text">
+                    <span className="mset-row-label">Remote sources</span>
+                    <span className="mset-row-value">
+                      Plex, Jellyfin, Emby and Subsonic servers
+                    </span>
+                  </span>
                   <button
-                    className="btn-secondary"
+                    className="btn-secondary mset-row-btn"
                     type="button"
                     onClick={() => setSettingUpRemote(true)}
                   >
@@ -962,47 +982,58 @@ export default function MobileSettings({
               <>
                 <div className="mset-playback-divider" role="separator" />
                 <div className="mset-row mset-cache-row">
-                  <label
-                    className="mset-row-label"
-                    htmlFor={`${keyIdPrefix}cache-size`}
-                  >
-                    Cache size
-                  </label>
-                  <select
+                  <span className="mset-row-text">
+                    <label
+                      className="mset-row-label"
+                      htmlFor={`${keyIdPrefix}cache-size`}
+                    >
+                      Cache size
+                    </label>
+                    <span className="mset-row-value">
+                      Music saved for offline from your servers and outside
+                      sources
+                    </span>
+                  </span>
+                  <Select
                     id={`${keyIdPrefix}cache-size`}
-                    className="mset-select"
-                    value={sourceSettings.cache_limit_mb}
-                    onChange={(event) =>
+                    value={String(sourceSettings.cache_limit_mb)}
+                    options={[
+                      ...(CACHE_SIZES.some(
+                        (size) => size.mb === sourceSettings.cache_limit_mb,
+                      )
+                        ? []
+                        : [
+                            {
+                              value: String(sourceSettings.cache_limit_mb),
+                              label: formatBytes(
+                                sourceSettings.cache_limit_mb * 1024 * 1024,
+                              ),
+                            },
+                          ]),
+                      ...CACHE_SIZES.map((size) => ({
+                        value: String(size.mb),
+                        label: size.label,
+                      })),
+                    ]}
+                    onChange={(value) =>
                       onSourceSettingsChange({
                         ...sourceSettings,
-                        cache_limit_mb: Number(event.target.value),
+                        cache_limit_mb: Number(value),
                       })
                     }
-                  >
-                    {CACHE_SIZES.some(
-                      (size) => size.mb === sourceSettings.cache_limit_mb,
-                    ) ? null : (
-                      <option value={sourceSettings.cache_limit_mb}>
-                        {formatBytes(
-                          sourceSettings.cache_limit_mb * 1024 * 1024,
-                        )}
-                      </option>
-                    )}
-                    {CACHE_SIZES.map((size) => (
-                      <option key={size.mb} value={size.mb}>
-                        {size.label}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </div>
                 <div className="mset-row mset-cache-row">
-                  <span className="mset-row-value">
-                    {cacheUsage === null
-                      ? "Checking cache…"
-                      : `${formatBytes(cacheUsage)} used`}
+                  <span className="mset-row-text">
+                    <span className="mset-row-label">Cached music</span>
+                    <span className="mset-row-value">
+                      {cacheUsage === null
+                        ? "Checking…"
+                        : `${formatBytes(cacheUsage)} used`}
+                    </span>
                   </span>
                   <button
-                    className="btn-secondary"
+                    className="btn-secondary mset-row-btn"
                     type="button"
                     onClick={() => {
                       void clearSourceCache()
@@ -1010,7 +1041,7 @@ export default function MobileSettings({
                         .then(refreshCacheUsage);
                     }}
                   >
-                    Clear cache
+                    Clear
                   </button>
                 </div>
               </>
@@ -1037,7 +1068,9 @@ export default function MobileSettings({
         )}
 
         <section className="mset-section">
-          <h2>Listening</h2>
+          <h2>
+            <BiHeadphone /> Listening
+          </h2>
           <div className="mset-card">
             {!listenStats ||
             (listenStats.tracks_played <= 0 &&
@@ -1127,23 +1160,17 @@ export default function MobileSettings({
             </label>
           </div>
           <div className="mset-card mset-eq-card">
-            <select
+            <Select
               className="eq-preset-select mset-eq-preset"
               value=""
-              onChange={(e) => {
-                if (e.target.value) onEqPreset(e.target.value);
-              }}
+              placeholder="Presets"
+              options={EQ_PRESETS.map((preset) => ({
+                value: preset.id,
+                label: preset.label,
+              }))}
+              onChange={onEqPreset}
               aria-label="EQ preset"
-            >
-              <option value="" disabled>
-                Presets
-              </option>
-              {EQ_PRESETS.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.label}
-                </option>
-              ))}
-            </select>
+            />
             <div
               className={`mset-eq-bands ${eqSettings.enabled ? "" : "disabled"}`}
             >
@@ -1394,63 +1421,6 @@ export default function MobileSettings({
           </section>
         )}
 
-        <section className="mset-section mset-danger-zone">
-          <h2>
-            <BiErrorCircle /> Reset
-          </h2>
-          <div className="mset-card mset-danger-card">
-            <p className="mset-hint">
-              Clear Wave&apos;s database and cached covers. Your audio files on
-              disk stay put. Library and Favorites are kept empty; custom
-              playlists and media folder links are removed.
-            </p>
-            {!resetConfirming ? (
-              <button
-                className="btn-ghost mset-danger-btn"
-                type="button"
-                onClick={() => setResetConfirming(true)}
-              >
-                <BiReset /> Clear database…
-              </button>
-            ) : (
-              <div className="mset-danger-confirm">
-                <p className="mset-danger-warning">
-                  This cannot be undone. Continue?
-                </p>
-                <div className="mset-danger-actions">
-                  <button
-                    className="btn-ghost btn-sm"
-                    type="button"
-                    disabled={resetting}
-                    onClick={() => setResetConfirming(false)}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    className="btn-primary btn-sm mset-danger-confirm-btn"
-                    type="button"
-                    disabled={resetting}
-                    onClick={() => {
-                      void (async () => {
-                        setResetting(true);
-                        try {
-                          await onResetApp();
-                          setResetConfirming(false);
-                          refreshMediaFolders();
-                        } finally {
-                          setResetting(false);
-                        }
-                      })();
-                    }}
-                  >
-                    {resetting ? "Resetting…" : "Yes, reset Wave"}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </section>
-
         <section className="mset-section">
           <h2>
             <BiDownload /> Updates
@@ -1479,6 +1449,63 @@ export default function MobileSettings({
                 <UpdateStatusRow update={update} />
               </>
             )}
+          </div>
+        </section>
+
+        <section className="mset-section mset-danger-zone">
+          <h2>
+            <BiErrorCircle /> Reset
+          </h2>
+          <div className="mset-card">
+            <div className="mset-row mset-danger-row">
+              <span className="mset-row-text">
+                <span className="mset-row-label">Clear database</span>
+                <span className="mset-gapless-hint">
+                  {resetConfirming
+                    ? "This can't be undone. Your audio files stay; everything else in Wave is cleared."
+                    : "Empties your library and favorites, and removes playlists, folder links and cached covers. Audio files on disk stay put."}
+                </span>
+              </span>
+              {!resetConfirming ? (
+                <button
+                  className="mset-row-btn mset-danger-btn"
+                  type="button"
+                  onClick={() => setResetConfirming(true)}
+                >
+                  <BiReset /> Clear…
+                </button>
+              ) : (
+                <span className="mset-row-actions">
+                  <button
+                    className="btn-ghost mset-row-btn"
+                    type="button"
+                    disabled={resetting}
+                    onClick={() => setResetConfirming(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="mset-row-btn mset-danger-confirm-btn"
+                    type="button"
+                    disabled={resetting}
+                    onClick={() => {
+                      void (async () => {
+                        setResetting(true);
+                        try {
+                          await onResetApp();
+                          setResetConfirming(false);
+                          refreshMediaFolders();
+                        } finally {
+                          setResetting(false);
+                        }
+                      })();
+                    }}
+                  >
+                    {resetting ? "Clearing…" : "Clear"}
+                  </button>
+                </span>
+              )}
+            </div>
           </div>
         </section>
 
