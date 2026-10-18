@@ -44,7 +44,7 @@ Important behaviors:
 - **`play_track`** plays a single file by path without updating the queue.
 - On Android, `content://` URIs play directly through ExoPlayer (no copy required for playback). See [Android playback](./android.md).
 - **Remote audio becomes a file before it plays.** The engine only understands paths, so a streamed search result is fetched into the source cache and handed over as a path. Nothing in the playback stack is aware of URLs. See [Song sourcing](./sources.md).
-- **Remote library tracks (Plex, Subsonic) have `wave-remote://` paths.** They play progressively from a sparse cache file while it downloads: a worker-thread decoder on desktop, a `127.0.0.1` loopback server for ExoPlayer on Android. See [Remote Library](./remote-library.md).
+- **Remote library tracks (Plex, Jellyfin, Emby, Subsonic) have `wave-remote://` paths.** They play progressively from a sparse cache file while it downloads: a worker-thread decoder on desktop, a `127.0.0.1` loopback server for ExoPlayer on Android. See [Remote Library](./remote-library.md).
 - **`search_library` and `search_library_collections` read the `library_tracks` view**, not the `tracks` table. Tracks streamed but not downloaded are deliberately absent from browse, search, and counts until the user saves them.
 
 ## Documentation index
@@ -57,7 +57,7 @@ Important behaviors:
 | [DSP](./dsp.md) | Digital Signal Processing (equalizer, biquad filters) |
 | [Android playback](./android.md) | ExoPlayer backend, SAF import, media session bridge |
 | [Song sourcing](./sources.md) | Remote search tier, streaming cache, downloads |
-| [Remote Library](./remote-library.md) | Plex and Subsonic sources, progressive streaming, the network gate, refresh |
+| [Remote Library](./remote-library.md) | Plex, Jellyfin, Emby and Subsonic sources, progressive streaming, the network gate, refresh |
 
 ## Command summary
 
@@ -106,7 +106,9 @@ Important behaviors:
 | `plex_list_servers`, `plex_list_libraries`, `plex_add_source` | Set up a Plex server as a remote source |
 | `plex_reauthorize_source` | Sign a remote source in again |
 | `plex_probe_direct`, `plex_add_direct_source`, `plex_set_direct_token` | Add a Plex server by address and token, without plex.tv |
-| `subsonic_add_source`, `subsonic_set_password` | Add a Subsonic server (Navidrome, Airsonic, Gonic) and sign it in again |
+| `subsonic_add_source` | Add a Subsonic server (Navidrome, Airsonic, Gonic) |
+| `jellyfin_sign_in`, `jellyfin_add_source` | Add a Jellyfin or Emby server and pick its music libraries |
+| `set_source_password` | Sign a Subsonic, Jellyfin or Emby source in again |
 | `list_remote_sources`, `remove_remote_source` | The remote sources in Settings |
 | `get_remote_status` | Network gate state and each source's state |
 | `request_library_refresh` | Rescan and sync, at most every 30 seconds |

@@ -2,8 +2,8 @@
 
 A remote source is a music library that lives on another machine. Its tracks
 appear in Wave's library next to local files, stream on demand, and are kept in
-a cache so a second play is instant and works offline. Plex and
-Subsonic-compatible servers (Navidrome, Airsonic, Gonic) are the backends. The pieces below are deliberately backend-agnostic: a later backend,
+a cache so a second play is instant and works offline. Plex, Jellyfin, Emby
+and Subsonic-compatible servers (Navidrome, Airsonic, Gonic) are the backends. The pieces below are deliberately backend-agnostic: a later backend,
 such as a Wave peer reached through Radii, plugs into the same contract without
 touching the library merge, the stream cache, or the player.
 
@@ -24,6 +24,7 @@ With it off, Wave makes no remote request of any kind, including at startup.
 | `remote/sync.rs` | Catalog walks and the album artwork pass |
 | `remote/plex/` | Plex sign-in, server discovery, catalog paging, ranged audio |
 | `remote/subsonic/` | Subsonic API: signed requests, catalog paging, ranged audio |
+| `remote/jellyfin/` | Jellyfin and Emby: sign-in, music libraries, catalog paging, ranged audio |
 | `remote/http.rs` | The HTTP clients every backend shares |
 | `remote/stream/` | Stream cache, progressive reader, Android loopback server |
 | `remote/commands.rs` | Tauri commands, events and startup |
@@ -133,6 +134,35 @@ password, which is checked with `ping` before it is saved.
 
 ---
 
+## Jellyfin and Emby
+
+Both servers share one API and one backend (`kind = "jellyfin"`). A bare
+address gets `http://` and port 8096, and a pasted web UI path (`/web/#/home`)
+is dropped. `/System/Info/Public`, which needs no sign-in, gives the server's id
+and name, and tells the two apart: Jellyfin names itself in `ProductName`, Emby
+leaves it out.
+
+Signing in posts the username and password to `/Users/AuthenticateByName`
+once. Wave stores the access token and user id it gets back, never the
+password. Every request carries the `MediaBrowser` authorization in each form
+the two servers read (`Authorization`, `X-Emby-Authorization` and
+`X-Emby-Token`), with a device id made for that source. The server ties a
+sign-in to its device id, so signing in again replaces the old token rather
+than leaving sessions behind. Signing in again checks that the password signs
+in the same user. Until libraries are picked, the sign-in waits in memory for 15
+minutes and its token never reaches the frontend.
+
+The user's music libraries come from `/Users/{id}/Views`, or `/UserViews` on
+Jellyfin versions that moved it, keeping views whose `CollectionType` is
+`music`. The catalog is `/Items` with `IncludeItemTypes=Audio` and `Recursive`,
+500 tracks a page, one library after another; each library's
+`TotalRecordCount` gives the total for the progress bar. Audio is
+`/Audio/{id}/stream?static=true`, the original file, never a transcode, with
+HTTP Range requests. Artwork is the item's primary image, or its album's.
+The source id is built from the server id and user id.
+
+---
+
 ## Stream cache and progressive playback
 
 Playing a remote track starts a **fill**: a background download into a sparse
@@ -211,7 +241,8 @@ seconds left so the UI can say so.
 | `plex_probe_direct` / `plex_add_direct_source` | Add a server by address and optional token, without plex.tv |
 | `plex_set_direct_token` | Give a directly added server a new token |
 | `subsonic_add_source` | Add a Subsonic server by address, username and password |
-| `subsonic_set_password` | Give a Subsonic source a new password |
+| `jellyfin_sign_in` / `jellyfin_add_source` | Sign in to a Jellyfin or Emby server, then add it with the chosen libraries |
+| `set_source_password` | Sign a Subsonic, Jellyfin or Emby source in again with its password |
 | `list_remote_sources` / `remove_remote_source` | The settings list |
 | `get_remote_status` | Gate state and per-source state |
 | `request_library_refresh` | Start a refresh or report the cooldown |
@@ -226,7 +257,7 @@ Events: `remote-sync-progress`, `remote-sync-finished`, `remote-status-changed`,
 
 ## Testing
 
-The suite is offline. Plex and Subsonic responses are inline JSON fixtures and a loopback
+The suite is offline. Plex, Subsonic and Jellyfin responses are inline JSON fixtures and a loopback
 fake server; the stream cache is tested against a throttled fake backend,
 including seek-ahead, resume, gate closure and decoding while the file is still
 downloading.
