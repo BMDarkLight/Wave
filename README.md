@@ -178,7 +178,7 @@ section instead of breaking the search.
 
 Turn on **Outside Sourcing** in Settings and add a Plex server: sign in through
 your browser, pick the server, pick its music libraries. Where plex.tv can't be
-reached, choose **Plex server (connect by address)** instead and enter the
+reached, choose **Plex server** instead and enter the
 server's address, plus its token unless the server lets your network in
 without one. For Jellyfin or Emby, enter the server's address, your username
 and password, then pick its music libraries; Wave keeps the server's sign-in

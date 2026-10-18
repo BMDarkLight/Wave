@@ -44,8 +44,8 @@ type Step =
 const POLL_MS = 2000;
 
 const KINDS: { kind: Kind; label: string }[] = [
-  { kind: "plex_tv", label: "Plex (sign in with plex.tv)" },
-  { kind: "plex_direct", label: "Plex server (connect by address)" },
+  { kind: "plex_tv", label: "Plex" },
+  { kind: "plex_direct", label: "Plex server" },
   { kind: "jellyfin", label: "Jellyfin or Emby" },
   {
     kind: "subsonic",
