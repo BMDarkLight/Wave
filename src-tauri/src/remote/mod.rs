@@ -9,12 +9,17 @@
 pub mod backend;
 pub mod commands;
 pub mod gate;
+pub(crate) mod http;
 pub mod plex;
 pub mod refresh;
 pub mod store;
 pub mod stream;
+pub mod subsonic;
 pub mod sync;
 pub mod uri;
+
+#[cfg(test)]
+pub(crate) mod testkit;
 
 use crate::library::Library;
 use backend::RemoteBackend;
@@ -183,6 +188,15 @@ impl RemoteRuntime {
                         Err(_) => tracing::warn!("Unreadable config for remote source {}", row.id),
                     }
                 }
+                "subsonic" => {
+                    match serde_json::from_str::<subsonic::SubsonicConfig>(&row.config_json) {
+                        Ok(config) => {
+                            backends
+                                .insert(row.id, Arc::new(subsonic::SubsonicBackend::new(config)));
+                        }
+                        Err(_) => tracing::warn!("Unreadable config for remote source {}", row.id),
+                    }
+                }
                 other => tracing::warn!("Unknown remote source kind {other}; skipping {}", row.id),
             }
         }
@@ -306,6 +320,23 @@ mod tests {
         assert!(rt.backend(&other).is_none());
         assert!(rt.backend(&broken).is_none());
         assert_eq!(rt.statuses(), vec![(plex, SourceState::Ok)]);
+    }
+
+    #[test]
+    fn reload_builds_subsonic_backends_without_plex_headers() {
+        let library = test_library();
+        let subsonic = library
+            .insert_remote_source(
+                "subsonic",
+                "alice@nas:4533",
+                "Navidrome (nas:4533)",
+                r#"{"url":"http://nas:4533","username":"alice","password":"x"}"#,
+            )
+            .unwrap();
+        let (events, _) = collector();
+        let rt = RemoteRuntime::new_for_test(test_library(), events);
+        rt.reload_sources(&library);
+        assert_eq!(rt.backend(&subsonic).unwrap().kind(), "subsonic");
     }
 
     #[test]

@@ -299,9 +299,9 @@ impl RemoteBackend for PlexBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::super::testkit::{fake_server, http};
     use super::*;
     use crate::remote::gate::GateState;
+    use crate::remote::testkit::{fake_server, http};
     use std::io::Read;
     use std::net::TcpListener;
 

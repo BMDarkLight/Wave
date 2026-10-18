@@ -167,8 +167,8 @@ pub fn direct_config(
 
 #[cfg(test)]
 mod tests {
-    use super::super::testkit::{fake_server, http};
     use super::*;
+    use crate::remote::testkit::{fake_server, http};
 
     fn headers() -> PlexHeaders {
         PlexHeaders {

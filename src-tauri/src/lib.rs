@@ -335,6 +335,8 @@ pub fn run() {
             remote::commands::plex_probe_direct,
             remote::commands::plex_add_direct_source,
             remote::commands::plex_set_direct_token,
+            remote::commands::subsonic_add_source,
+            remote::commands::subsonic_set_password,
             remote::commands::list_remote_sources,
             remote::commands::remove_remote_source,
             remote::commands::get_remote_status,

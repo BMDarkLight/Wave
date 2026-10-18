@@ -6,7 +6,7 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
-//! A canned HTTP server for Plex tests, on 127.0.0.1.
+//! A canned HTTP server for remote backend tests, on 127.0.0.1.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};

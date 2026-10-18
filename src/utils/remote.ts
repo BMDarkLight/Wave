@@ -131,6 +131,24 @@ export const plexSetDirectToken = (
 ): Promise<void> =>
   safeInvoke<void>("plex_set_direct_token", { sourceId, token });
 
+/** Adds a Subsonic-compatible server (Navidrome, Airsonic, Gonic). */
+export const subsonicAddSource = (
+  url: string,
+  username: string,
+  password: string,
+): Promise<RemoteSource> =>
+  safeInvoke<RemoteSource>("subsonic_add_source", {
+    url,
+    username: username.trim(),
+    password,
+  });
+
+export const subsonicSetPassword = (
+  sourceId: string,
+  password: string,
+): Promise<void> =>
+  safeInvoke<void>("subsonic_set_password", { sourceId, password });
+
 export const listRemoteSources = (): Promise<RemoteSource[]> =>
   safeInvoke<RemoteSource[]>("list_remote_sources");
 
@@ -198,7 +216,7 @@ export function unavailableReason(
   const state = status?.sources.find(
     (s) => s.id === track.remote_source_id,
   )?.state;
-  if (state === "signed_out") return "Sign in to Plex again in Settings";
+  if (state === "signed_out") return "Sign in to the server again in Settings";
   if (state === "unreachable") return "Can't reach the server";
   return null;
 }

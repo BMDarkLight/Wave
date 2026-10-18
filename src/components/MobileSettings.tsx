@@ -912,8 +912,8 @@ export default function MobileSettings({
               <span className="mset-gapless-copy">
                 <span className="mset-gapless-label">Outside Sourcing</span>
                 <span className="mset-gapless-hint">
-                  Stream music from your own servers, like Plex. Nothing is
-                  contacted while this is off.
+                  Stream music from your own servers, like Plex or Navidrome.
+                  Nothing is contacted while this is off.
                 </span>
               </span>
             </label>

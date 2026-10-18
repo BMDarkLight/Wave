@@ -20,20 +20,48 @@ import {
   plexProbeDirect,
   plexReauthorizeSource,
   plexSetDirectToken,
+  subsonicAddSource,
+  subsonicSetPassword,
   type PlexLibrary,
   type PlexServer,
 } from "../../utils/remote";
 
+/** The kinds of server a source can be added from. */
+type Kind = "plex_tv" | "plex_direct" | "subsonic";
+
 type Step =
-  "kind" | "sign-in" | "direct" | "token" | "server" | "libraries" | "adding";
+  | "kind"
+  | "sign-in"
+  | "form"
+  | "token"
+  | "password"
+  | "server"
+  | "libraries"
+  | "adding";
 
 const POLL_MS = 2000;
 
+const KINDS: { kind: Kind; label: string }[] = [
+  { kind: "plex_tv", label: "Plex (sign in with plex.tv)" },
+  { kind: "plex_direct", label: "Plex server (connect by address)" },
+  {
+    kind: "subsonic",
+    label: "Navidrome, Airsonic, Gonic and other Subsonic servers",
+  },
+];
+
+function firstStep(reauthorizing: boolean, method: string): Step {
+  if (!reauthorizing) return "kind";
+  if (method === "plex_token") return "token";
+  if (method === "password") return "password";
+  return "sign-in";
+}
+
 /**
- * Adds a remote source: a Plex server through plex.tv sign-in, or by its
- * address and token without plex.tv. Then pick its music libraries. With
- * `reauthorizeSourceId` it only signs an existing source in again, the way
- * `reauthorizeMethod` says.
+ * Adds a remote source: a Plex server through plex.tv sign-in or by its
+ * address, or a Subsonic-compatible server by address, username and
+ * password. With `reauthorizeSourceId` it only signs an existing source in
+ * again, the way `reauthorizeMethod` says.
  */
 export default function RemoteSourceSetupDialog({
   reauthorizeSourceId,
@@ -47,16 +75,14 @@ export default function RemoteSourceSetupDialog({
   onDone?: () => void;
 }) {
   const reauthorizing = reauthorizeSourceId != null;
-  const [step, setStep] = useState<Step>(
-    reauthorizing
-      ? reauthorizeMethod === "plex_token"
-        ? "token"
-        : "sign-in"
-      : "kind",
+  const [step, setStep] = useState<Step>(() =>
+    firstStep(reauthorizing, reauthorizeMethod),
   );
+  const [kind, setKind] = useState<Kind>("plex_tv");
   const [address, setAddress] = useState("");
-  const [token, setToken] = useState("");
-  const [direct, setDirect] = useState(false);
+  const [username, setUsername] = useState("");
+  // The Plex token or the Subsonic password, depending on the kind.
+  const [secret, setSecret] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,13 +104,23 @@ export default function RemoteSourceSetupDialog({
     if (!closed.current) setError(formatInvokeError(err, fallback));
   };
 
+  const finish = () => {
+    onDone?.();
+    onClose();
+  };
+
+  const chooseKind = (next: Kind) => {
+    setKind(next);
+    setError(null);
+    setStep(next === "plex_tv" ? "sign-in" : "form");
+  };
+
   const signedIn = async (session: string) => {
     if (reauthorizing) {
       setStep("adding");
       try {
         await plexReauthorizeSource(reauthorizeSourceId, session);
-        onDone?.();
-        onClose();
+        finish();
       } catch (err) {
         fail(err, "Could not sign in again");
         setStep("sign-in");
@@ -173,13 +209,24 @@ export default function RemoteSourceSetupDialog({
     }
   };
 
-  const connectDirect = async () => {
+  /** A Plex server shows its libraries next; a Subsonic server is added now. */
+  const submitForm = async () => {
     setError(null);
+    if (kind === "subsonic") {
+      setStep("adding");
+      try {
+        await subsonicAddSource(address, username, secret);
+        finish();
+      } catch (err) {
+        fail(err, "Could not add the server");
+        setStep("form");
+      }
+      return;
+    }
     setBusy(true);
     try {
-      const server = await plexProbeDirect(address, token);
+      const server = await plexProbeDirect(address, secret);
       if (closed.current) return;
-      setDirect(true);
       setLibraries(server.libraries);
       setChosen(new Set(server.libraries.map((library) => library.key)));
       setStep("libraries");
@@ -190,32 +237,40 @@ export default function RemoteSourceSetupDialog({
     }
   };
 
-  const saveToken = async () => {
+  /** Signs an existing source in again with a new token or password. */
+  const saveSecret = async () => {
     if (!reauthorizeSourceId) return;
+    const back = step;
     setError(null);
     setStep("adding");
     try {
-      await plexSetDirectToken(reauthorizeSourceId, token);
-      onDone?.();
-      onClose();
+      if (back === "token") {
+        await plexSetDirectToken(reauthorizeSourceId, secret);
+      } else {
+        await subsonicSetPassword(reauthorizeSourceId, secret);
+      }
+      finish();
     } catch (err) {
-      fail(err, "Could not use that token");
-      setStep("token");
+      fail(
+        err,
+        back === "token"
+          ? "Could not use that token"
+          : "Could not sign in again",
+      );
+      setStep(back);
     }
   };
 
   const add = async () => {
-    if (!direct && (!sessionId || !serverId)) return;
     setError(null);
     setStep("adding");
     try {
-      if (direct) {
-        await plexAddDirectSource(address, token, [...chosen]);
+      if (kind === "plex_direct") {
+        await plexAddDirectSource(address, secret, [...chosen]);
       } else if (sessionId && serverId) {
         await plexAddSource(sessionId, serverId, [...chosen]);
       }
-      onDone?.();
-      onClose();
+      finish();
     } catch (err) {
       fail(err, "Could not add the server");
       setStep("libraries");
@@ -231,6 +286,17 @@ export default function RemoteSourceSetupDialog({
     });
   };
 
+  const usesPassword = step === "password" || kind === "subsonic";
+  const formReady =
+    address.trim() !== "" &&
+    (kind !== "subsonic" || (username.trim() !== "" && secret !== ""));
+  const secretReady = step === "password" ? secret !== "" : !!secret.trim();
+  const secretLabel = usesPassword
+    ? "Password"
+    : step === "form"
+      ? "Token (optional)"
+      : "Token";
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -241,47 +307,48 @@ export default function RemoteSourceSetupDialog({
         }}
       >
         <div className="modal-header">
-          <h2>
-            {reauthorizing ? "Sign in to Plex again" : "Add a remote source"}
-          </h2>
+          <h2>{reauthorizing ? "Sign in again" : "Add a remote source"}</h2>
         </div>
 
         {step === "kind" && (
           <div className="add-source-options">
-            <button
-              className="add-source-option"
-              type="button"
-              onClick={() => setStep("sign-in")}
-            >
-              Plex (sign in with plex.tv)
-            </button>
-            <button
-              className="add-source-option"
-              type="button"
-              onClick={() => setStep("direct")}
-            >
-              Plex server (connect by address)
-            </button>
+            {KINDS.map((option) => (
+              <button
+                key={option.kind}
+                className="add-source-option"
+                type="button"
+                onClick={() => chooseKind(option.kind)}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
         )}
 
-        {(step === "direct" || step === "token") && (
+        {(step === "form" || step === "token" || step === "password") && (
           <form
             className="remote-setup-form"
             onSubmit={(event) => {
               event.preventDefault();
-              if (step === "direct") void connectDirect();
-              else void saveToken();
+              if (step === "form") {
+                if (formReady) void submitForm();
+              } else if (secretReady) {
+                void saveSecret();
+              }
             }}
           >
-            {step === "direct" && (
+            {step === "form" && (
               <label className="remote-setup-field">
                 <span>Server address</span>
                 <input
                   type="text"
                   value={address}
                   onChange={(event) => setAddress(event.target.value)}
-                  placeholder="192.168.1.10:32400"
+                  placeholder={
+                    kind === "subsonic"
+                      ? "192.168.1.10:4533"
+                      : "192.168.1.10:32400"
+                  }
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
@@ -289,26 +356,48 @@ export default function RemoteSourceSetupDialog({
                 />
               </label>
             )}
+            {step === "form" && kind === "subsonic" && (
+              <label className="remote-setup-field">
+                <span>Username</span>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoComplete="username"
+                />
+              </label>
+            )}
             <label className="remote-setup-field">
-              <span>{step === "direct" ? "Token (optional)" : "Token"}</span>
+              <span>{secretLabel}</span>
               <input
                 type="password"
-                value={token}
-                onChange={(event) => setToken(event.target.value)}
-                placeholder="X-Plex-Token"
+                value={secret}
+                onChange={(event) => setSecret(event.target.value)}
+                placeholder={usesPassword ? undefined : "X-Plex-Token"}
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
-                autoFocus={step === "token"}
+                autoComplete={usesPassword ? "current-password" : "off"}
+                autoFocus={step !== "form"}
               />
             </label>
-            <p className="mset-hint">
-              No plex.tv needed. Leave the token empty if the server lets your
-              network in without signing in (Settings, Network, List of IP
-              addresses allowed without auth). Otherwise use the server's
-              PlexOnlineToken from its Preferences.xml, or the X-Plex-Token
-              shown when you view an item's XML in Plex.
-            </p>
+            {usesPassword ? (
+              <p className="mset-hint">
+                The account on your server. Wave keeps the password on this
+                device to sign in.
+              </p>
+            ) : (
+              <p className="mset-hint">
+                No plex.tv needed. Leave the token empty if the server lets your
+                network in without signing in (Settings, Network, List of IP
+                addresses allowed without auth). Otherwise use the server's
+                PlexOnlineToken from its Preferences.xml, or the X-Plex-Token
+                shown when you view an item's XML in Plex.
+              </p>
+            )}
             {/* Submits on Enter; the visible button is in the actions row. */}
             <button type="submit" hidden />
           </form>
@@ -394,22 +483,22 @@ export default function RemoteSourceSetupDialog({
               Continue
             </button>
           )}
-          {step === "direct" && (
+          {step === "form" && (
             <button
               className="btn-primary"
               type="button"
-              disabled={busy || !address.trim()}
-              onClick={() => void connectDirect()}
+              disabled={busy || !formReady}
+              onClick={() => void submitForm()}
             >
-              Connect
+              {kind === "subsonic" ? "Add" : "Connect"}
             </button>
           )}
-          {step === "token" && (
+          {(step === "token" || step === "password") && (
             <button
               className="btn-primary"
               type="button"
-              disabled={!token.trim()}
-              onClick={() => void saveToken()}
+              disabled={!secretReady}
+              onClick={() => void saveSecret()}
             >
               Save
             </button>

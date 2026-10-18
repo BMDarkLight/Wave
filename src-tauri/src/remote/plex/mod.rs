@@ -12,14 +12,12 @@ pub mod api;
 pub mod auth;
 pub mod connection;
 pub mod direct;
-#[cfg(test)]
-pub(crate) mod testkit;
+
+pub(crate) use crate::remote::http::{api_client, stream_client};
 
 use crate::app::settings::AppSettings;
 use crate::remote::backend::RemoteError;
-use reqwest::blocking::{Client, RequestBuilder};
-use std::sync::OnceLock;
-use std::time::Duration;
+use reqwest::blocking::RequestBuilder;
 
 /// Identifies Wave to Plex. `client_id` is stable per install so the server
 /// and plex.tv see one device across launches.
@@ -88,28 +86,6 @@ pub(crate) fn check_status(
     } else {
         Err(RemoteError::Http(status.as_u16()))
     }
-}
-
-/// Client for short JSON requests.
-pub(crate) fn api_client() -> &'static Client {
-    static CLIENT: OnceLock<Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .unwrap_or_else(|_| Client::new())
-    })
-}
-
-/// Client for audio bytes: a long stream must not hit a total timeout.
-pub(crate) fn stream_client() -> &'static Client {
-    static CLIENT: OnceLock<Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .build()
-            .unwrap_or_else(|_| Client::new())
-    })
 }
 
 #[cfg(test)]

@@ -18,7 +18,7 @@ use super::plex::{self, PlexHeaders};
 use super::refresh::RefreshCooldown;
 use super::store::RemoteSourceRow;
 use super::uri::RemoteUri;
-use super::{stream, sync, RemoteEvent, RemoteRuntime, SourceState};
+use super::{stream, subsonic, sync, RemoteEvent, RemoteRuntime, SourceState};
 use crate::app::settings::AppSettingsState;
 use crate::commands::LibraryState;
 use crate::metadata::Track;
@@ -130,7 +130,7 @@ pub struct RemoteSourceDto {
     pub track_count: i64,
     pub last_sync_at: Option<i64>,
     pub last_error: Option<String>,
-    /// How to sign in again: `plex_tv` or `plex_token`.
+    /// How to sign in again: `plex_tv`, `plex_token` or `password`.
     pub reauth: String,
 }
 
@@ -167,8 +167,12 @@ fn source_dto(row: &RemoteSourceRow, state: SourceState) -> RemoteSourceDto {
     }
 }
 
-/// Whether a source signs in again through plex.tv or with a typed token.
+/// How a source signs in again: through plex.tv, with a typed Plex token, or
+/// with its password.
 fn reauth_for(row: &RemoteSourceRow) -> &'static str {
+    if row.kind == "subsonic" {
+        return "password";
+    }
     let direct = serde_json::from_str::<serde_json::Value>(&row.config_json)
         .ok()
         .and_then(|config| config.get("direct").and_then(serde_json::Value::as_bool))
@@ -565,6 +569,105 @@ pub async fn plex_set_direct_token(
         }
         config.server_token = token;
         let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+        rt.with_library(|library| {
+            library.update_remote_source_config(&source_id, &json)?;
+            rt.reload_sources(library);
+            Ok::<_, String>(())
+        })?;
+        rt.set_status(&source_id, SourceState::Ok);
+        sync_one_in_background(&task_app, rt, source_id);
+        Ok(())
+    })
+    .await
+}
+
+/// A Subsonic check's failure, said the way a person can act on.
+fn subsonic_error(error: RemoteError, url: &str) -> String {
+    match error {
+        RemoteError::Unauthorized => "Wrong username or password".to_string(),
+        RemoteError::Unreachable(_) => {
+            format!("Can't reach a server at {url}. Check the address and port.")
+        }
+        RemoteError::Parse(_) | RemoteError::Http(_) => {
+            "That address doesn't answer like a Subsonic server".to_string()
+        }
+        other => remote_error(other),
+    }
+}
+
+/// Signs in to a Subsonic-compatible server (Navidrome, Airsonic, Gonic and
+/// others), adds it as a remote source and starts its first sync.
+#[tauri::command]
+pub async fn subsonic_add_source(
+    url: String,
+    username: String,
+    password: String,
+    app: AppHandle,
+) -> Result<RemoteSourceDto, String> {
+    NetworkGate::global().check().map_err(remote_error)?;
+    let url = subsonic::normalize_url(&url)?;
+    let username = username.trim().to_string();
+    if username.is_empty() {
+        return Err("Enter your username".to_string());
+    }
+    let rt = runtime()?;
+    let task_app = app.clone();
+    blocking(move || {
+        let config = subsonic::SubsonicConfig {
+            url: url.clone(),
+            username,
+            password,
+            plain_password: false,
+            server_type: None,
+        };
+        let probed = subsonic::SubsonicBackend::new(config)
+            .probe()
+            .map_err(|e| subsonic_error(e, &url))?;
+        let name = subsonic::display_name(probed.server_type.as_deref(), &probed.url);
+        let key = subsonic::stable_key(&probed);
+        let json = serde_json::to_string(&probed).map_err(|e| e.to_string())?;
+        let id = rt.with_library(|library| {
+            let id = library.insert_remote_source("subsonic", &key, &name, &json)?;
+            rt.reload_sources(library);
+            Ok::<_, String>(id)
+        })?;
+        sync_one_in_background(&task_app, rt, id.clone());
+        let row = rt
+            .with_library(|library| library.list_remote_sources())?
+            .into_iter()
+            .find(|row| row.id == id)
+            .ok_or_else(|| "The new source went missing".to_string())?;
+        Ok(source_dto(&row, rt.status(&id)))
+    })
+    .await
+}
+
+/// Gives a Subsonic source a new password, after the server stopped
+/// accepting the old one.
+#[tauri::command]
+pub async fn subsonic_set_password(
+    source_id: String,
+    password: String,
+    app: AppHandle,
+) -> Result<(), String> {
+    NetworkGate::global().check().map_err(remote_error)?;
+    let rt = runtime()?;
+    let task_app = app.clone();
+    blocking(move || {
+        let row = rt
+            .with_library(|library| library.list_remote_sources())?
+            .into_iter()
+            .find(|row| row.id == source_id)
+            .ok_or_else(|| "That source was removed".to_string())?;
+        let mut config: subsonic::SubsonicConfig =
+            serde_json::from_str(&row.config_json).map_err(|e| e.to_string())?;
+        config.password = password;
+        config.plain_password = false;
+        let url = config.url.clone();
+        let probed = subsonic::SubsonicBackend::new(config)
+            .probe()
+            .map_err(|e| subsonic_error(e, &url))?;
+        let json = serde_json::to_string(&probed).map_err(|e| e.to_string())?;
         rt.with_library(|library| {
             library.update_remote_source_config(&source_id, &json)?;
             rt.reload_sources(library);
@@ -1008,6 +1111,10 @@ mod tests {
         assert_eq!(
             source_dto(&row("plex", "{}"), SourceState::Ok).reauth,
             "plex_tv"
+        );
+        assert_eq!(
+            source_dto(&row("subsonic", "{}"), SourceState::Ok).reauth,
+            "password"
         );
     }
 

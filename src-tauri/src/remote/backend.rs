@@ -55,7 +55,7 @@ impl std::fmt::Display for RemoteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RemoteError::Unreachable(msg) => f.write_str(msg),
-            RemoteError::Unauthorized => f.write_str("Sign in to Plex again"),
+            RemoteError::Unauthorized => f.write_str("Sign in to this server again"),
             RemoteError::Blocked(GateState::Disabled) => f.write_str("Outside Sourcing is off"),
             RemoteError::Blocked(GateState::Cellular) => {
                 f.write_str("Remote music is set to Wi-Fi only")
@@ -97,7 +97,7 @@ mod tests {
         );
         assert_eq!(
             RemoteError::Unauthorized.to_string(),
-            "Sign in to Plex again"
+            "Sign in to this server again"
         );
         assert_eq!(
             RemoteError::Blocked(GateState::Disabled).to_string(),
