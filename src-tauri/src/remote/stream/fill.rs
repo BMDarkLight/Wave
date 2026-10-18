@@ -356,6 +356,9 @@ impl Fill {
         let mut response: Option<Box<dyn ByteStream>> = None;
         let mut buf = vec![0u8; CHUNK];
         let mut unsaved = 0u64;
+        // False once the server answers a ranged request with the whole file:
+        // then the file is read once from the start, straight through.
+        let mut ranged = true;
         loop {
             self.gate.check()?;
             let limit = {
@@ -363,18 +366,35 @@ impl Fill {
                 if let Some(wanted) = state.wanted {
                     if wanted >= self.len || state.ranges.contiguous_from(wanted) > 0 {
                         state.wanted = None;
-                    } else if wanted < cursor || wanted > cursor + SEEK_AHEAD {
+                    } else if ranged && (wanted < cursor || wanted > cursor + SEEK_AHEAD) {
                         response = None;
                         cursor = wanted;
                     }
                 }
-                state.ranges.next_start_after(cursor).unwrap_or(self.len)
+                if ranged {
+                    state.ranges.next_start_after(cursor).unwrap_or(self.len)
+                } else {
+                    self.len
+                }
             };
 
             let fresh = response.is_none();
             let stream = match &mut response {
                 Some(stream) => stream,
-                None => response.insert(backend.open_bytes(part_key, cursor)?),
+                None => {
+                    let opened = match backend.open_bytes(part_key, cursor) {
+                        // The whole file came back for a ranged request, so
+                        // this server can't seek: start over from byte 0,
+                        // rewriting the bytes already here with the same ones.
+                        Err(RemoteError::Http(200)) if cursor > 0 => {
+                            ranged = false;
+                            cursor = 0;
+                            backend.open_bytes(part_key, 0)?
+                        }
+                        other => other?,
+                    };
+                    response.insert(opened)
+                }
             };
             let want = (limit - cursor).min(CHUNK as u64) as usize;
             let n = read_some(stream.as_mut(), &mut buf[..want])?;
@@ -398,7 +418,7 @@ impl Fill {
                 let mut state = self.lock();
                 state.ranges.insert(cursor, cursor + n as u64);
                 cursor += n as u64;
-                cursor >= self.len || state.ranges.contiguous_from(cursor) > 0
+                cursor >= self.len || (ranged && state.ranges.contiguous_from(cursor) > 0)
             };
             self.cond.notify_all();
             if fresh {
@@ -531,6 +551,21 @@ mod tests {
         let fill = h.spawn(second.clone());
         assert!(wait_until(LONG, || fill.is_complete()));
         assert_eq!(second.opens().first(), Some(&MIB));
+        assert!(std::fs::read(h.cache_path()).unwrap() == *h.data);
+    }
+
+    #[test]
+    fn a_server_that_ignores_ranges_is_read_from_the_start() {
+        let h = Harness::new(3 * MIB as usize);
+        let first = Arc::new(FakeBackend::new(h.data.clone(), FAST).failing_at(MIB));
+        let fill = h.spawn(first);
+        assert!(wait_until(LONG, || fill.error().is_some()));
+        drop(fill);
+
+        let rangeless = Arc::new(FakeBackend::new(h.data.clone(), FAST).without_ranges());
+        let fill = h.spawn(rangeless.clone());
+        assert!(wait_until(LONG, || fill.is_complete()));
+        assert_eq!(rangeless.opens(), vec![MIB, 0]);
         assert!(std::fs::read(h.cache_path()).unwrap() == *h.data);
     }
 

@@ -101,8 +101,10 @@ remembers the first that answers. The working address is written back after a
 sync without touching the rest of the stored config.
 
 Catalogs are paged 500 tracks at a time. Audio is the original file, never the
-transcoder, fetched with HTTP Range requests. Error messages never include a URL,
-since Plex URLs carry the token.
+transcoder, fetched with HTTP Range requests. Plex can turn a part request away
+when it has no playback decision for it (503, or 509 for bandwidth); its docs
+say a download needs none, so Wave asks again with `download=1`. Error messages
+never include a URL, since Plex URLs carry the token.
 
 ---
 
@@ -113,8 +115,8 @@ API are added with an address, a username and a password. A bare address gets
 `http://`; a pasted `/rest` or Navidrome `/app/#/...` path is dropped. Every
 request is signed with a fresh salt and `t = md5(password + salt)`, so the
 password itself never goes over the wire. A server that refuses token auth
-(error 41, as LDAP-backed ones do) gets the hex-encoded password instead, and
-the source remembers that choice. The password is stored in the
+(error 41, as LDAP-backed ones do, or 42 for any unsupported method) gets the
+hex-encoded password instead, and the source remembers that choice. The password is stored in the
 source's config, because each signature needs it.
 
 `ping` checks the account when the source is added and reports the server type
@@ -123,9 +125,10 @@ source's config, because each signature needs it.
 the same account on the same server can't be added twice.
 
 The catalog is read with `search3` and an empty query, 500 songs a page, which
-Navidrome, Gonic and most others answer with every song. A server that returns
-nothing that way is walked album by album instead (`getAlbumList2` in batches of
-50, then `getAlbum` for each). `getScanStatus` gives the song count for the
+OpenSubsonic requires servers to answer with every song. An older server that
+returns nothing that way, or refuses the empty query, is walked album by album
+instead (`getAlbumList2` in batches of 50, then `getAlbum` for each). A song's
+`created` date becomes its date added. `getScanStatus` gives the song count for the
 progress bar when the server reports one. Audio comes from `stream` with
 `format=raw`, so the server sends the original file, with HTTP Range requests;
 an error answered as JSON or XML in place of audio is reported as an error, not
@@ -144,17 +147,22 @@ leaves it out.
 
 Signing in posts the username and password to `/Users/AuthenticateByName`
 once. Wave stores the access token and user id it gets back, never the
-password. Every request carries the `MediaBrowser` authorization in each form
-the two servers read (`Authorization`, `X-Emby-Authorization` and
-`X-Emby-Token`), with a device id made for that source. The server ties a
+password. Every request carries the `MediaBrowser` scheme in the
+`Authorization` header, values quoted and URL-encoded, with a device id made
+for that source. Emby also gets `X-Emby-Authorization` and `X-Emby-Token`, which
+it documents; Jellyfin doesn't, since 12.0 removed them and its docs warn
+against sending a token twice. The server ties a
 sign-in to its device id, so signing in again replaces the old token rather
 than leaving sessions behind. Signing in again checks that the password signs
 in the same user. Until libraries are picked, the sign-in waits in memory for 15
-minutes and its token never reaches the frontend.
+minutes and its token never reaches the frontend. Removing the source posts
+`/Sessions/Logout`, so the token stops working.
 
-The user's music libraries come from `/Users/{id}/Views`, or `/UserViews` on
-Jellyfin versions that moved it, keeping views whose `CollectionType` is
-`music`. The catalog is `/Items` with `IncludeItemTypes=Audio` and `Recursive`,
+The user's music libraries come from `/UserViews` on Jellyfin (the old route is
+gone in 12) and `/Users/{id}/Views` on Emby, each falling back to the other on a
+404, keeping views whose `CollectionType` is `music`. The catalog is
+`/Items?userId=` on Jellyfin and `/Users/{id}/Items` on Emby, with
+`IncludeItemTypes=Audio` and `Recursive`,
 500 tracks a page, one library after another; each library's
 `TotalRecordCount` gives the total for the progress bar. Audio is
 `/Audio/{id}/stream?static=true`, the original file, never a transcode, with
@@ -171,6 +179,9 @@ Each track's bytes are fetched once.
 
 - A read past the downloaded region (a seek, or a format that keeps its index at
   the end) restarts the download at that offset; the gap is filled afterwards.
+- A server that answers a ranged request with the whole file can't seek, so the
+  fill reads it once from the start instead, and a seek waits for the download
+  to get there.
 - An interrupted fill resumes from the sidecar. A file is marked `complete` only
   when every byte is present.
 - A failed fill keeps its partial file and reports `remote-stream-failed` if

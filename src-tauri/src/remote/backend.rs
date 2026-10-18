@@ -69,6 +69,26 @@ impl std::fmt::Display for RemoteError {
     }
 }
 
+/// Seconds since 1970 for an ISO 8601 date such as
+/// "2024-03-01T18:22:05.1234567Z", read as UTC.
+pub fn unix_seconds(date: &str) -> Option<i64> {
+    let number = |range: std::ops::Range<usize>| -> Option<i64> { date.get(range)?.parse().ok() };
+    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
+    let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Days from the civil date, after Howard Hinnant's algorithm.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
 pub trait ByteStream: std::io::Read + Send {}
 impl<T: std::io::Read + Send> ByteStream for T {}
 
@@ -90,6 +110,17 @@ pub trait RemoteBackend: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unix_seconds_reads_iso_dates() {
+        assert_eq!(unix_seconds("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(
+            unix_seconds("2000-02-29T12:00:00.0000000Z"),
+            Some(951_825_600)
+        );
+        assert_eq!(unix_seconds("garbage"), None);
+        assert_eq!(unix_seconds("2024-13-01T00:00:00Z"), None);
+    }
 
     #[test]
     fn display_messages_are_user_facing() {

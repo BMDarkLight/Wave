@@ -18,7 +18,9 @@ use crate::remote::backend::{ByteStream, CatalogPage, RemoteBackend, RemoteError
 use crate::remote::gate::NetworkGate;
 use crate::remote::http::{api_client, stream_client};
 use crate::remote::uri::percent_encode;
-use api::{parse_response, song_to_meta, ApiFailure, Envelope, TOKEN_UNSUPPORTED};
+use api::{
+    parse_response, song_to_meta, ApiFailure, Envelope, AUTH_UNSUPPORTED, TOKEN_UNSUPPORTED,
+};
 use reqwest::blocking::Response;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -186,8 +188,10 @@ impl SubsonicBackend {
     /// Switches to sending the password when the server can't check tokens.
     /// Returns whether a retry is worth it.
     fn fall_back_to_password(&self, failure: &ApiFailure) -> bool {
-        matches!(failure, ApiFailure::Code(TOKEN_UNSUPPORTED, _))
-            && !self.plain.swap(true, Ordering::Relaxed)
+        matches!(
+            failure,
+            ApiFailure::Code(TOKEN_UNSUPPORTED | AUTH_UNSUPPORTED, _)
+        ) && !self.plain.swap(true, Ordering::Relaxed)
     }
 
     fn call(&self, endpoint: &str, params: &[(&str, &str)]) -> Result<Envelope, RemoteError> {
@@ -316,14 +320,23 @@ impl RemoteBackend for SubsonicBackend {
             let (songs, more) = self.album_page(offset)?;
             (songs, more.then_some(cursor + ALBUM_BATCH))
         } else {
-            let songs = self.search_page(cursor)?;
-            if cursor == 0 && songs.is_empty() {
-                // This server won't list everything for an empty search.
-                let (songs, more) = self.album_page(0)?;
-                (songs, more.then_some(ALBUM_MODE + ALBUM_BATCH))
-            } else {
-                let more = songs.len() == PAGE;
-                (songs, more.then_some(cursor + PAGE))
+            // OpenSubsonic requires an empty search to list everything; an
+            // older server may answer it with nothing or with an error.
+            let searched = match self.search_page(cursor) {
+                Ok(songs) if cursor == 0 && songs.is_empty() => None,
+                Ok(songs) => Some(songs),
+                Err(RemoteError::Parse(_) | RemoteError::Http(_)) if cursor == 0 => None,
+                Err(e) => return Err(e),
+            };
+            match searched {
+                Some(songs) => {
+                    let more = songs.len() == PAGE;
+                    (songs, more.then_some(cursor + PAGE))
+                }
+                None => {
+                    let (songs, more) = self.album_page(0)?;
+                    (songs, more.then_some(ALBUM_MODE + ALBUM_BATCH))
+                }
             }
         };
         Ok(CatalogPage {
@@ -478,6 +491,37 @@ mod tests {
         let log = seen.lock().unwrap();
         assert_eq!(param(&log[1], "p").as_deref(), Some("enc:736573616d65"));
         assert!(param(&log[1], "t").is_none());
+    }
+
+    #[test]
+    fn a_server_refusing_the_auth_method_gets_the_password_too() {
+        let (port, seen) = fake_server(vec![failed(42), ok("")]);
+        let config = backend_for(port).probe().unwrap();
+        assert!(config.plain_password);
+        assert!(param(&seen.lock().unwrap()[1], "p").is_some());
+    }
+
+    #[test]
+    fn a_server_refusing_the_empty_search_is_walked_by_album() {
+        let (port, seen) = fake_server(vec![
+            failed(0),
+            failed(10),
+            ok(r#","albumList2":{"album":[{"id":"a1"}]}"#),
+            ok(r#","album":{"id":"a1","song":[{"id":"s9","title":"Nine","size":5}]}"#),
+        ]);
+        let page = backend_for(port).catalog_page(0).unwrap();
+        assert_eq!(page.tracks[0].remote_id, "s9");
+        assert!(seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.starts_with("GET /rest/getAlbumList2?")));
+    }
+
+    #[test]
+    fn a_refused_search_past_the_first_page_is_an_error() {
+        let (port, _) = fake_server(vec![failed(10)]);
+        assert!(backend_for(port).catalog_page(500).is_err());
     }
 
     #[test]

@@ -250,11 +250,24 @@ impl RemoteBackend for PlexBackend {
     fn open_bytes(&self, part_key: &str, offset: u64) -> Result<Box<dyn ByteStream>, RemoteError> {
         self.gate.check()?;
         let token = &self.config.server_token;
-        let resp = self.send(&|base| {
-            self.headers
-                .apply_identity(stream_client().get(with_token(format!("{base}{part_key}"), token)))
-                .header("Range", format!("bytes={offset}-"))
-        })?;
+        let open = |download: bool| {
+            self.send(&|base| {
+                let mut url = format!("{base}{part_key}");
+                if download {
+                    url.push_str(if url.contains('?') { "&" } else { "?" });
+                    url.push_str("download=1");
+                }
+                self.headers
+                    .apply_identity(stream_client().get(with_token(url, token)))
+                    .header("Range", format!("bytes={offset}-"))
+            })
+        };
+        let mut resp = open(false)?;
+        // Plex can turn a stream away when it has no playback decision for it
+        // (503, or 509 for bandwidth). Its docs say a download needs none.
+        if matches!(resp.status().as_u16(), 503 | 509) {
+            resp = open(true)?;
+        }
         match resp.status() {
             StatusCode::PARTIAL_CONTENT => Ok(Box::new(resp)),
             StatusCode::OK if offset == 0 => Ok(Box::new(resp)),
@@ -458,6 +471,25 @@ mod tests {
         let head = &log[0];
         assert!(head.starts_with("GET /library/parts/9/1/file.flac?X-Plex-Token=secret-token "));
         assert!(head.to_ascii_lowercase().contains("range: bytes=1000-\r\n"));
+    }
+
+    #[test]
+    fn a_stream_turned_away_is_asked_for_as_a_download() {
+        let (port, seen) = fake_server(vec![
+            http("503 Service Unavailable", ""),
+            http("206 Partial Content", "hello"),
+        ]);
+        let backend = PlexBackend::with_gate(
+            config_for(&format!("http://127.0.0.1:{port}")),
+            headers(),
+            open_gate(),
+        );
+        assert!(backend
+            .open_bytes("/library/parts/9/1/file.flac", 10)
+            .is_ok());
+        let log = seen.lock().unwrap();
+        assert!(log[1]
+            .starts_with("GET /library/parts/9/1/file.flac?download=1&X-Plex-Token=secret-token "));
     }
 
     #[test]

@@ -352,6 +352,7 @@ pub(crate) mod testkit {
         fail_at: Option<u64>,
         silent: bool,
         refuse: Option<RemoteError>,
+        rangeless: bool,
         opens: Mutex<Vec<u64>>,
         reads: Arc<AtomicUsize>,
     }
@@ -364,6 +365,7 @@ pub(crate) mod testkit {
                 fail_at: None,
                 silent: false,
                 refuse: None,
+                rangeless: false,
                 opens: Mutex::new(Vec::new()),
                 reads: Arc::default(),
             }
@@ -384,6 +386,13 @@ pub(crate) mod testkit {
         /// Every `open_bytes` fails with `error`.
         pub fn refusing(mut self, error: RemoteError) -> Self {
             self.refuse = Some(error);
+            self
+        }
+
+        /// Answers a ranged request the way a server without Range support
+        /// does: with the whole file, which `open_bytes` reports as a 200.
+        pub fn without_ranges(mut self) -> Self {
+            self.rangeless = true;
             self
         }
 
@@ -439,6 +448,9 @@ pub(crate) mod testkit {
             if let Some(error) = &self.refuse {
                 std::thread::sleep(self.delay);
                 return Err(error.clone());
+            }
+            if self.rangeless && offset > 0 {
+                return Err(RemoteError::Http(200));
             }
             Ok(Box::new(FakeStream {
                 data: self.data.clone(),

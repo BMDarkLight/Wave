@@ -8,7 +8,7 @@
 
 //! Subsonic JSON (`f=json`) responses and their mapping to library tracks.
 
-use crate::remote::backend::{RemoteError, RemoteTrackMeta};
+use crate::remote::backend::{unix_seconds, RemoteError, RemoteTrackMeta};
 use serde::Deserialize;
 
 /// Subsonic's error codes that mean the credentials are the problem.
@@ -16,6 +16,11 @@ const WRONG_CREDENTIALS: u32 = 40;
 /// The server can't check a salted token (LDAP users, for one); the password
 /// has to be sent instead.
 pub const TOKEN_UNSUPPORTED: u32 = 41;
+/// The server doesn't accept this way of signing in at all; like 41, the
+/// password may still work.
+pub const AUTH_UNSUPPORTED: u32 = 42;
+/// OpenSubsonic: an API key that the server doesn't know.
+const INVALID_API_KEY: u32 = 44;
 const NOT_AUTHORIZED: u32 = 50;
 const NOT_FOUND: u32 = 70;
 
@@ -29,9 +34,11 @@ pub enum ApiFailure {
 impl From<ApiFailure> for RemoteError {
     fn from(failure: ApiFailure) -> Self {
         match failure {
-            ApiFailure::Code(WRONG_CREDENTIALS | TOKEN_UNSUPPORTED | NOT_AUTHORIZED, _) => {
-                RemoteError::Unauthorized
-            }
+            ApiFailure::Code(
+                WRONG_CREDENTIALS | TOKEN_UNSUPPORTED | AUTH_UNSUPPORTED | INVALID_API_KEY
+                | NOT_AUTHORIZED,
+                _,
+            ) => RemoteError::Unauthorized,
             ApiFailure::Code(NOT_FOUND, _) => RemoteError::Http(404),
             ApiFailure::Code(_, message) | ApiFailure::Malformed(message) => {
                 RemoteError::Parse(message)
@@ -59,6 +66,8 @@ pub struct Song {
     pub suffix: Option<String>,
     pub duration: Option<f64>,
     pub is_video: Option<bool>,
+    /// When the song joined the server's library, as an ISO 8601 date.
+    pub created: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
@@ -189,7 +198,7 @@ pub fn song_to_meta(song: &Song) -> Option<RemoteTrackMeta> {
         // The id is all `stream` needs.
         part_key: song.id.clone(),
         art_ref: song.cover_art.clone().filter(|a| !a.is_empty()),
-        updated_at: None,
+        updated_at: song.created.as_deref().and_then(unix_seconds),
     })
 }
 
@@ -203,7 +212,8 @@ mod tests {
         {"id":"s1","title":"Song One","album":"Album","artist":"Band",
          "displayAlbumArtist":"Band and Friends","track":3,"discNumber":1,"year":2001,
          "genre":"Rock","coverArt":"al-9","size":1234567,"contentType":"audio/flac",
-         "suffix":"flac","duration":215,"isVideo":false},
+         "suffix":"flac","duration":215,"isVideo":false,
+         "created":"2024-03-01T18:22:05.112827504Z"},
         {"id":"v1","title":"A Video","isVideo":true,"suffix":"mp4","size":10},
         {"id":"","title":"No Id"},
         {"id":"s2","title":"Song Two","contentType":"audio/mpeg","size":99,"duration":61}
@@ -234,6 +244,7 @@ mod tests {
         assert_eq!(meta.extension, "flac");
         assert_eq!(meta.part_key, "s1");
         assert_eq!(meta.art_ref.as_deref(), Some("al-9"));
+        assert_eq!(meta.updated_at, Some(1_709_317_325));
     }
 
     #[test]

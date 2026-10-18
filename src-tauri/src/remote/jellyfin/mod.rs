@@ -104,31 +104,40 @@ pub fn display_name(config: &JellyfinConfig) -> String {
     format!("{} ({})", config.server_name, config.product)
 }
 
-fn quoted(value: &str) -> String {
-    value.replace(['"', ','], "")
+/// Whether a server is Emby rather than Jellyfin, from the stored product.
+pub fn is_emby(product: &str) -> bool {
+    product == "Emby"
 }
 
-/// The `MediaBrowser` authorization value both servers read, with the token
-/// once there is one.
+/// The `MediaBrowser` authorization value, with the token once there is one.
+/// Values are quoted and URL-encoded, as Jellyfin's scheme asks.
 fn authorization(device_id: &str, token: Option<&str>) -> String {
     let mut value = format!(
         "MediaBrowser Client=\"Wave\", Device=\"Wave\", DeviceId=\"{}\", Version=\"{}\"",
-        quoted(device_id),
+        percent_encode(device_id),
         env!("CARGO_PKG_VERSION")
     );
     if let Some(token) = token.filter(|t| !t.is_empty()) {
-        value.push_str(&format!(", Token=\"{}\"", quoted(token)));
+        value.push_str(&format!(", Token=\"{}\"", percent_encode(token)));
     }
     value
 }
 
-/// Adds the authorization in every form the two servers accept: Jellyfin
-/// reads `Authorization`, Emby `X-Emby-Authorization` and `X-Emby-Token`.
-fn signed(request: RequestBuilder, device_id: &str, token: Option<&str>) -> RequestBuilder {
+/// Adds the authorization. Jellyfin reads only `Authorization` (12.0 removed
+/// the `X-Emby-*` headers, and it warns against sending a token twice); Emby
+/// also gets `X-Emby-Authorization` and `X-Emby-Token`, which it documents.
+fn signed(
+    request: RequestBuilder,
+    device_id: &str,
+    token: Option<&str>,
+    emby: bool,
+) -> RequestBuilder {
     let value = authorization(device_id, token);
-    let request = request
-        .header("Authorization", &value)
-        .header("X-Emby-Authorization", &value);
+    let request = request.header("Authorization", &value);
+    if !emby {
+        return request;
+    }
+    let request = request.header("X-Emby-Authorization", &value);
     match token.filter(|t| !t.is_empty()) {
         Some(token) => request.header("X-Emby-Token", token),
         None => request,
@@ -180,19 +189,36 @@ pub fn authenticate(
     device_id: &str,
     username: &str,
     password: &str,
+    emby: bool,
 ) -> Result<AuthResult, RemoteError> {
     gate.check()?;
     let request = api_client()
         .post(format!("{url}/Users/AuthenticateByName"))
         .header("Accept", "application/json")
         .json(&serde_json::json!({ "Username": username, "Pw": password }));
-    let resp = signed(request, device_id, None)
+    let resp = signed(request, device_id, None, emby)
         .send()
         .map_err(|_| unreachable_at(url))?;
     let body = check_status(resp)?
         .text()
         .map_err(|_| unreachable_at(url))?;
     api::parse_auth(&body)
+}
+
+/// Ends the sign-in on the server, so the token stops working. Errors are
+/// left to the caller to ignore: the source is going away either way.
+pub fn sign_out(gate: &NetworkGate, config: &JellyfinConfig) -> Result<(), RemoteError> {
+    gate.check()?;
+    let request = api_client().post(format!("{}/Sessions/Logout", config.url));
+    let resp = signed(
+        request,
+        &config.device_id,
+        Some(&config.token),
+        is_emby(&config.product),
+    )
+    .send()
+    .map_err(|_| unreachable_at(&config.url))?;
+    check_status(resp).map(|_| ())
 }
 
 pub struct JellyfinBackend {
@@ -218,11 +244,16 @@ impl JellyfinBackend {
         unreachable_at(&self.config.url)
     }
 
+    fn emby(&self) -> bool {
+        is_emby(&self.config.product)
+    }
+
     fn get(&self, path_and_query: &str, client: &reqwest::blocking::Client) -> RequestBuilder {
         signed(
             client.get(format!("{}{path_and_query}", self.config.url)),
             &self.config.device_id,
             Some(&self.config.token),
+            self.emby(),
         )
     }
 
@@ -236,23 +267,38 @@ impl JellyfinBackend {
         check_status(resp)?.text().map_err(|_| self.unreachable())
     }
 
-    /// The user's music libraries. Jellyfin 10.9 moved the list to
-    /// `/UserViews`; Emby and older Jellyfin answer at `/Users/{id}/Views`.
+    /// The user's music libraries. Jellyfin lists them at `/UserViews` (since
+    /// 10.9; the old route is gone in 12), Emby at `/Users/{id}/Views`. Each
+    /// falls back to the other's route on a 404.
     pub fn music_libraries(&self) -> Result<Vec<View>, RemoteError> {
         let user = percent_encode(&self.config.user_id);
-        let body = match self.get_json(&format!("/Users/{user}/Views")) {
-            Err(RemoteError::Http(404)) => self.get_json(&format!("/UserViews?userId={user}"))?,
+        let jellyfin = format!("/UserViews?userId={user}");
+        let emby = format!("/Users/{user}/Views");
+        let (first, second) = if self.emby() {
+            (emby, jellyfin)
+        } else {
+            (jellyfin, emby)
+        };
+        let body = match self.get_json(&first) {
+            Err(RemoteError::Http(404)) => self.get_json(&second)?,
             other => other?,
         };
         api::parse_music_views(&body)
     }
 
+    /// Jellyfin pages items at `/Items?userId=` (12 dropped
+    /// `/Users/{id}/Items`); Emby at `/Users/{id}/Items`.
     fn items_path(&self, library: &str, start: usize, limit: usize) -> String {
+        let user = percent_encode(&self.config.user_id);
+        let base = if self.emby() {
+            format!("/Users/{user}/Items?")
+        } else {
+            format!("/Items?userId={user}&")
+        };
         format!(
-            "/Items?userId={}&ParentId={}&IncludeItemTypes=Audio&Recursive=true\
+            "{base}ParentId={}&IncludeItemTypes=Audio&Recursive=true\
              &Fields=MediaSources,Path,Genres,DateCreated&SortBy=SortName&SortOrder=Ascending\
              &EnableImageTypes=Primary&StartIndex={start}&Limit={limit}",
-            percent_encode(&self.config.user_id),
             percent_encode(library),
         )
     }
@@ -445,7 +491,7 @@ mod tests {
         assert!(before.contains("DeviceId=\"dev\""));
         assert!(!before.contains("Token="));
         assert!(authorization("dev", Some("tok")).ends_with(", Token=\"tok\""));
-        assert!(!authorization("d\"e,v", None).contains("d\"e"));
+        assert!(authorization("d\"e,v", None).contains("DeviceId=\"d%22e%2Cv\""));
     }
 
     #[test]
@@ -460,15 +506,49 @@ mod tests {
             "dev",
             "alice",
             "sesame",
+            false,
         )
         .unwrap();
         assert_eq!(auth.user.id, "u1");
         assert_eq!(auth.access_token, "tok");
         let log = seen.lock().unwrap();
         assert!(log[0].starts_with("POST /Users/AuthenticateByName "));
-        let value = header(&log[0], "X-Emby-Authorization").unwrap();
+        let value = header(&log[0], "Authorization").unwrap();
         assert!(value.contains("DeviceId=\"dev\""));
+        assert!(!value.contains("Token="));
+        assert!(header(&log[0], "X-Emby-Authorization").is_none());
         assert!(header(&log[0], "X-Emby-Token").is_none());
+    }
+
+    #[test]
+    fn emby_also_gets_its_own_headers() {
+        let (port, seen) = fake_server(vec![http(
+            "200 OK",
+            r#"{"User":{"Id":"u1"},"AccessToken":"tok"}"#,
+        )]);
+        authenticate(
+            open_gate(),
+            &format!("http://127.0.0.1:{port}"),
+            "dev",
+            "alice",
+            "sesame",
+            true,
+        )
+        .unwrap();
+        let log = seen.lock().unwrap();
+        assert!(header(&log[0], "Authorization").is_some());
+        assert!(header(&log[0], "X-Emby-Authorization").is_some());
+    }
+
+    #[test]
+    fn sign_out_ends_the_session_with_the_token() {
+        let (port, seen) = fake_server(vec![http("204 No Content", "")]);
+        sign_out(open_gate(), &config_for(port, &[])).unwrap();
+        let log = seen.lock().unwrap();
+        assert!(log[0].starts_with("POST /Sessions/Logout "));
+        assert!(header(&log[0], "Authorization")
+            .unwrap()
+            .contains("Token=\"tok\""));
     }
 
     #[test]
@@ -480,6 +560,7 @@ mod tests {
             "dev",
             "alice",
             "wrong",
+            false,
         )
         .err()
         .unwrap();
@@ -499,22 +580,48 @@ mod tests {
         assert!(header(&log[0], "X-Emby-Token").is_none());
     }
 
+    fn views() -> String {
+        http(
+            "200 OK",
+            r#"{"Items":[{"Id":"m","Name":"Music","CollectionType":"music"}]}"#,
+        )
+    }
+
     #[test]
-    fn music_libraries_fall_back_to_user_views() {
-        let (port, seen) = fake_server(vec![
-            http("404 Not Found", ""),
-            http(
-                "200 OK",
-                r#"{"Items":[{"Id":"m","Name":"Music","CollectionType":"music"}]}"#,
-            ),
-        ]);
+    fn jellyfin_lists_libraries_at_user_views() {
+        let (port, seen) = fake_server(vec![views()]);
         let backend = JellyfinBackend::with_gate(config_for(port, &[]), open_gate());
-        let views = backend.music_libraries().unwrap();
-        assert_eq!(views.len(), 1);
+        assert_eq!(backend.music_libraries().unwrap().len(), 1);
+        let log = seen.lock().unwrap();
+        assert_eq!(log.len(), 1);
+        assert!(log[0].starts_with("GET /UserViews?userId=u1 "));
+        let value = header(&log[0], "Authorization").unwrap();
+        assert!(value.contains("Token=\"tok\""));
+        assert!(header(&log[0], "X-Emby-Token").is_none());
+    }
+
+    #[test]
+    fn emby_lists_libraries_at_user_views_by_path_and_falls_back() {
+        let (port, seen) = fake_server(vec![http("404 Not Found", ""), views()]);
+        let mut config = config_for(port, &[]);
+        config.product = "Emby".into();
+        let backend = JellyfinBackend::with_gate(config, open_gate());
+        assert_eq!(backend.music_libraries().unwrap().len(), 1);
         let log = seen.lock().unwrap();
         assert!(log[0].starts_with("GET /Users/u1/Views "));
+        assert_eq!(header(&log[0], "X-Emby-Token"), Some("tok"));
         assert!(log[1].starts_with("GET /UserViews?userId=u1 "));
-        assert_eq!(header(&log[1], "X-Emby-Token"), Some("tok"));
+    }
+
+    #[test]
+    fn emby_pages_items_under_the_user() {
+        let (port, seen) = fake_server(vec![page(&[], 1), page(&["a"], 1)]);
+        let mut config = config_for(port, &["L1"]);
+        config.product = "Emby".into();
+        let backend = JellyfinBackend::with_gate(config, open_gate());
+        backend.catalog_page(0).unwrap();
+        let log = seen.lock().unwrap();
+        assert!(log[1].starts_with("GET /Users/u1/Items?ParentId=L1&"));
     }
 
     #[test]
@@ -534,7 +641,7 @@ mod tests {
         assert_eq!(second.tracks[0].remote_id, "c");
         assert_eq!(second.next, None);
         let log = seen.lock().unwrap();
-        assert!(log[0].contains("ParentId=L1"));
+        assert!(log[0].starts_with("GET /Items?userId=u1&ParentId=L1&"));
         assert!(log[0].contains("Limit=0"));
         assert!(log[2].contains("ParentId=L1"));
         assert!(log[2].contains("StartIndex=0&Limit=500"));
@@ -560,7 +667,9 @@ mod tests {
         let log = seen.lock().unwrap();
         assert!(log[0].starts_with("GET /Audio/i1/stream?static=true "));
         assert_eq!(header(&log[0], "Range"), Some("bytes=10-"));
-        assert_eq!(header(&log[0], "X-Emby-Token"), Some("tok"));
+        assert!(header(&log[0], "Authorization")
+            .unwrap()
+            .contains("Token=\"tok\""));
     }
 
     #[test]
@@ -600,7 +709,7 @@ mod tests {
             RemoteError::Blocked(GateState::Disabled)
         );
         assert!(matches!(
-            authenticate(gate, "http://127.0.0.1:1", "d", "u", "p"),
+            authenticate(gate, "http://127.0.0.1:1", "d", "u", "p", false),
             Err(RemoteError::Blocked(GateState::Disabled))
         ));
     }

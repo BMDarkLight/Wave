@@ -666,6 +666,7 @@ fn jellyfin_with_password(config_json: &str, password: &str) -> Result<String, S
         &config.device_id,
         &config.username,
         password,
+        jellyfin::is_emby(&config.product),
     )
     .map_err(|e| jellyfin_error(e, &config.url))?;
     if auth.user.id != config.user_id {
@@ -767,7 +768,8 @@ pub async fn jellyfin_sign_in(
         let gate = NetworkGate::global();
         let info = jellyfin::public_info(gate, &url).map_err(|e| jellyfin_error(e, &url))?;
         let device_id = uuid::Uuid::new_v4().simple().to_string();
-        let auth = jellyfin::authenticate(gate, &url, &device_id, &username, &password)
+        let emby = jellyfin::is_emby(info.product());
+        let auth = jellyfin::authenticate(gate, &url, &device_id, &username, &password, emby)
             .map_err(|e| jellyfin_error(e, &url))?;
         let config = jellyfin::JellyfinConfig {
             url: url.clone(),
@@ -831,12 +833,12 @@ pub async fn jellyfin_add_source(
     let rt = runtime()?;
     let task_app = app.clone();
     blocking(move || {
-        let pending = pending_jellyfin()
-            .remove(&session_id)
+        // Kept until the source is stored, so a failed add can be tried again.
+        let (mut config, libraries) = pending_jellyfin()
+            .get(&session_id)
+            .map(|pending| (pending.config.clone(), pending.libraries.clone()))
             .ok_or_else(|| "The sign-in expired. Sign in again.".to_string())?;
-        let mut config = pending.config;
-        config.libraries = pending
-            .libraries
+        config.libraries = libraries
             .into_iter()
             .filter(|library| library_ids.contains(&library.id))
             .collect();
@@ -851,6 +853,7 @@ pub async fn jellyfin_add_source(
             rt.reload_sources(library);
             Ok::<_, String>(id)
         })?;
+        pending_jellyfin().remove(&session_id);
         sync_one_in_background(&task_app, rt, id.clone());
         let row = rt
             .with_library(|library| library.list_remote_sources())?
@@ -898,6 +901,13 @@ pub async fn remove_remote_source(source_id: String, app: AppHandle) -> Result<(
     let enabled = remote_enabled(&app);
     blocking(move || {
         rt.with_library(|library| {
+            let row = library
+                .list_remote_sources()?
+                .into_iter()
+                .find(|row| row.id == source_id);
+            if let Some(row) = row.filter(|row| row.kind == "jellyfin") {
+                sign_out_in_background(&row.config_json);
+            }
             let cached = library.tombstone_remote_source(&source_id)?;
             for uri in cached {
                 delete_cache_files(library, &uri);
@@ -910,6 +920,24 @@ pub async fn remove_remote_source(source_id: String, app: AppHandle) -> Result<(
     let _ = app.emit("remote-status-changed", ());
     let _ = app.emit("library-changed", ());
     Ok(())
+}
+
+/// Revokes a removed Jellyfin or Emby source's token, as Emby's docs ask of a
+/// client that signs out. Best effort: removal never waits on the server.
+fn sign_out_in_background(config_json: &str) {
+    let Ok(config) = serde_json::from_str::<jellyfin::JellyfinConfig>(config_json) else {
+        return;
+    };
+    let spawned = std::thread::Builder::new()
+        .name("wave-remote-sign-out".into())
+        .spawn(move || {
+            if let Err(e) = jellyfin::sign_out(NetworkGate::global(), &config) {
+                tracing::debug!("Signing out of a removed source failed: {e}");
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::debug!("Could not start signing out: {e}");
+    }
 }
 
 fn delete_cache_files(library: &crate::library::Library, uri: &RemoteUri) {
