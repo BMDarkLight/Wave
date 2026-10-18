@@ -939,8 +939,22 @@ export default function MobileSettings({
               </label>
             )}
 
+            {/* Desktop has no media source folders, so remote sources are
+                added here as well as from the Add menu. */}
             {sourceSettings.remote_sources_enabled && embedded && (
-              <RemoteSourceList />
+              <>
+                <div className="mset-row">
+                  <span className="mset-row-label">Remote sources</span>
+                  <button
+                    className="btn-secondary"
+                    type="button"
+                    onClick={() => setSettingUpRemote(true)}
+                  >
+                    Add remote source
+                  </button>
+                </div>
+                <RemoteSourceList />
+              </>
             )}
 
             {(sourceSettings.outside_sourcing_enabled ||
