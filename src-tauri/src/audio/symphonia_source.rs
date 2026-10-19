@@ -305,6 +305,12 @@ impl Iterator for SymphoniaSource {
                 }
                 let decoded = match self.decoder.decode(&packet) {
                     Ok(decoded) => decoded,
+                    // One damaged packet, not a broken stream: drop it and
+                    // play on, as opening the file already does.
+                    Err(symphonia::core::errors::Error::DecodeError(error)) => {
+                        tracing::debug!("Skipped an undecodable packet: {error}");
+                        continue;
+                    }
                     Err(error) => {
                         self.failure = Some(error.to_string());
                         return None;
