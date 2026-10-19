@@ -1542,7 +1542,11 @@ export const updateMediaPosition = (
   position_seconds: number,
   is_playing: boolean,
 ): Promise<void> => {
-  return safeInvoke("update_media_position", { position_seconds, is_playing });
+  // Tauri matches command arguments by their camelCase names.
+  return safeInvoke("update_media_position", {
+    positionSeconds: position_seconds,
+    isPlaying: is_playing,
+  });
 };
 
 /** Clear the OS media session when no track is loaded. */
