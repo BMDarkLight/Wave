@@ -270,7 +270,14 @@ export function usePlaybackController({
     try {
       setError(null);
       const path = await playPrevious();
-      if (!path && selectedPlaylistId && sortedPlaylist.length > 0) {
+      // Only an empty queue falls back to the playlist on screen. At the
+      // start of a queue the current track stays, as it does everywhere else.
+      if (
+        !path &&
+        !hasActiveQueue &&
+        selectedPlaylistId &&
+        sortedPlaylist.length > 0
+      ) {
         const orderedPaths = sortedPlaylist.map((t) => t.path);
         const fromIndex = sortedPlaylist.findIndex(
           (track) => track.path === playbackState.current_path,
@@ -299,7 +306,14 @@ export function usePlaybackController({
     try {
       setError(null);
       const path = await playNext();
-      if (!path && selectedPlaylistId && sortedPlaylist.length > 0) {
+      // The end of a queue is the end, not a cue to start whatever playlist
+      // happens to be on screen.
+      if (
+        !path &&
+        !hasActiveQueue &&
+        selectedPlaylistId &&
+        sortedPlaylist.length > 0
+      ) {
         const orderedPaths = sortedPlaylist.map((t) => t.path);
         const fromIndex = sortedPlaylist.findIndex(
           (track) => track.path === playbackState.current_path,
