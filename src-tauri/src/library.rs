@@ -3110,7 +3110,7 @@ impl Library {
                         MIN(aa.thumb_path) AS cover_art_data_url,
                         MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
                         MIN(t.path) AS cover_track_path
-                     FROM {TRACK_FROM}
+                     FROM {LIBRARY_TRACK_FROM}
                      INNER JOIN listen_stats ls ON ls.track_id = t.id
                      WHERE t.album IS NOT NULL AND TRIM(t.album) != ''
                        AND LOWER(TRIM(t.album)) NOT IN ('unknown album', 'unknown', 'untitled')
@@ -3346,7 +3346,7 @@ impl Library {
                 let mut stmt = connection
                     .prepare(&format!(
                         "SELECT {TRACK_SELECT_COLUMNS}
-                         FROM {TRACK_FROM}
+                         FROM {LIBRARY_TRACK_FROM}
                          WHERE LOWER(TRIM(t.genre)) = LOWER(TRIM(?1))
                            AND LOWER(TRIM(t.artist)) != LOWER(TRIM(?2))
                          LIMIT 16"
@@ -3391,7 +3391,7 @@ impl Library {
             let mut owned_stmt = connection
                 .prepare(&format!(
                     "SELECT {TRACK_SELECT_COLUMNS}
-                     FROM {TRACK_FROM}
+                     FROM {LIBRARY_TRACK_FROM}
                      WHERE LOWER(TRIM(t.artist)) = LOWER(TRIM(?1))
                      LIMIT 3"
                 ))
@@ -3459,7 +3459,7 @@ impl Library {
             let mut stmt = connection
                 .prepare(&format!(
                     "SELECT {TRACK_SELECT_COLUMNS}
-                     FROM {TRACK_FROM}
+                     FROM {LIBRARY_TRACK_FROM}
                      ORDER BY t.indexed_at DESC
                      LIMIT 200"
                 ))
@@ -3639,7 +3639,7 @@ impl Library {
                     MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
                     MIN(t.path) AS cover_track_path,
                     COALESCE(SUM(ls.listen_seconds), 0) AS listen_score
-                 FROM {TRACK_FROM}
+                 FROM {LIBRARY_TRACK_FROM}
                  LEFT JOIN listen_stats ls ON ls.track_id = t.id
                  WHERE t.album IS NOT NULL AND TRIM(t.album) != ''
                  GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
