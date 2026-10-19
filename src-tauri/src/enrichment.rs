@@ -21,7 +21,12 @@ use serde::Deserialize;
 use std::time::Duration;
 
 const REQUEST_TIMEOUT_SECONDS: u64 = 6;
-const USER_AGENT: &str = "Wave/0.1.0 (local artist enrichment)";
+// MusicBrainz and LRCLIB ask for the real version and a way to reach us.
+const USER_AGENT: &str = concat!(
+    "Wave/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/BMDarkLight/Wave)"
+);
 
 /// Spacing between MusicBrainz calls. Their usage policy asks for ~1 req/sec
 /// from unauthenticated clients.

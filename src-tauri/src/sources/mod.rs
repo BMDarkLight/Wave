@@ -28,7 +28,12 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const REQUEST_TIMEOUT_SECONDS: u64 = 8;
-const USER_AGENT: &str = "Wave/0.1.0 (music sourcing)";
+// Says which Wave is asking and where to find it, as the providers ask.
+const USER_AGENT: &str = concat!(
+    "Wave/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/BMDarkLight/Wave)"
+);
 
 /// Shared blocking client for every provider. Separate from the enrichment
 /// client so a slow MusicBrainz call can't consume a sourcing connection.

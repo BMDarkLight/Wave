@@ -22,7 +22,12 @@ use uuid::Uuid;
 
 const MAX_EMBEDDED_ART_BYTES: usize = 8 * 1024 * 1024;
 const ONLINE_LOOKUP_TIMEOUT_SECONDS: u64 = 5;
-const USER_AGENT: &str = "Wave/0.1.0 (local metadata enrichment)";
+// MusicBrainz and LRCLIB ask for the real version and a way to reach us.
+const USER_AGENT: &str = concat!(
+    "Wave/",
+    env!("CARGO_PKG_VERSION"),
+    " (https://github.com/BMDarkLight/Wave)"
+);
 
 fn metadata_client() -> &'static Client {
     static CLIENT: OnceLock<Client> = OnceLock::new();
