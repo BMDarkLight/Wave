@@ -317,7 +317,11 @@ impl Biquad {
 /// lazily rebuilt whenever the config version changes.
 pub struct Equalizer<S> {
     inner: S,
-    filters: [Biquad; 10],
+    /// One bank of band filters per channel. Samples arrive interleaved, and
+    /// a filter fed both channels would mix them and see the wrong rate.
+    filters: Vec<[Biquad; 10]>,
+    /// Which channel the next sample belongs to.
+    channel: usize,
     config: Arc<Mutex<EqConfig>>,
     sr: f32,
     /// Cached enabled flag so we avoid locking on every sample when EQ is off.
@@ -328,20 +332,24 @@ pub struct Equalizer<S> {
     last_version: u64,
 }
 
+/// The ten band filters for one channel.
+fn filter_bank(sr: f32, bands: &[f32; 10]) -> [Biquad; 10] {
+    core::array::from_fn(|i| Biquad::peaking_eq(sr, EQ_BANDS_HZ[i], bands[i], 1.41))
+}
+
 impl<S: Source<Item = f32>> Equalizer<S> {
     pub fn new(source: S, config: Arc<Mutex<EqConfig>>, version: Arc<Mutex<u64>>) -> Self {
         let sr = source.sample_rate() as f32;
+        let channels = usize::from(source.channels().max(1));
         let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
         let enabled = cfg.enabled;
-        let mut filters = core::array::from_fn(|_| Biquad::peaking_eq(sr, 1000.0, 0.0, 1.41));
-        for (i, (freq, gain)) in EQ_BANDS_HZ.iter().zip(cfg.bands.iter()).enumerate() {
-            filters[i] = Biquad::peaking_eq(sr, *freq, *gain, 1.41);
-        }
+        let filters = (0..channels).map(|_| filter_bank(sr, &cfg.bands)).collect();
         drop(cfg);
 
         Self {
             inner: source,
             filters,
+            channel: 0,
             config,
             sr,
             enabled,
@@ -358,8 +366,8 @@ impl<S: Source<Item = f32>> Equalizer<S> {
         self.last_version = v;
         let cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
         self.enabled = cfg.enabled;
-        for (i, (freq, gain)) in EQ_BANDS_HZ.iter().zip(cfg.bands.iter()).enumerate() {
-            self.filters[i] = Biquad::peaking_eq(self.sr, *freq, *gain, 1.41);
+        for bank in &mut self.filters {
+            *bank = filter_bank(self.sr, &cfg.bands);
         }
     }
 }
@@ -370,8 +378,14 @@ impl<S: Source<Item = f32> + Send> Iterator for Equalizer<S> {
     fn next(&mut self) -> Option<f32> {
         let sample = self.inner.next()?;
         self.sync_config();
+        let channel = self.channel;
+        self.channel = (channel + 1) % self.filters.len();
         if self.enabled {
-            Some(self.filters.iter_mut().fold(sample, |s, f| f.process(s)))
+            Some(
+                self.filters[channel]
+                    .iter_mut()
+                    .fold(sample, |s, f| f.process(s)),
+            )
         } else {
             Some(sample)
         }
@@ -396,9 +410,11 @@ impl<S: Source<Item = f32> + Send> Source for Equalizer<S> {
     }
 
     fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
-        for f in self.filters.iter_mut() {
+        for f in self.filters.iter_mut().flatten() {
             f.reset();
         }
+        // `channel` stays as it is: the sources below resume a seek at the
+        // same place in the frame.
         self.inner.try_seek(pos)
     }
 }
@@ -1720,6 +1736,43 @@ mod tests {
         for (a, b) in first_run.iter().zip(second_run.iter()) {
             assert!((a - b).abs() < 1e-5, "expected {a}, got {b}");
         }
+    }
+
+    #[test]
+    fn the_equalizer_filters_each_channel_on_its_own() {
+        const RATE: u32 = 44_100;
+        // A 1 kHz tone on the left, silence on the right, with only the
+        // 1 kHz band boosted by 12 dB.
+        let frames = RATE as usize;
+        let mut stereo = Vec::with_capacity(frames * 2);
+        for i in 0..frames {
+            let t = i as f32 / RATE as f32;
+            stereo.push(0.1 * (2.0 * std::f32::consts::PI * 1_000.0 * t).sin());
+            stereo.push(0.0);
+        }
+        let mut config = EqConfig {
+            enabled: true,
+            ..EqConfig::default()
+        };
+        config.bands[5] = 12.0;
+        let eq = Equalizer::new(
+            SamplesBuffer::new(2, RATE, stereo),
+            Arc::new(Mutex::new(config)),
+            Arc::new(Mutex::new(0)),
+        );
+        let out: Vec<f32> = eq.collect();
+
+        // Past the filter's settling time.
+        let steady = &out[out.len() / 2..];
+        let left_peak = steady.iter().step_by(2).fold(0.0f32, |m, s| m.max(s.abs()));
+        let right_peak = steady
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(right_peak < 1e-4, "left leaked into right: {right_peak}");
+        let gain_db = 20.0 * (left_peak / 0.1).log10();
+        assert!((gain_db - 12.0).abs() < 1.5, "1 kHz gain was {gain_db} dB");
     }
 
     use rodio::buffer::SamplesBuffer;
