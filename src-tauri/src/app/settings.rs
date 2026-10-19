@@ -231,7 +231,18 @@ impl AppSettings {
         }
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize settings: {e}"))?;
-        fs::write(path, json).map_err(|e| format!("Failed to write settings: {e}"))
+        // Saved every few seconds during playback, and the process can be
+        // killed at any point (Android does so freely). Written beside the
+        // file and renamed over it, so a cut-off write never leaves JSON that
+        // loads as all defaults.
+        let mut temp = path.as_os_str().to_owned();
+        temp.push(".tmp");
+        let temp = PathBuf::from(temp);
+        fs::write(&temp, json).map_err(|e| format!("Failed to write settings: {e}"))?;
+        fs::rename(&temp, path).map_err(|e| {
+            let _ = fs::remove_file(&temp);
+            format!("Failed to write settings: {e}")
+        })
     }
 
     /// The pairs the player should keep together: none while coupling is off.
@@ -409,6 +420,31 @@ mod tests {
             settings.active_song_couples(),
             [("a".to_string(), "b".to_string())]
         );
+    }
+
+    #[test]
+    fn saving_replaces_the_file_whole() {
+        let dir = std::env::temp_dir().join(format!("wave-test-settings-{}", uuid::Uuid::new_v4()));
+        let path = dir.join(SETTINGS_FILE);
+        let settings = AppSettings {
+            volume: 0.35,
+            media_folders: vec!["/music".into()],
+            ..AppSettings::default()
+        };
+        settings.save_to_path(&path).unwrap();
+        settings.save_to_path(&path).unwrap();
+
+        let loaded = AppSettings::load_from_path(&path);
+        assert_eq!(loaded.volume, 0.35);
+        assert_eq!(loaded.media_folders, ["/music"]);
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| name.to_string_lossy() != SETTINGS_FILE)
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
