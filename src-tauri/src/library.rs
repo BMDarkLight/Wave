@@ -4374,14 +4374,18 @@ fn upsert_track(conn: &impl Queryable, track: &Track) -> Result<String, String> 
             sample_rate = excluded.sample_rate,
             channels = excluded.channels,
             bit_depth = excluded.bit_depth,
-            lyrics = excluded.lyrics,
-            lyrics_source = excluded.lyrics_source,
+            -- A row read back with the list columns has no lyrics or
+            -- AcoustID, and a file without embedded lyrics says nothing
+            -- about ones fetched online. Neither may wipe what is stored.
+            lyrics_source = CASE WHEN excluded.lyrics IS NULL
+                THEN tracks.lyrics_source ELSE excluded.lyrics_source END,
+            lyrics = COALESCE(excluded.lyrics, tracks.lyrics),
             cover_art_data_url = NULL,
             cover_art_mime = COALESCE(excluded.cover_art_mime, tracks.cover_art_mime),
             cover_art_source = COALESCE(excluded.cover_art_source, tracks.cover_art_source),
-            fingerprint_sha256 = excluded.fingerprint_sha256,
-            acoustid_fingerprint = excluded.acoustid_fingerprint,
-            musicbrainz_recording_id = excluded.musicbrainz_recording_id,
+            fingerprint_sha256 = COALESCE(excluded.fingerprint_sha256, tracks.fingerprint_sha256),
+            acoustid_fingerprint = COALESCE(excluded.acoustid_fingerprint, tracks.acoustid_fingerprint),
+            musicbrainz_recording_id = COALESCE(excluded.musicbrainz_recording_id, tracks.musicbrainz_recording_id),
             file_size = excluded.file_size,
             modified_at = excluded.modified_at,
             indexed_at = excluded.indexed_at,
@@ -5923,6 +5927,34 @@ mod tests {
         let second = sample_track("new-random-id", "/music/song.mp3");
         let second_id = upsert_track(&*connection, &second).expect("second upsert");
         assert_eq!(second_id, "stable-id");
+    }
+
+    #[test]
+    fn adding_a_known_track_to_a_playlist_keeps_its_lyrics() {
+        let library = open_test_library().expect("library");
+        let path = "/music/sung.mp3";
+        let id = {
+            let connection = library.lock_connection().expect("connection");
+            upsert_track(&*connection, &sample_track("sung-id", path)).expect("upsert")
+        };
+        library
+            .set_track_lyrics(&id, "[00:01.00] hello", "lrclib")
+            .expect("lyrics");
+
+        let playlist = library.create_playlist("Mix", None).expect("playlist");
+        library
+            .add_track_to_playlist(&playlist.id, path.to_string())
+            .expect("add to playlist");
+        library
+            .add_track_to_favorites(path.to_string())
+            .expect("favorite");
+
+        let track = library
+            .get_track_details(path)
+            .expect("details")
+            .expect("track");
+        assert_eq!(track.lyrics.as_deref(), Some("[00:01.00] hello"));
+        assert_eq!(track.lyrics_source.as_deref(), Some("lrclib"));
     }
 
     #[test]
