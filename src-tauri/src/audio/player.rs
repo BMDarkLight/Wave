@@ -946,7 +946,24 @@ impl AudioPlayer {
             return;
         }
         std::thread::spawn(move || {
-            let levels = analyze_track_levels(&path).unwrap_or_else(|error| {
+            // A remote URI is not a file the decoder can open. Analyze the
+            // finished cache file, or keep the neutral gain until there is one,
+            // rather than caching made-up levels for the track.
+            let source = if crate::remote::uri::is_remote(&path) {
+                match stream::cache_file_if_complete(&path) {
+                    Some(file) => file,
+                    None => {
+                        normalizer
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .end_analysis();
+                        return;
+                    }
+                }
+            } else {
+                path.clone()
+            };
+            let levels = analyze_track_levels(&source).unwrap_or_else(|error| {
                 tracing::warn!("Level analysis failed for \"{path}\": {error}");
                 super::normalization::AudioLevels {
                     peak: 0.5,
