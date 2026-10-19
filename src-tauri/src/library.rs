@@ -5363,13 +5363,20 @@ fn search_tracks_fts(
 
     let mut hits = Vec::with_capacity(rows.len());
     for (track_id, fts_snip) in rows {
-        let track = connection
+        // The index can hold a row that is no longer library content (a
+        // stream whose lyrics were saved re-indexes it) or no longer exists.
+        // Search shows library tracks only, so those are passed over.
+        let Some(track) = connection
             .query_row(
-                &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM} WHERE t.id = ?1"),
+                &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {LIBRARY_TRACK_FROM} WHERE t.id = ?1"),
                 params![track_id],
                 |row| row_to_track(row, cover_root),
             )
-            .map_err(|e| format!("Failed to load FTS hit track: {e}"))?;
+            .optional()
+            .map_err(|e| format!("Failed to load FTS hit track: {e}"))?
+        else {
+            continue;
+        };
         let matched_fields = matched_fields_for(&track, query);
         let lyrics_snippet = if matched_fields.iter().any(|f| f == "lyrics") {
             track
@@ -5400,7 +5407,7 @@ fn search_tracks_like(
     let pattern = format!("%{}%", escape_like_pattern(query.trim()));
     let mut stmt = connection
         .prepare(&format!(
-            "SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM}
+            "SELECT {TRACK_DETAIL_COLUMNS} FROM {LIBRARY_TRACK_FROM}
              WHERE t.title LIKE ?1 ESCAPE '\\' COLLATE NOCASE
                 OR t.artist LIKE ?1 ESCAPE '\\' COLLATE NOCASE
                 OR t.album LIKE ?1 ESCAPE '\\' COLLATE NOCASE
