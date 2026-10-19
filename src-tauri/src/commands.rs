@@ -4453,10 +4453,15 @@ pub(crate) fn queued_paths(app: &tauri::AppHandle) -> Vec<String> {
 /// Paths that must survive eviction: what is playing, and what is queued.
 fn protected_cache_paths(player: &tauri::State<'_, PlayerState>) -> Vec<String> {
     let guard = lock_player_state(player);
-    match guard.as_ref() {
-        Some(player) => player.queue.tracks().to_vec(),
-        None => Vec::new(),
+    let Some(player) = guard.as_ref() else {
+        return Vec::new();
+    };
+    let mut paths = player.queue.tracks().to_vec();
+    // A track started on its own, outside the queue, plays all the same.
+    if let Some(current) = player.get_current_path() {
+        paths.push(current.to_string_lossy().into_owned());
     }
+    paths
 }
 
 /// Stream a remote result: fetch it into the cache and register it as a
