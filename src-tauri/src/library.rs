@@ -1160,10 +1160,11 @@ impl Library {
     pub fn list_playlists(&self, profile_id: Option<String>) -> Result<Vec<PlaylistInfo>, String> {
         let connection = self.lock_connection()?;
 
-        // For the default Library playlist, count from tracks table
-        // since it's virtual and doesn't rely on playlist_tracks.
+        // For the default Library playlist, count what it lists, since it's
+        // virtual and doesn't rely on playlist_tracks. Stream-only cache rows
+        // and hidden remote rows are in `tracks` but not in the Library.
         let default_count: i64 = connection
-            .query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM library_tracks", [], |row| row.get(0))
             .unwrap_or(0);
 
         let default_id = self.default_playlist_id_cache.get().cloned();
@@ -2219,7 +2220,7 @@ impl Library {
         connection: &Connection,
         playlist_id: &str,
     ) -> Result<Option<PlaylistInfo>, String> {
-        connection
+        let mut info = connection
             .query_row(
                 "SELECT p.id, p.profile_id, p.name, COUNT(pt.track_id), p.created_at, p.updated_at,
                         p.sync_folder
@@ -2231,7 +2232,18 @@ impl Library {
                 row_to_playlist,
             )
             .optional()
-            .map_err(|error| format!("Failed to query playlist: {error}"))
+            .map_err(|error| format!("Failed to query playlist: {error}"))?;
+        // Library has no playlist_tracks rows; count it as list_playlists does.
+        if let Some(info) = info.as_mut().filter(|info| {
+            self.default_playlist_id_cache
+                .get()
+                .is_some_and(|id| *id == info.id)
+        }) {
+            info.track_count = connection
+                .query_row("SELECT COUNT(*) FROM library_tracks", [], |row| row.get(0))
+                .map_err(|error| format!("Failed to count tracks: {error}"))?;
+        }
+        Ok(info)
     }
 
     /// Look up full `Track` records for a list of file paths (used by the queue).
@@ -2347,11 +2359,11 @@ impl Library {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("Failed to read search results: {e}"))?;
         // Library has no playlist_tracks rows, so its count comes from the
-        // tracks table, the same way list_playlists reports it.
+        // library_tracks view, the same way list_playlists reports it.
         if let Some(default_id) = self.default_playlist_id_cache.get() {
             if let Some(library) = rows.iter_mut().find(|p| &p.id == default_id) {
                 library.track_count = connection
-                    .query_row("SELECT COUNT(*) FROM tracks", [], |row| row.get(0))
+                    .query_row("SELECT COUNT(*) FROM library_tracks", [], |row| row.get(0))
                     .unwrap_or(0);
             }
         }
