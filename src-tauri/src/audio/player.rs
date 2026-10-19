@@ -1896,8 +1896,7 @@ impl AudioPlayer {
                 return Err(AudioError::NoTrackLoaded);
             }
             crate::android::audio::exo_play().map_err(AudioError::Decode)?;
-            self.clock.started_at = Some(Instant::now());
-            self.clock.stall_at_start = self.stall_now();
+            self.start_clock();
             self.output_suspended = false;
             return Ok(());
         }
@@ -1908,11 +1907,20 @@ impl AudioPlayer {
                 self.set_soft_fade_target(0.0);
                 sink.play();
                 self.set_soft_fade_target(1.0);
-                self.clock.started_at = Some(Instant::now());
-                self.clock.stall_at_start = self.stall_now();
+                self.start_clock();
                 Ok(())
             }
             None => Err(AudioError::NoTrackLoaded),
+        }
+    }
+
+    /// Set the clock running from where it stopped. Resuming what already
+    /// plays leaves it alone: restarting it there would throw away the time
+    /// played since the last start.
+    fn start_clock(&mut self) {
+        if self.clock.started_at.is_none() {
+            self.clock.started_at = Some(Instant::now());
+            self.clock.stall_at_start = self.stall_now();
         }
     }
 
