@@ -806,7 +806,10 @@ fn handle_request(state: &mut DaemonState, request: DaemonRequest) -> DaemonResp
             DaemonResponse::ok_msg("Queue cleared (current track kept).")
         }
         DaemonRequest::Volume { level } => match state.player.set_volume(level) {
-            Ok(()) => DaemonResponse::ok_msg(format!("Volume set to {:.0}%.", level * 100.0)),
+            Ok(()) => {
+                persist_player_settings(&state.player);
+                DaemonResponse::ok_msg(format!("Volume set to {:.0}%.", level * 100.0))
+            }
             Err(e) => DaemonResponse::err(e.to_string()),
         },
         DaemonRequest::SetDevice { name } => match rebuild_player_on_device(state, &name) {
