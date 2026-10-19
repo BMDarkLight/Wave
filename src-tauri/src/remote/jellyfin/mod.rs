@@ -407,6 +407,11 @@ mod tests {
     use crate::remote::testkit::{fake_server, http};
     use std::io::Read;
 
+    /// A throwaway password: the fake server never checks it.
+    fn test_password() -> String {
+        uuid::Uuid::new_v4().simple().to_string()
+    }
+
     fn open_gate() -> &'static NetworkGate {
         let gate: &'static NetworkGate = Box::leak(Box::new(NetworkGate::new_for_test()));
         gate.set_policy(true, true);
@@ -505,7 +510,7 @@ mod tests {
             &format!("http://127.0.0.1:{port}"),
             "dev",
             "alice",
-            "sesame",
+            &test_password(),
             false,
         )
         .unwrap();
@@ -531,7 +536,7 @@ mod tests {
             &format!("http://127.0.0.1:{port}"),
             "dev",
             "alice",
-            "sesame",
+            &test_password(),
             true,
         )
         .unwrap();
@@ -559,7 +564,7 @@ mod tests {
             &format!("http://127.0.0.1:{port}"),
             "dev",
             "alice",
-            "wrong",
+            &test_password(),
             false,
         )
         .err()
@@ -709,7 +714,14 @@ mod tests {
             RemoteError::Blocked(GateState::Disabled)
         );
         assert!(matches!(
-            authenticate(gate, "http://127.0.0.1:1", "d", "u", "p", false),
+            authenticate(
+                gate,
+                "http://127.0.0.1:1",
+                "d",
+                "u",
+                &test_password(),
+                false
+            ),
             Err(RemoteError::Blocked(GateState::Disabled))
         ));
     }
