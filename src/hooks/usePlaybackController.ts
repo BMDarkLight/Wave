@@ -466,6 +466,8 @@ export function usePlaybackController({
     try {
       setError(null);
       await removeFromQueue(index);
+      // Removing the playing track moves playback on to the next one.
+      await updatePlaybackState();
       await loadQueueTracks();
     } catch (err) {
       setError(formatInvokeError(err, "Failed to remove from queue"));

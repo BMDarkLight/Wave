@@ -3091,12 +3091,63 @@ pub async fn queue_insert_next(
     Ok(())
 }
 
+/// Removing the playing track moves playback on to the one after it, so the
+/// media session and listening stats have to follow, as they do for a skip.
 #[tauri::command]
 pub async fn remove_from_queue(
     index: usize,
-    state: tauri::State<'_, PlayerState>,
+    app: tauri::AppHandle,
 ) -> Result<Option<String>, String> {
-    Ok(lock_player(&state)?.remove_from_queue(index))
+    let task_app = app.clone();
+    let (removed, before, after, paused) = blocking(move || {
+        let following = with_app_player(&task_app, |player| {
+            let current = player.queue.current_index() == Some(index);
+            Ok(current
+                .then(|| player.queue.tracks().get(index + 1).cloned())
+                .flatten())
+        })?;
+        if let Some(following) = following {
+            if let Err(e) = prepare_remote_for_play(&following) {
+                tracing::warn!("{e}");
+            }
+        }
+        with_app_player(&task_app, |player| {
+            let path_of = |player: &AudioPlayer| {
+                player
+                    .get_current_path()
+                    .map(|p| p.to_string_lossy().into_owned())
+            };
+            let before = path_of(player);
+            let removed = player.remove_from_queue(index);
+            Ok((removed, before, path_of(player), player.is_paused()))
+        })
+    })
+    .await?;
+
+    if before != after {
+        match after {
+            Some(path) => {
+                let lookup_app = app.clone();
+                let track = blocking(move || {
+                    let lib = lookup_app.state::<LibraryState>();
+                    let lib = lib.0.lock().map_err(|e| e.to_string())?;
+                    Ok::<_, String>(resolve_track(&lib, &path))
+                })
+                .await?;
+                listen_switch_track(&app, &track.path, ListenEndReason::Skipped);
+                sync_bridge_now_playing(&app, &track);
+                if paused {
+                    app.state::<MediaBridgeState>().0.set_paused(0.0);
+                }
+            }
+            None => {
+                listen_flush_partial(&app);
+                app.state::<MediaBridgeState>().0.set_stopped();
+            }
+        }
+        persist_playback_state(&app);
+    }
+    Ok(removed)
 }
 
 #[tauri::command]
