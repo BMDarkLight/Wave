@@ -291,17 +291,20 @@ mod tests {
     const FRAMES: usize = 3 * 44_100;
     const RATE: usize = 44_100;
 
-    /// A WAV in memory whose reads stop once, for `pause`, halfway through.
+    /// A WAV in memory whose reads stop once halfway through, until the test
+    /// releases them or `pause` runs out. A stall of fixed length could end
+    /// before a busy machine let the test drain the buffer.
     struct StallingReader {
         inner: Cursor<Vec<u8>>,
         len: u64,
         stall_at: u64,
         pause: Duration,
+        release: Arc<AtomicBool>,
         stalled: bool,
     }
 
     impl StallingReader {
-        fn new(pause: Duration) -> Self {
+        fn new(pause: Duration, release: Arc<AtomicBool>) -> Self {
             let bytes = wav_bytes(FRAMES);
             let len = bytes.len() as u64;
             Self {
@@ -309,6 +312,7 @@ mod tests {
                 len,
                 stall_at: len / 2,
                 pause,
+                release,
                 stalled: false,
             }
         }
@@ -318,7 +322,10 @@ mod tests {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             let pos = self.inner.position();
             if !self.stalled && pos >= self.stall_at {
-                std::thread::sleep(self.pause);
+                let until = Instant::now() + self.pause;
+                while !self.release.load(Ordering::SeqCst) && Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
                 self.stalled = true;
             }
             let limit = if self.stalled {
@@ -346,17 +353,31 @@ mod tests {
         }
     }
 
-    fn spawn(pause: Duration) -> (BufferedSource, SharedStall, SharedBuffering) {
+    struct Spawned {
+        source: BufferedSource,
+        stall: SharedStall,
+        buffering: SharedBuffering,
+        /// Ends the reader's stall early.
+        release: Arc<AtomicBool>,
+    }
+
+    fn spawn(pause: Duration) -> Spawned {
+        let release = Arc::new(AtomicBool::new(false));
         let source = SymphoniaSource::from_media_source(
-            Box::new(StallingReader::new(pause)),
+            Box::new(StallingReader::new(pause, release.clone())),
             Some("wav"),
             "test.wav",
         )
         .unwrap();
         let stall: SharedStall = Arc::new(AtomicU64::new(0));
         let buffering: SharedBuffering = Arc::new(AtomicBool::new(false));
-        let buffered = BufferedSource::spawn(source, stall.clone(), buffering.clone());
-        (buffered, stall, buffering)
+        let source = BufferedSource::spawn(source, stall.clone(), buffering.clone());
+        Spawned {
+            source,
+            stall,
+            buffering,
+            release,
+        }
     }
 
     fn decoded() -> Vec<i16> {
@@ -371,10 +392,17 @@ mod tests {
 
     /// Pulls everything, 1000 samples at a time, and checks no batch blocks.
     /// The pause between batches still pulls about ten times faster than
-    /// playback, so the buffer runs dry during the stall. Batches must fit in
-    /// 5 ms, but a busy machine can preempt the test thread itself, so a few
-    /// may run over as long as none comes near the reader's 300 ms stall.
-    fn drain(source: &mut BufferedSource, buffering: &SharedBuffering) -> (Vec<i16>, bool) {
+    /// playback, so the buffer runs dry during the stall, which lasts until
+    /// silence comes out. Batches must fit in 5 ms, but a busy machine can
+    /// preempt the test thread itself, so a few may run over as long as none
+    /// comes near the length of the stall.
+    fn drain(spawned: &mut Spawned) -> (Vec<i16>, bool) {
+        let Spawned {
+            source,
+            buffering,
+            release,
+            ..
+        } = spawned;
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut out = Vec::new();
         let mut buffered_mid_stream = false;
@@ -395,6 +423,7 @@ mod tests {
                     Some(0) => {
                         if !out.is_empty() && buffering.load(Ordering::SeqCst) {
                             buffered_mid_stream = true;
+                            release.store(true, Ordering::SeqCst);
                         }
                     }
                     Some(sample) => {
@@ -416,25 +445,36 @@ mod tests {
         }
     }
 
+    /// Long enough that no test sees it run out unless it never releases it.
+    const STALL: Duration = Duration::from_secs(10);
+
     #[test]
     fn underrun_yields_silence_without_blocking() {
-        let (mut source, _, buffering) = spawn(Duration::from_millis(300));
-        assert_eq!(source.channels(), 2);
-        assert_eq!(source.sample_rate(), RATE as u32);
-        assert_eq!(source.current_frame_len(), None);
-        let (_, buffered_mid_stream) = drain(&mut source, &buffering);
+        let mut spawned = spawn(STALL);
+        assert_eq!(spawned.source.channels(), 2);
+        assert_eq!(spawned.source.sample_rate(), RATE as u32);
+        assert_eq!(spawned.source.current_frame_len(), None);
+        let (_, buffered_mid_stream) = drain(&mut spawned);
         assert!(buffered_mid_stream, "no silence while the reader stalled");
-        assert!(!buffering.load(Ordering::SeqCst));
+        assert!(!spawned.buffering.load(Ordering::SeqCst));
     }
 
     #[test]
     fn stall_counter_grows_during_underrun() {
-        let (mut source, stall, _) = spawn(Duration::from_millis(300));
+        let Spawned {
+            mut source,
+            stall,
+            release,
+            ..
+        } = spawn(STALL);
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut real = 0;
         while real < FRAMES {
             assert!(Instant::now() < deadline, "never got past the stall");
             match source.next() {
+                Some(0) if stall.load(Ordering::SeqCst) > 0 => {
+                    release.store(true, Ordering::SeqCst);
+                }
                 Some(0) | None => {}
                 Some(_) => real += 1,
             }
@@ -444,16 +484,16 @@ mod tests {
 
     #[test]
     fn yields_all_real_samples_in_order() {
-        let (mut source, _, buffering) = spawn(Duration::from_millis(300));
+        let mut spawned = spawn(STALL);
         let expected: Vec<i16> = decoded().into_iter().filter(|&s| s != 0).collect();
-        let (got, _) = drain(&mut source, &buffering);
+        let (got, _) = drain(&mut spawned);
         assert_eq!(got.len(), expected.len());
         assert!(got == expected, "samples differ from the decoded file");
     }
 
     #[test]
     fn seek_drops_stale_samples() {
-        let (mut source, _, _) = spawn(Duration::ZERO);
+        let Spawned { mut source, .. } = spawn(Duration::ZERO);
         let all = decoded();
         for _ in 0..500 {
             source.next();
