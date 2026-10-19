@@ -964,11 +964,12 @@ Gains are in **decibels (dB)** — positive values boost, negative values cut.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `bands` | `number[]` | yes | 10 floating-point gains in dB, one per band |
+| `bands` | `number[]` | yes | 10 floating-point gains in dB, one per band, each from -12 to +12 |
 
 **Returns:** `void`
 
-**Errors:** `"Expected exactly 10 EQ band values"`.
+**Errors:** `"Expected exactly 10 EQ band values"`, or a band that is not a
+finite number or falls outside -12 to +12 dB.
 
 ```typescript
 await invoke("set_eq_bands", {

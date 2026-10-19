@@ -277,7 +277,7 @@ impl AppSettings {
             if !gain.is_finite() {
                 *gain = 0.0;
             }
-            *gain = gain.clamp(-24.0, 24.0);
+            *gain = gain.clamp(-12.0, 12.0);
         }
         if !self.equalizer.crossfade_duration.is_finite() {
             self.equalizer.crossfade_duration = 0.0;

@@ -1580,9 +1580,9 @@ pub async fn set_eq_bands(
         if !gain.is_finite() {
             return Err(format!("EQ band {index} must be a finite number"));
         }
-        if gain.abs() > 24.0 {
+        if gain.abs() > 12.0 {
             return Err(format!(
-                "EQ band {index} gain must be between -24 and +24 dB"
+                "EQ band {index} gain must be between -12 and +12 dB"
             ));
         }
     }
