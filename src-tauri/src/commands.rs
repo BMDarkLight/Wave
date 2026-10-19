@@ -4011,8 +4011,9 @@ pub async fn reset_app(app: tauri::AppHandle) -> Result<ResetAppResult, String> 
         let mut slot = state.0.lock().map_err(|e| e.to_string())?;
         if let Some(player) = slot.as_mut() {
             let _ = player.stop();
-            player.clear_upcoming();
-            player.queue = Default::default();
+            // Emptied in place: shuffle and song couples are settings, and
+            // the reset leaves those alone.
+            player.queue.set_tracks(Vec::new());
         }
     }
     {
