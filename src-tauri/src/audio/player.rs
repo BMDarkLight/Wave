@@ -2021,22 +2021,23 @@ impl AudioPlayer {
 
             // Seeking leaves any sink-appended follow-up track in place. Rebuild so
             // we don't later hear a few ms of the old next and then restart it.
+            // A paused track is rebuilt paused: starting it to pause it again
+            // lets a moment of audio out.
             if self.has_sink_prefetch() {
+                if !was_playing {
+                    return self.load_paused_at(&path, seconds);
+                }
                 self.play(&path)?;
                 if let Some(sink) = self.sink.as_ref() {
                     sink.try_seek(offset)
                         .map_err(|error| AudioError::Decode(format!("Seek failed: {error}")))?;
                 }
                 self.clock.elapsed_before_start = offset;
-                self.clock.started_at = was_playing.then(Instant::now);
+                self.clock.started_at = Some(Instant::now());
                 self.clock.stall_at_start = self.stall_now();
-                if !was_playing {
-                    let _ = self.pause();
-                } else {
-                    // play() already faded in; SoftFade::try_seek reset gain to 0,
-                    // so nudge target to restart the post-seek ramp.
-                    self.set_soft_fade_target(1.0);
-                }
+                // play() already faded in; SoftFade::try_seek reset gain to 0,
+                // so nudge target to restart the post-seek ramp.
+                self.set_soft_fade_target(1.0);
                 return Ok(());
             }
 
@@ -2936,8 +2937,17 @@ impl AudioPlayer {
         if was_current && self.current_path.is_some() {
             let paused = self.is_paused();
             if index < self.queue.tracks().len() {
-                if self.jump_to_queue_index(index).is_ok() && paused {
-                    let _ = self.pause();
+                // A paused player stays paused on the next track, loaded
+                // without being started first.
+                if paused {
+                    let next = self.queue.jump_to(index).map(str::to_string);
+                    if let Some(next) = next {
+                        if let Err(error) = self.load_paused_at(&next, 0.0) {
+                            tracing::warn!("Could not load \"{next}\": {error}");
+                        }
+                    }
+                } else {
+                    let _ = self.jump_to_queue_index(index);
                 }
             } else {
                 let _ = self.stop();

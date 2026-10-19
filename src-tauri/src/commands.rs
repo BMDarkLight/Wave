@@ -3341,22 +3341,30 @@ pub async fn set_output_device(
     new_player.carry_sleep_timer_from(guard);
     let _ = new_player.set_speed(guard.speed());
 
+    // The old device keeps playing until its player is replaced below, so
+    // silence it before the new one starts rather than let both play.
+    if was_playing {
+        let _ = guard.pause();
+    }
+
     // Resume playback best-effort: a failure here (e.g. the file that was
     // playing has since been deleted) shouldn't discard an otherwise-
-    // successful device switch and the queue/EQ we just carried over.
+    // successful device switch and the queue/EQ we just carried over. A
+    // paused track is loaded paused, so none of it is heard on the way.
     if let Some(ref path) = current_path {
-        if was_playing || was_paused {
-            match new_player.play(path) {
-                Ok(()) => {
-                    if position > 0.0 {
-                        let _ = new_player.seek(position);
-                    }
-                    if was_paused {
-                        let _ = new_player.pause();
-                    }
+        let resumed = if was_paused {
+            new_player.load_paused_at(path, position)
+        } else if was_playing {
+            new_player.play(path).map(|()| {
+                if position > 0.0 {
+                    let _ = new_player.seek(position);
                 }
-                Err(e) => tracing::warn!("Resume after output device switch failed: {e}"),
-            }
+            })
+        } else {
+            Ok(())
+        };
+        if let Err(e) = resumed {
+            tracing::warn!("Resume after output device switch failed: {e}");
         }
     }
 

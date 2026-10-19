@@ -1032,7 +1032,7 @@ fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
 }
 
 fn rebuild_player_on_device(state: &mut DaemonState, name: &str) -> Result<(), String> {
-    let old = std::mem::replace(
+    let mut old = std::mem::replace(
         &mut state.player,
         AudioPlayer::new_with_device(name).map_err(|e| e.to_string())?,
     );
@@ -1052,16 +1052,26 @@ fn rebuild_player_on_device(state: &mut DaemonState, name: &str) -> Result<(), S
     let _ = state.player.set_speed(old.speed());
     let vol = old.volume();
     state.player.set_volume(vol).map_err(|e| e.to_string())?;
-    if let Some(path) = old.get_current_path() {
-        let path = path.to_string_lossy().to_string();
-        let pos = old.position_seconds();
-        let was_paused = old.is_paused();
-        state.player.play(&path).map_err(|e| e.to_string())?;
-        if pos > 0.0 {
-            state.player.seek(pos).ok();
-        }
+    let current = old
+        .get_current_path()
+        .map(|path| path.to_string_lossy().to_string());
+    let pos = old.position_seconds();
+    let was_paused = old.is_paused();
+    // The old device keeps playing until its player is gone, so silence it
+    // before the new one starts rather than let both play at once.
+    let _ = old.stop();
+    drop(old);
+    if let Some(path) = current {
         if was_paused {
-            state.player.pause().ok();
+            state
+                .player
+                .load_paused_at(&path, pos)
+                .map_err(|e| e.to_string())?;
+        } else {
+            state.player.play(&path).map_err(|e| e.to_string())?;
+            if pos > 0.0 {
+                state.player.seek(pos).ok();
+            }
         }
     }
     Ok(())
