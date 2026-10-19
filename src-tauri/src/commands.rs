@@ -3650,11 +3650,13 @@ pub async fn import_scanned_audio(
                 processed += 1;
             }
 
+            // `added` already counts the known tracks it linked into the
+            // playlist; ones the playlist held before were not imported.
             let batch_added = {
                 let lib = library.0.lock().map_err(|e| e.to_string())?;
                 let (added, _) =
                     lib.apply_playlist_sync(&playlist_id, &[], &extracted, &link_ids)?;
-                added + link_ids.len() as u32
+                added
             };
             imported += batch_added;
 
@@ -3883,11 +3885,12 @@ pub async fn sync_playlist_folder(
                 }
             }
 
+            // `apply_playlist_sync` counts the known tracks it links in too.
             let batch_added = {
                 let lib = library.0.lock().map_err(|e| e.to_string())?;
                 let (a, _) =
                     lib.apply_playlist_sync(&playlist_id_clone, &[], &extracted, &link_ids)?;
-                a + link_ids.len() as u32
+                a
             };
             added += batch_added;
 
