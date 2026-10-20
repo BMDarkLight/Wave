@@ -146,6 +146,7 @@ While the process runs without a window ("headless"):
 
 - **Nothing may dispatch through the Activity.** On Android, Tauri plugin commands and `app.path()` go through the Activity and panic once it is gone; that panic aborts the process and stops the music. Use `app_paths::app_data_dir` / `app_cache_dir` (resolved once at startup), drive the media session over JNI, and guard plugin calls such as `saf_io::open`.
 - **Reopening** starts a new Activity in the same process. `UiLifecycle` (Java) reports it with a `ui-started` action and `lifecycle::ensure_main_window` builds a new main window for it; the playback tick retries as a fallback. Tauri's own resume event is per window, so with no window it never fires. `UiLifecycle` also unbinds Tauri's `PluginManager` from the destroyed Activity so file dialogs and permission prompts work in the new one.
+- **The rebuilt webview reuses the id `main`.** wry tears an Activity's webview down later, on the UI thread, by that id. Android can destroy the old Activity only after starting the new one, and a teardown that ran after the rebuild would remove the new webview's asset and IPC handlers and leave a blank page. `ensure_main_window` makes a round trip through wry's UI-thread queue first, so any teardown still waiting there runs before the build.
 - **Ending**: dismissing the paused notification, or a media-session stop, exits the process.
 - The playback tick and the media-action worker catch panics, since with no UI they are what keeps auto-advance and the controls working.
 

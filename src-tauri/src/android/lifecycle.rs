@@ -104,12 +104,30 @@ pub fn ensure_main_window(app: &AppHandle) {
     if crate::android::jni::live_activity().is_none() {
         return;
     }
+    // The media worker and the tick can both get here at once; only one of
+    // them may build.
     let now = now_ms();
     let last = REOPEN_REQUESTED_MS.load(Ordering::Acquire);
-    if now.saturating_sub(last) < REOPEN_RETRY_MS {
+    if now.saturating_sub(last) < REOPEN_RETRY_MS
+        || REOPEN_REQUESTED_MS
+            .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
         return;
     }
-    REOPEN_REQUESTED_MS.store(now, Ordering::Release);
+
+    // wry tears down a destroyed Activity's webview later, on the UI thread,
+    // and finds what to remove by webview id. A rebuilt window's webview has
+    // the same id, `main`, so a teardown still queued there would take the new
+    // webview's asset and IPC handlers with it and leave the page blank. That
+    // happens when Android destroys the old Activity only after starting the
+    // new one. This round trip through the same queue waits it out.
+    if let Err(error) = tauri::webview_version() {
+        tracing::debug!("Waiting for the old webview to be torn down: {error}");
+    }
+    if !app.webview_windows().is_empty() {
+        return;
+    }
 
     let Some(config) = app
         .config()
