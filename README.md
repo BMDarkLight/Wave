@@ -448,9 +448,11 @@ wave playback shutdown           # stop the background service
 `wave now` is a live dashboard of what's playing: the track, a progress bar,
 volume, output device, shuffle and repeat, the sleep timer when one is set,
 and the next two tracks. It redraws in place until you press Q or Ctrl-C, and
-`wave now --once` prints a single frame. Press L to show the lyrics of the
-playing track under the status, following along line by line when they are
-synced; `wave now --lyrics` starts with them showing.
+`wave now --once` prints a single frame. Left and Right seek five seconds, Up
+and Down go to the previous and next track, and Space pauses and resumes.
+Press L to show the lyrics of the playing track under the status, following
+along line by line when they are synced; `wave now --lyrics` starts with them
+showing.
 
 ```bash
 wave lyrics show                 # lyrics of the playing track, as text

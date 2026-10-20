@@ -111,6 +111,9 @@ pub enum Commands {
         stop_on_error: bool,
     },
     /// Live now-playing dashboard
+    ///
+    /// Left and Right seek 5 seconds, Up and Down go to the previous and next
+    /// track, Space pauses and resumes, L shows the lyrics and Q exits.
     Now {
         /// Print one frame and exit instead of redrawing
         #[arg(long)]

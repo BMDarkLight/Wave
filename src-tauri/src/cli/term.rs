@@ -32,6 +32,12 @@ static HIDDEN: AtomicBool = AtomicBool::new(false);
 pub enum Key {
     Quit,
     Char(char),
+    Left,
+    Right,
+    Up,
+    Down,
+    /// Space.
+    PlayPause,
     /// The window changed size or focus; draw again straight away.
     Redraw,
 }
@@ -123,7 +129,12 @@ impl Live {
                     Some(Key::Quit)
                 }
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => Some(Key::Quit),
+                KeyCode::Char(' ') => Some(Key::PlayPause),
                 KeyCode::Char(c) => Some(Key::Char(c.to_ascii_lowercase())),
+                KeyCode::Left => Some(Key::Left),
+                KeyCode::Right => Some(Key::Right),
+                KeyCode::Up => Some(Key::Up),
+                KeyCode::Down => Some(Key::Down),
                 _ => continue,
             };
         }
