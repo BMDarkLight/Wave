@@ -454,6 +454,10 @@ Press L to show the lyrics of the playing track under the status, following
 along line by line when they are synced; `wave now --lyrics` starts with them
 showing.
 
+While the CLI plays, your keyboard's media keys and the system's now-playing
+controls (Control Center on macOS, MPRIS on Linux) work too, with or without
+`wave now` open.
+
 ```bash
 wave lyrics show                 # lyrics of the playing track, as text
 wave lyrics show e541104d --timestamps

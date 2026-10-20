@@ -313,6 +313,15 @@ impl DaemonMedia {
     fn clear(&mut self) {
         self.set_playback(false, 0.0, true);
     }
+
+    /// Have the system's media keys and now-playing controls call `on_event`.
+    fn attach(&mut self, on_event: impl Fn(souvlaki::MediaControlEvent) + Send + 'static) {
+        if let Some(controls) = &mut self.controls {
+            if let Err(e) = controls.attach(on_event) {
+                tracing::warn!("Media keys won't reach the daemon: {e:?}");
+            }
+        }
+    }
 }
 
 #[cfg(any(target_os = "windows", target_os = "android"))]
@@ -469,6 +478,8 @@ pub fn run_daemon() {
         listen: ListenTracker::new(),
         listen_skip: false,
     }));
+    #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
+    listen_for_media_keys(&state);
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| {
         eprintln!("Failed to bind playback daemon socket: {e}");
@@ -1347,30 +1358,7 @@ fn handle_menu_event(shared: &SharedState, id: &str) {
         return;
     }
     if id == "next" || id == "prev" {
-        if let Err(e) = prepare_skip(&shared.0, id == "next") {
-            tracing::warn!("Could not skip: {e}");
-            return;
-        }
-        let mut guard = match shared.0.lock() {
-            Ok(g) => g,
-            Err(poisoned) => {
-                tracing::warn!("Daemon mutex was poisoned, recovering");
-                poisoned.into_inner()
-            }
-        };
-        // Mirrors the IPC Next/Previous handlers: without this, the OS Now
-        // Playing widget keeps showing the track that was current before the
-        // tray click, since only manual playback-tick auto-advance re-syncs
-        // metadata otherwise.
-        let result = if id == "next" {
-            guard.player.play_next()
-        } else {
-            guard.player.play_previous()
-        };
-        if let Ok(Some(path)) = result {
-            guard.listen_skip = true;
-            sync_media_for_path(&mut guard, &path);
-        }
+        skip(shared, id == "next");
         return;
     }
     if id == "quit" {
@@ -1399,6 +1387,140 @@ fn handle_menu_event(shared: &SharedState, id: &str) {
             }
         };
         let _ = guard.player.set_sleep_timer(request);
+    }
+}
+
+/// Move to the next or previous track from outside a daemon request: the
+/// tray menu or a media key.
+#[cfg(not(target_os = "android"))]
+fn skip(shared: &SharedState, forward: bool) {
+    if let Err(e) = prepare_skip(&shared.0, forward) {
+        tracing::warn!("Could not skip: {e}");
+        return;
+    }
+    let mut guard = match shared.0.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            tracing::warn!("Daemon mutex was poisoned, recovering");
+            poisoned.into_inner()
+        }
+    };
+    // Mirrors the IPC Next/Previous handlers: without this, the OS Now
+    // Playing widget keeps showing the track that was current before, since
+    // only the playback tick's auto-advance re-syncs metadata otherwise.
+    let result = if forward {
+        guard.player.play_next()
+    } else {
+        guard.player.play_previous()
+    };
+    if let Ok(Some(path)) = result {
+        guard.listen_skip = true;
+        sync_media_for_path(&mut guard, &path);
+    }
+}
+
+/// Act on the system's media keys and its now-playing controls (Control
+/// Center on macOS, MPRIS on Linux). They arrive on a thread the system
+/// owns, so they are passed to one of the daemon's own, which can wait for
+/// the state lock and for a remote track to buffer.
+#[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
+fn listen_for_media_keys(state: &Arc<Mutex<DaemonState>>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .media
+        .attach(move |event| {
+            let _ = tx.send(event);
+        });
+    let shared = SharedState(Arc::clone(state));
+    let spawned = std::thread::Builder::new()
+        .name("wave-media-keys".into())
+        .spawn(move || {
+            for event in rx {
+                handle_media_event(&shared, event);
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!("Media keys won't reach the daemon: {e}");
+    }
+}
+
+/// How far a media seek key moves when the system does not say.
+#[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
+const MEDIA_SEEK_STEP: Duration = Duration::from_secs(5);
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
+fn handle_media_event(shared: &SharedState, event: souvlaki::MediaControlEvent) {
+    use souvlaki::{MediaControlEvent, SeekDirection};
+
+    let seek_by = |direction: SeekDirection, amount: Duration| {
+        let mut guard = match shared.0.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let step = amount.as_secs_f64();
+        let position = guard.player.position_seconds();
+        let to = match direction {
+            SeekDirection::Forward => position + step,
+            SeekDirection::Backward => position - step,
+        };
+        if guard.player.seek(to.max(0.0)).is_ok() {
+            sync_media_playback_state(&mut guard);
+        }
+    };
+
+    match event {
+        MediaControlEvent::Toggle => toggle_play_pause(shared),
+        MediaControlEvent::Play => {
+            let paused = shared
+                .0
+                .lock()
+                .map(|g| !g.player.is_playing())
+                .unwrap_or(false);
+            if paused {
+                toggle_play_pause(shared);
+            }
+        }
+        MediaControlEvent::Pause => {
+            let playing = shared
+                .0
+                .lock()
+                .map(|g| g.player.is_playing())
+                .unwrap_or(false);
+            if playing {
+                toggle_play_pause(shared);
+            }
+        }
+        MediaControlEvent::Next => skip(shared, true),
+        MediaControlEvent::Previous => skip(shared, false),
+        MediaControlEvent::Stop => {
+            // Stops playback; the daemon stays, unlike `wave playback stop`.
+            let mut guard = match shared.0.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let _ = guard.player.stop();
+            guard.media.clear();
+        }
+        MediaControlEvent::Seek(direction) => seek_by(direction, MEDIA_SEEK_STEP),
+        MediaControlEvent::SeekBy(direction, amount) => seek_by(direction, amount),
+        MediaControlEvent::SetPosition(position) => {
+            let mut guard = match shared.0.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if guard.player.seek(position.0.as_secs_f64()).is_ok() {
+                sync_media_playback_state(&mut guard);
+            }
+        }
+        MediaControlEvent::OpenUri(_)
+        | MediaControlEvent::Raise
+        | MediaControlEvent::Quit
+        | MediaControlEvent::SetVolume(_) => {}
+    }
+    if let Ok(mut guard) = shared.0.lock() {
+        sync_media_playback_state(&mut guard);
     }
 }
 
