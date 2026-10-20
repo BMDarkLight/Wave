@@ -2191,6 +2191,7 @@ function App() {
                   loadQueueTracks();
                 });
               }}
+              onPlayPause={handlePlayPause}
               onArtistClick={(name) => {
                 openArtistPage(name);
               }}

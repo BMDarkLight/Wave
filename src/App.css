@@ -4395,6 +4395,12 @@ img.queue-thumb {
   font-size: 18px;
 }
 
+/* Play button for album pages on the narrow layout; desktop plays from the
+   track list. */
+.page-float-play {
+  display: none;
+}
+
 .page-with-float-back > .page-back-btn,
 .page-with-float-back > .page-float-action {
   position: absolute;
@@ -5369,8 +5375,8 @@ div.album-hero-cover {
   }
 
   .album-hero-cover {
-    width: 160px;
-    height: 160px;
+    width: 200px;
+    height: 200px;
   }
 
   /* A centered column sizes the info to its content, which lets a long
@@ -7111,7 +7117,31 @@ div.album-hero-cover {
     right: 12px;
   }
 
+  /* The play button is another plain header icon, in the corner, with the
+     pen moved over to its left. */
+  .playlist-page.page-with-float-back > .page-float-play {
+    position: absolute;
+    top: calc(env(safe-area-inset-top, 0px) + 16px);
+    right: 12px;
+    z-index: 40;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text);
+    font-size: 24px;
+  }
+
+  .playlist-page.page-with-float-back > .page-float-play ~ .page-float-action {
+    right: 56px;
+  }
+
   .playlist-page.page-with-float-back > .page-back-btn:active,
+  .playlist-page.page-with-float-back > .page-float-play:active,
   .playlist-page.page-with-float-back > .page-float-action:active {
     background: rgba(var(--ink), 0.1);
   }

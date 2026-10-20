@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { BiChevronLeft, BiEditAlt } from "react-icons/bi";
+import { BiChevronLeft, BiEditAlt, BiPause, BiPlay } from "react-icons/bi";
 import {
   getAlbumTracks,
   getTrackFullCover,
@@ -94,6 +94,7 @@ interface AlbumPageProps {
   albumArtist: string | null;
   onBack: () => void;
   onPlayTrack: (path: string, tracks: Track[]) => void;
+  onPlayPause: () => void;
   onArtistClick: (artist: string) => void;
   onEditMetadata: (tracks: Track[]) => void;
   onOpenTrackMenu: (track: Track, anchor: ContextMenuAnchor) => void;
@@ -109,6 +110,7 @@ export default function AlbumPage({
   albumArtist,
   onBack,
   onPlayTrack,
+  onPlayPause,
   onArtistClick,
   onEditMetadata,
   onOpenTrackMenu,
@@ -135,6 +137,15 @@ export default function AlbumPage({
 
   const isCurrentTrack = (track: Track) =>
     playbackState.current_path === track.path;
+  // With one of the album's songs loaded, the button pauses and resumes it
+  // instead of starting the album over.
+  const albumLoaded = tracks.some(isCurrentTrack);
+  const albumPlaying = albumLoaded && playbackState.is_playing;
+  const playLabel = albumPlaying
+    ? "Pause"
+    : albumLoaded
+      ? "Play"
+      : "Play album";
 
   const totalDuration = tracks.reduce(
     (sum, t) => sum + (t.duration_seconds || 0),
@@ -177,6 +188,19 @@ export default function AlbumPage({
       >
         <BiChevronLeft />
       </button>
+      {tracks.length > 0 && (
+        <button
+          className="page-float-play"
+          onClick={() =>
+            albumLoaded ? onPlayPause() : onPlayTrack(tracks[0].path, tracks)
+          }
+          type="button"
+          title={playLabel}
+          aria-label={playLabel}
+        >
+          {albumPlaying ? <BiPause /> : <BiPlay />}
+        </button>
+      )}
       {editableTracks.length > 0 && (
         <button
           className="page-float-action"
