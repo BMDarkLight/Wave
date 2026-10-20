@@ -206,12 +206,16 @@ export default function PullToRefresh({
           role="status"
           aria-live="polite"
         >
+          {/* Keyed apart so the message never takes over the icon's span,
+              and with it the rotation the pull left on it. */}
           {message ? (
-            <span className="ptr-message">{message}</span>
+            <span key="message" className="ptr-message">
+              {message}
+            </span>
           ) : refreshing ? (
-            <span className="spinner" aria-label="Refreshing" />
+            <span key="spinner" className="spinner" aria-label="Refreshing" />
           ) : (
-            <span ref={icon} className="ptr-icon">
+            <span key="icon" ref={icon} className="ptr-icon">
               <BiRefresh />
             </span>
           )}
