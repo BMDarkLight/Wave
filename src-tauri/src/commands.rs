@@ -8,7 +8,7 @@
 
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1069,6 +1069,13 @@ pub(crate) fn handle_native_media_action(
             crate::android::lifecycle::ensure_main_window(app);
             Ok(())
         }
+        "open-now-playing" => {
+            // Wave was opened from the media notification or the lock screen.
+            // The page may still be loading, so the request waits for it.
+            OPEN_NOW_PLAYING.store(true, Ordering::Release);
+            let _ = app.emit("open-now-playing", ());
+            Ok(())
+        }
         "suspend" | "unsuspend" => {
             // ExoPlayer held or released output for a transient focus loss.
             let (position, playing) = with_app_player(app, |player| {
@@ -1085,6 +1092,17 @@ pub(crate) fn handle_native_media_action(
             Ok(())
         }
     }
+}
+
+/// Set when the media session opened Wave and Now Playing should show. Held
+/// here because the page may not exist yet when the tap arrives.
+static OPEN_NOW_PLAYING: AtomicBool = AtomicBool::new(false);
+
+/// Whether the media session asked for Now Playing since the page last
+/// checked. Asking clears it.
+#[tauri::command]
+pub fn take_open_now_playing() -> bool {
+    OPEN_NOW_PLAYING.swap(false, Ordering::AcqRel)
 }
 
 /// Push the current shuffle/repeat mode to the OS media bridge (e.g. so the

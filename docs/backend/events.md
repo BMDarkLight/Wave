@@ -223,6 +223,27 @@ await listen("system-theme-changed", async () => {
 
 ---
 
+### `open-now-playing`
+
+Android only. Emitted when Wave is opened from the media notification or the
+player on the lock screen. Call
+[`take_open_now_playing`](./commands.md#take_open_now_playing) to claim the
+request; it also reports a tap that came in before the page had loaded.
+
+| Payload | Type |
+|---------|------|
+| (none) | `()` |
+
+```typescript
+import { listen } from "@tauri-apps/api/event";
+
+await listen("open-now-playing", async () => {
+  if (await invoke<boolean>("take_open_now_playing")) openNowPlaying();
+});
+```
+
+---
+
 ### `update-download-progress`
 
 Emitted while [`download_update`](./commands.md#download_update) runs, at most

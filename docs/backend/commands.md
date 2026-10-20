@@ -1219,6 +1219,20 @@ When the phone switches, Wave emits
 
 ---
 
+### `take_open_now_playing`
+
+Whether the Android media notification or lock screen asked to show Now
+Playing since the page last checked. Asking clears the request. The tap can
+arrive before the page has loaded, so call this once at startup as well as on
+[`open-now-playing`](./events.md#open-now-playing). Always `false` on other
+platforms.
+
+**Arguments:** none
+
+**Returns:** `boolean`
+
+---
+
 ### `set_system_bar_theme`
 
 Match the Android status and navigation bar icons to the page: dark icons for

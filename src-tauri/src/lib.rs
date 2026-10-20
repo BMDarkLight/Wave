@@ -315,6 +315,7 @@ pub fn run() {
             commands::update_media_metadata,
             commands::update_media_position,
             commands::clear_media_session,
+            commands::take_open_now_playing,
             commands::create_playlist,
             commands::set_playlist_sync_folder,
             commands::delete_playlist,

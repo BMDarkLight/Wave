@@ -61,6 +61,13 @@ internal object MediaSessionState {
     internal const val NOTIFICATION_ID = 9401
     internal const val ACTION_SHUFFLE = "app.tauri.mediasession.SHUFFLE"
     internal const val ACTION_REPEAT = "app.tauri.mediasession.REPEAT"
+
+    /**
+     * Set on the intent that opens the app from the notification or the
+     * lock screen, so the app can tell that tap apart from a normal launch.
+     */
+    internal const val EXTRA_FROM_SESSION = "app.tauri.mediasession.FROM_SESSION"
+
     private const val MAX_ARTWORK_SIZE = 512
 
     // A track change arrives as several calls (metadata, play state,
@@ -585,6 +592,7 @@ internal object MediaSessionState {
     private fun launchIntent(ctx: Context): PendingIntent? {
         val intent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName) ?: return null
         intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        intent.putExtra(EXTRA_FROM_SESSION, true)
         return PendingIntent.getActivity(
             ctx, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

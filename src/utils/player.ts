@@ -1555,6 +1555,25 @@ export const clearMediaSession = (): Promise<void> => {
 };
 
 /**
+ * Calls `onRequest` when Wave is opened from the Android media notification
+ * or the lock screen, including a tap that arrived before this page loaded.
+ */
+export const listenToOpenNowPlaying = async (
+  onRequest: () => void,
+): Promise<() => void> => {
+  const take = () => {
+    safeInvoke<boolean>("take_open_now_playing")
+      .then((requested) => {
+        if (requested) onRequest();
+      })
+      .catch(() => {});
+  };
+  const unlisten = await listenTo("open-now-playing", take);
+  take();
+  return unlisten;
+};
+
+/**
  * Listen for OS media control events (play, pause, next, previous, seek).
  * Returns an unlisten function — call it when your component unmounts.
  *

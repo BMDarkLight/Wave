@@ -53,6 +53,7 @@ import {
   takeAndroidCrashReport,
   clearAndroidCrashReport,
   listenToSyncProgress,
+  listenToOpenNowPlaying,
   getRecentlyPlayed,
   getMostPlayed,
   getFileName,
@@ -685,6 +686,41 @@ function App() {
     if (isMobileLayout()) handleOpenMobilePlayer();
     else handleOpenLyrics();
   };
+
+  // Opened from the media notification or the lock screen: show Now
+  // Playing. A page that is still loading has no track to show yet, so the
+  // request waits for one, though not for long: a tap from a minute ago must
+  // not pop the player up when a track is finally picked.
+  const nowPlayingRequestedAt = useRef<number | null>(null);
+  const [nowPlayingRequest, setNowPlayingRequest] = useState(0);
+  const openFromSessionRef = useRef(() => {});
+  openFromSessionRef.current = () => {
+    if (isMobileLayout()) handleOpenMobilePlayer();
+  };
+  useEffect(() => {
+    if (!androidHost) return;
+    let stop: (() => void) | null = null;
+    let cancelled = false;
+    listenToOpenNowPlaying(() => {
+      nowPlayingRequestedAt.current = Date.now();
+      setNowPlayingRequest((count) => count + 1);
+    })
+      .then((unlisten) => {
+        if (cancelled) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, [androidHost]);
+  useEffect(() => {
+    const requestedAt = nowPlayingRequestedAt.current;
+    if (requestedAt === null || !currentTrack) return;
+    nowPlayingRequestedAt.current = null;
+    if (Date.now() - requestedAt <= 15_000) openFromSessionRef.current();
+  }, [nowPlayingRequest, currentTrack]);
 
   const handleOpenMobileSettings = () => {
     setMobileNavOpen(false);

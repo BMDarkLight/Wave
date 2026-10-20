@@ -137,6 +137,7 @@ Notification behaviour:
 - Held for a call (transient focus loss): the session shows paused but the service stays in the foreground. ExoPlayer resumes on its own when the call ends, with no user action, and Android refuses to start a foreground service from the background without one. `WaveExoPlayer` flags the hold to `MediaSessionState` before telling the engine.
 - Paused: the service leaves the foreground right away and the notification stays, now dismissable (Media3's `stopForeground(false)`). Resuming from the notification or a media button gets a foreground-start exemption from the system; if Android still refuses, playback runs and the notification is posted without the foreground guarantee.
 - Dismissing the paused notification, or a stop from a car, headset or the lock screen, pauses, clears the controls and keeps the queue. With the UI closed, the process then exits.
+- Tapping the notification, or the player on the lock screen, opens Wave on Now Playing. The launch intent carries `app.tauri.mediasession.FROM_SESSION`; `UiLifecycle` turns it into an `open-now-playing` action, which Rust holds until the page takes it with `take_open_now_playing`, since the page may still be loading.
 
 ## Closing the app while playing
 
@@ -198,7 +199,7 @@ None of this can be exercised in the browser or by unit tests. After changing an
 
 1. Play, lock the screen, wait for a track change: the next track starts and the notification follows.
 2. Play, swipe Wave out of recents: music continues and the notification stays.
-3. From there, open Wave again: the UI comes back on what is playing.
+3. From there, open Wave again: the UI comes back on what is playing. Do it from the launcher, then again by tapping the notification, which opens Now Playing.
 4. Pause from the notification and swipe the notification away: Wave exits (nothing left in recents or the shade), and the queue is there on the next launch.
 5. Take a call mid-song and hang up: the music resumes by itself.
 6. Unplug headphones or disconnect Bluetooth: playback pauses, and the notification shows paused.
