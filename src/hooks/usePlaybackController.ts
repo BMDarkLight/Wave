@@ -97,6 +97,7 @@ export function usePlaybackController({
     tracks: [],
     current_index: null,
     is_shuffled: false,
+    is_mashup: false,
   });
   const [showQueue, setShowQueue] = useState(false);
   const [queueMenuIndex, setQueueMenuIndex] = useState<number | null>(null);

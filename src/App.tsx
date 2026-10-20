@@ -81,6 +81,10 @@ import { useEqualizerSettings } from "./hooks/useEqualizerSettings";
 import { useTheme } from "./hooks/useTheme";
 import { useAppUpdate } from "./hooks/useAppUpdate";
 import { useSongCoupling } from "./hooks/useSongCoupling";
+import {
+  usePlaylistMashing,
+  type MashSource,
+} from "./hooks/usePlaylistMashing";
 import { useResizablePanels } from "./hooks/useResizablePanels";
 import { useLibrarySearch } from "./hooks/useLibrarySearch";
 import { useStatusFade } from "./hooks/useStatusFade";
@@ -105,6 +109,7 @@ import RemoveFromLibraryDialog from "./components/dialogs/RemoveFromLibraryDialo
 import AddToPlaylistDialog from "./components/dialogs/AddToPlaylistDialog";
 import AddFromLibraryDialog from "./components/dialogs/AddFromLibraryDialog";
 import CoupleSongDialog from "./components/dialogs/CoupleSongDialog";
+import MashupDialog from "./components/dialogs/MashupDialog";
 import CoupleMarker from "./components/CoupleMarker";
 import { SongCouplingContext } from "./utils/songCoupling";
 import CreatePlaylistDialog from "./components/dialogs/CreatePlaylistDialog";
@@ -385,6 +390,7 @@ function App() {
   // and artist pages show tracks that are not in the open playlist.
   const [menuTrack, setMenuTrack] = useState<Track | null>(null);
   const [couplingTrack, setCouplingTrack] = useState<Track | null>(null);
+  const [mashupStart, setMashupStart] = useState<MashSource | null>(null);
   const menuTrackPath = menuTrack?.path ?? null;
   const [menuAnchor, setMenuAnchor] = useState<{
     top: number;
@@ -530,6 +536,21 @@ function App() {
     () => (songCoupling.enabled ? songCoupling.couples : []),
     [songCoupling],
   );
+  const {
+    playlistMashingEnabled,
+    handlePlaylistMashingChange,
+    handleMash,
+    handleReshuffleMashup,
+  } = usePlaylistMashing(setError, async () => {
+    await updatePlaybackState();
+    await loadQueueTracks();
+  });
+  // The shuffle button turns into the mashup's reshuffle button while one
+  // plays, as long as mashing is still on.
+  const reshuffleMashup =
+    playlistMashingEnabled && queueData.is_mashup
+      ? handleReshuffleMashup
+      : undefined;
 
   const {
     isAddingTracks,
@@ -2201,6 +2222,16 @@ function App() {
               menuTrackPath={menuTrackPath}
               refreshKey={browseRefresh}
               playbackState={playbackState}
+              onMash={
+                playlistMashingEnabled
+                  ? () =>
+                      setMashupStart({
+                        kind: "album",
+                        name: viewingAlbum.name,
+                        albumArtist: viewingAlbum.albumArtist,
+                      })
+                  : undefined
+              }
             />
           ) : viewingArtist ? (
             <ArtistPage
@@ -2362,6 +2393,10 @@ function App() {
               onSongCouplingChange={(enabled) =>
                 void handleSongCouplingChange(enabled)
               }
+              playlistMashingEnabled={playlistMashingEnabled}
+              onPlaylistMashingChange={(enabled) =>
+                void handlePlaylistMashingChange(enabled)
+              }
               sourceSettings={sourceSettings}
               onSourceSettingsChange={handleSourceSettingsChange}
               currentOutputDevice={playbackState.output_device_name}
@@ -2439,6 +2474,16 @@ function App() {
                 });
               }}
               onToggleFavorite={handleToggleFavorite}
+              onMash={
+                playlistMashingEnabled && selectedPlaylist
+                  ? () =>
+                      setMashupStart({
+                        kind: "playlist",
+                        id: selectedPlaylist.id,
+                        name: selectedPlaylist.name,
+                      })
+                  : undefined
+              }
             />
           )}
 
@@ -2640,6 +2685,18 @@ function App() {
             />
           )}
 
+          {mashupStart && (
+            <MashupDialog
+              start={mashupStart}
+              playlists={playlists}
+              onClose={() => setMashupStart(null)}
+              onMash={(sources) => {
+                setMashupStart(null);
+                void handleMash(sources);
+              }}
+            />
+          )}
+
           {showAddFromLibrary && (
             <AddFromLibraryDialog
               onClose={closeAddFromLibrary}
@@ -2739,6 +2796,7 @@ function App() {
             onOpenArtist={openArtistPage}
             onOpenAlbum={openAlbumPage}
             onToggleShuffle={handleToggleShuffle}
+            onReshuffleMashup={reshuffleMashup}
             onPrevious={handlePrevious}
             onStop={handleStop}
             onPlayPause={handlePlayPause}
@@ -2789,6 +2847,7 @@ function App() {
               onPrevious={handlePrevious}
               onNext={handleNext}
               onToggleShuffle={handleToggleShuffle}
+              onReshuffleMashup={reshuffleMashup}
               onCycleRepeat={handleCycleRepeat}
               sleepTimer={playbackState.sleep_timer}
               onSetSleepTimer={(request) => void handleSetSleepTimer(request)}
@@ -2885,6 +2944,10 @@ function App() {
               songCouplingEnabled={songCoupling.enabled}
               onSongCouplingChange={(enabled) =>
                 void handleSongCouplingChange(enabled)
+              }
+              playlistMashingEnabled={playlistMashingEnabled}
+              onPlaylistMashingChange={(enabled) =>
+                void handlePlaylistMashingChange(enabled)
               }
               sourceSettings={sourceSettings}
               onSourceSettingsChange={handleSourceSettingsChange}

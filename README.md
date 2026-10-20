@@ -217,6 +217,11 @@ order you choose, like an intro and the track it leads into. It holds with
 shuffle on or off. Turn it on in Settings, then pick **Couple With…** from a
 song's menu.
 
+**Playlist mashing** mixes several albums and playlists into one shuffled
+queue. Turn it on in Settings, press the link button at the top right of an
+album or playlist, and pick the others to mash in. While the mashup plays the
+shuffle button becomes a link; press it to shuffle the mashup again.
+
 A **sleep timer** pauses playback after 15 to 90 minutes, or when the current
 track ends. The volume eases down over the last ten seconds, and resuming
 picks up where it stopped. Set it in the volume and equalizer panel on

@@ -194,6 +194,7 @@ pub(crate) fn persist_playback_state(app: &tauri::AppHandle) {
     settings.last_position_seconds = player.position_seconds();
     settings.last_queue = player.queue.tracks().to_vec();
     settings.last_queue_index = player.queue.current_index();
+    settings.last_queue_mashup = player.queue.is_mashup();
     settings.shuffle = player.queue.is_shuffled();
     settings.repeat = player.repeat.clone();
     let _ = settings.save(app);
@@ -1346,6 +1347,42 @@ pub async fn play_tracks(
     index: usize,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    start_queue(paths, index, false, app).await
+}
+
+/// Shuffle `paths`, the tracks of several albums or playlists, into one
+/// queue marked as a mashup, and play it from the top.
+#[tauri::command]
+pub async fn play_mashup(paths: Vec<String>, app: tauri::AppHandle) -> Result<(), String> {
+    let mut paths = paths;
+    let order = crate::audio::player::random_order(paths.len());
+    let shuffled = order
+        .into_iter()
+        .map(|i| std::mem::take(&mut paths[i]))
+        .collect();
+    start_queue(shuffled, 0, true, app).await
+}
+
+/// Shuffle the mashup that is playing again, keeping the current track.
+#[tauri::command]
+pub async fn reshuffle_mashup(
+    state: tauri::State<'_, PlayerState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    if !lock_player(&state)?.reshuffle_mashup() {
+        return Err("No mashup is playing".to_string());
+    }
+    persist_playback_state(&app);
+    Ok(())
+}
+
+/// Replace the queue with `paths` and play `paths[index]`.
+async fn start_queue(
+    paths: Vec<String>,
+    index: usize,
+    mashup: bool,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     if paths.is_empty() {
         return Err("No tracks to play".to_string());
     }
@@ -1385,6 +1422,9 @@ pub async fn play_tracks(
         prepare_remote_for_play(&first)?;
         with_app_player(&app_clone, |player| {
             player.queue.set_tracks(queue_paths);
+            if mashup {
+                player.queue.mark_mashup();
+            }
             if player.queue.pick(index).is_none() {
                 tracing::warn!("Failed to align queue with play_tracks index {index}");
             }
@@ -1853,6 +1893,26 @@ pub async fn set_auto_lyrics_download(
 ) -> Result<(), String> {
     let mut settings = lock_settings(&settings_state)?;
     settings.auto_lyrics_download = enabled;
+    settings.save(&app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_playlist_mashing_enabled(
+    settings_state: tauri::State<'_, AppSettingsState>,
+) -> Result<bool, String> {
+    let settings = lock_settings(&settings_state)?;
+    Ok(settings.playlist_mashing_enabled)
+}
+
+#[tauri::command]
+pub async fn set_playlist_mashing_enabled(
+    enabled: bool,
+    settings_state: tauri::State<'_, AppSettingsState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut settings = lock_settings(&settings_state)?;
+    settings.playlist_mashing_enabled = enabled;
     settings.save(&app)?;
     Ok(())
 }
@@ -2396,12 +2456,14 @@ pub async fn get_queue(state: tauri::State<'_, PlayerState>) -> Result<QueueStat
             tracks: Vec::new(),
             current_index: None,
             is_shuffled: false,
+            is_mashup: false,
         });
     };
     Ok(QueueStateDto {
         tracks: player.queue.tracks().to_vec(),
         current_index: player.queue.current_index(),
         is_shuffled: player.queue.is_shuffled(),
+        is_mashup: player.queue.is_mashup(),
     })
 }
 
@@ -3193,15 +3255,16 @@ pub async fn get_queue_tracks(
     state: tauri::State<'_, PlayerState>,
     library: tauri::State<'_, LibraryState>,
 ) -> Result<QueueDto, String> {
-    let (paths, current_index, is_shuffled) = {
+    let (paths, current_index, is_shuffled, is_mashup) = {
         let guard = lock_player_state(&state);
         match guard.as_ref() {
             Some(player) => (
                 player.queue.tracks().to_vec(),
                 player.queue.current_index(),
                 player.queue.is_shuffled(),
+                player.queue.is_mashup(),
             ),
-            None => (Vec::new(), None, false),
+            None => (Vec::new(), None, false, false),
         }
     };
 
@@ -3219,6 +3282,7 @@ pub async fn get_queue_tracks(
         tracks,
         current_index,
         is_shuffled,
+        is_mashup,
     })
 }
 

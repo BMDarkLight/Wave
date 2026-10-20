@@ -23,6 +23,7 @@ import {
   BiVolumeLow,
   BiVolumeMute,
 } from "react-icons/bi";
+import MashupButton from "./MashupButton";
 import { armDragDismissGhostClickGuard } from "../hooks/useDragDismiss";
 import Artwork from "./Artwork";
 import WaveformSeek from "./WaveformSeek";
@@ -60,6 +61,7 @@ export default function PlayerBar({
   onOpenArtist,
   onOpenAlbum,
   onToggleShuffle,
+  onReshuffleMashup,
   onPrevious,
   onStop,
   onPlayPause,
@@ -97,6 +99,9 @@ export default function PlayerBar({
   onOpenArtist: (artist: string) => void;
   onOpenAlbum: (album: string, albumArtist: string | null) => void;
   onToggleShuffle: () => void;
+  /** Set while a mashup plays: the shuffle button becomes the mashup's
+   * reshuffle button. */
+  onReshuffleMashup?: () => Promise<void>;
   onPrevious: () => void;
   onStop: () => void;
   onPlayPause: () => void;
@@ -266,14 +271,18 @@ export default function PlayerBar({
       </div>
 
       <div className="player-controls">
-        <button
-          className={`control-btn shuffle-btn ${playbackMode.shuffle ? "active" : ""}`}
-          onClick={onToggleShuffle}
-          type="button"
-          title={playbackMode.shuffle ? "Disable shuffle" : "Enable shuffle"}
-        >
-          <BiShuffle />
-        </button>
+        {onReshuffleMashup ? (
+          <MashupButton onReshuffle={onReshuffleMashup} />
+        ) : (
+          <button
+            className={`control-btn shuffle-btn ${playbackMode.shuffle ? "active" : ""}`}
+            onClick={onToggleShuffle}
+            type="button"
+            title={playbackMode.shuffle ? "Disable shuffle" : "Enable shuffle"}
+          >
+            <BiShuffle />
+          </button>
+        )}
         <button
           className="control-btn desktop-only-control"
           onClick={onPrevious}

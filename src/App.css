@@ -3599,6 +3599,12 @@ img.queue-thumb {
   box-shadow: 0 0 14px rgba(var(--ink), 0.16);
 }
 
+/* While a mashup plays its link stands in for shuffle and spins as the
+   mashup is shuffled again. */
+.mashup-btn.spinning svg {
+  animation: spin 0.6s cubic-bezier(0.45, 0, 0.25, 1);
+}
+
 /* Hovering an off button must not light it up like an on one. */
 .shuffle-btn:hover:not(:disabled):not(.active),
 .repeat-btn:hover:not(:disabled):not(.active) {
@@ -4418,8 +4424,33 @@ img.queue-thumb {
 }
 
 .page-with-float-back > .page-back-btn:hover,
-.page-with-float-back > .page-float-action:hover {
+.page-with-float-back > .page-float-action:hover,
+.page-with-float-back > .page-float-mashup:hover {
   background: rgba(var(--glass-bar), 0.75);
+}
+
+/* Mashup link in the album page's top right corner, a twin of the back
+   arrow in the other one. */
+.page-with-float-back > .page-float-mashup {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(var(--glass-bar), 0.55);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.15s;
 }
 
 .album-hero {
@@ -7140,8 +7171,28 @@ div.album-hero-cover {
     right: 56px;
   }
 
+  /* The mashup link joins the header icons, left of the play button and
+     the pen when there is one. */
+  .playlist-page.page-with-float-back > .page-float-mashup {
+    top: calc(env(safe-area-inset-top, 0px) + 16px);
+    right: 56px;
+    z-index: 40;
+    width: 44px;
+    height: 44px;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    font-size: 22px;
+  }
+
+  .playlist-page.page-with-float-back > .page-float-mashup.beside-pen {
+    right: 100px;
+  }
+
   .playlist-page.page-with-float-back > .page-back-btn:active,
   .playlist-page.page-with-float-back > .page-float-play:active,
+  .playlist-page.page-with-float-back > .page-float-mashup:active,
   .playlist-page.page-with-float-back > .page-float-action:active {
     background: rgba(var(--ink), 0.1);
   }
@@ -7352,13 +7403,15 @@ div.album-hero-cover {
 }
 
 .no-glass .lyrics-close-float,
-.no-glass .page-with-float-back > .page-float-action {
+.no-glass .page-with-float-back > .page-float-action,
+.no-glass .page-with-float-back > .page-float-mashup {
   background: var(--panel-soft);
 }
 
 @media (max-width: 900px) {
   /* The list pages' header icons have no fill to make solid. */
-  .no-glass .playlist-page.page-with-float-back > .page-float-action {
+  .no-glass .playlist-page.page-with-float-back > .page-float-action,
+  .no-glass .playlist-page.page-with-float-back > .page-float-mashup {
     background: transparent;
   }
 }
@@ -8192,6 +8245,22 @@ div.album-hero-cover {
   .mobile-status-fade {
     display: none !important;
   }
+}
+
+/* The mashup picker reuses Couple With...'s switch as its tabs, above the
+   filter instead of below the list. */
+.couple-order.mashup-tabs {
+  margin: 0 0 10px;
+}
+
+.mashup-dialog .modal-actions {
+  align-items: center;
+}
+
+.mashup-picked {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 /* Couple With... reuses the library picker, with a line of explanation and

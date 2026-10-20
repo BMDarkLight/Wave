@@ -29,6 +29,8 @@ pub struct AppSettings {
     pub last_position_seconds: f64,
     pub last_queue: Vec<String>,
     pub last_queue_index: Option<usize>,
+    /// The saved queue is a mashup of several albums or playlists.
+    pub last_queue_mashup: bool,
     pub shuffle: bool,
     pub repeat: RepeatMode,
     // Media folders scanned for music (content:// URIs on Android, paths on desktop).
@@ -102,6 +104,9 @@ pub struct AppSettings {
     /// brings them back.
     #[serde(default)]
     pub song_couples: Vec<SongCouple>,
+    /// Offer to mash albums and playlists together into one shuffled queue.
+    #[serde(default)]
+    pub playlist_mashing_enabled: bool,
     /// Look for a newer release when Wave starts. On Android the new APK is
     /// also downloaded, ready to install. Off leaves a manual check button.
     #[serde(default = "default_auto_update_enabled")]
@@ -165,6 +170,7 @@ impl Default for AppSettings {
             last_position_seconds: 0.0,
             last_queue: Vec::new(),
             last_queue_index: None,
+            last_queue_mashup: false,
             shuffle: false,
             repeat: RepeatMode::Off,
             media_folders: Vec::new(),
@@ -186,6 +192,7 @@ impl Default for AppSettings {
             plex_client_identifier: None,
             song_coupling_enabled: false,
             song_couples: Vec::new(),
+            playlist_mashing_enabled: false,
             auto_update_enabled: default_auto_update_enabled(),
         }
     }

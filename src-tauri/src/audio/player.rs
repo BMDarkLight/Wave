@@ -153,6 +153,29 @@ pub struct Queue {
     /// A new queue nothing has played from yet. It is shuffled and its
     /// couples are put together once the first track is picked.
     fresh: bool,
+    /// The queue mixes several albums or playlists. Replacing the queue ends
+    /// the mashup.
+    mashup: bool,
+}
+
+/// A random order of `0..len`, by Fisher-Yates.
+pub fn random_order(len: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..len).collect();
+    // splitmix64. Each swap needs its own random draw; deriving every j
+    // from one fixed seed reaches only a sliver of the possible orders.
+    let mut state = uuid::Uuid::new_v4().as_u64_pair().0;
+    let mut next_random = move || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    for i in (1..len).rev() {
+        let j = (next_random() % (i as u64 + 1)) as usize;
+        order.swap(i, j);
+    }
+    order
 }
 
 impl Queue {
@@ -163,27 +186,38 @@ impl Queue {
         self.current_index = None;
         self.unshuffled_rank = None;
         self.fresh = true;
+        self.mashup = false;
+    }
+
+    /// Mark the queue just set as a mashup of several albums or playlists.
+    pub fn mark_mashup(&mut self) {
+        self.mashup = true;
+    }
+
+    pub fn is_mashup(&self) -> bool {
+        self.mashup
+    }
+
+    /// Shuffle a mashup again around the current track. A mashup has no
+    /// order of its own to go back to, so with shuffle off none is kept.
+    /// Returns false when the queue is not a mashup.
+    pub fn reshuffle_mashup(&mut self) -> bool {
+        if !self.mashup {
+            return false;
+        }
+        self.fresh = false;
+        self.shuffle_tracks();
+        if !self.shuffle {
+            self.unshuffled_rank = None;
+        }
+        true
     }
 
     /// Fisher-Yates over the whole queue. The current track moves to the
     /// front so every other track is still ahead of it.
     fn shuffle_tracks(&mut self) {
         let len = self.tracks.len();
-        let mut order: Vec<usize> = (0..len).collect();
-        // splitmix64. Each swap needs its own random draw; deriving every j
-        // from one fixed seed reaches only a sliver of the possible orders.
-        let mut state = uuid::Uuid::new_v4().as_u64_pair().0;
-        let mut next_random = move || {
-            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
-        };
-        for i in (1..len).rev() {
-            let j = (next_random() % (i as u64 + 1)) as usize;
-            order.swap(i, j);
-        }
+        let mut order = random_order(len);
         if let Some(idx) = self.current_index {
             if let Some(pos) = order.iter().position(|&v| v == idx) {
                 order.swap(0, pos);
@@ -2913,6 +2947,16 @@ impl AudioPlayer {
         self.sync_preload();
     }
 
+    /// Shuffle the mashup that is playing again. Returns false when the
+    /// queue is not a mashup.
+    pub fn reshuffle_mashup(&mut self) -> bool {
+        let reshuffled = self.queue.reshuffle_mashup();
+        if reshuffled {
+            self.sync_preload();
+        }
+        reshuffled
+    }
+
     pub fn set_song_couples(&mut self, couples: Vec<(String, String)>) {
         self.queue.set_couples(couples);
         self.sync_preload();
@@ -3198,6 +3242,80 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(index_after_first_peek, queue.current_index());
         assert_eq!(queue.current_index(), Some(0));
+    }
+
+    // ── mashup ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn random_order_is_a_permutation() {
+        let mut order = random_order(50);
+        order.sort_unstable();
+        assert_eq!(order, (0..50).collect::<Vec<_>>());
+        assert!(random_order(0).is_empty());
+    }
+
+    #[test]
+    fn a_new_queue_ends_the_mashup() {
+        let mut queue = queue_of(&["a", "b"]);
+        queue.mark_mashup();
+        assert!(queue.is_mashup());
+        queue.set_tracks(vec!["c".to_string()]);
+        assert!(!queue.is_mashup());
+    }
+
+    #[test]
+    fn reshuffle_mashup_keeps_the_current_track_and_every_track() {
+        let paths: Vec<String> = (0..30).map(|i| i.to_string()).collect();
+        let mut queue = Queue::default();
+        queue.set_tracks(paths.clone());
+        queue.mark_mashup();
+        queue.jump(7);
+        queue.next(&RepeatMode::Off);
+
+        assert!(queue.reshuffle_mashup());
+        assert!(queue.is_mashup());
+        assert!(!queue.is_shuffled());
+        assert_eq!(queue.current_index(), Some(0));
+        assert_eq!(queue.tracks()[0], "8");
+        let mut sorted = queue.tracks().to_vec();
+        sorted.sort_unstable_by_key(|p| p.parse::<usize>().unwrap());
+        assert_eq!(sorted, paths);
+    }
+
+    #[test]
+    fn reshuffle_mashup_with_shuffle_off_leaves_no_order_to_restore() {
+        let mut queue = queue_of(&["a", "b", "c", "d", "e", "f"]);
+        queue.mark_mashup();
+        queue.jump(0);
+        queue.reshuffle_mashup();
+        let mixed = queue.tracks().to_vec();
+        // Turning shuffle off afterwards keeps the mashup's order.
+        queue.set_shuffle(false);
+        assert_eq!(queue.tracks(), mixed);
+    }
+
+    #[test]
+    fn reshuffle_mashup_keeps_couples_together() {
+        let paths: Vec<String> = (0..12).map(|i| i.to_string()).collect();
+        let mut queue = Queue::default();
+        queue.set_tracks(paths);
+        queue.mark_mashup();
+        queue.set_couples(vec![("3".into(), "9".into())]);
+        queue.jump(0);
+        for _ in 0..20 {
+            queue.reshuffle_mashup();
+            let at = queue.tracks().iter().position(|p| p == "3").unwrap();
+            assert_eq!(queue.tracks()[at + 1], "9");
+        }
+    }
+
+    #[test]
+    fn reshuffle_mashup_does_nothing_outside_a_mashup() {
+        let mut queue = queue_of(&["a", "b", "c"]);
+        queue.jump(1);
+        assert!(!queue.reshuffle_mashup());
+        assert_eq!(queue.tracks(), ["a", "b", "c"]);
+        assert_eq!(queue.current_index(), Some(1));
     }
 
     // ── set_shuffle / is_shuffled ────────────────────────────────────────

@@ -34,6 +34,7 @@ import {
   BiVolumeLow,
   BiVolumeFull,
 } from "react-icons/bi";
+import MashupButton from "./MashupButton";
 import {
   getTrackFullCover,
   getTrackDetails,
@@ -419,6 +420,9 @@ interface MobileNowPlayingProps {
   onPrevious: () => void;
   onNext: () => void;
   onToggleShuffle: () => void;
+  /** Set while a mashup plays: the shuffle button becomes the mashup's
+   * reshuffle button. */
+  onReshuffleMashup?: () => Promise<void>;
   onCycleRepeat: () => void;
   sleepTimer: SleepTimerStatus;
   onSetSleepTimer: (request: SleepRequest) => void;
@@ -478,6 +482,7 @@ export default function MobileNowPlaying({
   onPrevious,
   onNext,
   onToggleShuffle,
+  onReshuffleMashup,
   onCycleRepeat,
   sleepTimer,
   onSetSleepTimer,
@@ -1267,14 +1272,18 @@ export default function MobileNowPlaying({
       </div>
 
       <div className="mnp-controls">
-        <button
-          className={`control-btn shuffle-btn ${playbackMode.shuffle ? "active" : ""}`}
-          onClick={onToggleShuffle}
-          type="button"
-          title="Shuffle"
-        >
-          <BiShuffle />
-        </button>
+        {onReshuffleMashup ? (
+          <MashupButton onReshuffle={onReshuffleMashup} />
+        ) : (
+          <button
+            className={`control-btn shuffle-btn ${playbackMode.shuffle ? "active" : ""}`}
+            onClick={onToggleShuffle}
+            type="button"
+            title="Shuffle"
+          >
+            <BiShuffle />
+          </button>
+        )}
         <button
           className="control-btn"
           onClick={onPrevious}

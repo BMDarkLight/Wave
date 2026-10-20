@@ -25,6 +25,7 @@ import {
   BiExport,
   BiHeart,
   BiImage,
+  BiLinkAlt,
   BiMinus,
   BiMusic,
   BiPause,
@@ -129,6 +130,7 @@ export default function LibraryTrackList({
   onRemoveFromPlaylist,
   onRemoveFromLibrary,
   onToggleFavorite,
+  onMash,
 }: {
   mainSearchQuery: string;
   onMainSearchQueryChange: (value: string) => void;
@@ -181,6 +183,9 @@ export default function LibraryTrackList({
   onRemoveFromPlaylist: (path: string) => void;
   onRemoveFromLibrary: (path: string) => void;
   onToggleFavorite: (path: string) => void;
+  /** Open the mashup picker with this playlist in it. Left out while
+   * playlist mashing is off. */
+  onMash?: () => void;
 }) {
   const [playlistMenu, setPlaylistMenu] = useState<ContextMenuAnchor | null>(
     null,
@@ -353,6 +358,20 @@ export default function LibraryTrackList({
                 <BiSearch />
               </button>
             )}
+            {!mainSearchQuery.trim() &&
+              onMash &&
+              !isLibrary &&
+              playlist.length > 0 && (
+                <button
+                  className="btn-secondary playlist-mashup-btn"
+                  onClick={onMash}
+                  type="button"
+                  title="Mash up with other playlists or albums"
+                  aria-label="Mash up with other playlists or albums"
+                >
+                  <BiLinkAlt />
+                </button>
+              )}
             {!mainSearchQuery.trim() && ownPlaylist && (
               <button
                 className="btn-secondary"

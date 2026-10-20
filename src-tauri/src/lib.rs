@@ -96,6 +96,9 @@ pub fn run() {
                         let _ = player.queue.jump(idx);
                     }
                 }
+                if settings.last_queue_mashup {
+                    player.queue.mark_mashup();
+                }
             }
             player.set_song_couples(settings.active_song_couples());
             // The saved queue is already in its shuffled order.
@@ -400,6 +403,10 @@ pub fn run() {
             commands::set_song_coupling_enabled,
             commands::couple_songs,
             commands::uncouple_song,
+            commands::get_playlist_mashing_enabled,
+            commands::set_playlist_mashing_enabled,
+            commands::play_mashup,
+            commands::reshuffle_mashup,
             commands::get_glass_effects_enabled,
             commands::set_glass_effects_enabled,
             commands::get_animations_enabled,

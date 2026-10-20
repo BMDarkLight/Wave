@@ -899,6 +899,36 @@ straight away so new couples already play back to back.
 
 ---
 
+### `get_playlist_mashing_enabled` / `set_playlist_mashing_enabled`
+
+| Command | Arguments | Returns |
+|---------|-----------|---------|
+| `get_playlist_mashing_enabled` | none | `boolean` |
+| `set_playlist_mashing_enabled` | `enabled: boolean` | nothing |
+
+Whether album and playlist pages offer to start a mashup. Off by default.
+
+---
+
+### `play_mashup`
+
+**Arguments:** `paths: string[]`, the songs of every album and playlist being mashed
+
+Shuffles `paths` into a new queue marked as a mashup and plays it from the
+top. The queue reports `is_mashup: true` until another command replaces it.
+The flag is saved with the queue and restored at launch.
+
+---
+
+### `reshuffle_mashup`
+
+**Arguments:** none
+
+Shuffles the mashup again around the current track, which keeps playing.
+Fails when the queue is not a mashup.
+
+---
+
 ### `set_shuffle`
 
 **Arguments**

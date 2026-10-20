@@ -9,7 +9,13 @@
  */
 
 import { useEffect, useState } from "react";
-import { BiChevronLeft, BiEditAlt, BiPause, BiPlay } from "react-icons/bi";
+import {
+  BiChevronLeft,
+  BiEditAlt,
+  BiLinkAlt,
+  BiPause,
+  BiPlay,
+} from "react-icons/bi";
 import {
   getAlbumTracks,
   getTrackFullCover,
@@ -103,6 +109,9 @@ interface AlbumPageProps {
   /** Bumped after a metadata edit so the page re-reads the library. */
   refreshKey: number;
   playbackState: PlaybackState;
+  /** Open the mashup picker with this album in it. Left out while playlist
+   * mashing is off. */
+  onMash?: () => void;
 }
 
 export default function AlbumPage({
@@ -118,6 +127,7 @@ export default function AlbumPage({
   menuTrackPath,
   refreshKey,
   playbackState,
+  onMash,
 }: AlbumPageProps) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(true);
@@ -199,6 +209,17 @@ export default function AlbumPage({
           aria-label={playLabel}
         >
           {albumPlaying ? <BiPause /> : <BiPlay />}
+        </button>
+      )}
+      {onMash && tracks.length > 0 && (
+        <button
+          className={`page-float-mashup${editableTracks.length > 0 ? " beside-pen" : ""}`}
+          onClick={onMash}
+          type="button"
+          title="Mash up with other albums or playlists"
+          aria-label="Mash up with other albums or playlists"
+        >
+          <BiLinkAlt />
         </button>
       )}
       {editableTracks.length > 0 && (

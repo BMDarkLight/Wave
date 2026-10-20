@@ -176,6 +176,8 @@ export interface QueueState {
   tracks: string[];
   current_index: number | null;
   is_shuffled: boolean;
+  /** The queue mixes several albums or playlists. */
+  is_mashup: boolean;
 }
 
 export interface PlaybackMode {
@@ -198,6 +200,8 @@ export interface QueueTrackState {
   tracks: Track[];
   current_index: number | null;
   is_shuffled: boolean;
+  /** The queue mixes several albums or playlists. */
+  is_mashup: boolean;
 }
 
 export interface ImportResult {
@@ -239,6 +243,16 @@ export const playTrack = (path: string): Promise<void> => {
 /** Replace the queue with `paths` and start playback at `index`. */
 export const playTracks = (paths: string[], index: number): Promise<void> => {
   return safeInvoke("play_tracks", { paths, index });
+};
+
+/** Shuffle `paths` into one queue marked as a mashup and play it. */
+export const playMashup = (paths: string[]): Promise<void> => {
+  return safeInvoke("play_mashup", { paths });
+};
+
+/** Shuffle the mashup that is playing again, keeping the current track. */
+export const reshuffleMashup = (): Promise<void> => {
+  return safeInvoke("reshuffle_mashup");
 };
 
 export const pauseTrack = (): Promise<void> => {
@@ -1327,6 +1341,14 @@ export interface SongCoupling {
   enabled: boolean;
   couples: SongCouple[];
 }
+
+export const getPlaylistMashingEnabled = (): Promise<boolean> => {
+  return safeInvoke<boolean>("get_playlist_mashing_enabled");
+};
+
+export const setPlaylistMashingEnabled = (enabled: boolean): Promise<void> => {
+  return safeInvoke("set_playlist_mashing_enabled", { enabled });
+};
 
 export const getSongCoupling = (): Promise<SongCoupling> => {
   return safeInvoke<SongCoupling>("get_song_coupling");

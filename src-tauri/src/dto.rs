@@ -90,6 +90,8 @@ pub struct QueueStateDto {
     pub tracks: Vec<String>,
     pub current_index: Option<usize>,
     pub is_shuffled: bool,
+    /// The queue mixes several albums or playlists.
+    pub is_mashup: bool,
 }
 
 /// Queue with full track metadata (for UI display).
@@ -98,6 +100,8 @@ pub struct QueueDto {
     pub tracks: Vec<Track>,
     pub current_index: Option<usize>,
     pub is_shuffled: bool,
+    /// The queue mixes several albums or playlists.
+    pub is_mashup: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

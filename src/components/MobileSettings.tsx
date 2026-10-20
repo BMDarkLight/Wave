@@ -376,6 +376,8 @@ interface MobileSettingsProps {
   onVolumeNormalizationChange: (enabled: boolean) => void;
   songCouplingEnabled: boolean;
   onSongCouplingChange: (enabled: boolean) => void;
+  playlistMashingEnabled: boolean;
+  onPlaylistMashingChange: (enabled: boolean) => void;
   sourceSettings: SourceSettings;
   onSourceSettingsChange: (settings: SourceSettings) => void;
   currentOutputDevice: string;
@@ -426,6 +428,8 @@ export default function MobileSettings({
   onVolumeNormalizationChange,
   songCouplingEnabled,
   onSongCouplingChange,
+  playlistMashingEnabled,
+  onPlaylistMashingChange,
   sourceSettings,
   onSourceSettingsChange,
   currentOutputDevice,
@@ -1271,7 +1275,7 @@ export default function MobileSettings({
 
         <section className="mset-section">
           <h2>
-            <BiLink /> Song coupling
+            <BiLink /> Coupling and mashing
           </h2>
           <div className="mset-card mset-playback-card">
             <label className="mset-gapless-row">
@@ -1286,6 +1290,24 @@ export default function MobileSettings({
                   Link two songs so they always play back to back, in the order
                   you pick, with shuffle on or off. Couple songs from any song's
                   menu.
+                </span>
+              </span>
+            </label>
+            <div className="mset-playback-divider" role="separator" />
+            <label className="mset-gapless-row">
+              <input
+                type="checkbox"
+                checked={playlistMashingEnabled}
+                onChange={(event) =>
+                  onPlaylistMashingChange(event.target.checked)
+                }
+              />
+              <span className="mset-gapless-copy">
+                <span className="mset-gapless-label">Mash playlists</span>
+                <span className="mset-gapless-hint">
+                  Mix albums and playlists into one shuffled queue. Start a
+                  mashup from the link button on any album or playlist, and
+                  press the link in the player to shuffle it again.
                 </span>
               </span>
             </label>
