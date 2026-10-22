@@ -1,6 +1,7 @@
 package app.bmdarklight.wave;
 
 import android.content.Context;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -74,6 +75,8 @@ public final class CrashReporter {
             String body = "Wave soft failure\n"
                     + "When: " + now() + "\n"
                     + "Where: " + where + "\n"
+                    + "App: " + appVersion(context.getApplicationContext()) + "\n"
+                    + "Device: " + device() + "\n"
                     + "Message: " + message + "\n";
             write(context.getApplicationContext(), body);
             Log.e(TAG, where + ": " + message);
@@ -117,6 +120,8 @@ public final class CrashReporter {
         pw.println("Wave " + kind);
         pw.println("When: " + now());
         pw.println("Thread: " + Thread.currentThread().getName());
+        pw.println("App: " + appVersion(app));
+        pw.println("Device: " + device());
         if (error != null) {
             pw.println("Type: " + error.getClass().getName());
             pw.println("Message: " + error.getMessage());
@@ -167,6 +172,20 @@ public final class CrashReporter {
             });
         } catch (Throwable ignored) {
         }
+    }
+
+    private static String appVersion(Context app) {
+        try {
+            return "Wave " + app.getPackageManager()
+                    .getPackageInfo(app.getPackageName(), 0).versionName;
+        } catch (Throwable t) {
+            return "unknown";
+        }
+    }
+
+    private static String device() {
+        return Build.MANUFACTURER + " " + Build.MODEL
+                + ", Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")";
     }
 
     private static String now() {

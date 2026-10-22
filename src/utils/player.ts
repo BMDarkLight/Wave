@@ -1516,6 +1516,11 @@ export const openRepository = (): Promise<void> => {
   return safeInvoke("open_repository");
 };
 
+/** Opens a new GitHub issue filled in with a crash report, for the user to submit. */
+export const openCrashIssue = (report: string): Promise<void> => {
+  return safeInvoke("open_crash_issue", { report });
+};
+
 export const onUpdateProgress = async (
   handler: (progress: UpdateProgress) => void,
 ): Promise<() => void> => {

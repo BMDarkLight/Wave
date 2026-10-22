@@ -2219,6 +2219,12 @@ pub async fn open_repository() -> Result<(), String> {
     blocking(crate::app::updater::open_repository).await
 }
 
+/// Open a GitHub issue prefilled with an Android crash report.
+#[tauri::command]
+pub async fn open_crash_issue(report: String) -> Result<(), String> {
+    blocking(move || crate::app::updater::open_crash_issue(&report)).await
+}
+
 // ── Library / playlist commands ───────────────────────────────────────────────
 
 #[tauri::command]

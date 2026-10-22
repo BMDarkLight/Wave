@@ -33,6 +33,9 @@ const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/BMDarkLight/Wave/
 const RELEASES_PAGE_PREFIX: &str = "https://github.com/BMDarkLight/Wave/releases/";
 const LATEST_RELEASE_PAGE: &str = "https://github.com/BMDarkLight/Wave/releases/latest";
 const REPOSITORY_PAGE: &str = "https://github.com/BMDarkLight/Wave";
+const NEW_ISSUE_PAGE: &str = "https://github.com/BMDarkLight/Wave/issues/new";
+/// GitHub turns away issue links much past 8 KB, so a long report is cut to fit.
+const MAX_ISSUE_QUERY_BYTES: usize = 7000;
 const PROGRESS_EVENT: &str = "update-download-progress";
 const UPDATES_DIR: &str = "updates";
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
@@ -390,6 +393,56 @@ pub fn open_repository() -> Result<(), String> {
     open_url(REPOSITORY_PAGE)
 }
 
+/// Open a new GitHub issue filled in with a crash report. The user reads it
+/// over and submits it in the browser; nothing is sent from here.
+pub fn open_crash_issue(report: &str) -> Result<(), String> {
+    open_url(&crash_issue_url(report))
+}
+
+fn crash_issue_url(report: &str) -> String {
+    let report = report.trim();
+    let field = |name: &str| {
+        report
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let kind = field("Type: ")
+        .map(|t| t.rsplit('.').next().unwrap_or(t))
+        .or_else(|| field("Where: "))
+        .unwrap_or("crash");
+    let mut title = format!("Android crash: {kind}");
+    if let Some(message) = field("Message: ") {
+        let short: String = message.chars().take(100).collect();
+        title.push_str(": ");
+        title.push_str(&short);
+        if short.len() < message.len() {
+            title.push_str("...");
+        }
+    }
+
+    let mut kept = report.chars().count();
+    loop {
+        let mut text: String = report.chars().take(kept).collect();
+        if kept < report.chars().count() {
+            text.push_str("\n[report cut to fit the link]");
+        }
+        let body = format!(
+            "**What were you doing when it happened?**\n\n\n\n**Crash report**\n\n```\n{text}\n```\n"
+        );
+        let query: String = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("title", &title)
+            .append_pair("labels", "bug")
+            .append_pair("body", &body)
+            .finish();
+        if query.len() <= MAX_ISSUE_QUERY_BYTES || kept == 0 {
+            return format!("{NEW_ISSUE_PAGE}?{query}");
+        }
+        kept = kept * 9 / 10;
+    }
+}
+
 #[cfg(target_os = "android")]
 pub(crate) fn open_url(url: &str) -> Result<(), String> {
     crate::android::app_updater::open_url(url)
@@ -501,5 +554,33 @@ mod tests {
         let apk = pick_apk(&release.assets, "arm64-v8a").unwrap();
         assert_eq!(apk.size, 31457280);
         assert_eq!(apk.digest.as_deref(), Some("sha256:abc123"));
+    }
+
+    #[test]
+    fn crash_issue_url_carries_the_report_and_a_title() {
+        let report = "Wave FATAL\nThread: Thread-20\nType: java.lang.RuntimeException\nMessage: MediaMetadataProbe failed\n\n at a.b(c)";
+        let url = url::Url::parse(&crash_issue_url(report)).unwrap();
+        assert!(url.as_str().starts_with(NEW_ISSUE_PAGE));
+        let pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(
+            pairs["title"],
+            "Android crash: RuntimeException: MediaMetadataProbe failed"
+        );
+        assert!(pairs["body"].contains("Thread: Thread-20"));
+        assert!(pairs["body"].contains(" at a.b(c)"));
+    }
+
+    #[test]
+    fn crash_issue_url_cuts_a_long_report_to_fit() {
+        let report = format!(
+            "Wave FATAL\nType: x.Boom\n{}",
+            "at frame (File.java:1)\n".repeat(2000)
+        );
+        let url = crash_issue_url(&report);
+        assert!(url.len() <= NEW_ISSUE_PAGE.len() + 1 + MAX_ISSUE_QUERY_BYTES);
+        assert!(url::Url::parse(&url)
+            .unwrap()
+            .query_pairs()
+            .any(|(k, v)| k == "body" && v.contains("[report cut to fit the link]")));
     }
 }

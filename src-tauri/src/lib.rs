@@ -424,6 +424,7 @@ pub fn run() {
             commands::install_update,
             commands::open_release_page,
             commands::open_repository,
+            commands::open_crash_issue,
             commands::get_close_action,
             commands::set_close_action,
             commands::toggle_close_action,

@@ -9,6 +9,7 @@
  */
 
 import { BiX } from "react-icons/bi";
+import { openCrashIssue } from "../utils/player";
 
 export default function StatusToasts({
   showExitToast,
@@ -47,11 +48,20 @@ export default function StatusToasts({
           <div className="crash-report-card">
             <h2 id="crash-report-title">Wave recovered from a crash</h2>
             <p>
-              A previous launch failed. Copy this report when filing a bug — no
-              adb needed. Dismiss once you have copied it.
+              A previous launch failed. Report it on GitHub, which opens a new
+              issue with this report filled in for you to look over, or copy it.
+              Dismiss once you are done.
             </p>
             <pre className="crash-report-body">{crashReport}</pre>
             <div className="crash-report-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  void openCrashIssue(crashReport).catch(() => {});
+                }}
+              >
+                Report on GitHub
+              </button>
               <button
                 type="button"
                 onClick={() => {
