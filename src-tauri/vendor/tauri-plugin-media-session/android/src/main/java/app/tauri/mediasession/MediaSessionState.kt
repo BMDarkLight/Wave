@@ -110,6 +110,11 @@ internal object MediaSessionState {
     // Output held by a transient audio focus loss (a call, a navigation
     // prompt). The session shows paused, but playback will resume by itself.
     private var transientPause = false
+    // The host's UI is gone and the process runs only for this session. A
+    // pause then keeps the foreground: with no Activity and no foreground
+    // service Android stops the process within a minute or so, and the paused
+    // track goes with it. Dismissing the notification or a stop ends it.
+    private var headless = false
     private var canPrev = false
     private var canNext = false
     private var canSeek = true
@@ -143,9 +148,20 @@ internal object MediaSessionState {
      * foreground service from the background without one. Media3 keeps the
      * foreground for the same reason (it goes by playWhenReady, which stays
      * true through a transient focus loss).
+     *
+     * A paused track also keeps it while the host runs headless, since then
+     * the service is the only thing keeping the process alive.
      */
     @Volatile
     var foregroundWanted = false
+        private set
+
+    /**
+     * True while audio is running or about to resume by itself, so the CPU
+     * has to stay awake. A headless pause keeps the foreground without this.
+     */
+    @Volatile
+    var wakeWanted = false
         private set
 
     fun init(context: Context) {
@@ -178,8 +194,21 @@ internal object MediaSessionState {
     fun setTransientPause(held: Boolean) = main {
         if (transientPause == held) return@main
         transientPause = held
-        foregroundWanted = hasMedia && (isPlaying || transientPause)
+        refreshWanted()
         if (hasMedia) schedulePublish()
+    }
+
+    /** The host's UI went away while the session kept the process, or came back. */
+    fun setHeadless(held: Boolean) = main {
+        if (headless == held) return@main
+        headless = held
+        refreshWanted()
+        if (hasMedia) schedulePublish()
+    }
+
+    private fun refreshWanted() {
+        wakeWanted = hasMedia && (isPlaying || transientPause)
+        foregroundWanted = wakeWanted || (hasMedia && headless)
     }
 
     /**
@@ -216,7 +245,7 @@ internal object MediaSessionState {
         u.artworkUrl?.let { setArtworkUrl(it) }
 
         hasMedia = title.isNotBlank() || artist.isNotBlank()
-        foregroundWanted = hasMedia && (isPlaying || transientPause)
+        refreshWanted()
         if (!hasMedia) {
             stopInternal()
             return
@@ -275,6 +304,7 @@ internal object MediaSessionState {
         publishScheduled = false
         hasMedia = false
         foregroundWanted = false
+        wakeWanted = false
         transientPause = false
 
         // The session object is kept and only deactivated: releasing and
@@ -364,7 +394,7 @@ internal object MediaSessionState {
             publishedMetadataKey = metadataKey
         }
 
-        val notificationKey = "$metadataKey\u0000$isPlaying\u0000$transientPause\u0000$canPrev\u0000$canNext\u0000$shuffleEnabled\u0000$repeatMode"
+        val notificationKey = "$metadataKey\u0000$isPlaying\u0000$transientPause\u0000$headless\u0000$canPrev\u0000$canNext\u0000$shuffleEnabled\u0000$repeatMode"
         if (notificationKey == publishedNotificationKey) return
         publishedNotificationKey = notificationKey
         MediaSessionCleanupService.publish(ctx, buildNotification(ctx, s, art), foregroundWanted)
@@ -442,13 +472,25 @@ internal object MediaSessionState {
 
         // Shuffle and repeat sit on the outer edges so previous / play / next
         // keep their places and are the three shown in the compact view.
-        actions.add(
-            NotificationCompat.Action(
-                if (shuffleEnabled) R.drawable.ic_media_shuffle_on else R.drawable.ic_media_shuffle,
-                "Shuffle",
-                actionIntent(ctx, "shuffle", RC_SHUFFLE)
+        if (headless && !isPlaying && !transientPause) {
+            // Paused with the app closed, the notification stays in the
+            // foreground and before Android 13 cannot be swiped away. Close
+            // takes shuffle's place so it can still be ended from the shade.
+            actions.add(
+                NotificationCompat.Action(
+                    android.R.drawable.ic_menu_close_clear_cancel, "Close",
+                    actionIntent(ctx, "dismiss", RC_DISMISS)
+                )
             )
-        )
+        } else {
+            actions.add(
+                NotificationCompat.Action(
+                    if (shuffleEnabled) R.drawable.ic_media_shuffle_on else R.drawable.ic_media_shuffle,
+                    "Shuffle",
+                    actionIntent(ctx, "shuffle", RC_SHUFFLE)
+                )
+            )
+        }
         if (canPrev) {
             actions.add(
                 NotificationCompat.Action(

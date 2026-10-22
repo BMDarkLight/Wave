@@ -54,6 +54,12 @@ object MediaSessionBridge {
         MediaSessionState.setTransientPause(held)
     }
 
+    /** Called when the host's UI is destroyed while playback keeps the process, and when it is back. */
+    @JvmStatic
+    fun setHeadless(held: Boolean) {
+        MediaSessionState.setHeadless(held)
+    }
+
     @JvmStatic
     fun clear() {
         MediaSessionState.stop()

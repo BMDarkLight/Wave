@@ -43,6 +43,7 @@
     public static void updateSession(java.lang.String);
     public static void updateTimeline(double, double, double);
     public static void clearSession();
+    public static void setHeadless(boolean);
     public static void shutdownSessionNow();
     private static native void nativeOnMediaAction(java.lang.String);
 }

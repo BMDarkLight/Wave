@@ -69,6 +69,15 @@ public final class MediaNativeBridge {
         }
     }
 
+    /** The UI was destroyed while playback kept the process alive, or is back. */
+    public static void setHeadless(boolean headless) {
+        try {
+            MediaSessionBridge.setHeadless(headless);
+        } catch (Throwable t) {
+            Log.w(TAG, "setHeadless failed: " + t.getMessage());
+        }
+    }
+
     /** Remove the notification and stop the service synchronously, before exit. */
     public static void shutdownSessionNow() {
         try {

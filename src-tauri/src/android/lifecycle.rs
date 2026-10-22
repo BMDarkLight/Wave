@@ -17,6 +17,8 @@
 //! The process then runs "headless": engine, media session and notification,
 //! no window. From there:
 //! - Opening Wave again starts a new Activity, which gets a new main window.
+//! - Pausing keeps the media service in the foreground, since it is all that
+//!   holds the process now; without it Android ends the process soon after.
 //! - Dismissing the paused notification, or a stop from Bluetooth, ends the
 //!   process, since nothing is left for it to do.
 //!
@@ -53,6 +55,7 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent) {
             if code.is_none() && commands::is_playback_active(app) {
                 tracing::info!("UI closed while playing, keeping playback alive");
                 HEADLESS.store(true, Ordering::Release);
+                crate::android::media_bridge::session_set_headless(true);
                 api.prevent_exit();
             }
         }
@@ -98,6 +101,7 @@ pub fn ensure_main_window(app: &AppHandle) {
     if !app.webview_windows().is_empty() {
         // The rebuilt window is up; back to normal.
         HEADLESS.store(false, Ordering::Release);
+        crate::android::media_bridge::session_set_headless(false);
         return;
     }
     // The Activity has to exist before a window can attach to it.

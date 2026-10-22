@@ -252,6 +252,21 @@ pub fn session_shutdown_now() {
     });
 }
 
+/// Tell the session the UI is gone while playback keeps the process, or is
+/// back. While headless a pause keeps the foreground service, which is then
+/// the only thing keeping the process alive.
+pub fn session_set_headless(headless: bool) {
+    call_bridge(|env, class| {
+        env.call_static_method(
+            class,
+            "setHeadless",
+            "(Z)V",
+            &[JValue::Bool(headless.into())],
+        )?;
+        Ok(())
+    });
+}
+
 /// Take down the session's notification and foreground service.
 pub fn session_clear() {
     call_bridge(|env, class| {

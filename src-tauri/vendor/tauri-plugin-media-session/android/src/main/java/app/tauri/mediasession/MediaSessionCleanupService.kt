@@ -24,6 +24,9 @@ import androidx.core.content.ContextCompat
  *   dismissable straight away (Media3 does the same with
  *   `stopForeground(false)`). Resuming from the notification or a media button
  *   comes with a foreground-start exemption from the system.
+ * - Paused with the host's UI gone: stays in the foreground without the wake
+ *   lock. Nothing else holds the process then, and Android would end it, and
+ *   the paused track, shortly after leaving the foreground.
  * - Held for a call: stays in the foreground, because the resume afterwards
  *   has no user action behind it and would not be allowed to start it again.
  * - Task swiped away: playback keeps going if something is playing; otherwise
@@ -170,7 +173,7 @@ class MediaSessionCleanupService : Service() {
         pending = notification
         if (foreground) {
             enterForeground(notification)
-            acquireWakeLock()
+            if (MediaSessionState.wakeWanted) acquireWakeLock() else releaseWakeLock()
             return
         }
 
