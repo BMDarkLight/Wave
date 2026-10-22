@@ -150,6 +150,9 @@ import {
 import "./App.css";
 import "./touch-hover.css";
 
+/** How long Wave has to be out of sight before coming back resyncs folders. */
+const RESYNC_AFTER_AWAY_MS = 30 * 1000;
+
 function App() {
   useSoftKeyboard();
   const remoteStatus = useRemoteStatus();
@@ -885,6 +888,36 @@ function App() {
       loadPlaylists().catch(() => {});
     },
   });
+
+  // Background playback keeps Wave's process, and often the page, alive for
+  // days on Android, so the launch sync above may not run again for a long
+  // time. Catch up whenever Wave comes back after a while, so moved or deleted
+  // files drop out instead of failing on play.
+  const folderSyncOnReturn = useRef(() => Promise.resolve());
+  useEffect(() => {
+    folderSyncOnReturn.current = () => syncFolderPlaylists(playlists, true);
+  });
+  useEffect(() => {
+    if (!androidHost) return;
+    let hiddenAt = 0;
+    let running = false;
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now();
+        return;
+      }
+      if (!hiddenAt || running) return;
+      const away = Date.now() - hiddenAt;
+      hiddenAt = 0;
+      if (away < RESYNC_AFTER_AWAY_MS) return;
+      running = true;
+      folderSyncOnReturn.current().finally(() => {
+        running = false;
+      });
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [androidHost]);
 
   const {
     lyricsPanelTrack,
