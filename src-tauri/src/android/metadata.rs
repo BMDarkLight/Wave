@@ -165,7 +165,16 @@ pub fn probe_content_uri(_app: &AppHandle, uri: &str) -> Result<UriProbeResult, 
     // whole result and a library scan runs the app out of memory.
     let json = env
         .with_local_frame(16, |env| -> jni::errors::Result<Result<String, String>> {
-            Ok(call_probe(env, &activity_obj, trimmed))
+            let result = call_probe(env, &activity_obj, trimmed);
+            // When Java throws, the jni call returns Err with the exception
+            // still pending, so the checks in call_probe never run. Left
+            // pending it kills this thread later as an uncaught exception,
+            // which is how a moved or deleted file crashed playback.
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+            }
+            Ok(result)
         })
         .map_err(|e| format!("MediaMetadataProbe: local frame: {e}"))??;
 

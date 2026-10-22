@@ -46,7 +46,15 @@ impl ExoHandle {
         // This thread stays permanently JNI-attached, so local refs made in
         // `f` are only freed when this frame pops.
         env.with_local_frame(16, |env| -> jni::errors::Result<Result<R, String>> {
-            Ok(f(env))
+            let result = f(env);
+            // A call in `f` that threw returns Err before its own check runs
+            // and leaves the exception pending, which would later surface as
+            // an uncaught crash on this thread.
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+            }
+            Ok(result)
         })
         .map_err(|e| format!("local frame: {e}"))?
     }
