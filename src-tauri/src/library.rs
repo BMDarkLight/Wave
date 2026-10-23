@@ -5411,20 +5411,34 @@ fn search_tracks_fts(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to read FTS hits: {e}"))?;
 
-    let mut hits = Vec::with_capacity(rows.len());
-    for (track_id, fts_snip) in rows {
-        // The index can hold a row that is no longer library content (a
-        // stream whose lyrics were saved re-indexes it) or no longer exists.
-        // Search shows library tracks only, so those are passed over.
-        let Some(track) = connection
-            .query_row(
-                &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {LIBRARY_TRACK_FROM} WHERE t.id = ?1"),
-                params![track_id],
+    // One query for every hit rather than one per hit. The index can hold a
+    // row that is no longer library content (a stream whose lyrics were saved
+    // re-indexes it) or no longer exists. Search shows library tracks only,
+    // so those come back missing and are passed over.
+    let mut by_id: std::collections::HashMap<String, Track> =
+        std::collections::HashMap::with_capacity(rows.len());
+    if !rows.is_empty() {
+        let marks = vec!["?"; rows.len()].join(",");
+        let mut stmt = connection
+            .prepare(&format!(
+                "SELECT {TRACK_DETAIL_COLUMNS} FROM {LIBRARY_TRACK_FROM} WHERE t.id IN ({marks})"
+            ))
+            .map_err(|e| format!("Failed to prepare FTS hit lookup: {e}"))?;
+        let found = stmt
+            .query_map(
+                rusqlite::params_from_iter(rows.iter().map(|(id, _)| id)),
                 |row| row_to_track(row, cover_root),
             )
-            .optional()
-            .map_err(|e| format!("Failed to load FTS hit track: {e}"))?
-        else {
+            .map_err(|e| format!("Failed to load FTS hit tracks: {e}"))?;
+        for track in found {
+            let track = track.map_err(|e| format!("Failed to load FTS hit track: {e}"))?;
+            by_id.insert(track.id.clone(), track);
+        }
+    }
+
+    let mut hits = Vec::with_capacity(by_id.len());
+    for (track_id, fts_snip) in rows {
+        let Some(track) = by_id.remove(&track_id) else {
             continue;
         };
         let matched_fields = matched_fields_for(&track, query);
@@ -5445,7 +5459,7 @@ fn search_tracks_fts(
     }
     sort_search_hits(&mut hits);
     hits.truncate(limit as usize);
-    Ok(hits)
+    Ok(hits.into_iter().map(SearchHitDto::without_lyrics).collect())
 }
 
 fn search_tracks_like(
@@ -5501,7 +5515,7 @@ fn search_tracks_like(
         })
         .collect();
     sort_search_hits(&mut hits);
-    Ok(hits)
+    Ok(hits.into_iter().map(SearchHitDto::without_lyrics).collect())
 }
 
 #[cfg(test)]

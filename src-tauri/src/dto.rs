@@ -172,6 +172,17 @@ pub struct SearchHitDto {
     pub lyrics_snippet: Option<String>,
 }
 
+impl SearchHitDto {
+    /// Drop the full lyrics and AcoustID fingerprint once matching is done.
+    /// The results list never shows them, and up to 200 hits went over IPC
+    /// on every keystroke carrying both.
+    pub fn without_lyrics(mut self) -> Self {
+        self.track.lyrics = None;
+        self.track.acoustid_fingerprint = None;
+        self
+    }
+}
+
 /// Equalizer settings returned by `get_eq_settings`.
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct EqSettingsDto {
