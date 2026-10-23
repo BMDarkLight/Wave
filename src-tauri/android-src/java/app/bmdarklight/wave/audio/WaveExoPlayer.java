@@ -1062,8 +1062,17 @@ public final class WaveExoPlayer {
         final Object lock = new Object();
         final Throwable[] error = new Throwable[1];
         final boolean[] done = new boolean[1];
+        // Set when the caller stops waiting before the action started. The
+        // caller has already reported a failure and moved on (to the next
+        // track, say), so running the action late would undo that.
+        final boolean[] abandoned = new boolean[1];
         synchronized (lock) {
             mainHandler.post(() -> {
+                synchronized (lock) {
+                    if (abandoned[0]) {
+                        return;
+                    }
+                }
                 try {
                     action.run();
                 } catch (Throwable t) {
@@ -1080,11 +1089,13 @@ public final class WaveExoPlayer {
                 while (!done[0]) {
                     long remaining = deadline - System.currentTimeMillis();
                     if (remaining <= 0) {
+                        abandoned[0] = true;
                         throw new RuntimeException("Timed out waiting for ExoPlayer main-thread work");
                     }
                     lock.wait(remaining);
                 }
             } catch (InterruptedException e) {
+                abandoned[0] = true;
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("Interrupted waiting for ExoPlayer main-thread work", e);
             }
