@@ -1805,16 +1805,20 @@ fn write_daemon_state(port: u16, token: &str) -> Result<(), String> {
         token: token.to_string(),
     };
     let json = serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| e.to_string())?;
 
+    // The file holds the token, so it is created owner-only. Writing it first
+    // and tightening it after left the token readable to other users for a
+    // moment, and an old file would keep whatever mode it had.
+    let _ = std::fs::remove_file(&path);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| e.to_string())?;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
-
-    Ok(())
+    let mut file = options.open(&path).map_err(|e| e.to_string())?;
+    file.write_all(json.as_bytes()).map_err(|e| e.to_string())
 }
 
 fn remove_daemon_state() {
