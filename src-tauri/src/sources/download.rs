@@ -53,8 +53,9 @@ fn safe_component(raw: &str, fallback: &str) -> String {
         .collect();
     let cleaned = cleaned.trim().trim_matches('.').trim().to_string();
     if cleaned.is_empty() {
-        fallback.to_string()
-    } else if cleaned.len() > 120 {
+        return fallback.to_string();
+    }
+    let cleaned = if cleaned.len() > 120 {
         // Filesystems limit names in bytes, not characters, so cut on the
         // last whole character that fits in 120 bytes.
         let mut end = 120;
@@ -64,7 +65,27 @@ fn safe_component(raw: &str, fallback: &str) -> String {
         cleaned[..end].trim_end().to_string()
     } else {
         cleaned
+    };
+    if is_windows_device_name(&cleaned) {
+        // The suffix goes before any dot, since `nul.live_` is still `nul`.
+        let at = cleaned.find('.').unwrap_or(cleaned.len());
+        format!("{}_{}", &cleaned[..at], &cleaned[at..])
+    } else {
+        cleaned
     }
+}
+
+/// Windows will not create a file or folder named after a device, with or
+/// without an extension: `CON`, `nul.mp3`, `COM1`. A band called Con would
+/// fail to download there, and a library copied over from elsewhere too.
+fn is_windows_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper.len() == 4
+            && upper.as_bytes()[3].is_ascii_digit()
+            && upper.as_bytes()[3] != b'0')
 }
 
 /// `<root>/<Artist>/<Album>/<Title>.<ext>`, every component sanitised.
@@ -176,6 +197,19 @@ mod tests {
             PathBuf::from("Unknown Artist")
                 .join("Singles")
                 .join("Untitled.mp3")
+        );
+    }
+
+    #[test]
+    fn windows_device_names_get_a_suffix() {
+        assert_eq!(safe_component("Con", "x"), "Con_");
+        assert_eq!(safe_component("nul.live", "x"), "nul_.live");
+        assert_eq!(safe_component("COM1", "x"), "COM1_");
+        assert_eq!(safe_component("COM0", "x"), "COM0");
+        assert_eq!(safe_component("Console", "x"), "Console");
+        assert_eq!(
+            relative_layout_for("Aux", "Singles", "Prn", "mp3"),
+            PathBuf::from("Aux_").join("Singles").join("Prn_.mp3")
         );
     }
 
