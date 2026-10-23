@@ -24,8 +24,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 /// Lean list/playlist select: no lyrics / acoustid blobs; cover is album_art thumb path.
-/// Lyrics are left out, but whether they are synced (an LRC `[mm:ss` tag or a
-/// TTML `begin=`, as `hasTimestamps` checks in the UI) is kept for the list icon.
+/// Lyrics are left out, but whether they are synced is kept for the list icon.
 pub(crate) const TRACK_SELECT_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.artist, t.album, t.album_artist, t.genre,
                         t.year, t.track_number, t.disc_number, t.format, t.duration_seconds,
                         t.sample_rate, t.channels, t.bit_depth,
@@ -34,9 +33,7 @@ pub(crate) const TRACK_SELECT_COLUMNS: &str = "t.id, t.path, t.name, t.title, t.
                         t.fingerprint_sha256, NULL AS acoustid_fingerprint, t.musicbrainz_recording_id,
                         t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri, t.album_art_id,
                         t.source_provider, t.source_state,
-                        (t.lyrics GLOB '*[[][0-9]:[0-9][0-9]*' OR t.lyrics GLOB '*[[][0-9][0-9]:[0-9][0-9]*'
-                         OR t.lyrics GLOB '*[[][0-9][0-9][0-9]:[0-9][0-9]*'
-                         OR t.lyrics LIKE '%begin=%') IS 1 AS has_synced_lyrics,
+                        t.lyrics_synced AS has_synced_lyrics,
                         t.remote_source_id, t.cache_state, t.remote_missing";
 
 /// Full track row including lyrics (lyrics panel / detail).
@@ -48,10 +45,17 @@ pub(crate) const TRACK_DETAIL_COLUMNS: &str =
                         t.fingerprint_sha256, t.acoustid_fingerprint, t.musicbrainz_recording_id,
                         t.file_size, t.modified_at, t.indexed_at, t.is_saf_uri, t.album_art_id,
                         t.source_provider, t.source_state,
-                        (t.lyrics GLOB '*[[][0-9]:[0-9][0-9]*' OR t.lyrics GLOB '*[[][0-9][0-9]:[0-9][0-9]*'
-                         OR t.lyrics GLOB '*[[][0-9][0-9][0-9]:[0-9][0-9]*'
-                         OR t.lyrics LIKE '%begin=%') IS 1 AS has_synced_lyrics,
+                        t.lyrics_synced AS has_synced_lyrics,
                         t.remote_source_id, t.cache_state, t.remote_missing";
+
+/// Whether a track's lyrics are synced: an LRC `[mm:ss` tag or a TTML
+/// `begin=`, as `hasTimestamps` checks in the UI. Kept in `lyrics_synced` by
+/// triggers, since working it out in every list query scanned all the lyrics
+/// in the library each time.
+const LYRICS_SYNCED_SQL: &str = "(lyrics GLOB '*[[][0-9]:[0-9][0-9]*'
+     OR lyrics GLOB '*[[][0-9][0-9]:[0-9][0-9]*'
+     OR lyrics GLOB '*[[][0-9][0-9][0-9]:[0-9][0-9]*'
+     OR lyrics LIKE '%begin=%') IS 1";
 
 pub(crate) const TRACK_FROM: &str = "tracks t LEFT JOIN album_art aa ON aa.id = t.album_art_id";
 
@@ -435,6 +439,7 @@ impl Library {
         ensure_track_column(&connection, "cache_state", "TEXT")?;
         ensure_track_column(&connection, "remote_updated_at", "INTEGER")?;
         ensure_track_column(&connection, "remote_art_ref", "TEXT")?;
+        ensure_lyrics_synced_column(&connection)?;
         // Which analysis made a saved waveform. Rows from before the column
         // existed are version 1 and get recomputed.
         ensure_table_column(
@@ -4634,6 +4639,35 @@ impl Library {
     }
 }
 
+/// Add `tracks.lyrics_synced`, fill it in once for existing rows, and keep it
+/// current on every insert and lyrics change.
+fn ensure_lyrics_synced_column(connection: &Connection) -> Result<(), String> {
+    let existed = connection
+        .prepare("SELECT lyrics_synced FROM tracks LIMIT 0")
+        .is_ok();
+    ensure_track_column(connection, "lyrics_synced", "INTEGER NOT NULL DEFAULT 0")?;
+    if !existed {
+        connection
+            .execute(
+                &format!("UPDATE tracks SET lyrics_synced = {LYRICS_SYNCED_SQL}"),
+                [],
+            )
+            .map_err(|e| format!("Failed to mark synced lyrics: {e}"))?;
+    }
+    connection
+        .execute_batch(&format!(
+            "CREATE TRIGGER IF NOT EXISTS tracks_lyrics_synced_insert AFTER INSERT ON tracks
+             BEGIN
+                 UPDATE tracks SET lyrics_synced = {LYRICS_SYNCED_SQL} WHERE rowid = NEW.rowid;
+             END;
+             CREATE TRIGGER IF NOT EXISTS tracks_lyrics_synced_update AFTER UPDATE OF lyrics ON tracks
+             BEGIN
+                 UPDATE tracks SET lyrics_synced = {LYRICS_SYNCED_SQL} WHERE rowid = NEW.rowid;
+             END;"
+        ))
+        .map_err(|e| format!("Failed to set up synced lyrics triggers: {e}"))
+}
+
 fn ensure_track_column(
     connection: &Connection,
     column_name: &str,
@@ -6057,6 +6091,40 @@ mod tests {
         assert_eq!(synced, [true, true, true, false, false, false]);
         let lrc = library.get_tracks_by_paths(&paths[..1]).expect("row");
         assert_eq!(lrc[0].as_ref().unwrap().lyrics, None);
+    }
+
+    #[test]
+    fn synced_lyrics_flag_follows_a_lyrics_change() {
+        let library = open_test_library().expect("library");
+        let path = "/music/song.mp3";
+        let synced = || {
+            library
+                .get_tracks_by_paths(&[path.to_string()])
+                .expect("row")[0]
+                .as_ref()
+                .unwrap()
+                .has_synced_lyrics
+        };
+        {
+            let connection = library.lock_connection().expect("connection");
+            upsert_track(&*connection, &sample_track("song", path)).expect("upsert");
+        }
+        assert!(!synced());
+
+        let set = |lyrics: Option<&str>| {
+            library
+                .lock_connection()
+                .expect("connection")
+                .execute(
+                    "UPDATE tracks SET lyrics = ?1 WHERE path = ?2",
+                    params![lyrics, path],
+                )
+                .expect("update");
+        };
+        set(Some("[00:01.00]hello"));
+        assert!(synced());
+        set(None);
+        assert!(!synced());
     }
 
     #[test]
