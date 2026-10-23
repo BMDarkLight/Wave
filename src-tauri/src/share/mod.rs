@@ -31,6 +31,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 /// The port asked for first, so a client that remembered the address finds
 /// the server again after a restart. Any free port is used when it's taken.
@@ -60,8 +61,14 @@ pub struct ShareStatus {
 /// snapshot built from it.
 struct LibraryCatalog {
     library: Mutex<Library>,
-    cached: Mutex<Option<Arc<Snapshot>>>,
+    /// The last snapshot and when its version was last confirmed.
+    cached: Mutex<Option<(Arc<Snapshot>, Instant)>>,
 }
+
+/// How long a snapshot is trusted without asking the library again. A
+/// player seeking through a song sends a request per seek, and each version
+/// check counts the whole library.
+const FRESH_FOR: Duration = Duration::from_secs(2);
 
 impl LibraryCatalog {
     fn rebuild(&self, version: u32) -> Result<Arc<Snapshot>, String> {
@@ -87,14 +94,20 @@ impl LibraryCatalog {
 impl Catalog for LibraryCatalog {
     /// The snapshot, rebuilt only when the library has changed since.
     fn snapshot(&self) -> Result<Arc<Snapshot>, String> {
+        if let Some((snapshot, checked)) = self.cached.lock().as_ref() {
+            if checked.elapsed() < FRESH_FOR {
+                return Ok(snapshot.clone());
+            }
+        }
         let version = self.library.lock().share_version()?;
-        if let Some(snapshot) = self.cached.lock().as_ref() {
+        if let Some((snapshot, checked)) = self.cached.lock().as_mut() {
             if snapshot.version == version {
+                *checked = Instant::now();
                 return Ok(snapshot.clone());
             }
         }
         let snapshot = self.rebuild(version)?;
-        *self.cached.lock() = Some(snapshot.clone());
+        *self.cached.lock() = Some((snapshot.clone(), Instant::now()));
         Ok(snapshot)
     }
 }
