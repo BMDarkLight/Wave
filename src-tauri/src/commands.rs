@@ -25,16 +25,13 @@ use crate::dto::{
 use crate::library::{Library, PlaylistInfo};
 use crate::listen::{ListenEndReason, ListenFlush, ListenTracker};
 use crate::media_controls::TrackMetadata;
-use crate::metadata::{
-    enrich_lyrics_online, is_supported_audio_file, supported_audio_extensions, Track,
-};
+use crate::metadata::{enrich_lyrics_online, supported_audio_extensions, Track};
 use crate::path_validation::{
     is_android_content_uri, validate_audio_path, validate_playlist_import_path,
     validate_safe_output_path,
 };
 use crate::tag_edit::{Change, ResolvedEdit, TagEdit};
 use tauri::{Emitter, Manager};
-use walkdir::WalkDir;
 
 /// Lazily-initialized audio engine. Creation is deferred until first use so
 /// Android can finish wiring JNI / ndk_context before cpal/oboe opens a stream.
@@ -2402,15 +2399,10 @@ pub async fn scan_directory(directory: String) -> Result<Vec<String>, String> {
             return Err("Path is not a directory".to_string());
         }
 
-        let paths: Vec<String> = WalkDir::new(dir_path)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_file())
-            .filter(|e| is_supported_audio_file(e.path()))
-            .filter_map(|e| e.path().to_str().map(str::to_string))
-            .collect();
-
+        let (paths, unreadable) = crate::library::audio_files_under(dir_path);
+        for line in unreadable {
+            tracing::warn!("Skipped {line}");
+        }
         Ok(paths)
     })
     .await
@@ -3864,6 +3856,7 @@ pub async fn sync_playlist_folder(
                 .ok_or_else(|| "Playlist is not linked to a sync folder".to_string())?
         };
 
+        let mut errors = Vec::new();
         let raw_paths = if let Some(paths) = scanned_paths {
             paths
         } else {
@@ -3873,17 +3866,13 @@ pub async fn sync_playlist_folder(
                     "Sync folder is missing or not a directory: {sync_folder}"
                 ));
             }
-            WalkDir::new(dir_path)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(Result::ok)
-                .filter(|e| e.file_type().is_file())
-                .filter(|e| is_supported_audio_file(e.path()))
-                .filter_map(|e| e.path().to_str().map(str::to_string))
-                .collect()
+            let (paths, unreadable) = crate::library::audio_files_under(dir_path);
+            for line in unreadable {
+                push_import_error(&mut errors, line);
+            }
+            paths
         };
 
-        let mut errors = Vec::new();
         let mut desired = Vec::with_capacity(raw_paths.len());
         let mut seen = std::collections::HashSet::new();
 

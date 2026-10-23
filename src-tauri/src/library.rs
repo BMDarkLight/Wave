@@ -1053,17 +1053,8 @@ impl Library {
 
         // Collect all audio file paths first so the WalkDir iterator isn't
         // held across the DB lock acquisition.
-        let audio_paths: Vec<String> = WalkDir::new(directory_path)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_file())
-            .filter(|e| is_supported_audio_file(e.path()))
-            .filter_map(|e| e.path().to_str().map(str::to_string))
-            .collect();
-
+        let (audio_paths, mut failed) = audio_files_under(directory_path);
         let mut tracks = Vec::with_capacity(audio_paths.len());
-        let mut failed: Vec<String> = Vec::new();
 
         // Tags are read before each batch takes the write lock, and each batch
         // commits on its own. One transaction over the whole folder kept the
@@ -4639,6 +4630,29 @@ impl Library {
     }
 }
 
+/// Every supported audio file under `dir`, and a failure line for each one
+/// whose name is not valid UTF-8. Paths are stored as text, so those cannot
+/// be added, but they are reported instead of left out without a word.
+pub(crate) fn audio_files_under(dir: &Path) -> (Vec<String>, Vec<String>) {
+    let mut paths = Vec::new();
+    let mut unreadable = Vec::new();
+    let entries = WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file() && is_supported_audio_file(e.path()));
+    for entry in entries {
+        match entry.path().to_str() {
+            Some(path) => paths.push(path.to_string()),
+            None => unreadable.push(format!(
+                "{}: the file name is not valid UTF-8",
+                entry.path().to_string_lossy()
+            )),
+        }
+    }
+    (paths, unreadable)
+}
+
 /// Add `tracks.lyrics_synced`, fill it in once for existing rows, and keep it
 /// current on every insert and lyrics change.
 fn ensure_lyrics_synced_column(connection: &Connection) -> Result<(), String> {
@@ -7890,6 +7904,23 @@ mod tests {
             .index_directory(None, None, dir.to_string_lossy().to_string())
             .expect("import ran");
         assert!(tracks.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // macOS and Windows refuse to create a name that is not valid UTF-8.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_file_name_that_is_not_utf8_is_reported() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = std::env::temp_dir().join(format!("wave-test-utf8-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("fine.mp3"), b"").unwrap();
+        std::fs::write(dir.join(std::ffi::OsStr::from_bytes(b"caf\xe9.mp3")), b"").unwrap();
+
+        let (paths, unreadable) = audio_files_under(&dir);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(unreadable.len(), 1);
+        assert!(unreadable[0].ends_with("not valid UTF-8"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
