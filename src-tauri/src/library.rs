@@ -11,7 +11,7 @@ use crate::dto::{
     AlbumSummaryDto, ArtistSummaryDto, DiscoveryArtistDto, HomeSuggestionsDto, ListenRankDto,
     ListeningStatsDto, SearchHitDto,
 };
-use crate::metadata::{extract_track, is_supported_audio_file, Track};
+use crate::metadata::{extract_track, extract_track_for_bulk, is_supported_audio_file, Track};
 use crate::tag_edit::{Change, ResolvedEdit};
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use rusqlite::types::Value;
@@ -81,6 +81,9 @@ const DIVERSITY_SEED_ARTIST_LIMIT: usize = 5;
 /// Default virtual playlist that mirrors the full track table.
 pub const LIBRARY_PLAYLIST_NAME: &str = "Library";
 const LEGACY_LIBRARY_PLAYLIST_NAME: &str = "All Local Files";
+
+/// Files a folder import reads and commits per transaction.
+const INDEX_BATCH_SIZE: usize = 200;
 
 fn is_library_playlist_name(name: &str) -> bool {
     name == LIBRARY_PLAYLIST_NAME || name == LEGACY_LIBRARY_PLAYLIST_NAME
@@ -1057,94 +1060,107 @@ impl Library {
         let mut tracks = Vec::with_capacity(audio_paths.len());
         let mut failed: Vec<String> = Vec::new();
 
-        // Import everything in a single transaction for much better performance.
-        let mut connection = self.lock_connection()?;
-        let tx = connection
-            .transaction()
-            .map_err(|e| format!("Failed to begin transaction: {e}"))?;
-
+        // Tags are read before each batch takes the write lock, and each batch
+        // commits on its own. One transaction over the whole folder kept the
+        // daemon from recording listens for the length of the import, and
+        // Ctrl-C threw away everything already read. The bulk reader skips
+        // the full-file hash, which is what made a re-import read every byte.
         let now = now_timestamp();
-        for (done, path) in audio_paths.iter().enumerate() {
-            progress(done + 1, audio_paths.len(), path);
-            match extract_track(self.app_handle.as_ref(), path) {
-                Ok(mut track) => {
-                    let already_indexed = match tx
-                        .query_row(
-                            "SELECT 1 FROM tracks WHERE path = ?1",
-                            params![track.path],
-                            |_| Ok(()),
-                        )
-                        .optional()
-                    {
-                        Ok(row) => row.is_some(),
-                        Err(e) => {
-                            failed.push(format!("{path}: {e}"));
-                            continue;
-                        }
-                    };
-                    // The startup dedupe removes a second row with the same
-                    // artist, album and title, so inserting one here would
-                    // count a track as imported that is gone on next launch.
-                    let duplicate = if already_indexed {
-                        None
-                    } else {
-                        match tag_duplicate_of(&tx, &track) {
-                            Ok(found) => found,
+        let mut done = 0;
+        for chunk in audio_paths.chunks(INDEX_BATCH_SIZE) {
+            let batch: Vec<(&String, Result<Track, String>)> = chunk
+                .iter()
+                .map(|path| {
+                    done += 1;
+                    progress(done, audio_paths.len(), path);
+                    (path, extract_track_for_bulk(self.app_handle.as_ref(), path))
+                })
+                .collect();
+
+            let mut connection = self.lock_connection()?;
+            let tx = connection
+                .transaction()
+                .map_err(|e| format!("Failed to begin transaction: {e}"))?;
+            for (path, extracted) in batch {
+                match extracted {
+                    Ok(mut track) => {
+                        let already_indexed = match tx
+                            .query_row(
+                                "SELECT 1 FROM tracks WHERE path = ?1",
+                                params![track.path],
+                                |_| Ok(()),
+                            )
+                            .optional()
+                        {
+                            Ok(row) => row.is_some(),
                             Err(e) => {
                                 failed.push(format!("{path}: {e}"));
                                 continue;
                             }
-                        }
-                    };
-                    let track_id = match duplicate {
-                        Some((_, existing)) if library_playlist => {
-                            failed.push(format!(
-                                "{path}: same artist, album and title as {existing}"
-                            ));
+                        };
+                        // The startup dedupe removes a second row with the same
+                        // artist, album and title, so inserting one here would
+                        // count a track as imported that is gone on next launch.
+                        let duplicate = if already_indexed {
+                            None
+                        } else {
+                            match tag_duplicate_of(&tx, &track) {
+                                Ok(found) => found,
+                                Err(e) => {
+                                    failed.push(format!("{path}: {e}"));
+                                    continue;
+                                }
+                            }
+                        };
+                        let track_id = match duplicate {
+                            Some((_, existing)) if library_playlist => {
+                                failed.push(format!(
+                                    "{path}: same artist, album and title as {existing}"
+                                ));
+                                continue;
+                            }
+                            Some((id, _)) => id,
+                            None => match upsert_track(&tx, &track) {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    failed.push(format!("{path}: {e}"));
+                                    continue;
+                                }
+                            },
+                        };
+                        track.id = track_id.clone();
+                        if library_playlist {
+                            if !already_indexed {
+                                tracks.push(track);
+                            }
                             continue;
                         }
-                        Some((id, _)) => id,
-                        None => match upsert_track(&tx, &track) {
-                            Ok(id) => id,
+                        let position = match next_playlist_position(&tx, &playlist_id) {
+                            Ok(p) => p,
                             Err(e) => {
                                 failed.push(format!("{path}: {e}"));
                                 continue;
                             }
-                        },
-                    };
-                    track.id = track_id.clone();
-                    if library_playlist {
-                        if !already_indexed {
-                            tracks.push(track);
-                        }
-                        continue;
-                    }
-                    let position = match next_playlist_position(&tx, &playlist_id) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            failed.push(format!("{path}: {e}"));
-                            continue;
-                        }
-                    };
-                    match tx.execute(
-                        "INSERT OR IGNORE INTO playlist_tracks
+                        };
+                        match tx.execute(
+                            "INSERT OR IGNORE INTO playlist_tracks
                          (playlist_id, track_id, position, added_at)
                          VALUES (?1, ?2, ?3, ?4)",
-                        params![playlist_id, track_id, position, now],
-                    ) {
-                        Ok(0) => {}
-                        Ok(_) => tracks.push(track),
-                        Err(e) => failed.push(format!("{path}: {e}")),
+                            params![playlist_id, track_id, position, now],
+                        ) {
+                            Ok(0) => {}
+                            Ok(_) => tracks.push(track),
+                            Err(e) => failed.push(format!("{path}: {e}")),
+                        }
+                    }
+                    Err(e) => {
+                        failed.push(format!("{path}: {e}"));
                     }
                 }
-                Err(e) => {
-                    failed.push(format!("{path}: {e}"));
-                }
             }
+            tx.commit()
+                .map_err(|e| format!("Failed to commit import transaction: {e}"))?;
         }
-
-        tx.commit()
-            .map_err(|e| format!("Failed to commit import transaction: {e}"))?;
 
         if !failed.is_empty() {
             tracing::warn!(
