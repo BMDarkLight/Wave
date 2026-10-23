@@ -147,8 +147,12 @@ impl SmtcSession {
         let button_handler = TypedEventHandler::new({
             let app_handle = app_handle.clone();
             move |_, args: &Option<_>| {
-                let args: &SystemMediaTransportControlsButtonPressedEventArgs =
-                    args.as_ref().unwrap();
+                // A panic here would cross back into Windows and abort.
+                let Some(args): Option<&SystemMediaTransportControlsButtonPressedEventArgs> =
+                    args.as_ref()
+                else {
+                    return Ok(());
+                };
                 let button = args.Button()?;
                 let event = match button {
                     SystemMediaTransportControlsButton::Play => Some("media-control-play"),
@@ -171,7 +175,10 @@ impl SmtcSession {
         let app_handle = app.clone();
         let position_handler = TypedEventHandler::new({
             move |_, args: &Option<_>| {
-                let args: &PlaybackPositionChangeRequestedEventArgs = args.as_ref().unwrap();
+                let Some(args): Option<&PlaybackPositionChangeRequestedEventArgs> = args.as_ref()
+                else {
+                    return Ok(());
+                };
                 let position = Duration::from(args.RequestedPlaybackPosition()?);
                 let _ = app_handle.emit("media-control-set-position", position.as_secs_f64());
                 Ok(())
