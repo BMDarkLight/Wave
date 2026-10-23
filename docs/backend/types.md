@@ -343,6 +343,7 @@ interface UpdateCheck {
   release_url: string;
   download_size: number | null;
   downloaded: boolean;
+  notifications_blocked: boolean;
 }
 ```
 
@@ -353,6 +354,7 @@ interface UpdateCheck {
 | `release_url` | Page of that release, or the latest release page |
 | `download_size` | Bytes of the APK this phone would download. `null` on desktop, and on Android when the release has no APK for this CPU |
 | `downloaded` | The APK is already downloaded and ready to install |
+| `notifications_blocked` | Android only: Wave may not post notifications, so the in-app toast announces the update, phone layout included |
 
 ---
 

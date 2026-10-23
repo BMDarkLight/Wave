@@ -40,6 +40,7 @@
     public static void ready(android.content.Context, java.lang.String, java.lang.String);
     public static void failed(android.content.Context, java.lang.String, java.lang.String);
     public static void cancel(android.content.Context);
+    public static boolean enabled(android.content.Context);
 }
 -keep class app.bmdarklight.wave.AppUpdater { *; }
 -keepclassmembers class app.bmdarklight.wave.AppUpdater {

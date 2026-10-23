@@ -1465,6 +1465,11 @@ export interface UpdateCheck {
   download_size: number | null;
   /** The APK is downloaded and ready to install. */
   downloaded: boolean;
+  /**
+   * Android only: notifications are off, so the toast announces the update
+   * even in the phone layout.
+   */
+  notifications_blocked: boolean;
 }
 
 export interface UpdateProgress {

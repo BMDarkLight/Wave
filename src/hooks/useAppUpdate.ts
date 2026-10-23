@@ -198,6 +198,7 @@ export function useAppUpdate(setError: (message: string | null) => void) {
     install: () => void install(),
     openPage: () => void openPage(),
     showToast,
+    notificationsBlocked: check?.notifications_blocked ?? false,
     dismissToast: () => setToastDismissed(true),
   };
 }

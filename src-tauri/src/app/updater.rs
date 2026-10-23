@@ -222,6 +222,7 @@ pub fn check(app: &AppHandle, state: &UpdaterState) -> Result<UpdateCheckDto, St
             release_url: LATEST_RELEASE_PAGE.to_string(),
             download_size: None,
             downloaded: false,
+            notifications_blocked: false,
         });
     };
 
@@ -240,9 +241,14 @@ pub fn check(app: &AppHandle, state: &UpdaterState) -> Result<UpdateCheckDto, St
         None => false,
     };
     // Downloaded on an earlier launch and not installed yet: say so again.
+    // Not downloaded and nothing downloading: a progress notification left by
+    // a download the system killed would otherwise stay up for good, since it
+    // can't be swiped away.
     #[cfg(target_os = "android")]
     if downloaded {
         crate::android::update_notice::ready(&version.to_string(), &apk_path(app, version)?);
+    } else if !state.downloading.load(Ordering::SeqCst) {
+        crate::android::update_notice::cancel();
     }
     let dto = UpdateCheckDto {
         current_version: current.to_string(),
@@ -250,6 +256,7 @@ pub fn check(app: &AppHandle, state: &UpdaterState) -> Result<UpdateCheckDto, St
         release_url: release_url.clone(),
         download_size: apk.as_ref().map(|asset| asset.size),
         downloaded,
+        notifications_blocked: notifications_blocked(),
     };
     *state
         .found
@@ -267,6 +274,18 @@ struct ClearOnDrop<'a>(&'a AtomicBool);
 impl Drop for ClearOnDrop<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Whether the update notifications can't be shown, so the toast must stay.
+fn notifications_blocked() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        !crate::android::update_notice::enabled()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        false
     }
 }
 

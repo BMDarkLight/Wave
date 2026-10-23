@@ -136,6 +136,24 @@ pub fn failed(version: &str, reason: &str) {
     });
 }
 
+/// Whether Wave may post notifications. False when it can't tell, so the
+/// in-app announcement stays as the fallback.
+pub fn enabled() -> bool {
+    let mut answer = false;
+    with_context("enabled", |env, class, context| {
+        answer = env
+            .call_static_method(
+                class,
+                "enabled",
+                "(Landroid/content/Context;)Z",
+                &[JValue::Object(context)],
+            )?
+            .z()?;
+        Ok(())
+    });
+    answer
+}
+
 /// Takes down any update notification, once there is nothing to install.
 pub fn cancel() {
     with_context("cancel", |env, class, context| {

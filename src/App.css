@@ -2021,9 +2021,11 @@ input[type="search"]::-webkit-search-decoration {
 }
 
 /* The phone layout has no room for it, and on Android the system
-   notification announces the update instead. Settings still shows it. */
+   notification announces the update instead. Settings still shows it. When
+   Android blocks notifications the toast is the only announcement left, so
+   it stays. */
 @media (max-width: 900px) {
-  .update-toast {
+  .update-toast:not(.update-toast-keep) {
     display: none;
   }
 }

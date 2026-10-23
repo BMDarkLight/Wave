@@ -45,6 +45,9 @@ pub struct UpdateCheckDto {
     pub download_size: Option<u64>,
     /// The APK is already downloaded and ready to install.
     pub downloaded: bool,
+    /// Android only: notifications are off, so the update can't be announced
+    /// there and the in-app toast has to do it, phone layout included.
+    pub notifications_blocked: bool,
 }
 
 /// Payload of `update-download-progress`, in bytes.

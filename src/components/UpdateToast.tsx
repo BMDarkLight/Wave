@@ -16,7 +16,11 @@ export default function UpdateToast({ update }: { update: AppUpdate }) {
   if (!update.showToast || !update.latestVersion) return null;
   const ready = update.status === "ready";
   return (
-    <div className="update-toast" role="status" aria-live="polite">
+    <div
+      className={`update-toast${update.notificationsBlocked ? " update-toast-keep" : ""}`}
+      role="status"
+      aria-live="polite"
+    >
       <span className="update-toast-text">
         {ready
           ? `Wave ${update.latestVersion} is ready to install`

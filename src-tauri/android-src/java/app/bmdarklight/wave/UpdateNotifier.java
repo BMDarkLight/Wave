@@ -115,6 +115,20 @@ public final class UpdateNotifier {
         }
     }
 
+    /**
+     * Whether Wave may post notifications. On Android 13 and later that needs
+     * the runtime permission, which is only asked for once music plays.
+     */
+    public static boolean enabled(Context context) {
+        try {
+            NotificationManager manager =
+                    (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            return manager != null && manager.areNotificationsEnabled();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** Takes down whatever update notification is showing. */
     public static void cancel(Context context) {
         try {
