@@ -748,6 +748,8 @@ export interface SourceSettings {
   library_sharing_enabled: boolean;
   /** The name other devices see; "" for "Wave on <device>". */
   share_name: string;
+  /** Keep sharing after the window is closed. */
+  share_in_background: boolean;
 }
 
 export const getSourceSettings = (): Promise<SourceSettings> =>

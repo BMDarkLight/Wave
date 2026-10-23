@@ -11,6 +11,7 @@
 import { useEffect, useState } from "react";
 import type { SourceSettings } from "../utils/player";
 import { getShareStatus, type ShareStatus } from "../utils/remote";
+import { isAndroid } from "../utils/platform";
 
 /** How often the status line checks the running server again. */
 const STATUS_EVERY_MS = 10_000;
@@ -32,6 +33,13 @@ export default function LibrarySharingRow({
   // Kept here while typing: each saved name restarts the server.
   const [name, setName] = useState(sourceSettings.share_name);
   const [status, setStatus] = useState<ShareStatus | null>(null);
+  const [onAndroid, setOnAndroid] = useState(false);
+
+  useEffect(() => {
+    void isAndroid()
+      .then(setOnAndroid)
+      .catch(() => {});
+  }, []);
 
   useEffect(
     () => setName(sourceSettings.share_name),
@@ -110,6 +118,28 @@ export default function LibrarySharingRow({
               }}
             />
           </div>
+          <label className="mset-gapless-row mset-nested-row">
+            <input
+              type="checkbox"
+              checked={sourceSettings.share_in_background}
+              onChange={(event) =>
+                onSourceSettingsChange({
+                  ...sourceSettings,
+                  share_in_background: event.target.checked,
+                })
+              }
+            />
+            <span className="mset-gapless-copy">
+              <span className="mset-gapless-label">
+                Keep sharing in the background
+              </span>
+              <span className="mset-gapless-hint">
+                {onAndroid
+                  ? "Wave keeps running after you leave it, with a notification while it shares."
+                  : "Closing the window hides Wave instead of quitting, so players can still reach your music."}
+              </span>
+            </span>
+          </label>
           <p className="mset-hint mset-nested-row share-status">
             {shareStatusText(status)}
           </p>

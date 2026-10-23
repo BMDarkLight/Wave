@@ -1815,6 +1815,9 @@ pub struct SourceSettingsDto {
     /// The shared library's name; "" uses the default.
     #[serde(default)]
     pub share_name: String,
+    /// Keep sharing after the window is closed.
+    #[serde(default)]
+    pub share_in_background: bool,
 }
 
 #[tauri::command]
@@ -1831,6 +1834,7 @@ pub async fn get_source_settings(
         cache_limit_mb: settings.source_cache_limit_mb,
         library_sharing_enabled: settings.library_sharing_enabled,
         share_name: settings.share_name.clone().unwrap_or_default(),
+        share_in_background: settings.share_in_background,
     })
 }
 
@@ -1862,6 +1866,7 @@ pub async fn set_source_settings(
         stored.remote_cellular_enabled = settings.remote_cellular_enabled;
         stored.library_sharing_enabled = settings.library_sharing_enabled;
         stored.share_name = normalise(&settings.share_name);
+        stored.share_in_background = settings.share_in_background;
         stored.source_cache_limit_mb = settings.cache_limit_mb.max(MIN_CACHE_LIMIT_MB);
         stored.save(&app)?;
         (was_enabled, cap_shrank)
@@ -2968,10 +2973,28 @@ fn paths_writable(paths: &[String], can_write_uri: impl Fn(&str) -> bool) -> boo
 pub async fn get_track_full_cover(
     path: String,
     app: tauri::AppHandle,
+    library: tauri::State<'_, LibraryState>,
 ) -> Result<Option<String>, String> {
     validate_audio_path(&path)?;
+    let art_id = lock_library(&library)?
+        .get_track_details(&path)?
+        .and_then(|track| track.album_art_id);
     let app_clone = app.clone();
-    blocking(move || crate::metadata::extract_full_cover_data_url(Some(&app_clone), &path)).await
+    blocking(move || {
+        if let Ok(Some(full)) =
+            crate::metadata::extract_full_cover_data_url(Some(&app_clone), &path)
+        {
+            return Ok(Some(full));
+        }
+        // A remote song has no file to read a cover from until it is cached
+        // whole. The 512px copy saved with its album art is the next best;
+        // the 96px list thumbnail looked blurred at full size.
+        Ok(art_id
+            .and_then(|id| crate::cover_art::media_path_for_id(&app_clone, &id))
+            .and_then(|media| std::fs::read(media).ok())
+            .map(|bytes| crate::cover_art::full_cover_data_url(bytes, "image/jpeg")))
+    })
+    .await
 }
 
 #[tauri::command]

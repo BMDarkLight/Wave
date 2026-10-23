@@ -104,9 +104,10 @@ fn track_to_meta(item: &serde_json::Value) -> Option<RemoteTrackMeta> {
         return None;
     }
     let id = id_field(item, "id")?;
+    // Fetched once per album and shown full size, so the largest there is.
     let art_ref = item.get("artwork").and_then(|art| {
-        str_field(art, "480x480")
-            .or_else(|| str_field(art, "1000x1000"))
+        str_field(art, "1000x1000")
+            .or_else(|| str_field(art, "480x480"))
             .or_else(|| str_field(art, "150x150"))
     });
     let album = item
@@ -358,7 +359,7 @@ mod tests {
             "id": "YmJWK", "title": "Late Night", "duration": 190, "genre": "Electronic",
             "release_date": "2021-05-01T00:00:00Z", "created_at": "2021-05-02 10:00:00",
             "is_streamable": true, "is_stream_gated": false,
-            "artwork": { "480x480": "https://node/art/480x480.jpg" },
+            "artwork": { "480x480": "https://node/art/480x480.jpg", "1000x1000": "https://node/art/1000x1000.jpg" },
             "album_backlink": { "playlist_name": "Nights" },
             "user": { "name": "kirby", "handle": "kirbyDAO" }
         });
@@ -372,7 +373,7 @@ mod tests {
         assert_eq!(meta.size, 0);
         assert_eq!(
             meta.art_ref.as_deref(),
-            Some("https://node/art/480x480.jpg")
+            Some("https://node/art/1000x1000.jpg")
         );
         assert!(meta.updated_at.is_some());
 

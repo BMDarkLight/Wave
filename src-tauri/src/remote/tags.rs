@@ -91,6 +91,33 @@ pub fn read_header_tags(bytes: Vec<u8>, extension: &str) -> Option<HeaderTags> {
     (!out.is_empty()).then_some(out)
 }
 
+/// The front cover embedded in an audio file, with its MIME type, read from
+/// any seekable source (a local file or an Android document).
+pub fn embedded_picture(reader: impl std::io::Read + std::io::Seek) -> Option<(Vec<u8>, String)> {
+    let file = Probe::new(std::io::BufReader::new(reader))
+        .options(ParseOptions::new().read_properties(false))
+        .guess_file_type()
+        .ok()?
+        .read()
+        .ok()?;
+    file.tags().iter().find_map(|tag| {
+        let picture = tag
+            .pictures()
+            .iter()
+            .find(|p| p.pic_type() == lofty::picture::PictureType::CoverFront)
+            .or_else(|| tag.pictures().first())?;
+        (!picture.data().is_empty()).then(|| {
+            (
+                picture.data().to_vec(),
+                picture
+                    .mime_type()
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| "image/jpeg".to_string()),
+            )
+        })
+    })
+}
+
 /// The playing length of a complete audio file, from its headers.
 pub fn measure_duration(path: &std::path::Path) -> Option<f64> {
     use lofty::file::AudioFile;
@@ -220,6 +247,34 @@ mod tests {
         assert_eq!(tags.title.as_deref(), Some("Song"));
         assert_eq!(tags.artist.as_deref(), Some("Band"));
         assert_eq!(tags.track_number, Some(7));
+    }
+
+    #[test]
+    fn finds_the_front_cover_inside_a_file() {
+        let mut body = vec![0u8];
+        body.extend_from_slice(b"image/jpeg\0");
+        body.push(3); // front cover
+        body.push(0); // empty description
+        body.extend_from_slice(b"\xFF\xD8\xFF\xE0 cover bytes");
+        let mut frame = b"APIC".to_vec();
+        frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        frame.extend_from_slice(&[0, 0]);
+        frame.extend(body);
+        let size = frame.len() as u32;
+        let mut file = b"ID3\x03\x00\x00".to_vec();
+        file.extend_from_slice(&[
+            ((size >> 21) & 0x7f) as u8,
+            ((size >> 14) & 0x7f) as u8,
+            ((size >> 7) & 0x7f) as u8,
+            (size & 0x7f) as u8,
+        ]);
+        file.extend(frame);
+        file.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x00]);
+        file.extend(vec![0u8; 1024]);
+        let (data, mime) = embedded_picture(Cursor::new(file)).unwrap();
+        assert_eq!(mime, "image/jpeg");
+        assert!(data.ends_with(b"cover bytes"));
+        assert_eq!(embedded_picture(Cursor::new(vec![0u8; 2048])), None);
     }
 
     #[test]

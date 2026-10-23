@@ -25,7 +25,10 @@ const CLASS: &str = "app.bmdarklight.wave.UpdateNotifier";
 /// second, so progress is posted at most this often.
 const PROGRESS_EVERY: Duration = Duration::from_secs(1);
 
-fn with_context(
+/// Runs `call` with Wave's Java class `class_name` and the Application context,
+/// logging a failure as `what`.
+pub(crate) fn with_class(
+    class_name: &str,
     what: &str,
     call: impl FnOnce(&mut JNIEnv, &JClass, &JObject) -> jni::errors::Result<()>,
 ) {
@@ -43,11 +46,11 @@ fn with_context(
         let context = unsafe { JObject::from_raw(ctx.context() as jni::sys::jobject) };
         let outcome = env
             .with_local_frame(8, |env| -> jni::errors::Result<Result<(), String>> {
-                let class = match crate::android::media_bridge::load_app_class(env, &context, CLASS)
-                {
-                    Ok(class) => class,
-                    Err(e) => return Ok(Err(e)),
-                };
+                let class =
+                    match crate::android::media_bridge::load_app_class(env, &context, class_name) {
+                        Ok(class) => class,
+                        Err(e) => return Ok(Err(e)),
+                    };
                 Ok(call(env, &class, &context).map_err(|e| e.to_string()))
             })
             .map_err(|e| e.to_string())
@@ -58,7 +61,7 @@ fn with_context(
         outcome
     })();
     if let Err(e) = result {
-        tracing::debug!("Couldn't post the update notification ({what}): {e}");
+        tracing::debug!("Java call {class_name} ({what}) failed: {e}");
     }
 }
 
@@ -78,7 +81,7 @@ pub fn progress(version: &str, received: u64, total: u64) {
         }
         *last = Some((Instant::now(), percent));
     }
-    with_context("progress", |env, class, context| {
+    with_class(CLASS, "progress", |env, class, context| {
         let version = env.new_string(version)?;
         env.call_static_method(
             class,
@@ -99,7 +102,7 @@ pub fn progress(version: &str, received: u64, total: u64) {
 pub fn ready(version: &str, apk: &Path) {
     *LAST_PROGRESS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     let apk = apk.to_string_lossy();
-    with_context("ready", |env, class, context| {
+    with_class(CLASS, "ready", |env, class, context| {
         let version = env.new_string(version)?;
         let apk = env.new_string(apk.as_ref())?;
         env.call_static_method(
@@ -119,7 +122,7 @@ pub fn ready(version: &str, apk: &Path) {
 /// Replaces the progress with why the download failed.
 pub fn failed(version: &str, reason: &str) {
     *LAST_PROGRESS.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    with_context("failed", |env, class, context| {
+    with_class(CLASS, "failed", |env, class, context| {
         let version = env.new_string(version)?;
         let reason = env.new_string(reason)?;
         env.call_static_method(
@@ -140,7 +143,7 @@ pub fn failed(version: &str, reason: &str) {
 /// in-app announcement stays as the fallback.
 pub fn enabled() -> bool {
     let mut answer = false;
-    with_context("enabled", |env, class, context| {
+    with_class(CLASS, "enabled", |env, class, context| {
         answer = env
             .call_static_method(
                 class,
@@ -156,7 +159,7 @@ pub fn enabled() -> bool {
 
 /// Takes down any update notification, once there is nothing to install.
 pub fn cancel() {
-    with_context("cancel", |env, class, context| {
+    with_class(CLASS, "cancel", |env, class, context| {
         env.call_static_method(
             class,
             "cancel",

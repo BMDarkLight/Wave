@@ -238,7 +238,8 @@ The catalog is one `Search` for `upnp:class derivedfrom
 servers answer. A server that faults is walked with `Browse` instead,
 container by container, 16 levels at most. A walk sees the same song under
 Artists, Albums, Genres and Folders, so items are kept once by their file URL.
-An item's audio is its first plain `http-get` resource in a format Wave plays,
+An item's audio is its first plain `http-get` resource in a format Wave plays
+(its MIME type's, or for another `audio/` type, the extension its URL ends in),
 preferring one that states its size, since servers list transcodes (often
 `audio/L16`) beside the original. Tags, length and artwork come from the
 DIDL-Lite item; the length may be `H:MM:SS.fff` or the spec's fraction form
@@ -295,7 +296,12 @@ switch goes off.
 
 **What is shared.** Every library track Wave can open itself: local files,
 downloads, and on Android `content://` documents, opened through the
-ContentResolver (while Wave has a window, as every SAF read needs). Tracks of
+Application context's ContentResolver (`SafFile`), so they play with no
+window open too. Android stores a document's MIME subtype as its format
+(`MPEG`, `X-FLAC`), so formats are mapped to a real extension and MIME type,
+falling back on the document's own name; served as
+`application/octet-stream`, most of a phone's library used to be skipped by
+players. Tracks of
 someone else's server are not passed on. The tree is Artists (each holding
 their albums), Albums, All songs and Playlists; the default playlist is the
 whole library and is left out. Object ids are stable (`track:<id>`,
@@ -319,8 +325,16 @@ events are sent; players see changes through `SystemUpdateID`.
 `Content-Range`, 416 for a range past the end, HEAD) and the DLNA
 `transferMode.dlna.org` and `contentFeatures.dlna.org` headers. Each item's
 `res` carries the size, length, sample rate and channels. `/art/<track id>.jpg`
-serves the album thumbnail. URLs use the address the player reached the
-server on, so they work on whichever network it asked from.
+serves the best cover there is: the one embedded in the file at full size,
+else the 512px copy saved with the album art, else the thumbnail. URLs use the
+address the player reached the server on, so they work on whichever network
+it asked from.
+
+**In the background.** With **Keep sharing in the background** on, closing
+the window on desktop hides Wave instead of quitting. On Android a foreground
+service (`ShareService`, type `connectedDevice`, permission
+`FOREGROUND_SERVICE_CONNECTED_DEVICE`) holds the process with a "Sharing your
+library" notification, and the app's exit doesn't stop the server.
 
 **Finding it.** SSDP on 239.255.255.250:1900, joined on every interface and
 shared with any other SSDP stack on the machine. On start the server sends

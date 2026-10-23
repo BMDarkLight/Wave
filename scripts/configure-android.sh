@@ -106,6 +106,8 @@ permissions = [
     "android.permission.WAKE_LOCK",
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+    # Lets library sharing keep running in the background.
+    "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE",
     "android.permission.MODIFY_AUDIO_SETTINGS",
     "android.permission.POST_NOTIFICATIONS",
     "android.permission.READ_MEDIA_AUDIO",
@@ -215,6 +217,27 @@ if update_provider not in text:
     print("Registered UpdateFileProvider in AndroidManifest.xml")
 else:
     print("UpdateFileProvider already present in AndroidManifest.xml")
+
+# Foreground service that keeps library sharing alive with no window open.
+text = path.read_text(encoding="utf-8")
+share_service = "app.bmdarklight.wave.ShareService"
+if share_service not in text:
+    service_xml = (
+        '        <service\n'
+        f'            android:name="{share_service}"\n'
+        '            android:exported="false"\n'
+        '            android:foregroundServiceType="connectedDevice" />\n'
+    )
+    app_open = re.search(r"<application\b[^>]*>", text, flags=re.IGNORECASE | re.DOTALL)
+    if not app_open:
+        print("::error::could not find <application> open tag for ShareService", file=sys.stderr)
+        sys.exit(1)
+    insert_at = app_open.end()
+    text = text[:insert_at] + "\n" + service_xml + text[insert_at:]
+    path.write_text(text, encoding="utf-8")
+    print("Registered ShareService in AndroidManifest.xml")
+else:
+    print("ShareService already present in AndroidManifest.xml")
 
 # Network security config: cleartext only to the loopback stream server.
 text = path.read_text(encoding="utf-8")

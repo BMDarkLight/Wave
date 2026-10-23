@@ -226,6 +226,10 @@ pub fn apply(config: Option<ShareConfig>) {
     }
 }
 
+pub fn is_running() -> bool {
+    state().lock().is_some()
+}
+
 pub fn status() -> ShareStatus {
     let slot = state().lock();
     let Some(running) = slot.as_ref() else {
@@ -284,6 +288,12 @@ fn device_name() -> String {
 pub fn file_opener(app: Option<tauri::AppHandle>) -> Opener {
     Arc::new(move |path: &str| {
         if path.starts_with("content://") {
+            // Through the Application context first, which works with no
+            // window open, as sharing in the background needs.
+            #[cfg(target_os = "android")]
+            if let Ok(file) = crate::android::share_service::open_document(path) {
+                return Ok(file);
+            }
             let Some(app) = app.as_ref() else {
                 return Err(std::io::Error::other("no app to open a document with"));
             };

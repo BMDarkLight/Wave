@@ -101,6 +101,10 @@ pub struct AppSettings {
     /// The name other devices see; `None` uses "Wave on <device>".
     #[serde(default)]
     pub share_name: Option<String>,
+    /// Keep sharing with the window closed: on desktop closing hides Wave
+    /// instead of quitting, on Android a foreground service keeps it running.
+    #[serde(default)]
+    pub share_in_background: bool,
     /// The shared server's UUID, made once so other devices keep recognising
     /// it across launches.
     #[serde(default)]
@@ -203,6 +207,7 @@ impl Default for AppSettings {
             remote_cellular_enabled: false,
             library_sharing_enabled: false,
             share_name: None,
+            share_in_background: false,
             share_device_id: None,
             plex_client_identifier: None,
             song_coupling_enabled: false,

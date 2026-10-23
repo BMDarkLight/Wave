@@ -210,7 +210,9 @@ cloud.
 media server for your network. TVs, VLC, Kodi and other players (another copy
 of Wave included) can browse your music by artist, album, song and playlist
 and play it with seeking. Only songs stored on your device are shared, and
-nothing outside your network can reach them.
+nothing outside your network can reach them. Turn on **Keep sharing in the
+background** to keep it up after you close Wave: on desktop it stays in the
+tray, on Android it shows a notification while it shares.
 
 - Playback starts while the track is still downloading, then the whole file is
   kept in the cache, so the next play is instant and works offline. Seeking

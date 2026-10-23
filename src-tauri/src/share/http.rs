@@ -373,19 +373,38 @@ fn media(
     stream.flush()
 }
 
+/// The best cover there is for a track: the one inside its file at full
+/// size, else the 512px copy saved with the album art, else the 96px
+/// thumbnail. Players show covers large, and so does a copy of Wave that
+/// syncs this library, which keeps what it is sent.
+fn best_cover(server: &Server, track: &crate::metadata::Track) -> Option<(Vec<u8>, String)> {
+    if let Some(found) = (server.opener)(&track.path)
+        .ok()
+        .and_then(crate::remote::tags::embedded_picture)
+    {
+        return Some(found);
+    }
+    // The list query fills this with the absolute thumbnail path.
+    let thumb = track
+        .cover_art_data_url
+        .as_deref()
+        .filter(|path| !path.starts_with("data:"))?;
+    let best = crate::cover_art::prefer_media_artwork_url(Some(thumb))?;
+    std::fs::read(best)
+        .ok()
+        .map(|bytes| (bytes, "image/jpeg".to_string()))
+}
+
 fn art(stream: &mut TcpStream, server: &Server, name: &str, head_only: bool) -> io::Result<()> {
-    let thumb = track_id_from(name).and_then(|id| {
+    let cover = track_id_from(name).and_then(|id| {
         let snapshot = server.catalog.snapshot().ok()?;
-        let track = snapshot.track(&id)?;
-        // The list query fills this with the absolute thumbnail path.
-        let path = track.cover_art_data_url.clone()?;
-        (!path.starts_with("data:")).then_some(path)
+        best_cover(server, snapshot.track(&id)?)
     });
-    match thumb.and_then(|path| std::fs::read(path).ok()) {
-        Some(bytes) => respond(
+    match cover {
+        Some((bytes, mime)) => respond(
             stream,
             "200 OK",
-            &[("Content-Type", "image/jpeg".to_string())],
+            &[("Content-Type", mime)],
             &bytes,
             head_only,
         ),

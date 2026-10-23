@@ -1427,7 +1427,26 @@ pub fn apply_sharing(app: &AppHandle) {
     let app = app.clone();
     let spawned = std::thread::Builder::new()
         .name("wave-share-apply".into())
-        .spawn(move || crate::share::apply(sharing_config(&app)));
+        .spawn(move || {
+            let config = sharing_config(&app);
+            let background = config.as_ref().is_some_and(|_| {
+                app.try_state::<AppSettingsState>()
+                    .and_then(|s| s.0.lock().ok().map(|s| s.share_in_background))
+                    .unwrap_or(false)
+            });
+            #[cfg(target_os = "android")]
+            let name = config.as_ref().map(|c| c.name.clone());
+            crate::share::apply(config);
+            // Android ends a process with no window unless a foreground
+            // service holds it; desktop hides the window on close instead.
+            #[cfg(target_os = "android")]
+            match name.filter(|_| background && crate::share::is_running()) {
+                Some(name) => crate::android::share_service::start(&name),
+                None => crate::android::share_service::stop(),
+            }
+            #[cfg(not(target_os = "android"))]
+            let _ = background;
+        });
     if let Err(e) = spawned {
         tracing::warn!("Couldn't change library sharing: {e}");
     }

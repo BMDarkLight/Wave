@@ -274,7 +274,15 @@ pub fn run() {
                     .and_then(|state| state.0.lock().ok().map(|s| s.close_action))
                     .unwrap_or(CloseAction::Quit);
 
-                if action == CloseAction::HideWindow {
+                // Sharing in the background outlives the window: quitting
+                // would take the server down with it.
+                let keep_sharing = app
+                    .try_state::<AppSettingsState>()
+                    .and_then(|state| state.0.lock().ok().map(|s| s.share_in_background))
+                    .unwrap_or(false)
+                    && share::is_running();
+
+                if action == CloseAction::HideWindow || keep_sharing {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -467,7 +475,16 @@ pub fn run() {
             // Say goodbye on the network, so players drop the shared library
             // now rather than when its announcement runs out.
             if let tauri::RunEvent::Exit = _event {
-                share::apply(None);
+                // On Android the window can go while the process stays to
+                // share in the background, held by its foreground service.
+                let sharing_on = cfg!(target_os = "android")
+                    && _app
+                        .try_state::<AppSettingsState>()
+                        .and_then(|state| state.0.lock().ok().map(|s| s.share_in_background))
+                        .unwrap_or(false);
+                if !sharing_on {
+                    share::apply(None);
+                }
             }
         });
 }

@@ -31,6 +31,9 @@ pub mod multicast;
 pub mod update_notice;
 
 #[cfg(target_os = "android")]
+pub mod share_service;
+
+#[cfg(target_os = "android")]
 pub mod crash_report;
 
 #[cfg(target_os = "android")]

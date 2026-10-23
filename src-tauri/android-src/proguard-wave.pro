@@ -42,6 +42,15 @@
     public static void cancel(android.content.Context);
     public static boolean enabled(android.content.Context);
 }
+-keep class app.bmdarklight.wave.ShareService { *; }
+-keepclassmembers class app.bmdarklight.wave.ShareService {
+    public static void start(android.content.Context, java.lang.String);
+    public static void stop(android.content.Context);
+}
+-keep class app.bmdarklight.wave.SafFile { *; }
+-keepclassmembers class app.bmdarklight.wave.SafFile {
+    public static int openForReading(android.content.Context, java.lang.String);
+}
 -keep class app.bmdarklight.wave.AppUpdater { *; }
 -keepclassmembers class app.bmdarklight.wave.AppUpdater {
     public static void install(android.app.Activity, java.lang.String);

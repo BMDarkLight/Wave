@@ -79,8 +79,11 @@ fn parse_track(item: &serde_json::Value) -> Option<SourceTrack> {
         .unwrap_or_else(|| "Unknown artist".to_string());
     let album = item.get("album").and_then(|a| str_field(a, "title"));
     let artwork_url = item.get("album").and_then(|a| {
-        str_field(a, "cover_medium")
-            .or_else(|| str_field(a, "cover_big"))
+        // 500px: the kept cover is shown full size in Now Playing, and the
+        // 250px "medium" one went soft there.
+        str_field(a, "cover_big")
+            .or_else(|| str_field(a, "cover_xl"))
+            .or_else(|| str_field(a, "cover_medium"))
             .or_else(|| str_field(a, "cover"))
     });
 

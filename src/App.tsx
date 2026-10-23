@@ -169,6 +169,7 @@ function App() {
     cache_limit_mb: 2048,
     library_sharing_enabled: false,
     share_name: "",
+    share_in_background: false,
   });
   const [crashReport, setCrashReport] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
