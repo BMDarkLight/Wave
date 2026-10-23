@@ -61,18 +61,48 @@ type Step =
 
 const POLL_MS = 2000;
 
-const KINDS: { kind: Kind; label: string }[] = [
-  { kind: "plex_tv", label: "Plex" },
-  { kind: "plex_direct", label: "Plex server" },
-  { kind: "jellyfin", label: "Jellyfin or Emby" },
+const KINDS: { kind: Kind; label: string; description: string }[] = [
   {
     kind: "subsonic",
-    label: "Navidrome, Airsonic, Gonic and other Subsonic servers",
+    label: "Subsonic",
+    description:
+      "Navidrome, Airsonic, Gonic, Ampache and other Subsonic servers",
   },
-  { kind: "webdav", label: "WebDAV folder: Nextcloud, ownCloud or a NAS" },
-  { kind: "dlna", label: "DLNA or UPnP media server" },
-  { kind: "kodi", label: "Kodi" },
-  { kind: "audius", label: "Audius account" },
+  {
+    kind: "webdav",
+    label: "WebDAV",
+    description: "A music folder on Nextcloud, ownCloud, a NAS or rclone",
+  },
+  {
+    kind: "dlna",
+    label: "DLNA / UPnP",
+    description: "MiniDLNA, Serviio, Gerbera or a NAS on your network",
+  },
+  {
+    kind: "plex_tv",
+    label: "Plex",
+    description: "Sign in with your Plex account",
+  },
+  {
+    kind: "plex_direct",
+    label: "Plex server",
+    description: "Connect by address, without plex.tv",
+  },
+  {
+    kind: "jellyfin",
+    label: "Jellyfin / Emby",
+    description: "Sign in to your server and pick its music libraries",
+  },
+  {
+    kind: "kodi",
+    label: "Kodi",
+    description: "The music library of a Kodi device",
+  },
+  {
+    kind: "audius",
+    label: "Audius",
+    description: "An account's uploads, favorites and reposts",
+  },
 ];
 
 const PLACEHOLDERS: Partial<Record<Kind, string>> = {
@@ -410,7 +440,7 @@ export default function RemoteSourceSetupDialog({
         </div>
 
         {step === "kind" && (
-          <div className="add-source-options">
+          <div className="add-source-options remote-kind-list">
             {KINDS.map((option) => (
               <button
                 key={option.kind}
@@ -418,7 +448,12 @@ export default function RemoteSourceSetupDialog({
                 type="button"
                 onClick={() => chooseKind(option.kind)}
               >
-                {option.label}
+                <span className="remote-kind-text">
+                  <span className="remote-kind-name">{option.label}</span>
+                  <span className="remote-kind-description">
+                    {option.description}
+                  </span>
+                </span>
               </button>
             ))}
           </div>

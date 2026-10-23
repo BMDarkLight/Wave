@@ -8541,6 +8541,29 @@ div.album-hero-cover {
   background: rgba(var(--ink), 0.06);
 }
 
+/* Eight kinds outgrow a phone screen, so the list scrolls on its own. */
+.remote-kind-list {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.remote-kind-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.remote-kind-name {
+  font-weight: 600;
+}
+
+.remote-kind-description {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--quiet);
+}
+
 .remote-setup-list {
   display: flex;
   flex-direction: column;
