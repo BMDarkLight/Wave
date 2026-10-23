@@ -7,6 +7,7 @@
 // https://github.com/BMDarkLight/Wave
 
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -215,11 +216,39 @@ impl AppSettings {
             return Self::default();
         }
         let mut settings = match fs::read_to_string(path) {
-            Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+            Ok(contents) => match serde_json::from_str(&contents) {
+                Ok(settings) => settings,
+                Err(e) => {
+                    // The next save overwrites the file, so keep a copy of
+                    // what could not be read before it is gone.
+                    tracing::warn!("Settings file is not fully readable: {e}");
+                    let mut backup = path.as_os_str().to_owned();
+                    backup.push(".bak");
+                    let _ = fs::copy(path, PathBuf::from(backup));
+                    Self::salvage(&contents)
+                }
+            },
             Err(_) => Self::default(),
         };
         settings.normalize();
         settings
+    }
+
+    /// Keep every field that still reads and default the rest. One value
+    /// this build does not know, such as a theme added by a newer version,
+    /// used to throw away the media folders and the queue along with it.
+    fn salvage(contents: &str) -> Self {
+        let Ok(serde_json::Value::Object(fields)) = serde_json::from_str(contents) else {
+            return Self::default();
+        };
+        let mut kept = serde_json::Map::new();
+        for (key, value) in fields {
+            kept.insert(key.clone(), value);
+            if serde_json::from_value::<Self>(serde_json::Value::Object(kept.clone())).is_err() {
+                kept.remove(&key);
+            }
+        }
+        serde_json::from_value(serde_json::Value::Object(kept)).unwrap_or_default()
     }
 
     pub fn save(&self, app: &tauri::AppHandle) -> Result<(), String> {
@@ -241,11 +270,20 @@ impl AppSettings {
         // Saved every few seconds during playback, and the process can be
         // killed at any point (Android does so freely). Written beside the
         // file and renamed over it, so a cut-off write never leaves JSON that
-        // loads as all defaults.
+        // loads as all defaults. The data is synced before the rename, or a
+        // power cut can leave the renamed file empty. The temp name carries
+        // the process id because the CLI and the daemon both save here.
         let mut temp = path.as_os_str().to_owned();
-        temp.push(".tmp");
+        temp.push(format!(".{}.tmp", std::process::id()));
         let temp = PathBuf::from(temp);
-        fs::write(&temp, json).map_err(|e| format!("Failed to write settings: {e}"))?;
+        let written = fs::File::create(&temp).and_then(|mut file| {
+            file.write_all(json.as_bytes())?;
+            file.sync_all()
+        });
+        if let Err(e) = written {
+            let _ = fs::remove_file(&temp);
+            return Err(format!("Failed to write settings: {e}"));
+        }
         fs::rename(&temp, path).map_err(|e| {
             let _ = fs::remove_file(&temp);
             format!("Failed to write settings: {e}")
@@ -451,6 +489,27 @@ mod tests {
             .filter(|name| name.to_string_lossy() != SETTINGS_FILE)
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn one_unreadable_field_keeps_the_rest() {
+        let dir = std::env::temp_dir().join(format!("wave-test-settings-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(SETTINGS_FILE);
+        std::fs::write(
+            &path,
+            r#"{"volume":0.4,"media_folders":["/music"],"theme_mode":"sepia"}"#,
+        )
+        .unwrap();
+
+        let loaded = AppSettings::load_from_path(&path);
+        assert_eq!(loaded.volume, 0.4);
+        assert_eq!(loaded.media_folders, ["/music"]);
+        assert_eq!(loaded.theme_mode, ThemeMode::default());
+        let mut backup = path.clone().into_os_string();
+        backup.push(".bak");
+        assert!(PathBuf::from(backup).is_file());
         let _ = std::fs::remove_dir_all(dir);
     }
 
