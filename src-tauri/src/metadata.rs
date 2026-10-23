@@ -281,7 +281,7 @@ pub fn extract_track_with_options(
         album_artist: tags.album_artist,
         genre: tags.genre,
         year: tags.year,
-        track_number: tags.track_number,
+        track_number: tags.track_number.or(fallback.track_number),
         disc_number: tags.disc_number,
         format: extension,
         duration_seconds,
@@ -353,7 +353,7 @@ fn extract_track_content_uri(
         album_artist: probed.album_artist,
         genre: probed.genre,
         year: probed.year,
-        track_number: probed.track_number,
+        track_number: probed.track_number.or(fallback.track_number),
         disc_number: None,
         format,
         duration_seconds: probed
@@ -839,6 +839,7 @@ pub(crate) struct FallbackFields {
     pub(crate) title: String,
     pub(crate) artist: String,
     pub(crate) album: String,
+    pub(crate) track_number: Option<i32>,
 }
 
 /// The readable path inside a document URI: `Music/Telegram/song.mp3` for
@@ -901,15 +902,16 @@ pub(crate) fn fallback_fields(path: &Path) -> FallbackFields {
         .and_then(|name| name.to_str())
         .unwrap_or("Local Files")
         .to_string();
-    let (artist, title) = file_stem
-        .split_once(" - ")
-        .map(|(artist, title)| (artist.to_string(), title.to_string()))
-        .unwrap_or_else(|| ("Unknown Artist".to_string(), file_stem.to_string()));
+    // The rules a WebDAV file name is read by: "07 - Title" is track 7,
+    // "Artist - Title" names the artist. Splitting on " - " alone made the
+    // track number of "02 - Song" the artist.
+    let name = crate::remote::webdav::name_meta(file_stem, None);
 
     FallbackFields {
-        title,
-        artist,
+        title: name.title,
+        artist: name.artist.unwrap_or_else(|| "Unknown Artist".to_string()),
         album,
+        track_number: name.track_number,
     }
 }
 
@@ -1038,6 +1040,22 @@ mod tests {
         let fields = fallback_fields(Path::new("/music/SomeAlbum/JustAFilename.mp3"));
         assert_eq!(fields.artist, "Unknown Artist");
         assert_eq!(fields.title, "JustAFilename");
+    }
+
+    #[test]
+    fn fallback_fields_reads_a_leading_track_number() {
+        let fields = fallback_fields(Path::new("/music/Album/02 - Untagged Song.mp3"));
+        assert_eq!(fields.artist, "Unknown Artist");
+        assert_eq!(fields.title, "Untagged Song");
+        assert_eq!(fields.track_number, Some(2));
+        let fields = fallback_fields(Path::new("/music/01 - Yoko Takahashi - Thesis.flac"));
+        assert_eq!(fields.artist, "Yoko Takahashi");
+        assert_eq!(fields.title, "Thesis");
+        assert_eq!(fields.track_number, Some(1));
+        // A title that only starts with digits keeps them.
+        let fields = fallback_fields(Path::new("/music/1979.mp3"));
+        assert_eq!(fields.title, "1979");
+        assert_eq!(fields.track_number, None);
     }
 
     #[test]
