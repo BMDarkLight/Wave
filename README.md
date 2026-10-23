@@ -61,8 +61,8 @@ Wave installs as a normal desktop app and puts a `wave` command on your `PATH`.
 
 | Platform    | Install                                                         |
 | ----------- | --------------------------------------------------------------- |
-| Debian/Ubuntu | `sudo apt install ./Wave_1.1.7_amd64.deb`                      |
-| Fedora/RHEL | `sudo dnf install ./Wave-1.1.7-1.x86_64.rpm`                     |
+| Debian/Ubuntu | `sudo apt install ./Wave_1.2.0_amd64.deb`                      |
+| Fedora/RHEL | `sudo dnf install ./Wave-1.2.0-1.x86_64.rpm`                     |
 | Arch        | `yay -S wave-music-player-bin`                                   |
 | Flatpak     | `flatpak install app.bmdarklight.wave`                           |
 | AppImage    | download, `chmod +x`, run                                        |
