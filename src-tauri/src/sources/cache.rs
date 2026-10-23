@@ -30,14 +30,6 @@ use crate::app::paths;
 /// Refuse absurd payloads outright rather than filling the disk on a bad URL.
 const MAX_FETCH_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Cache file for a provider's track. Ids are sanitised because Internet
-/// Archive identifiers can contain path separators.
-pub fn cached_path(provider: &str, id: &str, extension: &str) -> PathBuf {
-    paths::source_cache_dir()
-        .join(sanitize(provider))
-        .join(format!("{}.{}", sanitize(id), sanitize(extension)))
-}
-
 /// Cache slot for a preview clip.
 ///
 /// Kept in its own directory because previews are *not* library content: they
@@ -126,15 +118,24 @@ pub(crate) fn sanitize(raw: &str) -> String {
 
 /// Download `url` to `dest`, writing through a temp file so an interrupted
 /// fetch can never leave a half-written file that Symphonia would fail to
-/// probe. Returns the byte count.
-pub fn fetch_to(client: &Client, url: &str, dest: &Path) -> Result<u64, SourceError> {
+/// probe. `referer` is for hosts that only serve files linked from their own
+/// pages; see [`super::SourceProvider::fetch_referer`]. Returns the byte count.
+pub fn fetch_to(
+    client: &Client,
+    url: &str,
+    referer: Option<&str>,
+    dest: &Path,
+) -> Result<u64, SourceError> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| SourceError::Network(format!("Cannot create cache directory: {e}")))?;
     }
 
-    let mut response = client
-        .get(url)
+    let mut request = client.get(url);
+    if let Some(referer) = referer {
+        request = request.header(reqwest::header::REFERER, referer);
+    }
+    let mut response = request
         .send()
         .map_err(|e| SourceError::Network(e.to_string()))?;
 
@@ -336,13 +337,9 @@ mod tests {
     }
 
     #[test]
-    fn previews_are_kept_apart_from_library_cache() {
+    fn previews_are_kept_apart_from_the_stream_cache() {
         let preview = preview_path("deezer", "123", "mp3");
-        let cached = cached_path("deezer", "123", "mp3");
-        assert_ne!(
-            preview, cached,
-            "a preview must never occupy a library slot"
-        );
+        assert!(!preview.starts_with(remote_cache_root()));
         assert!(preview.to_string_lossy().contains("previews"));
         assert!(preview.starts_with(paths::source_cache_dir()));
     }
@@ -355,8 +352,8 @@ mod tests {
     }
 
     #[test]
-    fn cached_path_stays_inside_the_cache_dir() {
-        let path = cached_path("archive", "../escape", "mp3");
+    fn preview_path_stays_inside_the_cache_dir() {
+        let path = preview_path("archive", "../escape", "mp3");
         assert!(path.starts_with(paths::source_cache_dir()));
         assert!(!path.to_string_lossy().contains(".."));
     }

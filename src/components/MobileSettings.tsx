@@ -909,7 +909,7 @@ export default function MobileSettings({
                   />
                 </div>
                 <p className="mset-hint mset-key-note">
-                  Deezer and Internet Archive need no key. Deezer returns
+                  Every other catalog needs no key. Deezer and iTunes return
                   30-second clips; Spotify serves no audio at all.
                 </p>
               </>
@@ -930,8 +930,9 @@ export default function MobileSettings({
               <span className="mset-gapless-copy">
                 <span className="mset-gapless-label">Outside Sourcing</span>
                 <span className="mset-gapless-hint">
-                  Play music from your own Plex, Jellyfin or Navidrome server.
-                  Wave won't connect to anything while this is off.
+                  Play music from your own server, a WebDAV or DLNA share, Kodi,
+                  or an Audius account. Wave won't connect to anything while
+                  this is off.
                 </span>
               </span>
             </label>
@@ -966,7 +967,7 @@ export default function MobileSettings({
                   <span className="mset-row-text">
                     <span className="mset-row-label">Remote sources</span>
                     <span className="mset-row-value">
-                      Plex, Jellyfin, Emby and Subsonic servers
+                      Plex, Jellyfin, Subsonic, WebDAV, DLNA, Kodi, Audius
                     </span>
                   </span>
                   <button

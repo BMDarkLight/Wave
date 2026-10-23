@@ -33,7 +33,7 @@ export interface RemoteSource {
   track_count: number;
   last_sync_at: number | null;
   last_error: string | null;
-  /** How to sign in again: "plex_tv" or "plex_token". */
+  /** How to sign in again: "plex_tv", "plex_token", "password" or "none". */
   reauth: string;
 }
 
@@ -143,7 +143,50 @@ export const subsonicAddSource = (
     password,
   });
 
-/** Signs a Subsonic, Jellyfin or Emby source in again with its password. */
+/**
+ * Adds a WebDAV folder (Nextcloud, ownCloud, a NAS share). The username is
+ * optional; leave it blank for a folder that needs no sign-in.
+ */
+export const webdavAddSource = (
+  url: string,
+  username: string,
+  password: string,
+): Promise<RemoteSource> =>
+  safeInvoke<RemoteSource>("webdav_add_source", {
+    url,
+    username: username.trim(),
+    password,
+  });
+
+/** A DLNA or UPnP media server found on the local network. */
+export interface DlnaServer {
+  location: string;
+  name: string;
+}
+
+export const dlnaDiscover = (): Promise<DlnaServer[]> =>
+  safeInvoke<DlnaServer[]>("dlna_discover");
+
+/** Adds a media server by its description address or a bare host and port. */
+export const dlnaAddSource = (address: string): Promise<RemoteSource> =>
+  safeInvoke<RemoteSource>("dlna_add_source", { address });
+
+/** Adds an Audius account's uploads, favorites and reposts by its handle. */
+export const audiusAddSource = (handle: string): Promise<RemoteSource> =>
+  safeInvoke<RemoteSource>("audius_add_source", { handle: handle.trim() });
+
+export const kodiAddSource = (
+  url: string,
+  username: string,
+  password: string,
+): Promise<RemoteSource> =>
+  safeInvoke<RemoteSource>("kodi_add_source", {
+    url,
+    username: username.trim(),
+    password,
+  });
+
+/** Signs a Subsonic, Jellyfin, Emby, WebDAV or Kodi source in again. */
 export const setSourcePassword = (
   sourceId: string,
   password: string,

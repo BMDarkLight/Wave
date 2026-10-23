@@ -477,8 +477,14 @@ impl Fill {
         }
         let _ = std::fs::remove_file(sidecar);
         let enabled = self.gate.state() != GateState::Disabled;
+        // Catalogs that only list files (WebDAV, Audius, Kodi) give no length;
+        // the finished file can be measured instead.
+        let duration = crate::remote::tags::measure_duration(&self.path);
         let stored = rt.with_library(|l| {
             l.set_remote_cache_state(&self.uri, Some("complete"))?;
+            if let Some(seconds) = duration {
+                l.set_remote_track_duration_if_missing(&self.uri, seconds)?;
+            }
             l.recompute_remote_visibility(enabled)
         });
         if let Err(e) = stored {

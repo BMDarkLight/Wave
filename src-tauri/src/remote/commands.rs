@@ -18,7 +18,10 @@ use super::plex::{self, PlexHeaders};
 use super::refresh::RefreshCooldown;
 use super::store::RemoteSourceRow;
 use super::uri::RemoteUri;
-use super::{jellyfin, stream, subsonic, sync, RemoteEvent, RemoteRuntime, SourceState};
+use super::{
+    audius, dlna, jellyfin, kodi, stream, subsonic, sync, webdav, RemoteEvent, RemoteRuntime,
+    SourceState,
+};
 use crate::app::settings::AppSettingsState;
 use crate::commands::LibraryState;
 use crate::metadata::Track;
@@ -130,7 +133,7 @@ pub struct RemoteSourceDto {
     pub track_count: i64,
     pub last_sync_at: Option<i64>,
     pub last_error: Option<String>,
-    /// How to sign in again: `plex_tv`, `plex_token` or `password`.
+    /// How to sign in again: `plex_tv`, `plex_token`, `password` or `none`.
     pub reauth: String,
 }
 
@@ -167,10 +170,16 @@ fn source_dto(row: &RemoteSourceRow, state: SourceState) -> RemoteSourceDto {
     }
 }
 
-/// How a source signs in again: through plex.tv, with a typed Plex token, or
-/// with its password.
+/// How a source signs in again: through plex.tv, with a typed Plex token,
+/// with its password, or not at all (DLNA and Audius have no sign-in).
 fn reauth_for(row: &RemoteSourceRow) -> &'static str {
-    if matches!(row.kind.as_str(), "subsonic" | "jellyfin") {
+    if matches!(row.kind.as_str(), "dlna" | "audius") {
+        return "none";
+    }
+    if matches!(
+        row.kind.as_str(),
+        "subsonic" | "jellyfin" | "webdav" | "kodi"
+    ) {
         return "password";
     }
     let direct = serde_json::from_str::<serde_json::Value>(&row.config_json)
@@ -626,20 +635,232 @@ pub async fn subsonic_add_source(
         let name = subsonic::display_name(probed.server_type.as_deref(), &probed.url);
         let key = subsonic::stable_key(&probed);
         let json = serde_json::to_string(&probed).map_err(|e| e.to_string())?;
-        let id = rt.with_library(|library| {
-            let id = library.insert_remote_source("subsonic", &key, &name, &json)?;
-            rt.reload_sources(library);
-            Ok::<_, String>(id)
-        })?;
-        sync_one_in_background(&task_app, rt, id.clone());
-        let row = rt
-            .with_library(|library| library.list_remote_sources())?
-            .into_iter()
-            .find(|row| row.id == id)
-            .ok_or_else(|| "The new source went missing".to_string())?;
-        Ok(source_dto(&row, rt.status(&id)))
+        store_new_source(&task_app, rt, "subsonic", &key, &name, &json)
     })
     .await
+}
+
+/// Saves a checked source, builds its backend and starts its first sync.
+fn store_new_source(
+    app: &AppHandle,
+    rt: &'static RemoteRuntime,
+    kind: &str,
+    key: &str,
+    name: &str,
+    config_json: &str,
+) -> Result<RemoteSourceDto, String> {
+    let id = rt.with_library(|library| {
+        let id = library.insert_remote_source(kind, key, name, config_json)?;
+        rt.reload_sources(library);
+        Ok::<_, String>(id)
+    })?;
+    sync_one_in_background(app, rt, id.clone());
+    let row = rt
+        .with_library(|library| library.list_remote_sources())?
+        .into_iter()
+        .find(|row| row.id == id)
+        .ok_or_else(|| "The new source went missing".to_string())?;
+    Ok(source_dto(&row, rt.status(&id)))
+}
+
+/// A WebDAV check's failure, said the way a person can act on.
+fn webdav_error(error: RemoteError, url: &str) -> String {
+    match error {
+        RemoteError::Unauthorized => "Wrong username or password".to_string(),
+        RemoteError::Unreachable(_) => {
+            format!("Can't reach {url}. Check the address and port.")
+        }
+        RemoteError::Http(404) => "There's no folder at that address".to_string(),
+        RemoteError::Http(_) | RemoteError::Parse(_) => {
+            "That address isn't a WebDAV folder".to_string()
+        }
+        RemoteError::Insecure => {
+            "Use an https:// address to sign in to a server outside your network".to_string()
+        }
+        other => remote_error(other),
+    }
+}
+
+/// Adds a WebDAV folder (Nextcloud, ownCloud, a NAS share, rclone) as a
+/// remote source and starts its first sync. The username is optional.
+#[tauri::command]
+pub async fn webdav_add_source(
+    url: String,
+    username: String,
+    password: String,
+    app: AppHandle,
+) -> Result<RemoteSourceDto, String> {
+    NetworkGate::global().check().map_err(remote_error)?;
+    let url = webdav::normalize_url(&url)?;
+    let rt = runtime()?;
+    let task_app = app.clone();
+    blocking(move || {
+        let config = webdav::WebDavConfig {
+            url: url.clone(),
+            username: username.trim().to_string(),
+            password,
+        };
+        webdav::WebDavBackend::new(config.clone())
+            .and_then(|backend| backend.probe())
+            .map_err(|e| webdav_error(e, &url))?;
+        let name = webdav::display_name(&config.url);
+        let key = webdav::stable_key(&config);
+        let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+        store_new_source(&task_app, rt, "webdav", &key, &name, &json)
+    })
+    .await
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DlnaServerDto {
+    pub location: String,
+    pub name: String,
+}
+
+/// Looks for DLNA and UPnP media servers on the local network. Each one found
+/// is listed by name with the address its description lives at.
+#[tauri::command]
+pub async fn dlna_discover() -> Result<Vec<DlnaServerDto>, String> {
+    let gate = NetworkGate::global();
+    gate.check().map_err(remote_error)?;
+    blocking(move || {
+        let locations = dlna::discover(gate, Duration::from_secs(3)).map_err(remote_error)?;
+        // Descriptions are read side by side so one slow box doesn't hold up
+        // the list.
+        let handles: Vec<_> = locations
+            .into_iter()
+            .map(|location| std::thread::spawn(move || dlna::describe(gate, &location).ok()))
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut servers = Vec::new();
+        for config in handles.into_iter().filter_map(|h| h.join().ok().flatten()) {
+            if seen.insert(dlna::stable_key(&config)) {
+                servers.push(DlnaServerDto {
+                    location: config.location,
+                    name: config.name,
+                });
+            }
+        }
+        servers.sort_by_key(|server| server.name.to_lowercase());
+        Ok(servers)
+    })
+    .await
+}
+
+/// Adds a DLNA or UPnP media server, found by [`dlna_discover`] or typed as an
+/// address, and starts its first sync.
+#[tauri::command]
+pub async fn dlna_add_source(address: String, app: AppHandle) -> Result<RemoteSourceDto, String> {
+    let gate = NetworkGate::global();
+    gate.check().map_err(remote_error)?;
+    let candidates = dlna::candidate_locations(&address)?;
+    let rt = runtime()?;
+    let task_app = app.clone();
+    blocking(move || {
+        let config = candidates
+            .iter()
+            .find_map(|location| dlna::describe(gate, location).ok())
+            .ok_or_else(|| "There's no media server at that address".to_string())?;
+        dlna::DlnaBackend::new(config.clone())
+            .and_then(|backend| backend.probe())
+            .map_err(|_| format!("{} didn't answer a request for its music", config.name))?;
+        let key = dlna::stable_key(&config);
+        let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+        store_new_source(&task_app, rt, "dlna", &key, &config.name, &json)
+    })
+    .await
+}
+
+/// Adds an Audius account by its handle: its uploads, favorites and reposts
+/// join the library. Nothing about the account is private, so there is no
+/// sign-in.
+#[tauri::command]
+pub async fn audius_add_source(handle: String, app: AppHandle) -> Result<RemoteSourceDto, String> {
+    let gate = NetworkGate::global();
+    gate.check().map_err(remote_error)?;
+    let handle = audius::parse_handle(&handle)?;
+    let rt = runtime()?;
+    let task_app = app.clone();
+    blocking(move || {
+        let config = audius::resolve(gate, &handle).map_err(|e| match e {
+            RemoteError::Http(404) => format!("There's no Audius account called @{handle}"),
+            other => remote_error(other),
+        })?;
+        let name = audius::display_name(&config);
+        let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+        store_new_source(&task_app, rt, "audius", &config.user_id, &name, &json)
+    })
+    .await
+}
+
+/// A Kodi check's failure, said the way a person can act on.
+fn kodi_error(error: RemoteError, url: &str) -> String {
+    match error {
+        RemoteError::Unauthorized => "Wrong username or password".to_string(),
+        RemoteError::Unreachable(_) => format!(
+            "Can't reach Kodi at {url}. Check that remote control over HTTP is on in Kodi's settings."
+        ),
+        RemoteError::Http(_) | RemoteError::Parse(_) => {
+            "There's no Kodi web server at that address".to_string()
+        }
+        RemoteError::Insecure => {
+            "Use an https:// address to sign in to Kodi outside your network".to_string()
+        }
+        other => remote_error(other),
+    }
+}
+
+/// Adds a Kodi device's music library and starts its first sync.
+#[tauri::command]
+pub async fn kodi_add_source(
+    url: String,
+    username: String,
+    password: String,
+    app: AppHandle,
+) -> Result<RemoteSourceDto, String> {
+    NetworkGate::global().check().map_err(remote_error)?;
+    let url = kodi::normalize_url(&url)?;
+    let rt = runtime()?;
+    let task_app = app.clone();
+    blocking(move || {
+        let config = kodi::KodiConfig {
+            url: url.clone(),
+            username: username.trim().to_string(),
+            password,
+        };
+        kodi::KodiBackend::new(config.clone())
+            .probe()
+            .map_err(|e| kodi_error(e, &url))?;
+        let name = kodi::display_name(&config.url);
+        let key = kodi::stable_key(&config);
+        let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+        store_new_source(&task_app, rt, "kodi", &key, &name, &json)
+    })
+    .await
+}
+
+/// A Kodi config with a new password, checked with the device.
+fn kodi_with_password(config_json: &str, password: String) -> Result<String, String> {
+    let mut config: kodi::KodiConfig =
+        serde_json::from_str(config_json).map_err(|e| e.to_string())?;
+    config.password = password;
+    let url = config.url.clone();
+    kodi::KodiBackend::new(config.clone())
+        .probe()
+        .map_err(|e| kodi_error(e, &url))?;
+    serde_json::to_string(&config).map_err(|e| e.to_string())
+}
+
+/// A WebDAV config with a new password, checked against the folder.
+fn webdav_with_password(config_json: &str, password: String) -> Result<String, String> {
+    let mut config: webdav::WebDavConfig =
+        serde_json::from_str(config_json).map_err(|e| e.to_string())?;
+    config.password = password;
+    let url = config.url.clone();
+    webdav::WebDavBackend::new(config.clone())
+        .and_then(|backend| backend.probe())
+        .map_err(|e| webdav_error(e, &url))?;
+    serde_json::to_string(&config).map_err(|e| e.to_string())
 }
 
 /// A Subsonic config signed in with a new password, checked with the server.
@@ -696,6 +917,8 @@ pub async fn set_source_password(
         let json = match row.kind.as_str() {
             "subsonic" => subsonic_with_password(&row.config_json, password)?,
             "jellyfin" => jellyfin_with_password(&row.config_json, &password)?,
+            "webdav" => webdav_with_password(&row.config_json, password)?,
+            "kodi" => kodi_with_password(&row.config_json, password)?,
             _ => return Err("This source doesn't sign in with a password".to_string()),
         };
         rt.with_library(|library| {
@@ -1154,17 +1377,21 @@ pub fn after_local_library_change(app: &AppHandle) {
 /// Applies Outside Sourcing settings to the network gate and the library.
 /// Called after the settings change; `was_enabled` is the value before.
 pub fn apply_settings(app: &AppHandle, was_enabled: bool) {
-    let (enabled, cellular) = app
+    let (enabled, cellular, searching) = app
         .try_state::<AppSettingsState>()
         .and_then(|state| {
-            state
-                .0
-                .lock()
-                .ok()
-                .map(|s| (s.remote_sources_enabled, s.remote_cellular_enabled))
+            state.0.lock().ok().map(|s| {
+                (
+                    s.remote_sources_enabled,
+                    s.remote_cellular_enabled,
+                    s.outside_sourcing_enabled,
+                )
+            })
         })
-        .unwrap_or((false, false));
+        .unwrap_or((false, false, false));
     NetworkGate::global().set_policy(enabled, cellular);
+    // Search results have always streamed over any network.
+    NetworkGate::search().set_policy(searching, true);
     let _ = app.emit("remote-status-changed", ());
     if enabled == was_enabled {
         return;

@@ -28,7 +28,7 @@ catalogs — in a single portable app built on Rust + Tauri + React.
   - [Library, albums & artists](#library-albums--artists)
   - [Metadata editor](#metadata-editor)
   - [Three-tier search](#three-tier-search)
-  - [Your own server (Plex, Jellyfin, Navidrome)](#your-own-server-plex-jellyfin-navidrome)
+  - [Your own server and shares](#your-own-server-and-shares)
   - [Queue & playback](#queue--playback)
   - [Lyrics](#lyrics)
   - [Audio engine & DSP](#audio-engine--dsp)
@@ -86,8 +86,8 @@ live.
 | 🔍 **Three-tier search** | Filters the current view, then the whole library (lyrics included), then — only if you ask — the internet. |
 | 🎚️ **Real DSP** | 10-band biquad equalizer, crossfade, gapless playback, and loudness normalization. |
 | 📝 **Synced lyrics** | Auto-fetched from LRCLIB, highlighted line by line, importable and exportable. |
-| 🌐 **Free catalogs** | Stream or download full-length tracks from Internet Archive and Jamendo. Off by default. |
-| 🗄️ **Your own server** | Add a Plex, Jellyfin, Emby, Navidrome or other Subsonic server and its music joins your library, streaming as it plays and cached for offline. Off by default. |
+| 🌐 **Free catalogs** | Stream or download full-length tracks from Internet Archive, Jamendo, Audius, ccMixter, and Wikimedia Commons. Off by default. |
+| 🗄️ **Your own server** | Add a Plex, Jellyfin, Emby, Navidrome or other Subsonic server, a WebDAV folder, a DLNA server, Kodi, or an Audius account, and its music joins your library, streaming as it plays and cached for offline. Off by default. |
 | 📱 **One codebase** | Windows, macOS, Linux, and Android — desktop and touch layouts from the same UI. |
 | 🪶 **Portable** | A single native binary; no Electron, no heavy runtime. |
 
@@ -166,15 +166,16 @@ Search widens only as far as it has to, and never touches the network on its own
 
 <img src="docs/screenshots/desktop-search.png" alt="Library search with matched-field badges and lyric snippets" width="100%">
 
-Tier 3 queries Internet Archive, Jamendo, and Deezer concurrently and groups the
-results by provider with their licence line. Full-length audio can be streamed or
-saved to your library; Deezer only exposes 30-second previews, so those play but
-are never written to disk. A provider that fails degrades to an "unavailable"
+Tier 3 queries Deezer, iTunes, Jamendo, Audius, Internet Archive, ccMixter, and
+Wikimedia Commons concurrently and groups the results by provider with their
+licence line. Full-length audio starts playing as soon as the first bytes
+arrive and can be saved to your library; Deezer and iTunes only expose
+30-second previews, so those play but are never written to disk. A provider that fails degrades to an "unavailable"
 section instead of breaking the search.
 
 <img src="docs/screenshots/desktop-sources.png" alt="Remote source results grouped by provider" width="100%">
 
-### Your own server (Plex, Jellyfin, Navidrome)
+### Your own server and shares
 
 Turn on **Outside Sourcing** in Settings, then choose **Add remote source**
 (under Outside Sourcing on desktop, or the + in Media Source Folders on
@@ -186,9 +187,24 @@ without one. For Jellyfin or Emby, enter the server's address, your username
 and password, then pick its music libraries; Wave keeps the server's sign-in
 token, not your password. For Navidrome, Airsonic, Gonic and other Subsonic
 servers, choose that option and enter the server's address, your username and
-password. The
-server's tracks join your library, albums, artists and search, marked with a
-small cloud.
+password.
+
+Other places your music can live:
+
+- **WebDAV folder**: Nextcloud, ownCloud, a Synology or QNAP share, rclone.
+  Enter the folder's address and, if it asks for one, your login. Tags are read
+  from the start of each file, and a `cover.jpg` next to the files becomes the
+  album art.
+- **DLNA or UPnP media server**: MiniDLNA, Serviio, Universal Media Server,
+  Gerbera, or the one built into your NAS or router. Wave lists the servers it
+  finds on your network, or you can enter one's address.
+- **Kodi**: turn on remote control over HTTP in Kodi's settings, then enter its
+  address and the username and password set there.
+- **Audius account**: enter a handle and that account's uploads, favorites and
+  reposts join your library. No sign-in, since all of it is public.
+
+The tracks join your library, albums, artists and search, marked with a small
+cloud.
 
 - Playback starts while the track is still downloading, then the whole file is
   kept in the cache, so the next play is instant and works offline. Seeking
@@ -614,7 +630,7 @@ in [`docs/cli.md`](docs/cli.md).
 ### External services (all optional)
 - **LRCLIB** — lyrics
 - **MusicBrainz** + **Cover Art Archive** — metadata and cover art enrichment
-- **Internet Archive**, **Jamendo**, **Deezer** — remote search tier
+- **Deezer**, **iTunes**, **Jamendo**, **Audius**, **Internet Archive**, **ccMixter**, **Wikimedia Commons**: remote search tier
 - **GitHub Releases** — the update check at launch (Settings, Auto update)
 
 ---
@@ -774,14 +790,18 @@ to check on a phone after changing them:
 Wave works fully offline. Searching the internet for music is opt-in — toggle
 **Search outside sources** in Settings.
 
-Deezer and Internet Archive need no setup. Jamendo needs a free client ID from
+Jamendo needs a free client ID from
 [developer.jamendo.com](https://developer.jamendo.com), entered in Settings.
+Every other catalog needs no setup.
 
-Deezer's API only serves 30-second previews; previews play but are never saved to
-your library. Full-length audio comes from Internet Archive and Jamendo.
+Deezer and iTunes only serve 30-second previews; previews play but are never
+saved to your library. Full-length audio comes from Jamendo, Audius, Internet
+Archive, ccMixter, and Wikimedia Commons. Audius tracks can be saved only when
+the artist allows downloads.
 
-Streaming from your own Plex, Jellyfin, Emby or Subsonic server is a separate
-switch, **Outside Sourcing**. Nothing contacts your server while it is off.
+Streaming from your own server, a WebDAV or DLNA share, Kodi or an Audius
+account is a separate switch, **Outside Sourcing**. Nothing contacts them while
+it is off.
 
 ---
 

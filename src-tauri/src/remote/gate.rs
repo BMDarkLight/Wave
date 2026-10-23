@@ -50,6 +50,30 @@ impl NetworkGate {
         GATE.get_or_init(NetworkGate::new)
     }
 
+    /// The gate for streamed search results, which follow the search switch
+    /// rather than Outside Sourcing.
+    pub fn search() -> &'static NetworkGate {
+        static GATE: OnceLock<NetworkGate> = OnceLock::new();
+        GATE.get_or_init(NetworkGate::new)
+    }
+
+    /// The gate that governs a source's traffic.
+    pub fn for_source(source_id: &str) -> &'static NetworkGate {
+        if source_id == super::search::SEARCH_SOURCE {
+            Self::search()
+        } else {
+            Self::global()
+        }
+    }
+
+    /// [`Self::for_source`] for a track path; local paths get the global gate.
+    pub fn for_path(path: &str) -> &'static NetworkGate {
+        match super::uri::RemoteUri::parse(path) {
+            Some(uri) => Self::for_source(&uri.source_id),
+            None => Self::global(),
+        }
+    }
+
     pub fn set_policy(&self, enabled: bool, cellular_allowed: bool) {
         self.enabled.store(enabled, Ordering::Relaxed);
         self.cellular_allowed

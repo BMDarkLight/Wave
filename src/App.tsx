@@ -1931,7 +1931,7 @@ function App() {
                 type="button"
                 onClick={() => void searchSourcesNow()}
               >
-                Search Deezer &amp; free catalogs
+                Search online catalogs
               </button>
             )}
           <SourceResults
@@ -2129,7 +2129,7 @@ function App() {
                 type="button"
                 onClick={() => void searchSourcesNow()}
               >
-                Search Deezer &amp; free catalogs
+                Search online catalogs
               </button>
             )}
           <SourceResults

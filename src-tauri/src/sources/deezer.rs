@@ -9,7 +9,7 @@
 //! Deezer: discovery and metadata.
 //!
 //! Deezer's public search API is free and unauthenticated, and its metadata
-//! and artwork are the best of the three providers. Its audio is *not*:
+//! and artwork are as good as any provider's. Its audio is *not*:
 //! `preview` is a 30-second MP3, and that is deliberately all this provider
 //! ever returns. Full-length Deezer audio is encrypted and requires account
 //! token decryption, which is out of scope permanently. Hence

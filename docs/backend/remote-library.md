@@ -2,8 +2,12 @@
 
 A remote source is a music library that lives on another machine. Its tracks
 appear in Wave's library next to local files, stream on demand, and are kept in
-a cache so a second play is instant and works offline. Plex, Jellyfin, Emby
-and Subsonic-compatible servers (Navidrome, Airsonic, Gonic) are the backends. The pieces below are deliberately backend-agnostic: a later backend,
+a cache so a second play is instant and works offline. The backends are Plex,
+Jellyfin and Emby, Subsonic-compatible servers (Navidrome, Airsonic, Gonic),
+WebDAV folders (Nextcloud, ownCloud, NAS shares), DLNA and UPnP media servers,
+Kodi, and Audius accounts. Full-length search results stream through the same
+cache; see [Song sourcing](./sources.md#streamed-results-are-hidden-remote-rows).
+The pieces below are deliberately backend-agnostic: a later backend,
 such as a Wave peer reached through Radii, plugs into the same contract without
 touching the library merge, the stream cache, or the player.
 
@@ -25,6 +29,12 @@ With it off, Wave makes no remote request of any kind, including at startup.
 | `remote/plex/` | Plex sign-in, server discovery, catalog paging, ranged audio |
 | `remote/subsonic/` | Subsonic API: signed requests, catalog paging, ranged audio |
 | `remote/jellyfin/` | Jellyfin and Emby: sign-in, music libraries, catalog paging, ranged audio |
+| `remote/webdav.rs` | WebDAV: `PROPFIND` walk, tags from file headers, folder covers |
+| `remote/dlna.rs` | DLNA and UPnP: SSDP discovery, ContentDirectory search and browse |
+| `remote/kodi.rs` | Kodi: JSON-RPC catalog, `/vfs/` audio |
+| `remote/audius.rs` | Audius accounts: uploads, favorites and reposts |
+| `remote/search.rs` | The built-in source behind streamed search results |
+| `remote/tags.rs` | Tags read from the first bytes of a file, and their cache |
 | `remote/http.rs` | The HTTP clients every backend shares |
 | `remote/stream/` | Stream cache, progressive reader, Android loopback server |
 | `remote/commands.rs` | Tauri commands, events and startup |
@@ -173,6 +183,114 @@ The source id is built from the server id and user id.
 
 ---
 
+## WebDAV
+
+A WebDAV folder is added by its address, with a username and password if it
+asks for one. A bare address gets `http://`, and the path always ends in `/` so
+files join under it. Nextcloud and ownCloud folders live under
+`/remote.php/dav/files/<user>/`; a Nextcloud public link share is
+`/public.php/dav/files/<share token>/`, with `anonymous` as the username when
+the share has a password. Every `PROPFIND` carries
+`X-Requested-With: XMLHttpRequest`, without which Nextcloud refuses one on a
+public share. The password is stored in the source's config,
+because every request carries it as Basic auth. Over plain `http://` it is only
+sent to this machine or an address that can only be on the local network
+(private and link-local IPs, single-label names, `.local`, `.lan`,
+`.home.arpa`, `.internal`); anywhere else the source asks for HTTPS.
+
+There is no music API, only files. The catalog walks the folder one directory
+at a time with `PROPFIND` and `Depth: 1`, since many servers refuse
+`Depth: infinity`. Folders whose names start with `.` or `@`, and recycle bins,
+are skipped (Synology keeps thumbnails in `@eaDir`); the walk stops 12 levels
+down. A member listed with a bare error status and no properties, as RFC 4918
+allows for a folder the login can't read, is skipped too, and a weak ETag
+(`W/"..."`) counts as the same version as its strong form. A directory that vanishes or can't be read mid-walk is skipped; any other
+failure ends the sync without tombstoning anything.
+
+Each audio file becomes a track whose id is a hash of its path below the
+folder, so the id survives a change of server address. Its tags come from the
+first 256 KB of the file, enough for ID3v2, FLAC and Ogg headers. What was read
+is kept in `<data>/source-cache/remote-tags/`, keyed by the file's ETag (or its
+size and modification time), so a sync only reads headers of new or changed
+files. A file with no tags there, such as an MP4 with its index at the end, is
+described by its path: `Artist/Album/01 - Title.flac`, with `2001 - Album`
+giving the year, `CD2` or `Disc 2` folders giving the disc, and `Artist - Title`
+file names giving the artist when the folders don't. A `cover.jpg`,
+`folder.jpg` or `front.jpg` next to the files becomes the album's artwork. The
+length is measured once the whole file is cached.
+
+---
+
+## DLNA and UPnP
+
+Media servers are found with an SSDP `M-SEARCH` for
+`urn:schemas-upnp-org:device:MediaServer:1`, sent twice and answered for 3
+seconds, or added by address. The search goes out of every multicast-capable
+interface, not only the one the system picks: while a VPN is up the system
+sends multicast into the tunnel, and a server on the LAN would never hear it. A bare `host:port` tries the description paths
+servers commonly use (`/rootDesc.xml` for MiniDLNA, `/description.xml`, and
+others). The device description gives the name, the UDN, which becomes the
+source id so a server that changes address is still the same source, and the
+ContentDirectory control URL.
+
+The catalog is one `Search` for `upnp:class derivedfrom
+"object.item.audioItem"`, 500 items a page, which MiniDLNA and most full
+servers answer. A server that faults is walked with `Browse` instead,
+container by container, 16 levels at most. A walk sees the same song under
+Artists, Albums, Genres and Folders, so items are kept once by their file URL.
+An item's audio is its first plain `http-get` resource in a format Wave plays,
+preferring one that states its size, since servers list transcodes (often
+`audio/L16`) beside the original. Tags, length and artwork come from the
+DIDL-Lite item; the length may be `H:MM:SS.fff` or the spec's fraction form
+`H:MM:SS.F0/F1`. A server that only shares folders (rclone, some NAS boxes)
+sends the file name as the title and no tags, so an item without an artist has
+its title read the way a WebDAV file name is. A `TotalMatches` of 0 means the
+server can't count, so paging continues until a page comes back empty. No
+sign-in exists, so there is never a password to ask for.
+
+---
+
+## Kodi
+
+Kodi is added by the address of its web server (Settings, Services, Control,
+"Allow remote control via HTTP"), port 8080 unless one is given, with its
+username and password, which travel as Basic auth under the same rule as
+WebDAV. The catalog is `AudioLibrary.GetSongs`, 500 songs a page in Kodi's own
+order: a sort with ties, such as by track number across albums, could move a
+song between pages. The artist is Kodi's `displayartist` ("A feat. B"). A song's
+audio is its original file: `Files.PrepareDownload` names a `/vfs/` path,
+which also works for files Kodi reads over NFS or SMB. Artwork is the song's
+thumbnail through `/image/`. The catalog has no file sizes; see
+[Files without a size](#files-without-a-size).
+
+---
+
+## Audius
+
+An Audius account is added by its handle, typed as `@name`, `name` or a
+profile link. Its uploads, favorites and reposts are public, so there is no
+sign-in. The catalog walks the three in turn, 100 items a request; favorites
+list only track ids, which are looked up in one request per page. A track in
+more than one list is kept once, and tracks gated behind a purchase or a follow
+are left out. Favorites are matched to their tracks by either id form, since
+the API spec gives a string where the server sends a number. A later page that
+repeats the one before means the server isn't paging that list, and ends it. Audio is the `/stream` endpoint, which redirects to a freshly
+signed copy and honours Range.
+
+---
+
+## Files without a size
+
+The stream cache sizes its sparse file before the first byte is written.
+WebDAV, DLNA, Plex, Jellyfin and Subsonic list sizes; Kodi, Audius and search
+results don't. For those, the first play asks for one byte
+(`Range: bytes=0-0`), reads the total from `Content-Range`, and stores it on the
+row. A sync that lists a size of 0 or no length keeps the stored values, so the
+cache isn't reset by a catalog that never knew them. A length the catalog left
+out is measured from the file once it is complete.
+
+---
+
 ## Stream cache and progressive playback
 
 Playing a remote track starts a **fill**: a background download into a sparse
@@ -255,7 +373,11 @@ seconds left so the UI can say so.
 | `plex_set_direct_token` | Give a directly added server a new token |
 | `subsonic_add_source` | Add a Subsonic server by address, username and password |
 | `jellyfin_sign_in` / `jellyfin_add_source` | Sign in to a Jellyfin or Emby server, then add it with the chosen libraries |
-| `set_source_password` | Sign a Subsonic, Jellyfin or Emby source in again with its password |
+| `webdav_add_source` | Add a WebDAV folder by address, with an optional username and password |
+| `dlna_discover` / `dlna_add_source` | Find media servers on the network, then add one found or typed |
+| `kodi_add_source` | Add a Kodi device by address, username and password |
+| `audius_add_source` | Add an Audius account by handle |
+| `set_source_password` | Sign a Subsonic, Jellyfin, Emby, WebDAV or Kodi source in again with its password |
 | `list_remote_sources` / `remove_remote_source` | The settings list |
 | `get_remote_status` | Gate state and per-source state |
 | `request_library_refresh` | Start a refresh or report the cooldown |
@@ -270,8 +392,8 @@ Events: `remote-sync-progress`, `remote-sync-finished`, `remote-status-changed`,
 
 ## Testing
 
-The suite is offline. Plex, Subsonic and Jellyfin responses are inline JSON fixtures and a loopback
-fake server; the stream cache is tested against a throttled fake backend,
+The suite is offline. Every backend's responses are inline fixtures (JSON,
+WebDAV multistatus, SOAP and DIDL-Lite) served by a loopback fake server; the stream cache is tested against a throttled fake backend,
 including seek-ahead, resume, gate closure and decoding while the file is still
 downloading.
 
@@ -282,3 +404,21 @@ playback decoder:
 WAVE_PLEX_URL=http://192.168.1.10:32400 WAVE_PLEX_TOKEN=... WAVE_PLEX_SECTION=3 \
   cargo test --lib -- --ignored live_plex --nocapture
 ```
+
+End-to-end checks in `remote/live.rs` add a real source to a fresh library,
+sync it, fetch its artwork, then play tracks through the stream cache: a read
+three quarters in before anything has downloaded, then the whole file, which
+must decode and get its length recorded.
+
+```bash
+WAVE_WEBDAV_URL=http://127.0.0.1:8090/ WAVE_WEBDAV_USER=u WAVE_WEBDAV_PASS=p \
+  cargo test --lib -- --ignored live_webdav --nocapture
+WAVE_DLNA_ADDRESS=127.0.0.1:7879 cargo test --lib -- --ignored live_dlna --nocapture
+WAVE_KODI_URL=192.168.1.30:8080 WAVE_KODI_USER=kodi WAVE_KODI_PASS=... \
+  cargo test --lib -- --ignored live_kodi --nocapture
+cargo test --lib -- --ignored live_audius --nocapture
+cargo test --lib -- --ignored live_search_results --nocapture
+```
+
+`rclone serve webdav <folder>` and `rclone serve dlna <folder>` make quick
+local servers for the first two.

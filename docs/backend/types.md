@@ -405,7 +405,7 @@ interface SourceTrack {
 | Field | Description |
 |-------|-------------|
 | `audio_url` | `null` when the provider needs a second call to resolve audio (Internet Archive). Resolved during streaming |
-| `is_full_length` | `false` for Deezer, whose API only serves 30-second previews. Drives the "30s preview" badge |
+| `is_full_length` | `false` for Deezer and iTunes, whose APIs only serve 30-second previews. Drives the "30s preview" badge |
 | `downloadable` | `false` when the provider's terms do not allow keeping a copy. Drives whether a download button is offered |
 | `attribution` | Licence line to display alongside the result |
 | `already_in_library` | Local path when the user already owns this track, so the UI can mark it and play the local copy |

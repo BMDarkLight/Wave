@@ -6,19 +6,27 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
+pub mod audius;
 pub mod backend;
 pub mod commands;
+pub mod dlna;
 pub mod gate;
 pub(crate) mod http;
 pub mod jellyfin;
+pub mod kodi;
 pub mod plex;
 pub mod refresh;
+pub mod search;
 pub mod store;
 pub mod stream;
 pub mod subsonic;
 pub mod sync;
+pub mod tags;
 pub mod uri;
+pub mod webdav;
 
+#[cfg(test)]
+mod live;
 #[cfg(test)]
 pub(crate) mod testkit;
 
@@ -157,8 +165,16 @@ impl RemoteRuntime {
         self.backends.read().get(source_id).cloned()
     }
 
+    /// The sources the user added. The built-in search source is left out:
+    /// it has nothing to sync and nothing to show in settings.
     pub fn source_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.backends.read().keys().cloned().collect();
+        let mut ids: Vec<String> = self
+            .backends
+            .read()
+            .keys()
+            .filter(|id| id.as_str() != search::SEARCH_SOURCE)
+            .cloned()
+            .collect();
         ids.sort();
         ids
     }
@@ -207,9 +223,43 @@ impl RemoteRuntime {
                         Err(_) => tracing::warn!("Unreadable config for remote source {}", row.id),
                     }
                 }
+                "webdav" => match serde_json::from_str::<webdav::WebDavConfig>(&row.config_json)
+                    .ok()
+                    .and_then(|config| webdav::WebDavBackend::new(config).ok())
+                {
+                    Some(backend) => {
+                        backends.insert(row.id, Arc::new(backend));
+                    }
+                    None => tracing::warn!("Unreadable config for remote source {}", row.id),
+                },
+                "dlna" => match serde_json::from_str::<dlna::DlnaConfig>(&row.config_json)
+                    .ok()
+                    .and_then(|config| dlna::DlnaBackend::new(config).ok())
+                {
+                    Some(backend) => {
+                        backends.insert(row.id, Arc::new(backend));
+                    }
+                    None => tracing::warn!("Unreadable config for remote source {}", row.id),
+                },
+                "audius" => match serde_json::from_str::<audius::AudiusConfig>(&row.config_json) {
+                    Ok(config) => {
+                        backends.insert(row.id, Arc::new(audius::AudiusBackend::new(config)));
+                    }
+                    Err(_) => tracing::warn!("Unreadable config for remote source {}", row.id),
+                },
+                "kodi" => match serde_json::from_str::<kodi::KodiConfig>(&row.config_json) {
+                    Ok(config) => {
+                        backends.insert(row.id, Arc::new(kodi::KodiBackend::new(config)));
+                    }
+                    Err(_) => tracing::warn!("Unreadable config for remote source {}", row.id),
+                },
                 other => tracing::warn!("Unknown remote source kind {other}; skipping {}", row.id),
             }
         }
+        backends.insert(
+            search::SEARCH_SOURCE.to_string(),
+            Arc::new(search::SearchStreamBackend::new()),
+        );
         self.statuses
             .lock()
             .retain(|id, _| backends.contains_key(id));
@@ -235,10 +285,12 @@ impl RemoteRuntime {
     #[allow(dead_code)]
     pub fn statuses(&self) -> Vec<(String, SourceState)> {
         let mut all: Vec<(String, SourceState)> = self
-            .backends
-            .read()
-            .keys()
-            .map(|id| (id.clone(), self.status(id)))
+            .source_ids()
+            .into_iter()
+            .map(|id| {
+                let state = self.status(&id);
+                (id, state)
+            })
             .collect();
         all.sort_by(|a, b| a.0.cmp(&b.0));
         all

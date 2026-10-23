@@ -665,7 +665,7 @@ export interface SourceTrack {
   duration_seconds: number | null;
   artwork_url: string | null;
   audio_url: string | null;
-  /** False for Deezer, which only exposes 30-second previews. */
+  /** False for Deezer and iTunes, which only expose 30-second previews. */
   is_full_length: boolean;
   /** False when the provider's terms don't allow keeping a copy. */
   downloadable: boolean;

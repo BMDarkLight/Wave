@@ -4467,11 +4467,14 @@ impl Library {
             .map_err(|e| format!("Failed to look up source track: {e}"))
     }
 
-    /// Insert or refresh the row backing a streamed track.
+    /// Insert or refresh a `cached` row, the kind a full-length search result
+    /// got before results streamed through the remote cache. Libraries made
+    /// back then still hold them, so tests create them to cover that.
     ///
     /// Cached rows are deliberately kept out of the FTS index: tier-2 search
     /// means "my library", and something you merely previewed is not that. The
     /// index entry is added later, if and when the track is downloaded.
+    #[cfg(test)]
     pub fn upsert_cached_source_track(
         &self,
         track: &Track,
@@ -4506,6 +4509,74 @@ impl Library {
             let _ = connection.execute("DELETE FROM tracks_fts WHERE track_id = ?1", params![id]);
         }
 
+        connection
+            .query_row(
+                &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM} WHERE t.id = ?1"),
+                params![id],
+                |row| row_to_track(row, &self.cover_root),
+            )
+            .map_err(|e| format!("Failed to reload source track: {e}"))
+    }
+
+    /// Insert or refresh the row behind a full-length search result that
+    /// streams through the remote cache. `track.path` is its
+    /// `wave-remote://search/...` path.
+    ///
+    /// The row is a remote row that is never visible, so it plays, caches and
+    /// can be downloaded like a remote library track while staying out of
+    /// browse, search and stats. A size already learned from the source is
+    /// kept, and so is a download.
+    pub fn upsert_streamed_source_track(
+        &self,
+        track: &Track,
+        provider: &str,
+        remote_id: &str,
+        part_key: &str,
+    ) -> Result<Track, String> {
+        let connection = self.lock_connection()?;
+        // `upsert_track` writes the given size over the stored one.
+        let known_size: i64 = connection
+            .query_row(
+                "SELECT file_size FROM tracks WHERE path = ?1",
+                params![track.path],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to read source track: {e}"))?
+            .unwrap_or(0);
+        let id = upsert_track(&*connection, track)?;
+        connection
+            .execute(
+                "UPDATE tracks
+                 SET source_provider = ?2, source_id = ?3, source_url = ?4,
+                     remote_source_id = ?5, remote_visible = 0, remote_missing = 0,
+                     source_state = CASE WHEN source_state = 'downloaded'
+                                         THEN source_state ELSE 'remote' END,
+                     file_size = CASE WHEN ?6 > 0 THEN ?6 ELSE ?7 END
+                 WHERE id = ?1",
+                params![
+                    id,
+                    provider,
+                    remote_id,
+                    part_key,
+                    crate::remote::search::SEARCH_SOURCE,
+                    track.file_size,
+                    known_size
+                ],
+            )
+            .map_err(|e| format!("Failed to record source provenance: {e}"))?;
+        let state: Option<String> = connection
+            .query_row(
+                "SELECT source_state FROM tracks WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to read source state: {e}"))?
+            .flatten();
+        if state.as_deref() != Some("downloaded") {
+            let _ = connection.execute("DELETE FROM tracks_fts WHERE track_id = ?1", params![id]);
+        }
         connection
             .query_row(
                 &format!("SELECT {TRACK_DETAIL_COLUMNS} FROM {TRACK_FROM} WHERE t.id = ?1"),
@@ -5548,6 +5619,69 @@ mod tests {
             title: title.to_string(),
             ..sample_track("ignored", path)
         }
+    }
+
+    #[test]
+    fn streamed_search_results_are_hidden_remote_rows_until_downloaded() {
+        use crate::remote::search::{part_key, remote_id, SEARCH_SOURCE};
+        use crate::remote::uri::RemoteUri;
+
+        let library = open_test_library().unwrap();
+        let rid = remote_id("audius", "YmJWK");
+        let uri = RemoteUri::new(SEARCH_SOURCE, &rid);
+        let mut row = source_track(&uri.to_path(), "Late Night");
+        row.file_size = 0;
+        let key = part_key("audius", "https://api.audius.co/v1/tracks/YmJWK/stream");
+        let stored = library
+            .upsert_streamed_source_track(&row, "audius", &rid, &key)
+            .unwrap();
+        assert_eq!(stored.source_state.as_deref(), Some("remote"));
+
+        // Shown nowhere, even after a visibility pass with remote music on.
+        library.recompute_remote_visibility(true).unwrap();
+        let count = |sql: &str| -> i64 {
+            library
+                .read_connection()
+                .query_row(sql, [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(count("SELECT COUNT(*) FROM library_tracks"), 0);
+        assert_eq!(count("SELECT COUNT(*) FROM tracks_fts"), 0);
+
+        // The stream cache can find it, and a size it learns is kept when the
+        // result is streamed again.
+        let info = library.remote_stream_info(&uri).unwrap().unwrap();
+        assert_eq!(info.part_key, key);
+        library.set_remote_track_size(&uri, 4096).unwrap();
+        library
+            .upsert_streamed_source_track(&row, "audius", &rid, &key)
+            .unwrap();
+        assert_eq!(
+            library.remote_stream_info(&uri).unwrap().unwrap().size,
+            4096
+        );
+
+        // A second result streamed alongside it is a row of its own.
+        let other_id = remote_id("ccmixter", "71291");
+        let mut other = source_track(
+            &RemoteUri::new(SEARCH_SOURCE, &other_id).to_path(),
+            "The Light Between Us",
+        );
+        other.id = "second-row".into();
+        library
+            .upsert_streamed_source_track(&other, "ccmixter", &other_id, "ccmixter|https://x/a.mp3")
+            .unwrap();
+        assert_eq!(
+            count("SELECT COUNT(*) FROM tracks WHERE remote_source_id = 'search'"),
+            2
+        );
+
+        // Downloading makes it library content.
+        let kept = library
+            .promote_source_track(&stored.id, "/music/Late Night.mp3")
+            .unwrap();
+        assert_eq!(kept.source_state.as_deref(), Some("downloaded"));
+        assert_eq!(count("SELECT COUNT(*) FROM library_tracks"), 1);
     }
 
     #[test]

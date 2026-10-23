@@ -20,19 +20,37 @@ import {
   plexProbeDirect,
   plexReauthorizeSource,
   plexSetDirectToken,
+  audiusAddSource,
+  dlnaAddSource,
+  dlnaDiscover,
   jellyfinAddSource,
   jellyfinSignIn,
+  kodiAddSource,
   setSourcePassword,
   subsonicAddSource,
+  webdavAddSource,
+  type DlnaServer,
   type PlexLibrary,
   type PlexServer,
 } from "../../utils/remote";
 
 /** The kinds of server a source can be added from. */
-type Kind = "plex_tv" | "plex_direct" | "jellyfin" | "subsonic";
+type Kind =
+  | "plex_tv"
+  | "plex_direct"
+  | "jellyfin"
+  | "subsonic"
+  | "webdav"
+  | "dlna"
+  | "kodi"
+  | "audius";
+
+/** Kinds added straight from the form, with no library step after it. */
+const ADDED_FROM_FORM: Kind[] = ["subsonic", "webdav", "kodi", "audius"];
 
 type Step =
   | "kind"
+  | "dlna"
   | "sign-in"
   | "form"
   | "token"
@@ -51,7 +69,20 @@ const KINDS: { kind: Kind; label: string }[] = [
     kind: "subsonic",
     label: "Navidrome, Airsonic, Gonic and other Subsonic servers",
   },
+  { kind: "webdav", label: "WebDAV folder: Nextcloud, ownCloud or a NAS" },
+  { kind: "dlna", label: "DLNA or UPnP media server" },
+  { kind: "kodi", label: "Kodi" },
+  { kind: "audius", label: "Audius account" },
 ];
+
+const PLACEHOLDERS: Partial<Record<Kind, string>> = {
+  subsonic: "192.168.1.10:4533",
+  jellyfin: "192.168.1.10:8096",
+  plex_direct: "192.168.1.10:32400",
+  webdav: "https://cloud.example.com/remote.php/dav/files/you/Music",
+  kodi: "192.168.1.30:8080",
+  audius: "@handle",
+};
 
 function firstStep(reauthorizing: boolean, method: string): Step {
   if (!reauthorizing) return "kind";
@@ -62,9 +93,10 @@ function firstStep(reauthorizing: boolean, method: string): Step {
 
 /**
  * Adds a remote source: a Plex server through plex.tv sign-in or by its
- * address, or a Subsonic-compatible server by address, username and
- * password. With `reauthorizeSourceId` it only signs an existing source in
- * again, the way `reauthorizeMethod` says.
+ * address, a Jellyfin, Emby or Subsonic server, a WebDAV folder, a DLNA
+ * server found on the network, a Kodi device, or an Audius account. With
+ * `reauthorizeSourceId` it only signs an existing source in again, the way
+ * `reauthorizeMethod` says.
  */
 export default function RemoteSourceSetupDialog({
   reauthorizeSourceId,
@@ -94,6 +126,8 @@ export default function RemoteSourceSetupDialog({
   const [serverId, setServerId] = useState<string | null>(null);
   const [libraries, setLibraries] = useState<PlexLibrary[]>([]);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [dlnaServers, setDlnaServers] = useState<DlnaServer[]>([]);
+  const [dlnaChoice, setDlnaChoice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const closed = useRef(false);
 
@@ -113,10 +147,47 @@ export default function RemoteSourceSetupDialog({
     onClose();
   };
 
+  /** Looks for media servers on the local network. */
+  const findDlnaServers = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const found = await dlnaDiscover();
+      if (closed.current) return;
+      setDlnaServers(found);
+      setDlnaChoice(found[0]?.location ?? null);
+    } catch (err) {
+      fail(err, "Couldn't search your network");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const chooseKind = (next: Kind) => {
     setKind(next);
     setError(null);
+    if (next === "dlna") {
+      setStep("dlna");
+      void findDlnaServers();
+      return;
+    }
     setStep(next === "plex_tv" ? "sign-in" : "form");
+  };
+
+  /** A typed address wins over a server picked from the list. */
+  const dlnaTarget = address.trim() || dlnaChoice;
+
+  const addDlna = async () => {
+    if (!dlnaTarget) return;
+    setError(null);
+    setStep("adding");
+    try {
+      await dlnaAddSource(dlnaTarget);
+      finish();
+    } catch (err) {
+      fail(err, "Couldn't add the server");
+      setStep("dlna");
+    }
   };
 
   const signedIn = async (session: string) => {
@@ -214,15 +285,23 @@ export default function RemoteSourceSetupDialog({
   };
 
   /**
-   * Plex and Jellyfin servers show their libraries next; a Subsonic server is
+   * Plex and Jellyfin servers show their libraries next; every other kind is
    * added now.
    */
   const submitForm = async () => {
     setError(null);
-    if (kind === "subsonic") {
+    if (ADDED_FROM_FORM.includes(kind)) {
       setStep("adding");
       try {
-        await subsonicAddSource(address, username, secret);
+        if (kind === "subsonic") {
+          await subsonicAddSource(address, username, secret);
+        } else if (kind === "webdav") {
+          await webdavAddSource(address, username, secret);
+        } else if (kind === "kodi") {
+          await kodiAddSource(address, username, secret);
+        } else {
+          await audiusAddSource(address);
+        }
         finish();
       } catch (err) {
         fail(err, "Couldn't add the server");
@@ -302,7 +381,11 @@ export default function RemoteSourceSetupDialog({
   };
 
   const withAccount = kind === "subsonic" || kind === "jellyfin";
-  const usesPassword = step === "password" || withAccount;
+  // A WebDAV folder or a Kodi device may not ask for a login at all.
+  const optionalAccount = kind === "webdav" || kind === "kodi";
+  const showsAccount = withAccount || optionalAccount;
+  const showsSecret = kind !== "audius" || step !== "form";
+  const usesPassword = step === "password" || showsAccount;
   const formReady =
     address.trim() !== "" &&
     (!withAccount || (username.trim() !== "" && secret !== ""));
@@ -355,18 +438,18 @@ export default function RemoteSourceSetupDialog({
           >
             {step === "form" && (
               <label className="remote-setup-field">
-                <span>Server address</span>
+                <span>
+                  {kind === "audius"
+                    ? "Audius handle"
+                    : kind === "webdav"
+                      ? "Folder address"
+                      : "Server address"}
+                </span>
                 <input
                   type="text"
                   value={address}
                   onChange={(event) => setAddress(event.target.value)}
-                  placeholder={
-                    kind === "subsonic"
-                      ? "192.168.1.10:4533"
-                      : kind === "jellyfin"
-                        ? "192.168.1.10:8096"
-                        : "192.168.1.10:32400"
-                  }
+                  placeholder={PLACEHOLDERS[kind]}
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
@@ -374,9 +457,11 @@ export default function RemoteSourceSetupDialog({
                 />
               </label>
             )}
-            {step === "form" && withAccount && (
+            {step === "form" && showsAccount && (
               <label className="remote-setup-field">
-                <span>Username</span>
+                <span>
+                  {optionalAccount ? "Username (optional)" : "Username"}
+                </span>
                 <input
                   type="text"
                   value={username}
@@ -388,22 +473,43 @@ export default function RemoteSourceSetupDialog({
                 />
               </label>
             )}
-            <label className="remote-setup-field">
-              <span>{secretLabel}</span>
-              <input
-                type="password"
-                value={secret}
-                onChange={(event) => setSecret(event.target.value)}
-                placeholder={usesPassword ? undefined : "X-Plex-Token"}
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                autoComplete={usesPassword ? "current-password" : "off"}
-                autoFocus={step !== "form"}
-              />
-            </label>
+            {showsSecret && (
+              <label className="remote-setup-field">
+                <span>{secretLabel}</span>
+                <input
+                  type="password"
+                  value={secret}
+                  onChange={(event) => setSecret(event.target.value)}
+                  placeholder={usesPassword ? undefined : "X-Plex-Token"}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoComplete={usesPassword ? "current-password" : "off"}
+                  autoFocus={step !== "form"}
+                />
+              </label>
+            )}
             {step === "password" ? (
               <p className="mset-hint">Enter your password for this server.</p>
+            ) : kind === "webdav" ? (
+              <p className="mset-hint">
+                The address of the folder that holds your music. For Nextcloud,
+                copy the WebDAV address from Files, Settings, and add the folder
+                to the end. Wave saves the password on this device, and only
+                sends it over plain http:// to an address on your own network.
+              </p>
+            ) : kind === "kodi" ? (
+              <p className="mset-hint">
+                In Kodi, turn on Settings, Services, Control, &quot;Allow remote
+                control via HTTP&quot;, and use the username and password set
+                there. Wave saves the password on this device.
+              </p>
+            ) : kind === "audius" ? (
+              <p className="mset-hint">
+                The account&apos;s uploads, favorites and reposts join your
+                library. They&apos;re public, so there&apos;s nothing to sign in
+                to.
+              </p>
             ) : kind === "subsonic" ? (
               <p className="mset-hint">
                 Use your login for this server. Wave saves the password on this
@@ -422,6 +528,59 @@ export default function RemoteSourceSetupDialog({
               </p>
             )}
             {/* Submits on Enter; the visible button is in the actions row. */}
+            <button type="submit" hidden />
+          </form>
+        )}
+
+        {step === "dlna" && (
+          <form
+            className="remote-setup-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (dlnaTarget) void addDlna();
+            }}
+          >
+            {busy ? (
+              <p className="confirm-text">
+                Looking for media servers on your network…
+              </p>
+            ) : dlnaServers.length === 0 ? (
+              <p className="confirm-text">
+                No media servers answered. Check that the server is on and on
+                this network, or enter its address.
+              </p>
+            ) : (
+              <div className="remote-setup-list" role="radiogroup">
+                {dlnaServers.map((server) => (
+                  <label key={server.location} className="remote-setup-row">
+                    <input
+                      type="radio"
+                      name="dlna-server"
+                      checked={
+                        !address.trim() && dlnaChoice === server.location
+                      }
+                      onChange={() => {
+                        setAddress("");
+                        setDlnaChoice(server.location);
+                      }}
+                    />
+                    <span>{server.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <label className="remote-setup-field">
+              <span>Or enter its address</span>
+              <input
+                type="text"
+                value={address}
+                onChange={(event) => setAddress(event.target.value)}
+                placeholder="192.168.1.10:8200"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </label>
             <button type="submit" hidden />
           </form>
         )}
@@ -515,12 +674,32 @@ export default function RemoteSourceSetupDialog({
               disabled={busy || !formReady}
               onClick={() => void submitForm()}
             >
-              {kind === "subsonic"
+              {ADDED_FROM_FORM.includes(kind)
                 ? "Add"
                 : kind === "jellyfin"
                   ? "Sign in"
                   : "Connect"}
             </button>
+          )}
+          {step === "dlna" && (
+            <>
+              <button
+                className="btn-ghost"
+                type="button"
+                disabled={busy}
+                onClick={() => void findDlnaServers()}
+              >
+                Search again
+              </button>
+              <button
+                className="btn-primary"
+                type="button"
+                disabled={busy || !dlnaTarget}
+                onClick={() => void addDlna()}
+              >
+                Add
+              </button>
+            </>
           )}
           {(step === "token" || step === "password") && (
             <button

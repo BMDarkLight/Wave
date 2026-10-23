@@ -22,13 +22,15 @@ cannot be read it behaves as though the switch were off.
 
 Two facts about the rest of the app shape everything here.
 
-**Playback is path-keyed end to end.** `AudioPlayer::play(&str)` →
-`SymphoniaSource::new(path)` → `File::open`. Queue entries are paths, and
-`settings.last_queue` persists them. The engine has no concept of a URL, so
-remote audio becomes playable by **becoming a file**: it is fetched to a cache
-file and handed to the existing engine as a path. Seeking, gapless, the
-equalizer, volume normalization, and the Android ExoPlayer route are all
-untouched by this feature.
+**Playback is path-keyed end to end.** Queue entries are paths, and
+`settings.last_queue` persists them. A full-length result gets a
+`wave-remote://search/<provider>:<id>` path and plays through the same stream
+cache as a remote library track: a sparse cache file filled in the background,
+read progressively while it downloads (see
+[Remote Library](./remote-library.md#stream-cache-and-progressive-playback)).
+A preview is small enough to fetch whole, so it becomes a plain cache file.
+Seeking, gapless, the equalizer, volume normalization, and the Android
+ExoPlayer route work the same either way.
 
 **Network calls follow the `enrichment.rs` doctrine.** Every call is blocking
 and runs on a background thread, never on a command's response path. Every
@@ -42,13 +44,19 @@ search. One provider being down, slow, or unconfigured never blocks another.
 | Provider | Setup | Audio | Downloadable |
 |----------|-------|-------|--------------|
 | **Deezer** | none | 30-second previews only | no |
-| **Internet Archive** | none | full length | yes |
+| **iTunes** | none | 30-second previews only | no |
 | **Jamendo** | free client ID | full length | per-track licence |
+| **Audius** | none | full length | when the artist allows it |
+| **Internet Archive** | none | full length | yes |
+| **ccMixter** | none | full length | yes |
+| **Wikimedia Commons** | none | full length | yes |
 | **Spotify** | client ID field exists | **none — see below** | no |
+
+Results come back in that order, previews first.
 
 ### Deezer
 
-Free, unauthenticated search with the best metadata and artwork of the three.
+Free, unauthenticated search with the best metadata and artwork, alongside iTunes.
 Its API exposes audio only as a `preview` field: a 30-second MP3. Full-length
 Deezer audio is encrypted and requires account-token decryption, which is out of
 scope permanently. This is why `is_full_length` and `downloadable` are always
@@ -59,6 +67,33 @@ Deezer's `duration` field reports the **full** track length (e.g. 230s for a
 track whose preview is 30s). The provider deliberately overrides it, because
 reporting the full length would make the seek bar lie about a clip that stops a
 quarter of the way in.
+
+### iTunes
+
+Apple's public search API: free, no key, and metadata as good as Deezer's. The
+only audio is `previewUrl`, a 30-second AAC clip in an `.m4a` container, so every
+result is a preview, exactly as with Deezer. The full-length `trackTimeMillis` is
+ignored for the same seek-bar reason.
+
+Search results link 100px artwork. The artwork server renders any size from the
+same path, so the provider rewrites the `100x100bb` segment to `600x600bb`.
+
+Apple documents a limit of roughly 20 calls a minute, so the provider asks for a
+3-second gap between searches.
+
+### Audius
+
+Full-length streaming with no key; requests carry `app_name=Wave` as Audius asks.
+Each search result includes a `stream.url`, but that URL is signed with a
+timestamp and goes stale. Results instead point at the stable
+`/v1/tracks/{id}/stream` endpoint, which redirects to a freshly signed MP3 on
+every fetch. That URL has no extension, so the cache file falls back to `.mp3`.
+
+Tracks that are not streamable, or are gated behind a purchase or a follow, are
+dropped at parse time: their stream endpoint answers 404 for an anonymous caller.
+
+A result is downloadable when the artist enabled downloads and did not gate
+them. What gets kept is the streamed MP3, not the original upload.
 
 ### Internet Archive
 
@@ -90,6 +125,40 @@ failure — it never silently disappears from the results.
 Tracks whose licence permits it use Jamendo's download URL; the rest fall back
 to the streaming URL and are marked not downloadable.
 
+### ccMixter
+
+Full-length Creative Commons music, mostly remixes and instrumentals, with no
+key. Every upload is CC-licensed, so every result is downloadable. An upload is a
+bundle of files (the mix, often a FLAC of it, sometimes stems, zips, or images),
+and the provider takes the first MP3, falling back to Ogg, FLAC, or WAV. The
+duration comes from the file's `ps` field ("3:38").
+
+Search uses `search_type=all`. The API's default matches any word, so "jazz
+piano" returned piano tracks with no jazz in them.
+
+The file server has hotlink protection: `/content/` URLs answer 403 unless the
+request carries a ccMixter `Referer`. The provider supplies
+`https://ccmixter.org/` through `fetch_referer`, which is what a browser sends
+when the download link on an upload's page is clicked. The trailing slash
+matters; without it the request is still refused.
+
+### Wikimedia Commons
+
+Freely licensed and public-domain recordings, strongest on classical and early
+jazz. Commons is a media library rather than a music catalog, so the provider
+filters harder than the others:
+
+- The query adds `filetype:audio -filemime:audio/midi`. The engine cannot render
+  MIDI, and Commons hosts a lot of it.
+- Results shorter than 30 seconds are dropped. `filetype:audio` also matches
+  thousands of one-second Lingua Libre word pronunciations.
+- Only `mp3`, `ogg`, `oga`, `opus`, `flac`, and `wav` files are kept.
+
+Metadata comes from each file's `extmetadata`. The artist there is an HTML
+fragment, sometimes a multi-line credit, so it is reduced to plain text and its
+first line. Results are re-sorted by the search's `index`, because the API
+returns pages in page-id order.
+
 ### Spotify
 
 **Spotify's API serves no audio through any endpoint.** Playback exists only
@@ -113,6 +182,7 @@ pub trait SourceProvider: Send + Sync {
     fn rate_limit(&self) -> Duration { Duration::from_millis(0) }
     fn search(&self, c: &Client, q: &str, limit: usize) -> Result<Vec<SourceTrack>, SourceError>;
     fn resolve_audio(&self, c: &Client, t: &SourceTrack) -> Result<String, SourceError>;
+    fn fetch_referer(&self) -> Option<&'static str> { None }
 }
 ```
 
@@ -132,23 +202,61 @@ Adding a provider means one file implementing the trait plus a line in
 
 ## Storage model
 
-Streamed **full-length** tracks become real rows in `tracks`, flagged as remote.
-Everything downstream — queue, now playing, favorites, lyrics, EQ,
-normalization — then works with no special-casing, and downloading is just
-"copy the file and flip the flag".
+Streamed **full-length** tracks become real rows in `tracks`. Everything
+downstream (queue, now playing, favorites, lyrics, EQ, normalization) then
+works with no special-casing, and downloading is "wait for the cache, copy the
+file, flip the flag".
+
+### Streamed results are hidden remote rows
+
+A full-length result is a remote row of the built-in `search` source
+(`remote/search.rs`):
+
+| Column | Value |
+|--------|-------|
+| `path` | `wave-remote://search/<provider>:<id>` |
+| `remote_source_id` | `search` |
+| `source_id` | `<provider>:<id>` |
+| `source_url` | `<provider>\|<audio url>`, so a fetch knows whose `Referer` to send |
+| `source_state` | `remote`, or `downloaded` once kept |
+| `remote_visible` | always `0` |
+
+`stream_source_track` only resolves the audio URL and writes the row; the bytes
+arrive when the track plays. The search source has no `remote_sources` row, is
+never synced, is left out of the settings list, and the visibility pass never
+shows its rows, so a streamed result stays out of browse, search, counts and
+stats exactly as before.
+
+Its traffic follows the **Search outside sources** switch, not Outside
+Sourcing: it has its own `NetworkGate::search()`, and the stream cache picks the
+gate by source id. Turning the search switch off stops a fill between chunks.
+
+None of these providers list a file size, which the stream cache needs before
+it writes anything, so the backend asks for one byte (`Range: bytes=0-0`) and
+reads the total from `Content-Range`. The size is stored on the row and kept
+across re-streams.
+
+### Rows from before streaming
+
+Earlier versions fetched a result whole into `<data>/source-cache/<provider>/`
+and stored it as a `cached` row whose path is that file. Libraries made back
+then still hold such rows. They keep playing from their file, a second stream
+of the same result reuses them while the file exists, and eviction and
+downloads treat them as before. New results never create them.
 
 ### Columns added to `tracks`
 
 | Column | Meaning |
 |--------|---------|
-| `source_provider` | `NULL` for local files, else `deezer` / `jamendo` / `archive` |
-| `source_id` | The provider's track id |
-| `source_url` | Audio URL the bytes came from |
-| `source_state` | `NULL` local, `cached` streamed only, `downloaded` kept |
+| `source_provider` | `NULL` for local files, else the provider id: `jamendo`, `audius`, `archive`, `ccmixter`, `wikimedia` |
+| `source_id` | The provider's track id, `<provider>:<id>` on a streamed row |
+| `source_url` | Where the bytes come from |
+| `source_state` | `NULL` local, `remote` streamed, `cached` from before streaming, `downloaded` kept |
 | `source_fetched_at` | Cache LRU ordering |
 
-`UNIQUE(source_provider, source_id)` makes re-streaming reuse a row instead of
-duplicating it.
+`UNIQUE(remote_source_id, source_id)` for streamed rows, and
+`UNIQUE(source_provider, source_id)` for the older ones, make re-streaming reuse
+a row instead of duplicating it.
 
 ### The `library_tracks` view
 
@@ -196,12 +304,14 @@ consults the preview registry first.
 
 | Location | Contents | Lifetime |
 |----------|----------|----------|
-| `<data>/source-cache/<provider>/` | Full-length streamed audio | Until evicted |
+| `<data>/source-cache/remote/search/` | Full-length streamed audio, with a `.ranges` sidecar while partial | Until evicted |
+| `<data>/source-cache/<provider>/` | Full-length audio from before streaming | Until evicted |
 | `<data>/source-cache/previews/` | Preview clips | Wiped at startup |
 
-Downloads are written through a temp file plus an atomic rename, so an
+A preview is written through a temp file plus an atomic rename, so an
 interrupted fetch can never leave a half-written file that Symphonia would fail
-to probe.
+to probe. Streamed audio is only called complete when every byte range has
+arrived.
 
 Eviction is LRU by `source_fetched_at`, bounded by `source_cache_limit_mb`
 (default 2 GB on desktop, 1 GB on Android, set under **Cache size** in Settings;
@@ -226,10 +336,12 @@ Destination differs by platform:
 
 Two rules inside the download path:
 
-**Copy, do not move.** Promoting a cached file while that track is playing would
-pull the file out from under an open decoder — survivable on Unix, a hard
-failure on Windows. The download copies, updates the row, and leaves the cache
-copy for the next eviction pass.
+**Wait for the whole file, then copy.** A streamed result is kept the way a
+remote library track is (`download_remote_track`): the download waits for the
+fill to finish, then copies the cache file. Promoting a cached file by moving
+it while that track is playing would pull the file out from under an open
+decoder, survivable on Unix and a hard failure on Windows, so the cache copy is
+left for the next eviction pass.
 
 **No tag writing.** Doing it properly would mean adding a tag-writing
 dependency, against the project's "no unnecessary dependencies" goal. Provider
@@ -248,7 +360,8 @@ Every failure degrades to "less", never to "broken".
 |---------|----------|
 | One provider errors or times out | That section reports unavailable; others render |
 | Provider not configured | Section shows a setup hint |
-| Audio resolve or fetch fails | Toast; no row inserted; no partial file on disk |
+| Audio URL can't be resolved | Toast; no row inserted |
+| Audio fetch fails while playing | `remote-stream-failed`; the partial cache file is kept and resumed next time |
 | Fully offline | Button works; every provider reports unavailable |
 | Android destination not writable | Falls back to app-private storage and emits `source-download-fallback` |
 | Interrupted download | Temp file discarded; cached row untouched |
@@ -274,11 +387,8 @@ seeks. See `audio/symphonia_source.rs`.
 
 ## Known limits
 
-- **No progressive playback for search results.** A search result downloads
-  fully before it starts. That is imperceptible for a 480 KB preview and fine
-  for a typical Jamendo track, but a 167 MB Archive concert takes over a minute
-  before the first note. Remote library tracks (Plex) do stream progressively;
-  see [Remote Library](./remote-library.md).
+- **Previews still download whole.** A 30-second clip is around 500 KB, so
+  streaming it would save nothing.
 - **Archive results are item-level**, so a result is the first audio file in an
   item rather than a specific track.
 - **Android SAF writes are not implemented.** Downloads reach the primary media
@@ -297,7 +407,10 @@ parsing plus malformed and empty responses; cache tests cover eviction ordering,
 the cap, and the never-evict-playing invariant; library tests cover the
 `library_tracks` view, promotion, and dedup safety.
 
-Live network checks are `#[ignore]`d and opt-in:
+Live network checks are `#[ignore]`d and opt-in. Besides each provider's
+search-and-decode round trip, `live_search_stream` reads each full-length
+provider's size and a range from the middle of a file, which is what seeking
+ahead of the download needs:
 
 ```bash
 cargo test --lib -- --ignored --nocapture

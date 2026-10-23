@@ -232,7 +232,9 @@ fn upsert_one(
         // A download is the user's own file now: its path, name, format, size
         // and tags describe that file and stay as they are, so a sync never
         // undoes their edits. Otherwise a new part or size means new bytes
-        // behind the same URI, so the cache starts over.
+        // behind the same URI, so the cache starts over. A size of 0 or no
+        // duration means the catalog doesn't say (Audius, Kodi, WebDAV), so the
+        // value learned when the track first played is kept.
         tx.execute(
             "UPDATE tracks SET
                 path = CASE WHEN source_state = 'downloaded' THEN path ELSE ?2 END,
@@ -249,18 +251,19 @@ fn upsert_one(
                 disc_number = CASE WHEN source_state = 'downloaded'
                                    THEN disc_number ELSE ?11 END,
                 format = CASE WHEN source_state = 'downloaded' THEN format ELSE ?12 END,
-                duration_seconds = CASE WHEN source_state = 'downloaded'
+                duration_seconds = CASE WHEN source_state = 'downloaded' OR ?13 IS NULL
                                         THEN duration_seconds ELSE ?13 END,
-                file_size = CASE WHEN source_state = 'downloaded' THEN file_size ELSE ?14 END,
+                file_size = CASE WHEN source_state = 'downloaded' OR ?14 = 0
+                                 THEN file_size ELSE ?14 END,
                 source_provider = ?15, source_id = ?16, source_url = ?17,
                 source_state = CASE WHEN source_state = 'downloaded'
                                     THEN source_state ELSE 'remote' END,
                 remote_updated_at = ?18, remote_art_ref = ?19, remote_missing = 0,
                 cache_state = CASE WHEN ?20 OR (source_state IS NOT 'downloaded'
-                        AND (source_url IS NOT ?17 OR file_size IS NOT ?14))
+                        AND (source_url IS NOT ?17 OR (?14 <> 0 AND file_size IS NOT ?14)))
                     THEN NULL ELSE cache_state END,
                 source_fetched_at = CASE WHEN ?20 OR (source_state IS NOT 'downloaded'
-                        AND (source_url IS NOT ?17 OR file_size IS NOT ?14))
+                        AND (source_url IS NOT ?17 OR (?14 <> 0 AND file_size IS NOT ?14)))
                     THEN NULL ELSE source_fetched_at END
              WHERE id = ?1",
             params![
@@ -732,6 +735,42 @@ impl Library {
         Ok(())
     }
 
+    /// Records a size the server only revealed when asked for the file,
+    /// for backends whose catalog leaves it out.
+    pub fn set_remote_track_size(&self, uri: &RemoteUri, size: u64) -> Result<(), String> {
+        self.write_connection()
+            .execute(
+                "UPDATE tracks SET file_size = ?3
+                 WHERE remote_source_id = ?1 AND source_id = ?2
+                   AND source_state IS NOT 'downloaded'",
+                params![
+                    uri.source_id,
+                    uri.remote_id,
+                    i64::try_from(size).unwrap_or(i64::MAX)
+                ],
+            )
+            .map_err(sql_error("set remote track size"))?;
+        Ok(())
+    }
+
+    /// Fills in a length the catalog didn't give, once the whole file is
+    /// cached and can be measured. A known length is never replaced.
+    pub fn set_remote_track_duration_if_missing(
+        &self,
+        uri: &RemoteUri,
+        seconds: f64,
+    ) -> Result<(), String> {
+        self.write_connection()
+            .execute(
+                "UPDATE tracks SET duration_seconds = ?3
+                 WHERE remote_source_id = ?1 AND source_id = ?2
+                   AND (duration_seconds IS NULL OR duration_seconds <= 0)",
+                params![uri.source_id, uri.remote_id, seconds],
+            )
+            .map_err(sql_error("set remote track duration"))?;
+        Ok(())
+    }
+
     /// Cached remote rows with the extension that names their file, least
     /// recently fetched first. Downloads are not listed: they are library
     /// content, not cache.
@@ -859,7 +898,7 @@ fn remote_candidates(tx: &Transaction<'_>) -> Result<Vec<Candidate>, String> {
                     COALESCE(rs.rowid, 9223372036854775807)
              FROM tracks t
              LEFT JOIN remote_sources rs ON rs.id = t.remote_source_id
-             WHERE t.source_state = 'remote'",
+             WHERE t.source_state = 'remote' AND t.remote_source_id IS NOT 'search'",
         )
         .map_err(sql_error("prepare visibility query"))?;
     let rows = statement

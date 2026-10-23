@@ -111,6 +111,35 @@ pub trait RemoteBackend: Send + Sync {
     fn working_uri(&self) -> Option<String> {
         None
     }
+
+    /// The file's size, for backends whose catalog doesn't list it. The
+    /// stream cache needs it before the first byte is written.
+    fn content_length(&self, _part_key: &str) -> Result<u64, RemoteError> {
+        Err(RemoteError::Parse(
+            "The server didn't say how big this song is".into(),
+        ))
+    }
+}
+
+/// The total size a ranged answer reports: from `Content-Range` on a 206,
+/// from `Content-Length` on a 200 that ignored the range.
+pub fn total_size(resp: &reqwest::blocking::Response) -> Option<u64> {
+    let header = |name| {
+        resp.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+    if resp.status().as_u16() == 206 {
+        return header(reqwest::header::CONTENT_RANGE)?
+            .rsplit('/')
+            .next()?
+            .trim()
+            .parse()
+            .ok()
+            .filter(|size| *size > 0);
+    }
+    resp.content_length().filter(|size| *size > 0)
 }
 
 #[cfg(test)]

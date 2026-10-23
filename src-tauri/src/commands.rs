@@ -4268,6 +4268,8 @@ fn run_artist_enrichment_job(app: &tauri::AppHandle) {
 // runs on `spawn_blocking`, never on the async command path. Failures degrade:
 // a provider that is down yields an errored section, not a failed search.
 
+use crate::remote::search as search_stream;
+use crate::remote::uri::RemoteUri;
 use crate::sources::{self, cache as source_cache, download as source_download, SourceTrack};
 
 /// Providers currently configured, read from settings.
@@ -4338,7 +4340,9 @@ fn source_track_to_track(
         .map(|d| d.as_secs() as i64)
         .unwrap_or_default();
     Track {
-        id: String::new(),
+        // Fresh, as for a local file; re-streaming the same result keeps the
+        // id it was first stored with, since the upsert matches on path.
+        id: uuid::Uuid::new_v4().to_string(),
         path: path.to_string(),
         name: Path::new(path)
             .file_name()
@@ -4404,17 +4408,12 @@ fn fetch_source_artwork(app: &tauri::AppHandle, source: &SourceTrack) -> Option<
     Some(saved.id)
 }
 
-/// Trim the stream cache back under its configured cap.
+/// Trim the stream cache down to `cap_bytes`, or the configured cap when
+/// `None`. Returns the bytes freed.
 ///
 /// `protected` is the currently playing track plus the live queue. Deleting
 /// one of those would pull a file out from under an open decoder. Remote
 /// tracks share the cap: evicting one deletes its cache file but keeps its row.
-fn evict_source_cache(app: &tauri::AppHandle, library: &Library, protected: Vec<String>) {
-    evict_source_cache_to(app, library, protected, None);
-}
-
-/// [`evict_source_cache`] down to `cap_bytes`, or the configured cap when
-/// `None`. Returns the bytes freed.
 pub(crate) fn evict_source_cache_to(
     app: &tauri::AppHandle,
     library: &Library,
@@ -4523,51 +4522,98 @@ fn protected_cache_paths(player: &tauri::State<'_, PlayerState>) -> Vec<String> 
     paths
 }
 
-/// Stream a remote result: fetch it into the cache and register it as a
-/// playable library row. Re-streaming something already cached reuses the file.
+/// Registers a full-length result as a hidden row of the search source. Only
+/// resolving its audio URL touches the network; the bytes come when it plays.
+async fn register_streamed_source_track(
+    track: SourceTrack,
+    app: tauri::AppHandle,
+) -> Result<Track, String> {
+    crate::remote::gate::NetworkGate::search()
+        .check()
+        .map_err(|e| e.to_string())?;
+    let config = source_config(&app);
+    tokio::task::spawn_blocking(move || {
+        let provider = sources::provider_by_id(&config, &track.provider)
+            .ok_or_else(|| format!("Unknown source: {}", track.provider))?;
+        let audio_url = provider
+            .resolve_audio(sources::source_client(), &track)
+            .map_err(|e| e.to_string())?;
+        let mut resolved = track.clone();
+        resolved.audio_url = Some(audio_url.clone());
+
+        let remote_id = search_stream::remote_id(&track.provider, &track.id);
+        let path = RemoteUri::new(search_stream::SEARCH_SOURCE, &remote_id).to_path();
+        let art_id = fetch_source_artwork(&app, &track);
+        let mut row = source_track_to_track(&resolved, &path, art_id, 0);
+        row.name = format!("{}.{}", track.title, resolved.extension());
+
+        let state = app.state::<LibraryState>();
+        let library = state.0.lock().map_err(lock_poisoned)?;
+        library.upsert_streamed_source_track(
+            &row,
+            &track.provider,
+            &remote_id,
+            &search_stream::part_key(&track.provider, &audio_url),
+        )
+    })
+    .await
+    .map_err(|e| format!("Stream failed: {e}"))?
+}
+
+/// Stream a remote result. A preview is fetched whole into the session's
+/// preview cache. A full-length track becomes a hidden row of the built-in
+/// search source and plays progressively through the remote stream cache, so
+/// it starts as soon as the first bytes arrive; nothing is fetched here.
 #[tauri::command]
 pub async fn stream_source_track(
     track: SourceTrack,
     app: tauri::AppHandle,
     library: tauri::State<'_, LibraryState>,
-    player: tauri::State<'_, PlayerState>,
 ) -> Result<Track, String> {
+    if track.is_full_length {
+        let existing = {
+            let library = lock_library(&library)?;
+            let remote_id = search_stream::remote_id(&track.provider, &track.id);
+            // A streamed row resumes from whatever its cache holds. Rows from
+            // before streaming point at a whole file in the cache.
+            match library.find_source_track(&track.provider, &remote_id)? {
+                Some(streamed) => Some(streamed),
+                None => library
+                    .find_source_track(&track.provider, &track.id)?
+                    .filter(|old| Path::new(&old.path).is_file()),
+            }
+        };
+        return match existing {
+            Some(existing) => Ok(existing),
+            None => register_streamed_source_track(track, app).await,
+        };
+    }
+
     // A preview is not something the user chose to own, so it never becomes a
     // library row. Reuse the cached clip if it is still on disk.
-    let is_preview = !track.is_full_length;
-    if is_preview {
-        let existing = preview_registry().lock().ok().and_then(|map| {
-            map.values()
-                .find(|t| {
-                    t.source_provider.as_deref() == Some(track.provider.as_str())
-                        && Path::new(&t.path).is_file()
-                        && t.path
-                            == source_cache::preview_path(
-                                &track.provider,
-                                &track.id,
-                                &track.extension(),
-                            )
-                            .to_string_lossy()
-                })
-                .cloned()
-        });
-        if let Some(existing) = existing {
-            return Ok(existing);
-        }
-    } else {
-        // Reuse an existing row when its file is still on disk.
-        let library = lock_library(&library)?;
-        if let Some(existing) = library.find_source_track(&track.provider, &track.id)? {
-            if Path::new(&existing.path).is_file() {
-                return Ok(existing);
-            }
-        }
+    let existing = preview_registry().lock().ok().and_then(|map| {
+        map.values()
+            .find(|t| {
+                t.source_provider.as_deref() == Some(track.provider.as_str())
+                    && Path::new(&t.path).is_file()
+                    && t.path
+                        == source_cache::preview_path(
+                            &track.provider,
+                            &track.id,
+                            &track.extension(),
+                        )
+                        .to_string_lossy()
+            })
+            .cloned()
+    });
+    if let Some(existing) = existing {
+        return Ok(existing);
     }
 
     let config = source_config(&app);
     let app_for_fetch = app.clone();
     let source = track.clone();
-    let (path, size, art_id, audio_url) = tokio::task::spawn_blocking(move || {
+    let (path, size, art_id) = tokio::task::spawn_blocking(move || {
         let provider = sources::provider_by_id(&config, &source.provider)
             .ok_or_else(|| format!("Unknown source: {}", source.provider))?;
         let client = sources::source_client();
@@ -4577,39 +4623,22 @@ pub async fn stream_source_track(
 
         let mut resolved = source.clone();
         resolved.audio_url = Some(audio_url.clone());
-        let dest = if resolved.is_full_length {
-            source_cache::cached_path(&source.provider, &source.id, &resolved.extension())
-        } else {
-            source_cache::preview_path(&source.provider, &source.id, &resolved.extension())
-        };
-        let size = source_cache::fetch_to(client, &audio_url, &dest).map_err(|e| e.to_string())?;
+        let dest = source_cache::preview_path(&source.provider, &source.id, &resolved.extension());
+        let size = source_cache::fetch_to(client, &audio_url, provider.fetch_referer(), &dest)
+            .map_err(|e| e.to_string())?;
         let art_id = fetch_source_artwork(&app_for_fetch, &source);
-        Ok::<_, String>((dest, size as i64, art_id, audio_url))
+        Ok::<_, String>((dest, size as i64, art_id))
     })
     .await
     .map_err(|e| format!("Stream failed: {e}"))??;
 
+    // Playable, displayable, and entirely absent from the library.
     let path_string = path.to_string_lossy().into_owned();
     let mut row = source_track_to_track(&track, &path_string, art_id, size);
-
-    if is_preview {
-        // Playable, displayable, and entirely absent from the library.
-        row.id = format!("preview:{}:{}", track.provider, track.id);
-        row.source_state = Some("preview".to_string());
-        register_preview(&row);
-        return Ok(row);
-    }
-
-    let protected = protected_cache_paths(&player);
-
-    let library = lock_library(&library)?;
-    let stored =
-        library.upsert_cached_source_track(&row, &track.provider, &track.id, &audio_url)?;
-    // Never evict what we just fetched, nor anything currently in play.
-    let mut protected = protected;
-    protected.push(stored.path.clone());
-    evict_source_cache(&app, &library, protected);
-    Ok(stored)
+    row.id = format!("preview:{}:{}", track.provider, track.id);
+    row.source_state = Some("preview".to_string());
+    register_preview(&row);
+    Ok(row)
 }
 
 /// Keep a remote track: copy it into the download destination and promote its
@@ -4622,7 +4651,6 @@ pub async fn download_source_track(
     track: SourceTrack,
     app: tauri::AppHandle,
     library: tauri::State<'_, LibraryState>,
-    player: tauri::State<'_, PlayerState>,
     settings_state: tauri::State<'_, AppSettingsState>,
 ) -> Result<Track, String> {
     if !track.downloadable {
@@ -4633,8 +4661,12 @@ pub async fn download_source_track(
     }
 
     // Make sure the bytes exist locally, reusing the cached copy when present.
-    let cached =
-        stream_source_track(track.clone(), app.clone(), library.clone(), player.clone()).await?;
+    let cached = stream_source_track(track.clone(), app.clone(), library.clone()).await?;
+    // A streamed row waits for its cache to finish, then is kept the way a
+    // remote library track is.
+    if crate::remote::uri::is_remote(&cached.path) {
+        return crate::remote::commands::download_remote_track(cached.path, app).await;
+    }
 
     let media_folders = lock_settings(&settings_state)?.media_folders.clone();
     let destination = source_download::choose_destination(
@@ -4686,6 +4718,30 @@ pub async fn download_source_track(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_streamed_result_gets_a_row_id_of_its_own() {
+        // An empty id made the second full-length result streamed in a
+        // session fail with a UNIQUE constraint on `tracks.id`.
+        let source = SourceTrack {
+            provider: "audius".into(),
+            id: "YmJWK".into(),
+            title: "Late Night".into(),
+            artist: "kirby".into(),
+            album: None,
+            duration_seconds: Some(190.0),
+            artwork_url: None,
+            audio_url: Some("https://api.audius.co/v1/tracks/YmJWK/stream".into()),
+            is_full_length: true,
+            downloadable: false,
+            attribution: None,
+            already_in_library: None,
+        };
+        let a = source_track_to_track(&source, "wave-remote://search/audius%3Aa", None, 0);
+        let b = source_track_to_track(&source, "wave-remote://search/audius%3Ab", None, 0);
+        assert!(!a.id.is_empty());
+        assert_ne!(a.id, b.id);
+    }
 
     #[test]
     fn remote_tracks_restore_only_from_a_finished_cache() {

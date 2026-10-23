@@ -18,10 +18,14 @@
 //! being down, slow, or unconfigured never blocks another.
 
 pub mod archive;
+pub mod audius;
 pub mod cache;
+pub mod ccmixter;
 pub mod deezer;
 pub mod download;
+pub mod itunes;
 pub mod jamendo;
+pub mod wikimedia;
 
 use reqwest::blocking::Client;
 use std::sync::{Mutex, OnceLock};
@@ -29,7 +33,7 @@ use std::time::{Duration, Instant};
 
 const REQUEST_TIMEOUT_SECONDS: u64 = 8;
 // Says which Wave is asking and where to find it, as the providers ask.
-const USER_AGENT: &str = concat!(
+pub(crate) const USER_AGENT: &str = concat!(
     "Wave/",
     env!("CARGO_PKG_VERSION"),
     " (https://github.com/BMDarkLight/Wave)"
@@ -87,7 +91,8 @@ pub struct SourceTrack {
     /// `None` when the provider needs a second call to resolve playable audio
     /// (Internet Archive). Always resolved through [`SourceProvider::resolve_audio`].
     pub audio_url: Option<String>,
-    /// False for Deezer, whose public API only exposes 30-second previews.
+    /// False for Deezer and iTunes, whose public APIs only expose 30-second
+    /// previews.
     pub is_full_length: bool,
     /// False when the provider's terms don't allow keeping a copy. Drives
     /// whether the UI offers a download button at all.
@@ -103,7 +108,7 @@ pub struct SourceTrack {
 
 impl SourceTrack {
     /// Filename extension for the cached/downloaded file, guessed from the
-    /// audio URL and defaulted to mp3; every provider here serves MP3.
+    /// audio URL. A URL with no extension (Audius's stream endpoint) is MP3.
     pub fn extension(&self) -> String {
         self.audio_url
             .as_deref()
@@ -148,6 +153,12 @@ pub trait SourceProvider: Send + Sync {
     /// filled `audio_url` just hand it back; Internet Archive does its file
     /// listing here so search stays one request per provider.
     fn resolve_audio(&self, client: &Client, track: &SourceTrack) -> Result<String, SourceError>;
+
+    /// `Referer` to send when fetching audio, for hosts whose hotlink
+    /// protection refuses requests that do not come from their own site.
+    fn fetch_referer(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 // ── Configuration ─────────────────────────────────────────────────────────
@@ -165,8 +176,12 @@ pub struct SourceConfig {
 pub fn providers(config: &SourceConfig) -> Vec<Box<dyn SourceProvider>> {
     vec![
         Box::new(deezer::Deezer),
+        Box::new(itunes::ITunes),
         Box::new(jamendo::Jamendo::new(config.jamendo_client_id.clone())),
+        Box::new(audius::Audius),
         Box::new(archive::InternetArchive),
+        Box::new(ccmixter::CcMixter),
+        Box::new(wikimedia::WikimediaCommons),
     ]
 }
 
@@ -369,7 +384,7 @@ mod live_tests {
 
         let dest = std::env::temp_dir().join(format!("wave-live-{}.mp3", track.id));
         let _ = std::fs::remove_file(&dest);
-        let written = cache::fetch_to(client, &url, &dest).expect("preview fetch failed");
+        let written = cache::fetch_to(client, &url, None, &dest).expect("preview fetch failed");
 
         assert!(
             written > 10_000,
@@ -434,7 +449,7 @@ mod live_tests {
             resolved_track.extension()
         ));
         let _ = std::fs::remove_file(&dest);
-        let written = cache::fetch_to(client, &resolved, &dest)
+        let written = cache::fetch_to(client, &resolved, None, &dest)
             .unwrap_or_else(|e| panic!("resolved URL was not fetchable: {e}"));
         assert!(written > 10_000, "suspiciously small: {written} bytes");
 
@@ -443,5 +458,80 @@ mod live_tests {
 
         println!("OK  {} — {written} bytes from {resolved}", track.title);
         let _ = std::fs::remove_file(&dest);
+    }
+
+    /// Search, resolve, fetch, and decode the first reasonably short result,
+    /// the same path `stream_source_track` takes. Returns the track it played.
+    fn fetch_and_decode_first(provider: &dyn SourceProvider, query: &str) -> SourceTrack {
+        let client = source_client();
+        let tracks = provider
+            .search(client, query, 10)
+            .unwrap_or_else(|e| panic!("{} search failed: {e}", provider.id()));
+        assert!(
+            !tracks.is_empty(),
+            "{} returned no parseable results",
+            provider.id()
+        );
+
+        // Keep the download small: a two-hour Audius mix proves nothing extra.
+        let track = tracks
+            .iter()
+            .find(|t| t.duration_seconds.is_none_or(|d| d <= 600.0))
+            .unwrap_or(&tracks[0]);
+        let url = provider
+            .resolve_audio(client, track)
+            .unwrap_or_else(|e| panic!("{} resolve failed: {e}", provider.id()));
+
+        let dest = std::env::temp_dir().join(format!(
+            "wave-live-{}-{}.{}",
+            provider.id(),
+            track.id,
+            track.extension()
+        ));
+        let _ = std::fs::remove_file(&dest);
+        let written = cache::fetch_to(client, &url, provider.fetch_referer(), &dest)
+            .unwrap_or_else(|e| panic!("{} fetch failed: {e}", provider.id()));
+        assert!(written > 10_000, "suspiciously small: {written} bytes");
+
+        crate::audio::symphonia_source::SymphoniaSource::new(dest.to_string_lossy().as_ref())
+            .unwrap_or_else(|e| panic!("{} audio must be decodable: {e}", provider.id()));
+
+        println!(
+            "OK  {}: {} by {} ({written} bytes from {url})",
+            provider.id(),
+            track.title,
+            track.artist
+        );
+        let _ = std::fs::remove_file(&dest);
+        track.clone()
+    }
+
+    #[test]
+    #[ignore = "hits the network"]
+    fn itunes_preview_is_an_m4a_the_engine_decodes() {
+        let track = fetch_and_decode_first(&itunes::ITunes, "daft punk");
+        assert_eq!(track.extension(), "m4a");
+        assert!(!track.is_full_length && !track.downloadable);
+    }
+
+    #[test]
+    #[ignore = "hits the network"]
+    fn audius_stream_endpoint_redirects_to_decodable_audio() {
+        let track = fetch_and_decode_first(&audius::Audius, "lofi");
+        assert!(track.is_full_length);
+    }
+
+    #[test]
+    #[ignore = "hits the network"]
+    fn ccmixter_upload_is_decodable() {
+        let track = fetch_and_decode_first(&ccmixter::CcMixter, "piano");
+        assert!(track.is_full_length && track.downloadable);
+    }
+
+    #[test]
+    #[ignore = "hits the network"]
+    fn wikimedia_recording_is_decodable() {
+        let track = fetch_and_decode_first(&wikimedia::WikimediaCommons, "bach cello suite");
+        assert!(track.is_full_length && track.downloadable);
     }
 }

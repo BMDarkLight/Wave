@@ -516,19 +516,21 @@ for (const section of sections) {
 
 ### `stream_source_track`
 
-Fetch a remote result into the local cache and return it as a playable `Track`.
-Play the returned `path` exactly as you would a local file.
+Return a search result as a playable `Track`. Play the returned `path` the way
+you would any other track.
 
 Behavior depends on the result:
 
-- **Full length** — cached to disk and registered as a library row flagged
-  `source_state: "cached"`. Hidden from browse and search until downloaded.
-- **Preview** (`is_full_length: false`) — cached to a session-scoped directory
-  and returned with `source_state: "preview"`. **No database row is created**,
-  and it is excluded from listening statistics and recently-played.
+- **Full length**: registered as a hidden remote row with a
+  `wave-remote://search/...` path and `source_state: "remote"`, and returned
+  without fetching any audio. Playing it streams progressively through the
+  remote stream cache, so it starts as soon as the first bytes arrive. Hidden
+  from browse and search until downloaded.
+- **Preview** (`is_full_length: false`): fetched whole to a session-scoped
+  directory and returned with `source_state: "preview"`. **No database row is
+  created**, and it is excluded from listening statistics and recently-played.
 
-Safe to call repeatedly: an already-cached track is reused rather than
-re-fetched.
+Safe to call repeatedly: an existing row or cached clip is reused.
 
 **Arguments**
 
@@ -538,8 +540,11 @@ re-fetched.
 
 **Returns:** `Track`
 
-**Errors (examples):** `"This recording isn't available for download"` (401/403),
-`"The source is rate limiting — try again in a moment"` (429), resolve failures.
+**Errors (examples):** resolve failures, such as an Archive item with no
+playable file; for a preview, `"This recording isn't available for download"`
+(401/403) or `"The source is rate limiting, try again in a moment"` (429). A
+full-length track that fails while playing reports
+[`remote-stream-failed`](./events.md) instead.
 
 ---
 
@@ -549,8 +554,10 @@ Keep a remote track: copy it into the platform download destination and promote
 its row into the library, making it browsable and searchable immediately with no
 rescan.
 
-Streams the track first if it is not already cached. Copies rather than moves,
-so a track playing from the cache is never disturbed.
+Registers the track first if needed, then waits for its stream cache to
+finish (up to ten minutes) and keeps it the way `download_remote_track` keeps a
+remote library track. Copies rather than moves, so a track playing from the
+cache is never disturbed.
 
 **Arguments**
 

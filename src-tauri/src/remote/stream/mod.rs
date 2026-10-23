@@ -71,7 +71,7 @@ fn complete_file(info: &RemoteStreamInfo) -> Option<PathBuf> {
 #[allow(dead_code)]
 pub fn fill_for(uri: &RemoteUri) -> Result<Arc<Fill>, String> {
     let rt = RemoteRuntime::global().ok_or(NOT_SET_UP)?;
-    fill_for_with(rt, NetworkGate::global(), uri)
+    fill_for_with(rt, NetworkGate::for_source(&uri.source_id), uri)
 }
 
 pub(crate) fn fill_for_with(
@@ -87,16 +87,20 @@ pub(crate) fn fill_for_with(
             return Ok(fill);
         }
     }
-    let info = lookup(rt, uri)?;
-    if info.size == 0 {
-        return Err("The server didn't say how big this song is".to_string());
-    }
+    let mut info = lookup(rt, uri)?;
     if complete_file(&info).is_none() {
         gate.check().map_err(|e| e.to_string())?;
     }
     let backend = rt
         .backend(&uri.source_id)
         .ok_or("This server is not set up")?;
+    if info.size == 0 {
+        let size = backend
+            .content_length(&info.part_key)
+            .map_err(|e| e.to_string())?;
+        rt.with_library(|l| l.set_remote_track_size(uri, size))?;
+        info.size = size;
+    }
     let fill = Fill::spawn_with(rt, gate, info, backend);
     if let Some(error) = fill.error() {
         return Err(error);
@@ -109,7 +113,7 @@ pub(crate) fn fill_for_with(
 /// or a fill to read progressively. Paths that are not remote are files.
 pub fn resolve_play_target(path: &str) -> Result<PlayTarget, String> {
     let rt = RemoteRuntime::global().ok_or(NOT_SET_UP)?;
-    resolve_play_target_with(rt, NetworkGate::global(), path)
+    resolve_play_target_with(rt, NetworkGate::for_path(path), path)
 }
 
 pub(crate) fn resolve_play_target_with(
@@ -138,7 +142,7 @@ pub fn prepare_for_play(path: &str, timeout: Duration) -> Result<(), String> {
         return Ok(());
     }
     let rt = RemoteRuntime::global().ok_or(NOT_SET_UP)?;
-    prepare_for_play_with(rt, NetworkGate::global(), path, timeout)
+    prepare_for_play_with(rt, NetworkGate::for_path(path), path, timeout)
 }
 
 fn prepare_for_play_with(

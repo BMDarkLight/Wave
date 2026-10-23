@@ -108,7 +108,7 @@ export default function RemoteSourceList() {
                 <BiCloud /> {source.display_name}
               </span>
               {label && <span className="mset-row-value">{label}</span>}
-              {source.state === "signed_out" && (
+              {source.state === "signed_out" && source.reauth !== "none" && (
                 <button
                   className="btn-secondary remote-source-signin"
                   type="button"

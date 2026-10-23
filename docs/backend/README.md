@@ -97,7 +97,7 @@ Important behaviors:
 | `search_library` | Tier 2 — realtime local search with matched fields and lyric snippets |
 | `search_library_collections` | Tier 2 — album and artist matches for the same query |
 | `search_sources` | Tier 3 — query remote providers concurrently (explicit user action only) |
-| `stream_source_track` | Fetch a remote result into the cache and return a playable `Track` |
+| `stream_source_track` | Return a playable `Track` for a result: a streamed row, or a fetched preview |
 | `download_source_track` | Keep a remote track: copy to the download folder and index it |
 | `get_source_settings` | Read the source switches, provider credentials and cache size |
 | `set_source_settings` | Persist the source switches, provider credentials and cache size |
@@ -107,7 +107,11 @@ Important behaviors:
 | `plex_probe_direct`, `plex_add_direct_source`, `plex_set_direct_token` | Add a Plex server by address and token, without plex.tv |
 | `subsonic_add_source` | Add a Subsonic server (Navidrome, Airsonic, Gonic) |
 | `jellyfin_sign_in`, `jellyfin_add_source` | Add a Jellyfin or Emby server and pick its music libraries |
-| `set_source_password` | Sign a Subsonic, Jellyfin or Emby source in again |
+| `webdav_add_source` | Add a WebDAV folder (Nextcloud, ownCloud, a NAS share) |
+| `dlna_discover`, `dlna_add_source` | Find and add a DLNA or UPnP media server |
+| `kodi_add_source` | Add a Kodi device's music library |
+| `audius_add_source` | Add an Audius account's uploads, favorites and reposts |
+| `set_source_password` | Sign a Subsonic, Jellyfin, Emby, WebDAV or Kodi source in again |
 | `list_remote_sources`, `remove_remote_source` | The remote sources in Settings |
 | `get_remote_status` | Network gate state and each source's state |
 | `request_library_refresh` | Rescan and sync, at most every 30 seconds |

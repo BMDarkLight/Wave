@@ -58,7 +58,7 @@ pub fn start_loopback() -> io::Result<&'static Loopback> {
 fn resolve(path: &str) -> Result<PlayTarget, Refusal> {
     let rt = RemoteRuntime::global()
         .ok_or_else(|| Refusal::Unavailable("Remote music isn't set up".into()))?;
-    resolve_with(rt, NetworkGate::global(), path)
+    resolve_with(rt, NetworkGate::for_path(path), path)
 }
 
 fn resolve_with(
