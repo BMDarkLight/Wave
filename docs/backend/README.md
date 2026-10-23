@@ -86,7 +86,6 @@ Important behaviors:
 | `get_playlist` | List all tracks in the default playlist |
 | `clear_playlist` | Remove all tracks from the default playlist |
 | `play_track_from_playlist` | Play track at index and sync playback queue |
-| `index_music_library` | Scan a folder and import audio files |
 | `list_playlists` | List playlists (optionally filtered by profile) |
 | `get_library_database_path` | Absolute path to the SQLite database |
 | `get_supported_audio_extensions` | Lowercase extensions the backend accepts |

@@ -1011,18 +1011,6 @@ impl Library {
         Ok(())
     }
 
-    /// Index a directory without reporting progress. The GUI calls this; the
-    /// CLI wants progress and the skipped files, so it uses the variant below.
-    pub fn index_directory(
-        &self,
-        profile_id: Option<String>,
-        playlist_name: Option<String>,
-        directory: String,
-    ) -> Result<Vec<Track>, String> {
-        self.index_directory_with_progress(profile_id, playlist_name, directory, &mut |_, _, _| {})
-            .map(|(tracks, _failed)| tracks)
-    }
-
     /// Index a directory, calling `progress(done, total, path)` before each
     /// file, and hand back the files that could not be indexed alongside the
     /// ones that were, each failure as "path: reason".
@@ -7892,18 +7880,6 @@ mod tests {
         // The counter climbs and the total holds. WalkDir promises no order,
         // but these pairs do not depend on one.
         assert_eq!(seen, vec![(1, 2), (2, 2)]);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn index_directory_still_returns_just_the_tracks() {
-        let library = open_test_library().unwrap();
-        let dir = unreadable_audio_dir(1);
-        // The wrapper keeps the signature the GUI calls, dropping failures.
-        let tracks = library
-            .index_directory(None, None, dir.to_string_lossy().to_string())
-            .expect("import ran");
-        assert!(tracks.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 

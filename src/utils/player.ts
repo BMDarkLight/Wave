@@ -526,18 +526,6 @@ export const scanDirectory = (directory: string): Promise<string[]> => {
   return safeInvoke<string[]>("scan_directory", { directory });
 };
 
-export const indexMusicLibrary = (
-  directory: string,
-  profileId?: string,
-  playlistName?: string,
-): Promise<Track[]> => {
-  return safeInvoke<Track[]>("index_music_library", {
-    directory,
-    profileId,
-    playlistName,
-  });
-};
-
 export const listPlaylists = (profileId?: string): Promise<PlaylistInfo[]> => {
   return safeInvoke<PlaylistInfo[]>("list_playlists", { profileId });
 };

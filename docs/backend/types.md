@@ -101,7 +101,7 @@ interface PlaybackMode {
 
 ## `Track`
 
-Rich metadata for a library item. Returned by `add_track_to_playlist`, `get_playlist`, and `index_music_library`.
+Rich metadata for a library item. Returned by `add_track_to_playlist` and `get_playlist`.
 
 ```typescript
 interface Track {

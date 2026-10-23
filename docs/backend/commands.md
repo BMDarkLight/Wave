@@ -279,24 +279,6 @@ Play the track at a **zero-based index** in the default playlist. Also:
 
 ---
 
-### `index_music_library`
-
-Recursively scan a directory for supported audio files, extract metadata, and import into a playlist.
-
-**Arguments**
-
-| Name | Type | Required | Default | Description |
-|------|------|----------|---------|-------------|
-| `directory` | `string` | yes | — | Folder to scan |
-| `profileId` | `string` | no | `"default"` | Profile id |
-| `playlistName` | `string` | no | `"All Local Files"` | Target playlist name |
-
-**Returns:** `Track[]` — only tracks **newly added** to the playlist during this scan (skipped/duplicate files are omitted)
-
-**Errors:** `"Library path is not a directory"`. Individual file failures are logged server-side and skipped.
-
----
-
 ### `list_playlists`
 
 **Arguments**

@@ -2409,24 +2409,6 @@ pub async fn scan_directory(directory: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub async fn index_music_library(
-    directory: String,
-    profile_id: Option<String>,
-    playlist_name: Option<String>,
-    app: tauri::AppHandle,
-) -> Result<Vec<Track>, String> {
-    let task_app = app.clone();
-    let tracks = blocking(move || {
-        let library = task_app.state::<LibraryState>();
-        let lib = library.0.lock().map_err(|e| e.to_string())?;
-        lib.index_directory(profile_id, playlist_name, directory)
-    })
-    .await?;
-    crate::remote::commands::after_local_library_change(&app);
-    Ok(tracks)
-}
-
-#[tauri::command]
 pub async fn list_playlists(
     profile_id: Option<String>,
     library: tauri::State<'_, LibraryState>,
