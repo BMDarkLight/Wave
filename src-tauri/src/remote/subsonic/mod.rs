@@ -185,18 +185,36 @@ impl SubsonicBackend {
         format!("{}/rest/{endpoint}?{}", self.config.url, query.join("&"))
     }
 
-    /// Switches to sending the password when the server can't check tokens.
-    /// Returns whether a retry is worth it.
-    fn fall_back_to_password(&self, failure: &ApiFailure) -> bool {
-        matches!(
+    /// Switches to sending the password when the server can't check tokens,
+    /// so the call can be tried again. Any other failure is returned as is.
+    fn retry_with_password(&self, failure: ApiFailure) -> Result<(), RemoteError> {
+        let token_refused = matches!(
             failure,
             ApiFailure::Code(TOKEN_UNSUPPORTED | AUTH_UNSUPPORTED, _)
-        ) && !self.plain.swap(true, Ordering::Relaxed)
+        );
+        if !token_refused || self.plain.load(Ordering::Relaxed) {
+            return Err(failure.into());
+        }
+        if !password_travels_safely(&self.config.url) {
+            return Err(RemoteError::Insecure);
+        }
+        self.plain.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// The `p=enc:` form is the password in hex, readable by anyone on the
+    /// network path, so it only goes out over HTTPS or to this machine.
+    fn check_password_safe(&self) -> Result<(), RemoteError> {
+        if self.plain.load(Ordering::Relaxed) && !password_travels_safely(&self.config.url) {
+            return Err(RemoteError::Insecure);
+        }
+        Ok(())
     }
 
     fn call(&self, endpoint: &str, params: &[(&str, &str)]) -> Result<Envelope, RemoteError> {
         self.gate.check()?;
         loop {
+            self.check_password_safe()?;
             let resp = api_client()
                 .get(self.url(endpoint, params))
                 .header("Accept", "application/json")
@@ -214,8 +232,7 @@ impl SubsonicBackend {
             let body = resp.text().map_err(|_| self.unreachable())?;
             match parse_response(&body) {
                 Ok(envelope) => return Ok(envelope),
-                Err(failure) if self.fall_back_to_password(&failure) => continue,
-                Err(failure) => return Err(failure.into()),
+                Err(failure) => self.retry_with_password(failure)?,
             }
         }
     }
@@ -270,6 +287,7 @@ impl SubsonicBackend {
     ) -> Result<Response, RemoteError> {
         self.gate.check()?;
         loop {
+            self.check_password_safe()?;
             let mut request = stream_client().get(self.url(endpoint, params));
             if let Some(offset) = offset {
                 request = request.header("Range", format!("bytes={offset}-"));
@@ -284,8 +302,10 @@ impl SubsonicBackend {
             if status.is_success() && is_api_body(&resp) {
                 let body = resp.text().map_err(|_| self.unreachable())?;
                 match parse_response(&body) {
-                    Err(failure) if self.fall_back_to_password(&failure) => continue,
-                    Err(failure) => return Err(failure.into()),
+                    Err(failure) => {
+                        self.retry_with_password(failure)?;
+                        continue;
+                    }
                     Ok(_) => return Err(RemoteError::Parse("No audio in the response".into())),
                 }
             }
@@ -364,6 +384,21 @@ impl RemoteBackend for SubsonicBackend {
         resp.bytes()
             .map(|bytes| bytes.to_vec())
             .map_err(|_| self.unreachable())
+    }
+}
+
+fn password_travels_safely(server_url: &str) -> bool {
+    let Ok(url) = url::Url::parse(server_url) else {
+        return false;
+    };
+    if url.scheme() == "https" {
+        return true;
+    }
+    match url.host() {
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
     }
 }
 
@@ -491,6 +526,25 @@ mod tests {
         let log = seen.lock().unwrap();
         assert_eq!(param(&log[1], "p").as_deref(), Some("enc:736573616d65"));
         assert!(param(&log[1], "t").is_none());
+    }
+
+    #[test]
+    fn the_password_is_never_sent_readable_over_plain_http() {
+        let backend = SubsonicBackend::with_gate(
+            SubsonicConfig {
+                url: "http://192.0.2.1:4533".into(),
+                username: "alice".into(),
+                password: "sesame".into(),
+                plain_password: true,
+                server_type: None,
+            },
+            open_gate(),
+        );
+        assert!(matches!(backend.probe(), Err(RemoteError::Insecure)));
+        assert!(password_travels_safely("https://music.example.com"));
+        assert!(password_travels_safely("http://localhost:4533"));
+        assert!(password_travels_safely("http://[::1]:4533"));
+        assert!(!password_travels_safely("http://192.168.1.20:4533"));
     }
 
     #[test]

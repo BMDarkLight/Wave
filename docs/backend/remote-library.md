@@ -116,7 +116,9 @@ API are added with an address, a username and a password. A bare address gets
 request is signed with a fresh salt and `t = md5(password + salt)`, so the
 password itself never goes over the wire. A server that refuses token auth
 (error 41, as LDAP-backed ones do, or 42 for any unsupported method) gets the
-hex-encoded password instead, and the source remembers that choice. The password is stored in the
+hex-encoded password instead, and the source remembers that choice. Hex is not
+encryption, so that fallback only happens over HTTPS or to a server on this
+machine; anywhere else the source reports that it needs HTTPS. The password is stored in the
 source's config, because each signature needs it.
 
 `ping` checks the account when the source is added and reports the server type

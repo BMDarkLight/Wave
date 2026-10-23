@@ -174,7 +174,9 @@ fn read_some(stream: &mut dyn ByteStream, buf: &mut [u8]) -> Result<usize, FillE
 /// track is that track's problem, so it leaves the source alone.
 fn source_state_for(error: &RemoteError) -> Option<SourceState> {
     match error {
-        RemoteError::Unauthorized | RemoteError::Http(401) => Some(SourceState::SignedOut),
+        RemoteError::Unauthorized | RemoteError::Http(401) | RemoteError::Insecure => {
+            Some(SourceState::SignedOut)
+        }
         RemoteError::Blocked(_) => Some(SourceState::Blocked),
         RemoteError::Http(400..=499) | RemoteError::Parse(_) => None,
         RemoteError::Http(_) | RemoteError::Unreachable(_) => Some(SourceState::Unreachable),

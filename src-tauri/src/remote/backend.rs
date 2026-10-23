@@ -49,6 +49,9 @@ pub enum RemoteError {
     Blocked(GateState),
     Parse(String),
     Http(u16),
+    /// The server only takes the password itself, and the connection is
+    /// not HTTPS.
+    Insecure,
 }
 
 impl std::fmt::Display for RemoteError {
@@ -65,6 +68,9 @@ impl std::fmt::Display for RemoteError {
             }
             RemoteError::Parse(_) => f.write_str("Unexpected response from the server"),
             RemoteError::Http(code) => write!(f, "The server returned an error ({code})"),
+            RemoteError::Insecure => f.write_str(
+                "This server only accepts the password itself. Connect to it over HTTPS",
+            ),
         }
     }
 }
