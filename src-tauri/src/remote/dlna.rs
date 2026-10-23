@@ -124,7 +124,7 @@ pub fn discover(gate: &NetworkGate, wait: Duration) -> Result<Vec<String>, Remot
 
 /// The IPv4 addresses of the interfaces a search goes out of, after the
 /// system's own choice (`0.0.0.0`).
-fn multicast_interfaces() -> Vec<Ipv4Addr> {
+pub(crate) fn multicast_interfaces() -> Vec<Ipv4Addr> {
     let mut found = vec![Ipv4Addr::UNSPECIFIED];
     let mut add = |ip: Ipv4Addr| {
         if !found.contains(&ip) {
@@ -222,7 +222,7 @@ fn child_text(node: roxmltree::Node<'_, '_>, name: &str) -> Option<String> {
 }
 
 /// Reads a device description and finds its ContentDirectory service.
-fn parse_description(xml: &str, location: &str) -> Result<DlnaConfig, RemoteError> {
+pub(crate) fn parse_description(xml: &str, location: &str) -> Result<DlnaConfig, RemoteError> {
     let doc = roxmltree::Document::parse(xml).map_err(|e| RemoteError::Parse(e.to_string()))?;
     let root = doc.root_element();
     let location_url =

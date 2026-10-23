@@ -115,6 +115,7 @@ Important behaviors:
 | `list_remote_sources`, `remove_remote_source` | The remote sources in Settings |
 | `get_remote_status` | Network gate state and each source's state |
 | `request_library_refresh` | Rescan and sync, at most every 30 seconds |
+| `get_share_status` | Whether the library is shared on the network, and where |
 | `clear_source_cache`, `get_source_cache_usage` | The shared audio cache |
 | `download_remote_track` | Keep a remote library track as a local file |
 

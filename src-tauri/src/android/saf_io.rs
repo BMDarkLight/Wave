@@ -41,6 +41,13 @@ fn open(app: &AppHandle, uri: &str, opts: OpenOptions) -> Result<File, String> {
     .map_err(|e| format!("Failed to open {uri}: {e}"))
 }
 
+/// A document opened for reading, seekable like any file.
+pub fn open_for_reading(app: &AppHandle, uri: &str) -> Result<File, String> {
+    let mut opts = OpenOptions::new();
+    opts.read(true);
+    open(app, uri, opts)
+}
+
 /// Copy a document into a local file.
 pub fn copy_uri_to_file(app: &AppHandle, uri: &str, dest: &Path) -> Result<(), String> {
     let mut opts = OpenOptions::new();

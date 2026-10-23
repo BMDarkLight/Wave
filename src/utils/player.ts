@@ -744,6 +744,10 @@ export interface SourceSettings {
   remote_cellular_enabled: boolean;
   /** Size cap of the shared audio cache. */
   cache_limit_mb: number;
+  /** Share the library on the network while Outside Sourcing is on. */
+  library_sharing_enabled: boolean;
+  /** The name other devices see; "" for "Wave on <device>". */
+  share_name: string;
 }
 
 export const getSourceSettings = (): Promise<SourceSettings> =>

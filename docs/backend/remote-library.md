@@ -279,6 +279,73 @@ signed copy and honours Range.
 
 ---
 
+## Sharing the library
+
+With Outside Sourcing on, **Share my library** makes Wave a DLNA / UPnP media
+server (`share/`), so a TV, VLC, Kodi, a phone app or another copy of Wave can
+browse the library and play it. It is off by default and stops when either
+switch goes off.
+
+| Path | Role |
+|------|------|
+| `share/catalog.rs` | The library as ContentDirectory objects, DIDL-Lite, and the search grammar |
+| `share/http.rs` | Device and service descriptions, SOAP control, songs and covers |
+| `share/ssdp.rs` | Announcing the server and answering searches |
+| `share/mod.rs` | Starting, stopping, and the status the settings show |
+
+**What is shared.** Every library track Wave can open itself: local files,
+downloads, and on Android `content://` documents, opened through the
+ContentResolver (while Wave has a window, as every SAF read needs). Tracks of
+someone else's server are not passed on. The tree is Artists (each holding
+their albums), Albums, All songs and Playlists; the default playlist is the
+whole library and is left out. Object ids are stable (`track:<id>`,
+`album:<hash>`, `artist:<hash>`, `playlist:<id>`), so a player that kept one
+still finds it after the library changes. `SystemUpdateID` is a hash of the
+track count, the newest index and change times, and the playlists, and the
+catalog snapshot is rebuilt only when it changes.
+
+**Control.** ContentDirectory:1 with Browse (both flags, paging by
+`StartingIndex` and `RequestedCount`, 0 meaning all), Search with the full
+criteria grammar of section 2.5.5 (`and`, `or`, parentheses, `=`, `!=`, `<`,
+`<=`, `>`, `>=`, `contains`, `doesNotContain`, `derivedfrom`, `exists`), and
+the capability and update-id queries. Sorting is not offered (`SortCaps` is
+empty). ConnectionManager:1 answers its three required actions. Errors come
+back as SOAP faults with the spec's codes: 701 for an unknown object, 708 for
+criteria it can't read, 710 for an unknown search container. `SUBSCRIBE` is
+acknowledged with a SID so control points that insist on one carry on, but no
+events are sent; players see changes through `SystemUpdateID`.
+
+**Media.** `/media/<track id>.<ext>` serves the file with byte ranges (206,
+`Content-Range`, 416 for a range past the end, HEAD) and the DLNA
+`transferMode.dlna.org` and `contentFeatures.dlna.org` headers. Each item's
+`res` carries the size, length, sample rate and channels. `/art/<track id>.jpg`
+serves the album thumbnail. URLs use the address the player reached the
+server on, so they work on whichever network it asked from.
+
+**Finding it.** SSDP on 239.255.255.250:1900, joined on every interface and
+shared with any other SSDP stack on the machine. On start the server sends
+`ssdp:alive` for its five targets (root device, UUID, MediaServer:1, both
+services) on every interface, each with that interface's address in LOCATION,
+and repeats them every 10 minutes against a `max-age` of 1800. An `M-SEARCH`
+for `ssdp:all` or any target gets a unicast reply after a short random wait,
+with the LOCATION the searcher can reach. On stop, and when the app quits, it
+sends `ssdp:byebye`. On Android it holds a Wi-Fi multicast lock while sharing,
+since Android drops multicast without one; that needs the
+`CHANGE_WIFI_MULTICAST_STATE` permission.
+
+**Safety.** HTTP and SSDP only answer loopback, private and link-local
+addresses; anything else is dropped. DLNA has no sign-in, so anyone on the same
+network can play what is shared, which the settings copy says. The HTTP port
+is 50800 when free, so players that remember an address find the server again,
+and any free port otherwise. The server's UUID is made once and kept in
+settings, and its name defaults to "Wave on <device>".
+
+This is the groundwork for Wave libraries caching each other: another copy of
+Wave already finds a shared library through its DLNA client and streams it
+into its own cache.
+
+---
+
 ## Files without a size
 
 The stream cache sizes its sparse file before the first byte is written.
@@ -381,6 +448,7 @@ seconds left so the UI can say so.
 | `list_remote_sources` / `remove_remote_source` | The settings list |
 | `get_remote_status` | Gate state and per-source state |
 | `request_library_refresh` | Start a refresh or report the cooldown |
+| `get_share_status` | Whether the library is shared, its name, addresses and song count |
 | `clear_source_cache` / `get_source_cache_usage` | The cache controls |
 | `download_remote_track` | Keep a remote track as a local file |
 
@@ -422,3 +490,12 @@ cargo test --lib -- --ignored live_search_results --nocapture
 
 `rclone serve webdav <folder>` and `rclone serve dlna <folder>` make quick
 local servers for the first two.
+
+Sharing has one too: it indexes a folder into a fresh library, shares it,
+finds it with Wave's own SSDP search, syncs it with Wave's DLNA client and
+plays every song through the stream cache. `WAVE_SHARE_HOLD=<seconds>` keeps
+the server up afterwards to try it from another player.
+
+```bash
+WAVE_SHARE_DIR=/path/to/music cargo test --lib -- --ignored live_shared_library --nocapture
+```

@@ -217,6 +217,18 @@ export const jellyfinAddSource = (
 ): Promise<RemoteSource> =>
   safeInvoke<RemoteSource>("jellyfin_add_source", { sessionId, libraryIds });
 
+/** Whether the library is shared on the network, as what and where. */
+export interface ShareStatus {
+  running: boolean;
+  name: string;
+  addresses: string[];
+  track_count: number;
+  error: string | null;
+}
+
+export const getShareStatus = (): Promise<ShareStatus> =>
+  safeInvoke<ShareStatus>("get_share_status");
+
 export const listRemoteSources = (): Promise<RemoteSource[]> =>
   safeInvoke<RemoteSource[]>("list_remote_sources");
 

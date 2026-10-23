@@ -167,6 +167,8 @@ function App() {
     remote_sources_enabled: false,
     remote_cellular_enabled: false,
     cache_limit_mb: 2048,
+    library_sharing_enabled: false,
+    share_name: "",
   });
   const [crashReport, setCrashReport] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);

@@ -8596,6 +8596,11 @@ div.album-hero-cover {
   padding-left: 28px;
 }
 
+/* The address a long IPv4 list wraps onto rather than widening the card. */
+.share-status {
+  overflow-wrap: anywhere;
+}
+
 .mset-cache-row {
   display: flex;
   align-items: center;

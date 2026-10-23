@@ -1392,6 +1392,7 @@ pub fn apply_settings(app: &AppHandle, was_enabled: bool) {
     NetworkGate::global().set_policy(enabled, cellular);
     // Search results have always streamed over any network.
     NetworkGate::search().set_policy(searching, true);
+    apply_sharing(app);
     let _ = app.emit("remote-status-changed", ());
     if enabled == was_enabled {
         return;
@@ -1415,6 +1416,68 @@ pub fn apply_settings(app: &AppHandle, was_enabled: bool) {
     if let Err(e) = spawned {
         tracing::warn!("Could not apply Outside Sourcing: {e}");
     }
+}
+
+/// Starts or stops sharing the library to match the settings: it runs only
+/// while both Outside Sourcing and library sharing are on. Starting binds
+/// sockets and stopping joins threads, so the work runs on a thread of its
+/// own, which reads the settings as they are by then; a quick on-off-on lands
+/// on the last of them.
+pub fn apply_sharing(app: &AppHandle) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("wave-share-apply".into())
+        .spawn(move || crate::share::apply(sharing_config(&app)));
+    if let Err(e) = spawned {
+        tracing::warn!("Couldn't change library sharing: {e}");
+    }
+}
+
+/// The server sharing should run with, or `None` when it should be off.
+fn sharing_config(app: &AppHandle) -> Option<crate::share::ShareConfig> {
+    // Read before the settings lock is taken, so the two are never held
+    // together.
+    let db_path = app
+        .try_state::<LibraryState>()
+        .and_then(|state| {
+            state
+                .0
+                .lock()
+                .ok()
+                .map(|l| std::path::PathBuf::from(l.db_path()))
+        })
+        .unwrap_or_else(crate::app::paths::library_db_path);
+    let state = app.try_state::<AppSettingsState>()?;
+    let mut settings = state.0.lock().ok()?;
+    if !(settings.remote_sources_enabled && settings.library_sharing_enabled) {
+        return None;
+    }
+    let uuid = match settings.share_device_id.clone() {
+        Some(id) => id,
+        None => {
+            let id = uuid::Uuid::new_v4().to_string();
+            settings.share_device_id = Some(id.clone());
+            if let Err(e) = settings.save(app) {
+                tracing::warn!("Couldn't save the shared library's id: {e}");
+            }
+            id
+        }
+    };
+    Some(crate::share::ShareConfig {
+        name: settings
+            .share_name
+            .clone()
+            .unwrap_or_else(crate::share::default_name),
+        uuid,
+        db_path,
+        opener: crate::share::file_opener(Some(app.clone())),
+    })
+}
+
+/// Whether the library is being shared, under what name and where.
+#[tauri::command]
+pub async fn get_share_status() -> Result<crate::share::ShareStatus, String> {
+    blocking(|| Ok(crate::share::status())).await
 }
 
 /// Delivers runtime events to the frontend.

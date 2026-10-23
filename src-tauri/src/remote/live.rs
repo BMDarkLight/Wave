@@ -348,3 +348,82 @@ fn live_search_results_stream_through_the_cache() {
         play_through(rt, &path);
     }
 }
+
+/// Shares a folder of real files with Wave's own media server, then finds it
+/// over SSDP, syncs it and plays every song with Wave's own DLNA client:
+///
+/// ```text
+/// WAVE_SHARE_DIR=/path/to/music cargo test --lib -- --ignored live_shared_library --nocapture
+/// ```
+///
+/// `WAVE_SHARE_HOLD=<seconds>` keeps the server up that long afterwards, to
+/// try it from a TV, VLC or another player.
+#[test]
+#[ignore = "shares a folder on the local network"]
+fn live_shared_library_round_trip() {
+    let folder = env("WAVE_SHARE_DIR");
+    let dir = std::env::temp_dir().join(format!("wave-share-live-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("shared.db");
+    let library = Library::new_with_path(&db_path).unwrap();
+    let (indexed, failed) = library
+        .index_directory_with_progress(None, None, folder, &mut |_, _, _| {})
+        .unwrap();
+    assert!(failed.is_empty(), "could not index: {failed:?}");
+    assert!(!indexed.is_empty());
+    let playlist = library.create_playlist("Road trip", None).unwrap();
+    library
+        .add_track_to_playlist(&playlist.id, indexed[0].path.clone())
+        .unwrap();
+    drop(library);
+
+    let uuid = uuid::Uuid::new_v4().to_string();
+    crate::share::apply(Some(crate::share::ShareConfig {
+        name: format!("Wave live test {}", &uuid[..8]),
+        uuid: uuid.clone(),
+        db_path,
+        opener: crate::share::file_opener(None),
+    }));
+    let status = crate::share::status();
+    assert!(status.running, "{:?}", status.error);
+    println!("sharing: {status:?}");
+
+    let gate = NetworkGate::global();
+    gate.set_policy(true, true);
+    let config = (0..3)
+        .find_map(|_| {
+            dlna::discover(gate, Duration::from_secs(3))
+                .unwrap()
+                .iter()
+                .filter_map(|location| dlna::describe(gate, location).ok())
+                .find(|c| c.udn == format!("uuid:{uuid}"))
+        })
+        .expect("Wave's client never discovered Wave's server");
+    println!("discovered {} at {}", config.name, config.location);
+
+    let key = dlna::stable_key(&config);
+    let (rt, id) = add_and_sync("dlna", &key, &serde_json::to_string(&config).unwrap());
+    let played = report_and_play(rt, &id, usize::MAX);
+    assert_eq!(played.len(), indexed.len(), "each shared song once");
+    let mut shared: Vec<_> = played.iter().map(|r| r.title.clone()).collect();
+    let mut local: Vec<_> = indexed.iter().map(|t| t.title.clone()).collect();
+    shared.sort();
+    local.sort();
+    assert_eq!(shared, local, "titles survive the trip");
+    for track in &indexed {
+        let row = played.iter().find(|r| r.title == track.title).unwrap();
+        assert_eq!(row.artist, track.artist, "{}", track.title);
+        assert_eq!(row.album, track.album, "{}", track.title);
+        assert_eq!(row.size, track.file_size, "{}", track.title);
+    }
+
+    if let Some(hold) = std::env::var("WAVE_SHARE_HOLD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
+        println!("holding the server for {hold}s");
+        std::thread::sleep(Duration::from_secs(hold));
+    }
+    crate::share::apply(None);
+    assert!(!crate::share::status().running);
+}

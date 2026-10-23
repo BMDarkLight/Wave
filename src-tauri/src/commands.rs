@@ -1808,6 +1808,13 @@ pub struct SourceSettingsDto {
     /// Android only: let remote music use mobile data.
     pub remote_cellular_enabled: bool,
     pub cache_limit_mb: u64,
+    /// Share the library as a DLNA / UPnP media server while Outside
+    /// Sourcing is on.
+    #[serde(default)]
+    pub library_sharing_enabled: bool,
+    /// The shared library's name; "" uses the default.
+    #[serde(default)]
+    pub share_name: String,
 }
 
 #[tauri::command]
@@ -1822,6 +1829,8 @@ pub async fn get_source_settings(
         remote_sources_enabled: settings.remote_sources_enabled,
         remote_cellular_enabled: settings.remote_cellular_enabled,
         cache_limit_mb: settings.source_cache_limit_mb,
+        library_sharing_enabled: settings.library_sharing_enabled,
+        share_name: settings.share_name.clone().unwrap_or_default(),
     })
 }
 
@@ -1851,6 +1860,8 @@ pub async fn set_source_settings(
         stored.spotify_client_id = normalise(&settings.spotify_client_id);
         stored.remote_sources_enabled = settings.remote_sources_enabled;
         stored.remote_cellular_enabled = settings.remote_cellular_enabled;
+        stored.library_sharing_enabled = settings.library_sharing_enabled;
+        stored.share_name = normalise(&settings.share_name);
         stored.source_cache_limit_mb = settings.cache_limit_mb.max(MIN_CACHE_LIMIT_MB);
         stored.save(&app)?;
         (was_enabled, cap_shrank)

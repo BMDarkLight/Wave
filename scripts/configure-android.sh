@@ -101,6 +101,8 @@ permissions = [
     "android.permission.INTERNET",
     # Lets remote music tell mobile data from Wi-Fi.
     "android.permission.ACCESS_NETWORK_STATE",
+    # Lets a shared library hear the searches DLNA players send.
+    "android.permission.CHANGE_WIFI_MULTICAST_STATE",
     "android.permission.WAKE_LOCK",
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",

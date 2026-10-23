@@ -73,6 +73,7 @@ import type {
 import { isAndroid } from "../utils/platform";
 import { formatBytes } from "../utils/format";
 import { clearSourceCache, getSourceCacheUsage } from "../utils/remote";
+import LibrarySharingRow from "./LibrarySharingRow";
 import AddSourceChooser from "./AddSourceChooser";
 import RemoteSourceList from "./RemoteSourceList";
 import Select from "./Select";
@@ -956,6 +957,14 @@ export default function MobileSettings({
                   </span>
                 </span>
               </label>
+            )}
+
+            {sourceSettings.remote_sources_enabled && (
+              <LibrarySharingRow
+                sourceSettings={sourceSettings}
+                onSourceSettingsChange={onSourceSettingsChange}
+                idPrefix={keyIdPrefix}
+              />
             )}
 
             {/* Desktop has no media source folders, so remote sources are

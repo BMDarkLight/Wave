@@ -29,6 +29,11 @@
 -keepclassmembers class app.bmdarklight.wave.NetworkState {
     public static boolean isCellularOrMetered(android.content.Context);
 }
+-keep class app.bmdarklight.wave.WifiMulticast { *; }
+-keepclassmembers class app.bmdarklight.wave.WifiMulticast {
+    public static boolean acquire(android.content.Context);
+    public static void release();
+}
 -keep class app.bmdarklight.wave.AppUpdater { *; }
 -keepclassmembers class app.bmdarklight.wave.AppUpdater {
     public static void install(android.app.Activity, java.lang.String);

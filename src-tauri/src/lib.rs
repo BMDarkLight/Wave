@@ -24,6 +24,7 @@ mod os_media;
 mod path_validation;
 pub mod playback_daemon;
 mod remote;
+mod share;
 mod sources;
 mod tag_edit;
 mod waveform_service;
@@ -344,6 +345,7 @@ pub fn run() {
             remote::commands::dlna_add_source,
             remote::commands::audius_add_source,
             remote::commands::kodi_add_source,
+            remote::commands::get_share_status,
             remote::commands::set_source_password,
             remote::commands::jellyfin_sign_in,
             remote::commands::jellyfin_add_source,
@@ -462,5 +464,10 @@ pub fn run() {
         .run(|_app, _event| {
             #[cfg(target_os = "android")]
             android::lifecycle::on_run_event(_app, &_event);
+            // Say goodbye on the network, so players drop the shared library
+            // now rather than when its announcement runs out.
+            if let tauri::RunEvent::Exit = _event {
+                share::apply(None);
+            }
         });
 }
