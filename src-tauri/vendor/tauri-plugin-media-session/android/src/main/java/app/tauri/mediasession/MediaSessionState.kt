@@ -68,7 +68,12 @@ internal object MediaSessionState {
      */
     internal const val EXTRA_FROM_SESSION = "app.tauri.mediasession.FROM_SESSION"
 
-    private const val MAX_ARTWORK_SIZE = 512
+    // The session's metadata, bitmap included, crosses to the system in one
+    // Binder transaction, which is capped near 1 MB. At 512px an ARGB cover
+    // is 1,048,576 bytes and Android refused it ("Could not copy bitmap to
+    // parcel blob"); 320px is about 400 KB, as large as the notification
+    // and lock screen show it.
+    private const val MAX_ARTWORK_SIZE = 320
 
     // A track change arrives as several calls (metadata, play state,
     // shuffle/repeat). Wait a moment so they turn into one notification post;
@@ -390,7 +395,14 @@ internal object MediaSessionState {
         val art = artwork ?: fallbackArtwork(ctx)
         val metadataKey = "$title\u0000$artist\u0000$album\u0000${durationMs()}\u0000${System.identityHashCode(art)}"
         if (metadataKey != publishedMetadataKey) {
-            s.setMetadata(buildMetadata(art))
+            try {
+                s.setMetadata(buildMetadata(art))
+            } catch (e: RuntimeException) {
+                // A bitmap the transaction still can't carry: publish the
+                // track without its cover rather than not at all.
+                Log.w(TAG, "metadata with artwork refused: ${e.message}")
+                s.setMetadata(buildMetadata(null))
+            }
             publishedMetadataKey = metadataKey
         }
 
