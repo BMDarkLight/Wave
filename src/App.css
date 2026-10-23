@@ -2020,6 +2020,14 @@ input[type="search"]::-webkit-search-decoration {
   cursor: pointer;
 }
 
+/* The phone layout has no room for it, and on Android the system
+   notification announces the update instead. Settings still shows it. */
+@media (max-width: 900px) {
+  .update-toast {
+    display: none;
+  }
+}
+
 .error-toast button {
   display: grid;
   place-items: center;

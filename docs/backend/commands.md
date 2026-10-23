@@ -1323,6 +1323,18 @@ app's cache, reporting progress through
 is checked against the size GitHub reports and, when GitHub lists one, its
 SHA-256 digest. Resolves once the APK is ready to install.
 
+While it runs, a quiet notification shows the progress (posted at most once
+a second, as Android drops faster updates). When the APK is ready it is
+replaced by one that alerts, "Wave <version> is ready to install", which opens
+the installer when tapped, with or without Wave open. A failed download
+replaces it with the reason. `check_for_update` posts the same "ready"
+notification for an APK downloaded on an earlier launch, and takes it down
+once no update is pending, so one left from the version now installed goes
+away. Both channels ("Update downloads", "Updates ready") can be muted in
+Android's settings; without the notification permission nothing is posted and
+Settings still shows the update. The in-app update toast is hidden in the
+phone layout, where it got clipped.
+
 **Arguments:** none
 
 **Returns:** nothing

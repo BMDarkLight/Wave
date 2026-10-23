@@ -209,6 +209,9 @@ pub fn check(app: &AppHandle, state: &UpdaterState) -> Result<UpdateCheckDto, St
             .found
             .lock()
             .map_err(|_| "Update state lock poisoned")? = None;
+        // A "ready to install" left from the update that is now running.
+        #[cfg(target_os = "android")]
+        crate::android::update_notice::cancel();
         // Whatever is left in the folder was installed already, or is older.
         if let Ok(dir) = updates_dir(app) {
             let _ = fs::remove_dir_all(dir);
@@ -236,6 +239,11 @@ pub fn check(app: &AppHandle, state: &UpdaterState) -> Result<UpdateCheckDto, St
         Some(asset) => is_downloaded(&apk_path(app, version)?, asset),
         None => false,
     };
+    // Downloaded on an earlier launch and not installed yet: say so again.
+    #[cfg(target_os = "android")]
+    if downloaded {
+        crate::android::update_notice::ready(&version.to_string(), &apk_path(app, version)?);
+    }
     let dto = UpdateCheckDto {
         current_version: current.to_string(),
         latest_version: Some(version.to_string()),
@@ -277,7 +285,10 @@ pub fn download(app: &AppHandle, state: &UpdaterState) -> Result<(), String> {
     let _busy = ClearOnDrop(&state.downloading);
 
     let path = apk_path(app, found.version)?;
+    let version = found.version.to_string();
     if is_downloaded(&path, &asset) {
+        #[cfg(target_os = "android")]
+        crate::android::update_notice::ready(&version, &path);
         return Ok(());
     }
     let dir = updates_dir(app)?;
@@ -286,16 +297,23 @@ pub fn download(app: &AppHandle, state: &UpdaterState) -> Result<(), String> {
     fs::create_dir_all(&dir).map_err(|e| format!("Could not make the updates folder: {e}"))?;
 
     let partial = path.with_extension("apk.part");
-    let result = fetch(app, &asset, &partial).and_then(|()| {
+    let result = fetch(app, &version, &asset, &partial).and_then(|()| {
         fs::rename(&partial, &path).map_err(|e| format!("Could not save the update: {e}"))
     });
     if result.is_err() {
         let _ = fs::remove_file(&partial);
     }
+    // On Android the notification takes over from the in-app toast, which
+    // the phone layout has no room for: tapping it opens the installer.
+    #[cfg(target_os = "android")]
+    match &result {
+        Ok(()) => crate::android::update_notice::ready(&version, &path),
+        Err(e) => crate::android::update_notice::failed(&version, e),
+    }
     result
 }
 
-fn fetch(app: &AppHandle, asset: &Asset, dest: &Path) -> Result<(), String> {
+fn fetch(app: &AppHandle, version: &str, asset: &Asset, dest: &Path) -> Result<(), String> {
     let mut response = client()?
         .get(&asset.browser_download_url)
         .send()
@@ -314,6 +332,10 @@ fn fetch(app: &AppHandle, asset: &Asset, dest: &Path) -> Result<(), String> {
                 total: asset.size,
             },
         );
+        #[cfg(target_os = "android")]
+        crate::android::update_notice::progress(version, received, asset.size);
+        #[cfg(not(target_os = "android"))]
+        let _ = version;
     };
     report(0);
     loop {

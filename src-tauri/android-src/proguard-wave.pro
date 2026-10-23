@@ -34,6 +34,13 @@
     public static boolean acquire(android.content.Context);
     public static void release();
 }
+-keep class app.bmdarklight.wave.UpdateNotifier { *; }
+-keepclassmembers class app.bmdarklight.wave.UpdateNotifier {
+    public static void progress(android.content.Context, java.lang.String, long, long);
+    public static void ready(android.content.Context, java.lang.String, java.lang.String);
+    public static void failed(android.content.Context, java.lang.String, java.lang.String);
+    public static void cancel(android.content.Context);
+}
 -keep class app.bmdarklight.wave.AppUpdater { *; }
 -keepclassmembers class app.bmdarklight.wave.AppUpdater {
     public static void install(android.app.Activity, java.lang.String);

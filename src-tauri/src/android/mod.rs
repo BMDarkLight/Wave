@@ -28,6 +28,9 @@ pub mod media_bridge;
 pub mod multicast;
 
 #[cfg(target_os = "android")]
+pub mod update_notice;
+
+#[cfg(target_os = "android")]
 pub mod crash_report;
 
 #[cfg(target_os = "android")]
