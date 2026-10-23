@@ -613,7 +613,8 @@ pub fn mime_for(format: &str) -> &'static str {
     match format.to_ascii_lowercase().as_str() {
         "mp3" | "mp2" | "mp1" => "audio/mpeg",
         "flac" => "audio/flac",
-        "m4a" | "m4b" | "m4p" | "mp4" | "aac" | "alac" => "audio/mp4",
+        "m4a" | "m4b" | "m4p" | "mp4" | "alac" => "audio/mp4",
+        "aac" => "audio/aac",
         "ogg" | "oga" => "audio/ogg",
         "opus" => "audio/opus",
         "wav" | "wave" => "audio/wav",
@@ -621,7 +622,7 @@ pub fn mime_for(format: &str) -> &'static str {
         "mka" | "mkv" => "audio/x-matroska",
         "weba" => "audio/webm",
         "caf" => "audio/x-caf",
-        _ => "application/octet-stream",
+        _ => UNKNOWN_MIME,
     }
 }
 
@@ -648,14 +649,48 @@ fn duration_text(seconds: f64) -> String {
 }
 
 /// The file extension a shared track's URL ends in.
+///
+/// Android stores a document's MIME subtype as its format ("MPEG",
+/// "X-FLAC", "X-M4A"), so those are mapped to the extension they stand for;
+/// failing that, the extension of the file's own name is used. Serving them
+/// as `application/octet-stream` made players, Wave's own DLNA client
+/// included, skip most of a phone's library.
 pub fn extension_of(track: &Track) -> String {
     let format = track.format.trim().to_ascii_lowercase();
-    if format.is_empty() {
-        "bin".to_string()
-    } else {
-        format
+    let known = match format.as_str() {
+        "mpeg" | "mpga" | "x-mpeg" | "mp3" => "mp3",
+        "x-flac" | "flac" => "flac",
+        "mp4" | "x-m4a" | "m4a" | "x-mp4" | "mp4a-latm" => "m4a",
+        "aac" | "x-aac" | "aacp" => "aac",
+        "x-wav" | "wav" | "wave" | "vnd.wave" => "wav",
+        "x-aiff" | "aiff" | "aif" => "aiff",
+        "x-ogg" | "ogg" | "oga" | "vorbis" => "ogg",
+        "x-matroska" | "mka" => "mka",
+        "webm" | "weba" => "weba",
+        "x-caf" | "caf" => "caf",
+        other => other,
+    };
+    if mime_for(known) != UNKNOWN_MIME {
+        return known.to_string();
     }
+    // `content://` paths end in an encoded document id, `.../Song.mp3`.
+    let decoded = percent_encoding::percent_decode_str(&track.path).decode_utf8_lossy();
+    let from_name = decoded
+        .rsplit(['/', ':'])
+        .next()
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .filter(|ext| mime_for(ext) != UNKNOWN_MIME);
+    from_name.unwrap_or_else(|| {
+        if known.is_empty() {
+            "bin".to_string()
+        } else {
+            known.to_string()
+        }
+    })
 }
+
+const UNKNOWN_MIME: &str = "application/octet-stream";
 
 fn art_uri(base: &str, track: &Track) -> String {
     format!(
@@ -1116,6 +1151,31 @@ mod tests {
             BAD_SEARCH_CRITERIA
         );
         assert!(parse_criteria(r#"(dc:title = "x""#).is_err());
+    }
+
+    #[test]
+    fn android_formats_are_served_as_audio() {
+        let with = |format: &str, path: &str| {
+            extension_of(&Track {
+                format: format.into(),
+                path: path.into(),
+                ..Track::default()
+            })
+        };
+        assert_eq!(with("MPEG", "content://x/a"), "mp3");
+        assert_eq!(with("X-FLAC", "content://x/a"), "flac");
+        assert_eq!(with("X-M4A", "content://x/a"), "m4a");
+        assert_eq!(with("AAC", "content://x/a"), "aac");
+        assert_eq!(mime_for("aac"), "audio/aac");
+        // Nothing to go on in the format: the document's own name decides.
+        assert_eq!(
+            with(
+                "AUDIO",
+                "content://com.android.externalstorage.documents/tree/primary%3AMusic/document/primary%3AMusic%2FSong.MP3"
+            ),
+            "mp3"
+        );
+        assert_eq!(with("flac", "/music/a.flac"), "flac");
     }
 
     #[test]

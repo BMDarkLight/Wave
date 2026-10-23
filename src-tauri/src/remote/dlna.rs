@@ -336,7 +336,8 @@ struct DidlItem {
     track_number: Option<i32>,
     year: Option<i32>,
     res_url: String,
-    mime: Option<String>,
+    /// What the resource is cached as, from its MIME type or URL.
+    extension: String,
     size: u64,
     duration_seconds: Option<f64>,
     art_url: Option<String>,
@@ -370,14 +371,37 @@ fn extension_for_mime(mime: &str) -> Option<&'static str> {
         match mime.split(';').next()?.trim().to_ascii_lowercase().as_str() {
             "audio/mpeg" | "audio/mp3" | "audio/x-mpeg" => "mp3",
             "audio/flac" | "audio/x-flac" => "flac",
-            "audio/mp4" | "audio/x-m4a" | "audio/m4a" | "audio/aac" | "audio/x-aac" => "m4a",
+            "audio/mp4" | "audio/x-m4a" | "audio/m4a" => "m4a",
+            "audio/aac" | "audio/x-aac" | "audio/aacp" => "aac",
             "audio/ogg" | "audio/x-ogg" | "application/ogg" | "audio/vorbis" => "ogg",
             "audio/opus" => "opus",
             "audio/wav" | "audio/x-wav" | "audio/wave" | "audio/vnd.wave" => "wav",
             "audio/aiff" | "audio/x-aiff" => "aiff",
+            "audio/x-matroska" => "mka",
+            "audio/webm" => "weba",
+            "audio/x-caf" => "caf",
             _ => return None,
         },
     )
+}
+
+/// The extension to cache a resource under: its MIME type's, or, for an
+/// `audio/` type not listed there, the one its URL ends in when Wave plays
+/// that format. `None` means the resource isn't something Wave can play.
+fn playable_extension(mime: &str, url: &str) -> Option<String> {
+    if let Some(ext) = extension_for_mime(mime) {
+        return Some(ext.to_string());
+    }
+    if !mime.trim().to_ascii_lowercase().starts_with("audio/") {
+        return None;
+    }
+    let path = url.split(['?', '#']).next()?;
+    let name = path.rsplit('/').next()?;
+    let (_, ext) = name.rsplit_once('.')?;
+    let ext = ext.to_ascii_lowercase();
+    crate::metadata::supported_audio_extensions()
+        .contains(&ext)
+        .then_some(ext)
 }
 
 fn parse_didl(didl: &str, base: &url::Url) -> Result<(Vec<DidlItem>, Vec<String>), RemoteError> {
@@ -411,28 +435,23 @@ fn parse_item(node: roxmltree::Node<'_, '_>, base: &url::Url) -> Option<DidlItem
     // beside the original; the original is the one that states its size.
     let playable: Vec<_> = node
         .children()
-        .filter(|n| {
-            n.is_element()
-                && n.tag_name().name() == "res"
-                && n.attribute("protocolInfo").is_some_and(|info| {
-                    let mut parts = info.split(':');
-                    parts.next() == Some("http-get")
-                        && parts
-                            .nth(1)
-                            .is_some_and(|mime| extension_for_mime(mime).is_some())
-                })
+        .filter(|n| n.is_element() && n.tag_name().name() == "res")
+        .filter_map(|n| {
+            let mut parts = n.attribute("protocolInfo")?.split(':');
+            if parts.next() != Some("http-get") {
+                return None;
+            }
+            let mime = parts.nth(1)?;
+            let extension = playable_extension(mime, n.text()?.trim())?;
+            Some((n, extension))
         })
         .collect();
-    let res = playable
+    let (res, extension) = playable
         .iter()
-        .find(|n| n.attribute("size").is_some())
+        .find(|(n, _)| n.attribute("size").is_some())
         .or_else(|| playable.first())
-        .copied()?;
+        .cloned()?;
     let res_url = base.join(res.text()?.trim()).ok()?.to_string();
-    let mime = res
-        .attribute("protocolInfo")
-        .and_then(|info| info.split(':').nth(2))
-        .map(str::to_string);
 
     let mut artist = None;
     let mut album_artist = None;
@@ -471,7 +490,7 @@ fn parse_item(node: roxmltree::Node<'_, '_>, base: &url::Url) -> Option<DidlItem
         art_url: child_text(node, "albumArtURI")
             .and_then(|u| base.join(&u).ok().map(|u| u.to_string())),
         res_url,
-        mime,
+        extension,
     })
 }
 
@@ -518,12 +537,7 @@ fn remote_id_for(res_url: &str) -> String {
 }
 
 fn item_to_meta(item: &DidlItem) -> RemoteTrackMeta {
-    let extension = item
-        .mime
-        .as_deref()
-        .and_then(extension_for_mime)
-        .map(str::to_string)
-        .unwrap_or_else(|| "mp3".to_string());
+    let extension = item.extension.clone();
     // A server that only shares folders (rclone, some NAS boxes) sends the
     // file name as the title and no tags. Without an artist, the name is read
     // the way a WebDAV file name is: "07 - Title", "Artist - Title".
@@ -978,6 +992,27 @@ mod tests {
             item_to_meta(&parse_didl(&didl, &base).unwrap().0[0]).title,
             "AC - DC Live"
         );
+    }
+
+    #[test]
+    fn any_audio_type_plays_when_its_url_names_a_known_format() {
+        assert_eq!(playable_extension("audio/mpeg", "/a"), Some("mp3".into()));
+        assert_eq!(playable_extension("audio/aac", "/a"), Some("aac".into()));
+        // An audio type not in the list falls back on the URL.
+        assert_eq!(
+            playable_extension("audio/x-unlisted", "http://h/media/1.flac?x=1"),
+            Some("flac".into())
+        );
+        assert_eq!(
+            playable_extension("audio/x-unlisted", "http://h/media/1"),
+            None
+        );
+        // Not audio at all, whatever the URL says.
+        assert_eq!(
+            playable_extension("application/octet-stream", "/a.mp3"),
+            None
+        );
+        assert_eq!(playable_extension("video/mp4", "/a.mp4"), None);
     }
 
     #[test]
