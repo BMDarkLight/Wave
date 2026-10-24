@@ -28,7 +28,7 @@ import {
   BiMicrophone,
 } from "react-icons/bi";
 import type { IconType } from "react-icons";
-import type { SourceSettings } from "../utils/player";
+import type { CloseAction, SourceSettings } from "../utils/player";
 import {
   BiFolderOpen,
   BiFolderMinus,
@@ -63,6 +63,8 @@ import {
   EQ_BAND_LABELS,
   EQ_PRESETS,
   openRepository,
+  getCloseAction,
+  setCloseAction,
 } from "../utils/player";
 import type {
   EqSettings,
@@ -78,6 +80,12 @@ import AddSourceChooser from "./AddSourceChooser";
 import RemoteSourceList from "./RemoteSourceList";
 import Select from "./Select";
 import RemoteSourceSetupDialog from "./dialogs/RemoteSourceSetupDialog";
+
+const CLOSE_ACTIONS: { value: CloseAction; label: string }[] = [
+  { value: "quit", label: "Close" },
+  { value: "minimize", label: "Minimize" },
+  { value: "hide_window", label: "Hide to tray" },
+];
 
 const CACHE_SIZES = [
   { mb: 512, label: "512 MB" },
@@ -455,6 +463,8 @@ export default function MobileSettings({
   const [lyricsBusy, setLyricsBusy] = useState(false);
   const [lyricsStatus, setLyricsStatus] = useState<string | null>(null);
   const [onAndroid, setOnAndroid] = useState(false);
+  // Desktop only; stays null on Android, which has no close button.
+  const [closeAction, setCloseActionState] = useState<CloseAction | null>(null);
 
   const refreshMediaFolders = () => {
     listMediaFolders()
@@ -478,6 +488,9 @@ export default function MobileSettings({
         return;
       }
       setShowAudioOutput(true);
+      getCloseAction()
+        .then(setCloseActionState)
+        .catch(() => {});
       listOutputDevices()
         .then(setOutputDevices)
         .catch(() => {});
@@ -1423,6 +1436,37 @@ export default function MobileSettings({
                     </span>
                   </span>
                 </label>
+              </>
+            )}
+            {closeAction && (
+              <>
+                <div className="mset-playback-divider" role="separator" />
+                <div className="mset-row mset-cache-row">
+                  <span className="mset-row-text">
+                    <label
+                      className="mset-row-label"
+                      htmlFor={`${keyIdPrefix}close-action`}
+                    >
+                      Close button
+                    </label>
+                    <span className="mset-row-value">
+                      What closing the window does. While your library is shared
+                      in the background, Close hides Wave instead.
+                    </span>
+                  </span>
+                  <Select
+                    id={`${keyIdPrefix}close-action`}
+                    value={closeAction}
+                    options={CLOSE_ACTIONS}
+                    onChange={(value) => {
+                      const action = value as CloseAction;
+                      setCloseActionState(action);
+                      setCloseAction(action)
+                        .then(setCloseActionState)
+                        .catch(() => {});
+                    }}
+                  />
+                </div>
               </>
             )}
           </div>

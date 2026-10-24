@@ -230,6 +230,17 @@ pub fn is_running() -> bool {
     state().lock().is_some()
 }
 
+/// True while the library is shared and set to stay shared with Wave closed,
+/// so closing or quitting from the window must leave the process running.
+pub fn in_background(app: &tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    is_running()
+        && app
+            .try_state::<crate::app_settings::AppSettingsState>()
+            .and_then(|state| state.0.lock().ok().map(|s| s.share_in_background))
+            .unwrap_or(false)
+}
+
 pub fn status() -> ShareStatus {
     let slot = state().lock();
     let Some(running) = slot.as_ref() else {

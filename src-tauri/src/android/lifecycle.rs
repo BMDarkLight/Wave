@@ -12,7 +12,9 @@
 //! destroys the Activity. Tauri treats its last window going away as a request
 //! to exit and would end the process, and the music with it. While something
 //! is playing we keep the process; the media service holds it in the
-//! foreground, which also stops Android from killing it with the task.
+//! foreground, which also stops Android from killing it with the task. The
+//! same goes while the library is shared in the background, held by the
+//! sharing service.
 //!
 //! The process then runs "headless": engine, media session and notification,
 //! no window. From there:
@@ -52,8 +54,11 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent) {
             commands::persist_playback_state(app);
             // `code` is only set for a deliberate exit (exit button, dismissed
             // controls); those always go through.
-            if code.is_none() && commands::is_playback_active(app) {
-                tracing::info!("UI closed while playing, keeping playback alive");
+            // Sharing in the background keeps the process the same way; its
+            // own foreground service holds it then.
+            let sharing = crate::share::in_background(app);
+            if code.is_none() && (commands::is_playback_active(app) || sharing) {
+                tracing::info!("UI closed while playing or sharing, keeping the process");
                 HEADLESS.store(true, Ordering::Release);
                 crate::android::media_bridge::session_set_headless(true);
                 api.prevent_exit();
@@ -154,7 +159,7 @@ pub fn ensure_main_window(app: &AppHandle) {
 /// End the process if it is only running for playback that just ended (the
 /// paused notification was dismissed, or playback was stopped).
 pub fn exit_if_headless(app: &AppHandle) {
-    if is_headless(app) {
+    if is_headless(app) && !crate::share::in_background(app) {
         tracing::info!("Playback ended with no UI open, exiting");
         app.exit(0);
     }

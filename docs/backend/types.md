@@ -302,13 +302,16 @@ interface EqSettings {
 Returned by `get_close_action`, `set_close_action`, and `toggle_close_action`.
 
 ```typescript
-type CloseAction = "quit" | "hide_window";
+type CloseAction = "quit" | "minimize" | "hide_window";
 ```
 
 | Value | Close-button behavior |
 |-------|------------------------|
 | `"quit"` | Exit the application (default) |
+| `"minimize"` | Minimize the main window to the dock or taskbar |
 | `"hide_window"` | Hide the main window; playback and the tray icon keep running |
+
+While the library is shared in the background, `"quit"` hides the window instead, and so does quitting from the app menu or the dock. **Quit** in the tray menu always exits.
 
 The preference is persisted to `wave-settings.json` in the app data directory and survives restarts.
 

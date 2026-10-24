@@ -20,6 +20,8 @@ pub enum CloseAction {
     Quit,
     /// Hide the main window; playback and the tray icon keep running.
     HideWindow,
+    /// Minimize the main window to the dock or taskbar.
+    Minimize,
 }
 
 /// Light or dark interface, or whichever the operating system is using.

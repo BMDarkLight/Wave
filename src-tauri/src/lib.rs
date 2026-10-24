@@ -276,15 +276,21 @@ pub fn run() {
 
                 // Sharing in the background outlives the window: quitting
                 // would take the server down with it.
-                let keep_sharing = app
-                    .try_state::<AppSettingsState>()
-                    .and_then(|state| state.0.lock().ok().map(|s| s.share_in_background))
-                    .unwrap_or(false)
-                    && share::is_running();
-
-                if action == CloseAction::HideWindow || keep_sharing {
-                    api.prevent_close();
-                    let _ = window.hide();
+                match action {
+                    CloseAction::Minimize => {
+                        api.prevent_close();
+                        #[cfg(desktop)]
+                        let _ = window.minimize();
+                    }
+                    CloseAction::HideWindow => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    CloseAction::Quit if share::in_background(app) => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    CloseAction::Quit => {}
                 }
             }
         })
@@ -472,16 +478,40 @@ pub fn run() {
         .run(|_app, _event| {
             #[cfg(target_os = "android")]
             android::lifecycle::on_run_event(_app, &_event);
+            // Quitting from the app menu or the dock (no exit code) while
+            // sharing in the background only puts the windows away. Quit in
+            // the tray menu exits with a code and still ends Wave.
+            #[cfg(not(target_os = "android"))]
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = &_event
+            {
+                if share::in_background(_app) {
+                    api.prevent_exit();
+                    for window in _app.webview_windows().values() {
+                        let _ = window.hide();
+                    }
+                }
+            }
+            // A hidden window comes back from a click on the dock icon.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = &_event
+            {
+                if let Some(window) = _app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
             // Say goodbye on the network, so players drop the shared library
             // now rather than when its announcement runs out.
             if let tauri::RunEvent::Exit = _event {
                 // On Android the window can go while the process stays to
                 // share in the background, held by its foreground service.
-                let sharing_on = cfg!(target_os = "android")
-                    && _app
-                        .try_state::<AppSettingsState>()
-                        .and_then(|state| state.0.lock().ok().map(|s| s.share_in_background))
-                        .unwrap_or(false);
+                let sharing_on = cfg!(target_os = "android") && share::in_background(_app);
                 if !sharing_on {
                     share::apply(None);
                 }

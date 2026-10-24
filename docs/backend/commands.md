@@ -1135,13 +1135,13 @@ Return what the main window **close button** (title-bar ✕) does.
 
 **Arguments:** none
 
-**Returns:** [`CloseAction`](./types.md#closeaction) — `"quit"` or `"hide_window"`
+**Returns:** [`CloseAction`](./types.md#closeaction): `"quit"`, `"minimize"` or `"hide_window"`
 
 **Example**
 
 ```typescript
 const action = await invoke<CloseAction>("get_close_action");
-// "quit" | "hide_window"
+// "quit" | "minimize" | "hide_window"
 ```
 
 ---
@@ -1154,7 +1154,7 @@ Set the close-button behavior explicitly.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `action` | [`CloseAction`](./types.md#closeaction) | yes | `"quit"` or `"hide_window"` |
+| `action` | [`CloseAction`](./types.md#closeaction) | yes | `"quit"`, `"minimize"` or `"hide_window"` |
 
 **Returns:** [`CloseAction`](./types.md#closeaction) — the value that was saved
 
@@ -1164,13 +1164,13 @@ Set the close-button behavior explicitly.
 await invoke("set_close_action", { action: "hide_window" });
 ```
 
-When set to `"hide_window"`, clicking close hides the window to the system tray; playback continues and the app can be reopened from the tray icon or taskbar. When set to `"quit"`, close exits Wave completely.
+When set to `"hide_window"`, clicking close hides the window to the system tray; playback continues and the app can be reopened from the tray icon or taskbar. When set to `"minimize"`, close minimizes the window to the dock or taskbar. When set to `"quit"`, close exits Wave completely, unless the library is shared in the background: then the window is hidden so sharing keeps going.
 
 ---
 
 ### `toggle_close_action`
 
-Switch between `"quit"` and `"hide_window"` and persist the new preference.
+Switch between `"quit"` and `"hide_window"` and persist the new preference. From `"minimize"` it goes to `"quit"`.
 
 **Arguments:** none
 

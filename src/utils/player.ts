@@ -1743,7 +1743,7 @@ export const listenToMediaControls = async (
 };
 
 /** What the window close button does. */
-export type CloseAction = "quit" | "hide_window";
+export type CloseAction = "quit" | "minimize" | "hide_window";
 
 export const getCloseAction = (): Promise<CloseAction> =>
   safeInvoke<CloseAction>("get_close_action");

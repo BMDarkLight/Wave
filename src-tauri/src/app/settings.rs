@@ -339,7 +339,7 @@ impl AppSettings {
     pub fn toggle_close_action(&mut self) {
         self.close_action = match self.close_action {
             CloseAction::Quit => CloseAction::HideWindow,
-            CloseAction::HideWindow => CloseAction::Quit,
+            CloseAction::HideWindow | CloseAction::Minimize => CloseAction::Quit,
         };
     }
 
