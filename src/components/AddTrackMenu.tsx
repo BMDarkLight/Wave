@@ -8,13 +8,14 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { BiCloud, BiFolderOpen, BiPlus } from "react-icons/bi";
+import { BiCloud, BiFolderOpen, BiLibrary, BiPlus } from "react-icons/bi";
 import ContextMenu from "./ContextMenu";
 
 export default function AddTrackMenu({
   anchor,
   onClose,
   androidHost,
+  onAddFromLibrary,
   onAddFiles,
   onAddFolder,
   onAddFolderAsPlaylist,
@@ -24,6 +25,8 @@ export default function AddTrackMenu({
   anchor: { top: number; left: number };
   onClose: () => void;
   androidHost: boolean;
+  /** Left out where every song is already listed, as in Library. */
+  onAddFromLibrary?: () => void;
   onAddFiles: () => void;
   onAddFolder: () => void;
   onAddFolderAsPlaylist: () => void;
@@ -32,6 +35,11 @@ export default function AddTrackMenu({
 }) {
   return (
     <ContextMenu anchor={anchor} onClose={onClose} className="add-track-menu">
+      {onAddFromLibrary && (
+        <button type="button" onClick={onAddFromLibrary}>
+          <BiLibrary /> Add from library
+        </button>
+      )}
       <button type="button" onClick={onAddFiles}>
         <BiPlus /> Add files
       </button>

@@ -13,7 +13,9 @@ import { BiFolderOpen, BiSync, BiX } from "react-icons/bi";
 import { getFileName } from "../../utils/player";
 
 export type PlaylistDialogState =
-  | { mode: "create" }
+  /** `seedPaths` are songs the new playlist starts with, when it was made
+   * from a song's "Add to playlist". */
+  | { mode: "create"; seedPaths?: string[] }
   | { mode: "rename"; playlistId: string; currentName: string };
 
 export default function CreatePlaylistDialog({
@@ -82,39 +84,48 @@ export default function CreatePlaylistDialog({
             placeholder="My playlist"
             autoComplete="off"
           />
-          {!androidHost && dialog.mode === "create" && (
-            <div className="playlist-sync-field">
-              <div className="playlist-sync-inline">
-                <span className="modal-label">Sync with folder</span>
-                <span className="modal-hint inline-hint">
-                  Optional. Keep this playlist tied to a music folder.
-                </span>
-                {syncFolder ? (
-                  <div className="playlist-sync-selected">
-                    <BiSync className="playlist-sync-icon" />
-                    <span className="playlist-sync-path" title={syncFolder}>
-                      {getFileName(syncFolder)}
-                    </span>
+          {dialog.mode === "create" && !!dialog.seedPaths?.length && (
+            <p className="modal-hint">
+              {dialog.seedPaths.length === 1
+                ? "It starts with the song you picked."
+                : `It starts with the ${dialog.seedPaths.length} songs you picked.`}
+            </p>
+          )}
+          {!androidHost &&
+            dialog.mode === "create" &&
+            !dialog.seedPaths?.length && (
+              <div className="playlist-sync-field">
+                <div className="playlist-sync-inline">
+                  <span className="modal-label">Sync with folder</span>
+                  <span className="modal-hint inline-hint">
+                    Optional. Keep this playlist tied to a music folder.
+                  </span>
+                  {syncFolder ? (
+                    <div className="playlist-sync-selected">
+                      <BiSync className="playlist-sync-icon" />
+                      <span className="playlist-sync-path" title={syncFolder}>
+                        {getFileName(syncFolder)}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn-ghost btn-sm"
+                        onClick={onClearSyncFolder}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  ) : (
                     <button
                       type="button"
-                      className="btn-ghost btn-sm"
-                      onClick={onClearSyncFolder}
+                      className="playlist-sync-pick"
+                      onClick={onPickSyncFolder}
                     >
-                      Clear
+                      <BiFolderOpen /> Choose
                     </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className="playlist-sync-pick"
-                    onClick={onPickSyncFolder}
-                  >
-                    <BiFolderOpen /> Choose
-                  </button>
-                )}
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            )}
           {error && <p className="modal-error">{error}</p>}
           <div className="modal-actions">
             <button className="btn-ghost" onClick={onClose} type="button">

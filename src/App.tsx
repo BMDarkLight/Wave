@@ -15,6 +15,7 @@ import { BiFolderOpen, BiSearch, BiChevronRight } from "react-icons/bi";
 import type { SourceSettings, SourceTrack } from "./utils/player";
 import {
   addTrackToPlaylistById,
+  addTracksToPlaylistById,
   getSourceSettings,
   listenToDownloadFallback,
   setSourceSettings,
@@ -239,6 +240,7 @@ function App() {
     handleClearPlaylist,
     confirmClearPlaylist,
     openCreatePlaylistDialog,
+    openCreatePlaylistWithSongs,
     openRenamePlaylistDialog,
     closePlaylistDialog,
     pickPlaylistSyncFolder,
@@ -569,11 +571,7 @@ function App() {
     addTrackMenuAnchor,
     setAddTrackMenuAnchor,
     showAddFromLibrary,
-    librarySearchQuery,
-    setLibrarySearchQuery,
-    librarySearchResults,
-    librarySearchSelected,
-    librarySearchLoading,
+    addFromLibraryTarget,
     librarySearchAdding,
     isScanningFolder,
     setIsScanningFolder,
@@ -584,7 +582,6 @@ function App() {
     handleAddTrack,
     openAddFromLibrary,
     closeAddFromLibrary,
-    toggleLibrarySearchSelect,
     handleAddSelectedFromLibrary,
     handlePickFileFromLibraryModal,
     handleAddFolder,
@@ -619,6 +616,16 @@ function App() {
     updatePlaybackState,
     loadFavoritePaths,
   });
+  // The picker greys out songs already in the playlist it adds to.
+  const addFromLibraryExisting = useMemo(
+    () =>
+      new Set(
+        addFromLibraryTarget && addFromLibraryTarget === selectedPlaylistId
+          ? playlist.map((track) => track.path)
+          : [],
+      ),
+    [addFromLibraryTarget, selectedPlaylistId, playlist],
+  );
 
   const handleSort = (column: typeof sortColumn) => {
     if (sortColumn === column) {
@@ -1417,6 +1424,18 @@ function App() {
           }
           return;
         }
+        closePlaylistDialog();
+        // A playlist started from a song gets that song; a blank one opens
+        // straight onto the picker, since filling it is the next step anyway.
+        const seeds = playlistDialog.seedPaths ?? [];
+        if (seeds.length > 0) {
+          await addTracksToPlaylistById(info.id, seeds);
+          await loadPlaylistTracks(info.id);
+          await loadPlaylists();
+        } else {
+          openAddFromLibrary(info.id);
+        }
+        return;
       } else {
         await renamePlaylist(playlistDialog.playlistId, name);
         await loadPlaylists();
@@ -2472,7 +2491,7 @@ function App() {
               menuTrackPath={menuTrackPath}
               onPlayPause={handlePlayPause}
               onAddFolderAndroid={() => void handleAddFolderAndroid()}
-              onOpenAddFromLibrary={openAddFromLibrary}
+              onOpenAddFromLibrary={() => openAddFromLibrary()}
               onOpenAddTrackMenu={() => {
                 if (addTrackBtnRef.current) {
                   const rect = addTrackBtnRef.current.getBoundingClientRect();
@@ -2483,7 +2502,6 @@ function App() {
                 }
                 setShowAddTrackMenu((v) => !v);
               }}
-              onAddTrack={() => void handleAddTrack(false)}
               onClearPlaylist={handleClearPlaylist}
               onRenamePlaylist={openRenamePlaylistDialog}
               onExportPlaylist={handleExportPlaylistById}
@@ -2594,6 +2612,15 @@ function App() {
                 setAddTrackMenuAnchor(null);
               }}
               androidHost={androidHost}
+              onAddFromLibrary={
+                isLibraryPlaylistName(selectedPlaylist?.name)
+                  ? undefined
+                  : () => {
+                      setShowAddTrackMenu(false);
+                      setAddTrackMenuAnchor(null);
+                      openAddFromLibrary();
+                    }
+              }
               onAddFiles={() => void handleAddTrack(true)}
               onAddFolder={() => void handleAddFolder()}
               onAddFolderAsPlaylist={() => void handleAddFolderAsPlaylist()}
@@ -2615,9 +2642,6 @@ function App() {
           {menuTrack &&
             menuAnchor &&
             (() => {
-              const addToPlaylistOptions = playlists.filter(
-                (p) => p.id !== selectedPlaylistId && p.name !== "Favorites",
-              );
               // Album and artist pages are not a playlist you can take a track out
               // of, so that entry only belongs to the playlist view.
               const browsing = !!viewingAlbum || !!viewingArtist;
@@ -2626,7 +2650,7 @@ function App() {
                   track={menuTrack}
                   anchor={menuAnchor}
                   onClose={closeTrackContextMenu}
-                  canAddToPlaylist={addToPlaylistOptions.length > 0}
+                  canAddToPlaylist
                   canRemoveFromPlaylist={
                     !browsing && !isLibraryPlaylistName(selectedPlaylist?.name)
                   }
@@ -2733,18 +2757,20 @@ function App() {
             />
           )}
 
-          {showAddFromLibrary && (
+          {addFromLibraryTarget && (
             <AddFromLibraryDialog
-              onClose={closeAddFromLibrary}
-              query={librarySearchQuery}
-              onQueryChange={setLibrarySearchQuery}
-              loading={librarySearchLoading}
+              targetPlaylistId={addFromLibraryTarget}
+              targetName={
+                playlists.find((p) => p.id === addFromLibraryTarget)?.name ??
+                "playlist"
+              }
+              libraryPlaylistId={libraryPlaylist?.id ?? null}
+              playlists={playlists}
+              existingPaths={addFromLibraryExisting}
               adding={librarySearchAdding}
-              results={librarySearchResults}
-              selected={librarySearchSelected}
-              onToggleSelect={toggleLibrarySearchSelect}
+              onClose={closeAddFromLibrary}
               onPickFile={() => void handlePickFileFromLibraryModal()}
-              onAddSelected={() => void handleAddSelectedFromLibrary()}
+              onAdd={(paths) => void handleAddSelectedFromLibrary(paths)}
             />
           )}
 
@@ -2799,6 +2825,11 @@ function App() {
               onSelect={(playlistId) =>
                 handleAddTrackToPlaylist(playlistId, addToPlaylistTrack)
               }
+              onCreateNew={() => {
+                setAddToPlaylistTrack(null);
+                setMenuTrack(null);
+                openCreatePlaylistWithSongs([addToPlaylistTrack]);
+              }}
             />
           )}
 

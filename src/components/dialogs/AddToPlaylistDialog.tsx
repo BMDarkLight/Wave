@@ -8,19 +8,22 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { BiX } from "react-icons/bi";
+import { BiPlus, BiX } from "react-icons/bi";
 import type { PlaylistInfo } from "../../utils/player";
+import { isLibraryPlaylistName } from "../../utils/track";
 
 export default function AddToPlaylistDialog({
   playlists,
   excludePlaylistId,
   onClose,
   onSelect,
+  onCreateNew,
 }: {
   playlists: PlaylistInfo[];
   excludePlaylistId: string | null;
   onClose: () => void;
   onSelect: (playlistId: string) => void;
+  onCreateNew: () => void;
 }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -43,8 +46,20 @@ export default function AddToPlaylistDialog({
           </button>
         </div>
         <div className="playlist-picker-list">
+          <button
+            className="playlist-picker-item playlist-picker-new"
+            type="button"
+            onClick={onCreateNew}
+          >
+            <BiPlus aria-hidden /> New playlist
+          </button>
           {playlists
-            .filter((p) => p.id !== excludePlaylistId && p.name !== "Favorites")
+            .filter(
+              (p) =>
+                p.id !== excludePlaylistId &&
+                p.name !== "Favorites" &&
+                !isLibraryPlaylistName(p.name),
+            )
             .map((p) => (
               <button
                 key={p.id}

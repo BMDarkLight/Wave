@@ -2638,6 +2638,58 @@ pub async fn search_library_collections(
     })
 }
 
+/// Add many songs to a playlist in the order given and return how many were
+/// added. A song the playlist already holds is skipped instead of failing the
+/// rest, so picking a whole album that overlaps the playlist still works.
+#[tauri::command]
+pub async fn add_tracks_to_playlist_by_id(
+    id: String,
+    paths: Vec<String>,
+    app: tauri::AppHandle,
+) -> Result<usize, String> {
+    blocking(move || {
+        let library = app.state::<LibraryState>();
+        let known = {
+            let lib = library.0.lock().map_err(|e| e.to_string())?;
+            // Library lists every song already, and has no rows of its own.
+            if lib.default_playlist_id()? == id {
+                return Err("Songs in your library are already in Library".to_string());
+            }
+            lib.track_ids_by_paths(&paths)?
+        };
+
+        // Songs from the library go in by id. Anything else, such as a file
+        // picked from disk, is resolved and read first, like a single add.
+        let sources: Vec<String> = paths
+            .iter()
+            .filter_map(|path| {
+                if known.contains_key(&crate::library::normalize_path_key(path)) {
+                    return Some(path.clone());
+                }
+                match crate::android::import::resolve_library_source(&app, path) {
+                    Ok(resolved) => Some(resolved),
+                    Err(error) => {
+                        tracing::warn!("Skipped adding {path} to a playlist: {error}");
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        // Tags for new files are read with the library unlocked, as an
+        // import does, so browsing stays live through a long add.
+        const BATCH_SIZE: usize = 50;
+        let mut added = 0;
+        for chunk in sources.chunks(BATCH_SIZE) {
+            let entries = crate::library::import_entries(Some(&app), chunk, &known);
+            let lib = library.0.lock().map_err(|e| e.to_string())?;
+            added += lib.append_import_entries(&id, &entries)?;
+        }
+        Ok(added)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn add_track_to_playlist_by_id(
     id: String,

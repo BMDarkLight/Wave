@@ -291,6 +291,25 @@ Play the track at a **zero-based index** in the default playlist. Also:
 
 ---
 
+### `add_tracks_to_playlist_by_id`
+
+Add many songs to a playlist in one go, in the order given. Songs the library
+already holds are linked by id; other paths are read from disk first. A song
+the playlist already holds is skipped, not an error.
+
+**Arguments**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `id` | `string` | yes | Playlist id from `list_playlists` |
+| `paths` | `string[]` | yes | Song paths, in the order they should be added |
+
+**Returns:** `number`, how many songs were added
+
+**Errors:** `"Songs in your library are already in Library"` when `id` is the Library playlist.
+
+---
+
 ### `get_library_database_path`
 
 **Arguments:** none

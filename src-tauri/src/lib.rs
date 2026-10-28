@@ -374,6 +374,7 @@ pub fn run() {
             commands::get_source_settings,
             commands::set_source_settings,
             commands::add_track_to_playlist_by_id,
+            commands::add_tracks_to_playlist_by_id,
             commands::remove_track_from_playlist_by_id,
             commands::remove_track_from_library,
             commands::clear_playlist_by_id,

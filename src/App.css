@@ -2976,6 +2976,480 @@ img.queue-thumb {
   }
 }
 
+/* The "add songs" picker. A wide card on desktop; in the phone layout it
+   takes the whole screen so the list gets every row it can. */
+.song-picker {
+  width: min(640px, 100%);
+  height: min(720px, 100%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 20px 20px 16px;
+}
+
+.song-picker .modal-header {
+  margin-bottom: 14px;
+}
+
+.song-picker-heading {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.song-picker-heading span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.song-picker-search {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border: 1px solid rgba(var(--ink), 0.1);
+  border-radius: 12px;
+  background: rgba(var(--well), 0.28);
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.song-picker-search:focus-within {
+  border-color: var(--green);
+}
+
+.song-picker-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 12px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.song-picker-tabs {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+  margin: 12px -20px 0;
+  padding: 0 20px 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.song-picker-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.song-picker-tab {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid rgba(var(--ink), 0.1);
+  border-radius: 999px;
+  background: rgba(var(--ink), 0.05);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.song-picker-tab span {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.song-picker-tab:hover {
+  background: rgba(var(--ink), 0.1);
+}
+
+.song-picker-tab.is-active {
+  border-color: transparent;
+  background: var(--green);
+  color: var(--on-green);
+}
+
+.song-picker-tab.is-active span {
+  color: inherit;
+  opacity: 0.7;
+}
+
+.song-picker-tab.is-picked-tab {
+  margin-left: auto;
+}
+
+.song-picker-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  margin-top: 12px;
+}
+
+.song-picker-count {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.song-picker-toolbar .btn-sm {
+  flex-shrink: 0;
+}
+
+.song-picker-back {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(var(--ink), 0.08);
+  color: var(--text);
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.song-picker-back:hover {
+  background: rgba(var(--ink), 0.14);
+}
+
+.song-picker-toolbar-title {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.song-picker-toolbar-title strong,
+.song-picker-toolbar-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.song-picker-toolbar-title strong {
+  font-size: 14px;
+}
+
+.song-picker-toolbar-title span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.song-picker-scroll {
+  flex: 1;
+  min-height: 0;
+  margin: 10px -8px 0;
+  padding: 0 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.song-picker-empty {
+  margin: 0;
+  padding: 28px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.song-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 58px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.song-picker-row:hover:not(:disabled):not(.is-picked) {
+  background: rgba(var(--ink), 0.06);
+}
+
+.song-picker-row.is-picked {
+  background: rgba(var(--ink), 0.11);
+}
+
+.song-picker-row:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.song-picker-check {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid rgba(var(--ink), 0.35);
+  border-radius: 6px;
+  font-size: 16px;
+}
+
+.song-picker-row.is-picked .song-picker-check {
+  border-color: var(--green);
+  background: var(--green);
+  color: var(--on-green);
+}
+
+.song-picker-cover {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--art-placeholder);
+  color: var(--quiet);
+  font-size: 16px;
+}
+
+.song-picker-cover.is-round {
+  border-radius: 999px;
+}
+
+.song-picker-meta {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.song-picker-title,
+.song-picker-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.song-picker-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.song-picker-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.song-picker-time,
+.song-picker-tag {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.song-picker-tag {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(var(--ink), 0.08);
+  font-weight: 600;
+}
+
+.song-picker-row.is-collection {
+  padding-left: 0;
+  cursor: default;
+}
+
+.song-picker-row.is-collection:hover:not(.is-picked) {
+  background: rgba(var(--ink), 0.06);
+}
+
+.song-picker-open {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 0 0 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.song-picker-chevron {
+  flex-shrink: 0;
+  color: var(--quiet);
+  font-size: 20px;
+}
+
+.song-picker-toggle {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1.5px solid rgba(var(--ink), 0.3);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease;
+}
+
+.song-picker-toggle:hover:not(:disabled) {
+  border-color: rgba(var(--ink), 0.6);
+}
+
+.song-picker-toggle.is-all,
+.song-picker-toggle.is-some {
+  border-color: var(--green);
+  background: var(--green);
+  color: var(--on-green);
+}
+
+.song-picker-footer {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px -20px 0;
+  padding: 12px 20px 0;
+  border-top: 1px solid rgba(var(--ink), 0.1);
+}
+
+.song-picker-order {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.song-picker-order-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.song-picker-reshuffle {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(var(--ink), 0.14);
+  border-radius: 10px;
+  background: rgba(var(--ink), 0.06);
+  color: var(--text);
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.song-picker-reshuffle:hover:not(:disabled) {
+  background: rgba(var(--ink), 0.12);
+}
+
+.song-picker-reshuffle:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.song-picker-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.song-picker-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .modal-backdrop.song-picker-backdrop {
+    padding: 0;
+  }
+
+  .song-picker-backdrop .song-picker {
+    width: 100dvw;
+    max-width: 100dvw;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    background: rgba(var(--glass-menu), 0.85);
+    padding: max(16px, env(safe-area-inset-top, 0px)) 16px
+      max(12px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .song-picker .modal-close-btn {
+    width: 40px;
+    height: 40px;
+    font-size: 22px;
+  }
+
+  .song-picker-search input {
+    padding: 13px 0;
+    font-size: 16px;
+  }
+
+  .song-picker-tabs {
+    margin-inline: -16px;
+    padding-inline: 16px;
+  }
+
+  .song-picker-tab {
+    padding: 9px 14px;
+  }
+
+  .song-picker-tab.is-picked-tab {
+    margin-left: 0;
+  }
+
+  .song-picker-footer {
+    margin-inline: -16px;
+    padding-inline: 16px;
+  }
+
+  .song-picker-actions .btn-primary {
+    min-height: 44px;
+  }
+}
+
 .library-picker-empty {
   margin: 0;
   padding: 16px;
@@ -3172,6 +3646,18 @@ img.queue-thumb {
 
 .playlist-picker-item:hover {
   background: rgba(var(--ink), 0.08);
+}
+
+.playlist-picker-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-bottom: 4px;
+}
+
+.playlist-picker-new svg {
+  font-size: 18px;
 }
 
 .mini-bars i {

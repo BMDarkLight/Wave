@@ -111,7 +111,6 @@ export default function LibraryTrackList({
   onAddFolderAndroid,
   onOpenAddFromLibrary,
   onOpenAddTrackMenu,
-  onAddTrack,
   onClearPlaylist,
   onRenamePlaylist,
   onExportPlaylist,
@@ -162,7 +161,6 @@ export default function LibraryTrackList({
   onAddFolderAndroid: () => void;
   onOpenAddFromLibrary: () => void;
   onOpenAddTrackMenu: () => void;
-  onAddTrack: () => void;
   onClearPlaylist: () => void;
   onRenamePlaylist: (id: string, currentName: string) => void;
   onExportPlaylist: (id: string, name: string) => void;
@@ -531,14 +529,11 @@ export default function LibraryTrackList({
               selectedPlaylist?.name !== "Favorites" && (
                 <button
                   className="btn-primary"
-                  onClick={() => {
-                    if (androidHost) onOpenAddFromLibrary();
-                    else onAddTrack();
-                  }}
+                  onClick={() => onOpenAddFromLibrary()}
                   disabled={isAddingTracks}
                   type="button"
                 >
-                  {androidHost ? "Add from library" : "Add your first track"}
+                  Add songs
                 </button>
               )}
           </div>

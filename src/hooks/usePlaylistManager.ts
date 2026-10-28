@@ -222,6 +222,14 @@ export function usePlaylistManager({
     setPlaylistDialog({ mode: "create" });
   };
 
+  const openCreatePlaylistWithSongs = (paths: string[]) => {
+    setMobileNavOpen(false);
+    setPlaylistNameInput("");
+    setPlaylistSyncFolderInput(null);
+    setPlaylistDialogError(null);
+    setPlaylistDialog({ mode: "create", seedPaths: paths });
+  };
+
   const openRenamePlaylistDialog = (
     playlistId: string,
     currentName: string,
@@ -363,6 +371,7 @@ export function usePlaylistManager({
     handleClearPlaylist,
     confirmClearPlaylist,
     openCreatePlaylistDialog,
+    openCreatePlaylistWithSongs,
     openRenamePlaylistDialog,
     closePlaylistDialog,
     pickPlaylistSyncFolder,

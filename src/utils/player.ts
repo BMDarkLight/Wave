@@ -770,6 +770,15 @@ export const addTrackToPlaylistById = (
   return safeInvoke<Track>("add_track_to_playlist_by_id", { id, path });
 };
 
+/** Add songs in the order given; returns how many the playlist did not
+ * already hold. */
+export const addTracksToPlaylistById = (
+  id: string,
+  paths: string[],
+): Promise<number> => {
+  return safeInvoke<number>("add_tracks_to_playlist_by_id", { id, paths });
+};
+
 export const clearAudioImports = (): Promise<number> => {
   return safeInvoke<number>("clear_audio_imports");
 };

@@ -5078,7 +5078,7 @@ fn row_file_still_present(
 }
 
 /// Stable path key for membership diffs (resolves symlinks when possible).
-fn normalize_path_key(path: &str) -> String {
+pub(crate) fn normalize_path_key(path: &str) -> String {
     let trimmed = path.trim();
     if trimmed.starts_with("content://") {
         return trimmed.to_string();
@@ -8367,5 +8367,43 @@ mod tests {
             .expect("second import ran");
         assert!(again.is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn adding_known_songs_keeps_their_order_and_skips_ones_already_there() {
+        let library = open_test_library().unwrap();
+        let playlist = library.create_playlist("Picks", None).unwrap();
+        {
+            let connection = library.lock_connection().unwrap();
+            for (id, title) in [("a", "Alpha"), ("b", "Bravo"), ("c", "Charlie")] {
+                let track = Track {
+                    title: title.into(),
+                    ..sample_track(id, &format!("/music/{id}.mp3"))
+                };
+                upsert_track(&*connection, &track).unwrap();
+            }
+        }
+        let known = |ids: &[&str]| -> Vec<ImportEntry> {
+            ids.iter()
+                .map(|id| ImportEntry::Known(id.to_string()))
+                .collect()
+        };
+
+        let added = library
+            .append_import_entries(&playlist.id, &known(&["c", "a"]))
+            .unwrap();
+        assert_eq!(added, 2);
+        let added = library
+            .append_import_entries(&playlist.id, &known(&["a", "b", "c"]))
+            .unwrap();
+        assert_eq!(added, 1, "only the song new to the playlist is added");
+
+        let order: Vec<String> = library
+            .get_playlist_tracks(&playlist.id)
+            .unwrap()
+            .into_iter()
+            .map(|track| track.title)
+            .collect();
+        assert_eq!(order, vec!["Charlie", "Alpha", "Bravo"]);
     }
 }

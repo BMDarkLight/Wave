@@ -8,9 +8,10 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   addTrackToPlaylistById,
+  addTracksToPlaylistById,
   clearAudioImports,
   createPlaylist,
   getFileName,
@@ -22,7 +23,6 @@ import {
   saveMediaFolder,
   scanDirectory,
   scanDirectoryRecursive,
-  searchLibraryTracks,
   selectAudioFile,
   selectAudioFolder,
   selectMediaFolder,
@@ -32,7 +32,6 @@ import {
   syncPlaylistFolder,
   type PlaybackState,
   type PlaylistInfo,
-  type Track,
 } from "../utils/player";
 import { formatInvokeError } from "../utils/errors";
 import { isLibraryPlaylistName } from "../utils/track";
@@ -124,15 +123,12 @@ export function useMediaImport({
     left: number;
   } | null>(null);
 
-  const [showAddFromLibrary, setShowAddFromLibrary] = useState(false);
-  const [librarySearchQuery, setLibrarySearchQuery] = useState("");
-  const [librarySearchResults, setLibrarySearchResults] = useState<Track[]>([]);
-  const [librarySearchSelected, setLibrarySearchSelected] = useState<
-    Set<string>
-  >(new Set());
-  const [librarySearchLoading, setLibrarySearchLoading] = useState(false);
+  /** Playlist the "add from library" picker is adding to, while it is open. */
+  const [addFromLibraryTarget, setAddFromLibraryTarget] = useState<
+    string | null
+  >(null);
+  const showAddFromLibrary = addFromLibraryTarget != null;
   const [librarySearchAdding, setLibrarySearchAdding] = useState(false);
-  const librarySearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [isScanningFolder, setIsScanningFolder] = useState(false);
   const [folderScanIsSync, setFolderScanIsSync] = useState(false);
@@ -180,109 +176,51 @@ export function useMediaImport({
     }
   };
 
-  const openAddFromLibrary = () => {
-    setLibrarySearchQuery("");
-    setLibrarySearchResults([]);
-    setLibrarySearchSelected(new Set());
-    setShowAddFromLibrary(true);
+  /** Open the picker for a playlist, the one on screen unless told otherwise
+   * (a playlist that was only just created isn't selected yet). */
+  const openAddFromLibrary = (playlistId?: string) => {
+    const target = playlistId ?? selectedPlaylistId;
+    if (!target) return;
+    setLibrarySearchAdding(false);
+    setAddFromLibraryTarget(target);
   };
 
   const closeAddFromLibrary = () => {
-    setShowAddFromLibrary(false);
-    setLibrarySearchQuery("");
-    setLibrarySearchResults([]);
-    setLibrarySearchSelected(new Set());
-    setLibrarySearchLoading(false);
+    setAddFromLibraryTarget(null);
     setLibrarySearchAdding(false);
-    if (librarySearchTimer.current) {
-      clearTimeout(librarySearchTimer.current);
-      librarySearchTimer.current = null;
-    }
   };
 
-  useEffect(() => {
-    if (!showAddFromLibrary) return;
-    if (librarySearchTimer.current) clearTimeout(librarySearchTimer.current);
-    librarySearchTimer.current = setTimeout(() => {
-      const q = librarySearchQuery;
-      setLibrarySearchLoading(true);
-      searchLibraryTracks(q, 80)
-        .then((tracks) => {
-          setLibrarySearchResults(tracks);
-          setLibrarySearchSelected((prev) => {
-            const next = new Set<string>();
-            for (const path of prev) {
-              if (tracks.some((t) => t.path === path)) next.add(path);
-            }
-            return next;
-          });
-        })
-        .catch(() => setLibrarySearchResults([]))
-        .finally(() => setLibrarySearchLoading(false));
-    }, 200);
-    return () => {
-      if (librarySearchTimer.current) {
-        clearTimeout(librarySearchTimer.current);
-        librarySearchTimer.current = null;
-      }
-    };
-  }, [showAddFromLibrary, librarySearchQuery]);
-
-  const toggleLibrarySearchSelect = (path: string) => {
-    setLibrarySearchSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  };
-
-  const handleAddSelectedFromLibrary = async () => {
-    const playlistId = selectedPlaylistId ?? getDefaultPlaylistId(playlists);
-    if (!playlistId || librarySearchSelected.size === 0) return;
+  const addPathsFromLibraryModal = async (paths: string[]) => {
+    const playlistId = addFromLibraryTarget;
+    if (!playlistId || paths.length === 0) return;
     setLibrarySearchAdding(true);
     setError(null);
-    let failCount = 0;
-    for (const path of librarySearchSelected) {
-      try {
-        await addTrackToPlaylistById(playlistId, path);
-      } catch (err) {
-        failCount++;
-        console.error("Failed to add library track:", path, err);
+    try {
+      const added = await addTracksToPlaylistById(playlistId, paths);
+      if (added < paths.length) {
+        const missed = paths.length - added;
+        setError(
+          `${missed} song${missed === 1 ? " was" : "s were"} already there or could not be read.`,
+        );
       }
+      closeAddFromLibrary();
+      await loadPlaylistTracks(playlistId);
+      await loadPlaylists();
+    } catch (err) {
+      setLibrarySearchAdding(false);
+      setError(formatInvokeError(err, "Failed to add songs"));
     }
-    setLibrarySearchAdding(false);
-    if (failCount > 0) setError(`Failed to add ${failCount} track(s).`);
-    closeAddFromLibrary();
-    await loadPlaylistTracks(playlistId);
-    await loadPlaylists();
   };
+
+  const handleAddSelectedFromLibrary = (paths: string[]) =>
+    addPathsFromLibraryModal(paths);
 
   const handlePickFileFromLibraryModal = async () => {
     try {
       setError(null);
       const paths = await selectAudioFile(true);
       if (!paths?.length) return;
-      const playlistId = selectedPlaylistId ?? getDefaultPlaylistId(playlists);
-      if (!playlistId) {
-        setError("No playlist selected.");
-        return;
-      }
-      setLibrarySearchAdding(true);
-      let failCount = 0;
-      for (const path of paths) {
-        try {
-          await addTrackToPlaylistById(playlistId, path);
-        } catch (err) {
-          failCount++;
-          console.error("Failed to add picked track:", path, err);
-        }
-      }
-      setLibrarySearchAdding(false);
-      if (failCount > 0) setError(`Failed to add ${failCount} track(s).`);
-      closeAddFromLibrary();
-      await loadPlaylistTracks(playlistId);
-      await loadPlaylists();
+      await addPathsFromLibraryModal(paths);
     } catch (err) {
       setLibrarySearchAdding(false);
       setError(formatInvokeError(err, "Failed to pick audio file"));
@@ -753,11 +691,7 @@ export function useMediaImport({
     addTrackMenuAnchor,
     setAddTrackMenuAnchor,
     showAddFromLibrary,
-    librarySearchQuery,
-    setLibrarySearchQuery,
-    librarySearchResults,
-    librarySearchSelected,
-    librarySearchLoading,
+    addFromLibraryTarget,
     librarySearchAdding,
     isScanningFolder,
     setIsScanningFolder,
@@ -768,7 +702,6 @@ export function useMediaImport({
     handleAddTrack,
     openAddFromLibrary,
     closeAddFromLibrary,
-    toggleLibrarySearchSelect,
     handleAddSelectedFromLibrary,
     handlePickFileFromLibraryModal,
     handleAddFolder,
