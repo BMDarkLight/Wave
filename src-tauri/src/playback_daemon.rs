@@ -20,7 +20,7 @@ use tray_icon::{TrayIconBuilder, TrayIconEvent};
 
 use crate::app_paths::{daemon_state_path, library_db_path};
 use crate::app_settings::AppSettings;
-use crate::audio::player::{AudioPlayer, Queue, RepeatMode};
+use crate::audio::player::{AudioPlayer, Queue, QueueSource, RepeatMode};
 use crate::audio::sleep_timer::{SleepRequest, SleepTimerStatus};
 use crate::library::Library;
 use crate::listen::{ListenEndReason, ListenFlush, ListenTracker};
@@ -225,6 +225,8 @@ struct DaemonState {
     /// Set when a request moved to another track, so the tick that sees the
     /// change counts the old one as skipped rather than played through.
     listen_skip: bool,
+    /// The library revision the queue last followed.
+    seen_revision: Option<i64>,
 }
 
 struct SharedState(Arc<Mutex<DaemonState>>);
@@ -478,6 +480,7 @@ pub fn run_daemon() {
         shutdown: false,
         listen: ListenTracker::new(),
         listen_skip: false,
+        seen_revision: None,
     }));
     #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
     listen_for_media_keys(&state);
@@ -1006,7 +1009,13 @@ fn daemon_start(state: &mut DaemonState, id: &str) -> DaemonResponse {
             Ok(tracks) if tracks.is_empty() => DaemonResponse::err("Playlist is empty."),
             Ok(tracks) => {
                 let paths: Vec<String> = tracks.iter().map(|t| t.path.clone()).collect();
+                let source = QueueSource::new(
+                    playlist.id.clone(),
+                    true,
+                    paths.iter().map(|path| (path.clone(), path.clone())),
+                );
                 state.player.queue.set_tracks(paths);
+                state.player.queue.set_source(source);
                 if state.player.queue.pick(0).is_none() {
                     return DaemonResponse::err("Failed to set queue.");
                 }
@@ -1094,6 +1103,33 @@ fn rebuild_player_on_device(state: &mut DaemonState, name: &str) -> Result<(), S
 
 // ── Playback tick ─────────────────────────────────────────────────────────────
 
+/// Have a queue that plays a playlist follow the songs added to it or taken
+/// out of it, by the app or another CLI command.
+fn follow_library(state: &mut DaemonState) {
+    let Ok(revision) = state.library.revision() else {
+        return;
+    };
+    if state.seen_revision.replace(revision) == Some(revision) {
+        return;
+    }
+    let Some(id) = state
+        .player
+        .queue
+        .source()
+        .map(|source| source.playlist_id().to_string())
+    else {
+        return;
+    };
+    match state.library.queue_source_paths(&id) {
+        Ok(paths) => {
+            state
+                .player
+                .follow_queue_source(&id, &paths, &std::collections::HashMap::new());
+        }
+        Err(error) => tracing::warn!("Could not read the playing playlist: {error}"),
+    }
+}
+
 fn playback_tick_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>>) {
     loop {
         std::thread::sleep(Duration::from_millis(500));
@@ -1110,6 +1146,7 @@ fn playback_tick_loop(state: Arc<Mutex<DaemonState>>, tooltip: Arc<Mutex<String>
                 poisoned.into_inner()
             }
         };
+        follow_library(&mut guard);
         if guard.player.tick_sleep_timer() {
             sync_media_playback_state(&mut guard);
         }

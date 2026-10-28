@@ -10,7 +10,14 @@
 
 // The Code for Frontend of Wave is currently completely AI Generated and may contain bugs or rough edges. Please report any issues you encounter at
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { BiFolderOpen, BiSearch, BiChevronRight } from "react-icons/bi";
 import type { SourceSettings, SourceTrack } from "./utils/player";
 import {
@@ -55,6 +62,7 @@ import {
   clearAndroidCrashReport,
   listenToSyncProgress,
   listenToOpenNowPlaying,
+  listenToQueueChanged,
   getRecentlyPlayed,
   getMostPlayed,
   getFileName,
@@ -1220,6 +1228,25 @@ function App() {
     loadQueueTracks().catch(() => {});
   }, [playbackState.current_path]);
 
+  // The queue follows songs added to or taken out of the playlist it plays.
+  const onQueueChanged = useEffectEvent(() => {
+    loadQueueTracks().catch(() => {});
+  });
+  useEffect(() => {
+    let cancelled = false;
+    let stop: (() => void) | undefined;
+    listenToQueueChanged(() => onQueueChanged())
+      .then((fn) => {
+        if (cancelled) fn();
+        else stop = fn;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, []);
+
   // Poll queue more frequently while the panel is open
   useEffect(() => {
     if (!showQueue) return;
@@ -1797,12 +1824,19 @@ function App() {
   }, []);
 
   // A sync, a download or a finished cache changes what the lists show. Bursts
-  // (a sync finishing several sources) are folded into one reload.
+  // (a sync finishing several sources) are folded into one reload, but a long
+  // sync still shows its songs every couple of seconds as they come in.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let burstStart: number | null = null;
     const reload = () => {
+      const now = Date.now();
+      burstStart ??= now;
+      if (timer !== undefined && now - burstStart >= 2000) return;
       clearTimeout(timer);
       timer = setTimeout(() => {
+        timer = undefined;
+        burstStart = null;
         loadPlaylists().catch(() => {});
         const id = selectedPlaylistIdRef.current;
         if (id) {

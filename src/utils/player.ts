@@ -1107,6 +1107,10 @@ export const clearQueue = (): Promise<void> => {
   return safeInvoke("clear_queue");
 };
 
+/** The queue followed a change to the playlist it plays. */
+export const listenToQueueChanged = (onChange: () => void) =>
+  listenTo<unknown>("queue-changed", () => onChange());
+
 export const getQueueTracks = (): Promise<QueueTrackState> => {
   return safeInvoke<QueueTrackState>("get_queue_tracks");
 };

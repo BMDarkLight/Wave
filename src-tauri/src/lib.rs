@@ -100,6 +100,14 @@ pub fn run() {
                 if settings.last_queue_mashup {
                     player.queue.mark_mashup();
                 }
+                if let Some(source) = &settings.last_queue_source {
+                    player
+                        .queue
+                        .set_source(audio::player::QueueSource::restored(
+                            source.playlist_id.clone(),
+                            source.in_playlist_order,
+                        ));
+                }
             }
             player.set_song_couples(settings.active_song_couples());
             // The saved queue is already in its shuffled order.
@@ -240,6 +248,7 @@ pub fn run() {
                         commands::tick_media_session(&tick_app);
                         commands::tick_sleep_timer(&tick_app);
                         commands::tick_auto_advance(&tick_app);
+                        commands::tick_library_changes(&tick_app);
                         commands::persist_playback_state_throttled(&tick_app);
                     }));
                     if tick.is_err() {

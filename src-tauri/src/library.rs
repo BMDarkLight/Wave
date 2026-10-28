@@ -440,6 +440,7 @@ impl Library {
         ensure_track_column(&connection, "remote_updated_at", "INTEGER")?;
         ensure_track_column(&connection, "remote_art_ref", "TEXT")?;
         ensure_lyrics_synced_column(&connection)?;
+        ensure_library_revision(&connection)?;
         // Which analysis made a saved waveform. Rows from before the column
         // existed are version 1 and get recomputed.
         ensure_table_column(
@@ -867,6 +868,46 @@ impl Library {
     pub fn get_default_playlist_tracks(&self) -> Result<Vec<Track>, String> {
         let playlist_id = self.default_playlist_id()?;
         self.get_playlist_tracks(&playlist_id)
+    }
+
+    /// Goes up whenever a song joins or leaves the library or a playlist,
+    /// from this process or another one.
+    pub fn revision(&self) -> Result<i64, String> {
+        self.read_connection()
+            .query_row(
+                "SELECT value FROM library_revision WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to read the library revision: {e}"))
+    }
+
+    /// The paths of a playlist's songs in the order `get_playlist_tracks`
+    /// lists them, remote songs included, for a queue playing that playlist.
+    pub fn queue_source_paths(&self, playlist_id: &str) -> Result<Vec<String>, String> {
+        let connection = self.read_connection();
+        let is_library = self
+            .default_playlist_id_cache
+            .get()
+            .is_some_and(|id| id == playlist_id);
+        let read = |row: &rusqlite::Row| row.get::<_, String>(0);
+        let paths = if is_library {
+            connection
+                .prepare("SELECT t.path FROM library_tracks t ORDER BY t.name")
+                .and_then(|mut statement| statement.query_map([], read)?.collect())
+        } else {
+            connection
+                .prepare(
+                    "SELECT t.path FROM playlist_tracks pt
+                     JOIN tracks t ON t.id = pt.track_id
+                     WHERE pt.playlist_id = ?1
+                     ORDER BY pt.position",
+                )
+                .and_then(|mut statement| {
+                    statement.query_map(params![playlist_id], read)?.collect()
+                })
+        };
+        paths.map_err(|e| format!("Failed to read the playlist's songs: {e}"))
     }
 
     pub fn get_playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>, String> {
@@ -4712,6 +4753,48 @@ pub(crate) fn audio_files_under(dir: &Path) -> (Vec<String>, Vec<String>) {
     (paths, unreadable)
 }
 
+/// A counter bumped whenever a song joins or leaves the library or a
+/// playlist. The app polls it to notice changes made anywhere: a folder sync,
+/// a remote source, an Android scan, or the CLI in another process.
+fn ensure_library_revision(connection: &Connection) -> Result<(), String> {
+    const BUMP: &str = "BEGIN UPDATE library_revision SET value = value + 1 WHERE id = 1; END;";
+    connection
+        .execute_batch(&format!(
+            "CREATE TABLE IF NOT EXISTS library_revision (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 value INTEGER NOT NULL
+             );
+             INSERT OR IGNORE INTO library_revision (id, value) VALUES (1, 0);
+             CREATE TRIGGER IF NOT EXISTS library_revision_track_insert
+                 AFTER INSERT ON tracks {BUMP}
+             CREATE TRIGGER IF NOT EXISTS library_revision_track_delete
+                 AFTER DELETE ON tracks {BUMP}
+             CREATE TRIGGER IF NOT EXISTS library_revision_track_update
+                 AFTER UPDATE OF path, source_state, remote_visible ON tracks
+                 WHEN OLD.path IS NOT NEW.path
+                     OR OLD.source_state IS NOT NEW.source_state
+                     OR OLD.remote_visible IS NOT NEW.remote_visible
+                 {BUMP}
+             CREATE TRIGGER IF NOT EXISTS library_revision_entry_insert
+                 AFTER INSERT ON playlist_tracks {BUMP}
+             CREATE TRIGGER IF NOT EXISTS library_revision_entry_delete
+                 AFTER DELETE ON playlist_tracks {BUMP}
+             CREATE TRIGGER IF NOT EXISTS library_revision_entry_move
+                 AFTER UPDATE OF position ON playlist_tracks
+                 WHEN OLD.position IS NOT NEW.position
+                 {BUMP}
+             CREATE TRIGGER IF NOT EXISTS library_revision_playlist_insert
+                 AFTER INSERT ON playlists {BUMP}
+             CREATE TRIGGER IF NOT EXISTS library_revision_playlist_delete
+                 AFTER DELETE ON playlists {BUMP}
+             CREATE TRIGGER IF NOT EXISTS library_revision_playlist_rename
+                 AFTER UPDATE OF name ON playlists
+                 WHEN OLD.name IS NOT NEW.name
+                 {BUMP}"
+        ))
+        .map_err(|e| format!("Failed to set up the library revision: {e}"))
+}
+
 /// Add `tracks.lyrics_synced`, fill it in once for existing rows, and keep it
 /// current on every insert and lyrics change.
 fn ensure_lyrics_synced_column(connection: &Connection) -> Result<(), String> {
@@ -8405,5 +8488,70 @@ mod tests {
             .map(|track| track.title)
             .collect();
         assert_eq!(order, vec!["Charlie", "Alpha", "Bravo"]);
+    }
+
+    #[test]
+    fn the_revision_moves_when_songs_join_or_leave_and_not_on_tag_edits() {
+        let library = open_test_library().unwrap();
+        let playlist = library.create_playlist("Mix", None).unwrap();
+        let start = library.revision().unwrap();
+
+        {
+            let connection = library.lock_connection().unwrap();
+            upsert_track(&*connection, &sample_track("a", "/music/a.mp3")).unwrap();
+        }
+        let added = library.revision().unwrap();
+        assert!(added > start, "a new song");
+
+        {
+            let connection = library.lock_connection().unwrap();
+            connection
+                .execute("UPDATE tracks SET title = 'Renamed' WHERE id = 'a'", [])
+                .unwrap();
+            upsert_track(&*connection, &sample_track("a", "/music/a.mp3")).unwrap();
+        }
+        assert_eq!(library.revision().unwrap(), added, "same song, same path");
+
+        library
+            .append_import_entries(&playlist.id, &[ImportEntry::Known("a".into())])
+            .unwrap();
+        let linked = library.revision().unwrap();
+        assert!(linked > added, "joined a playlist");
+
+        library
+            .remove_track_from_playlist_by_path(&playlist.id, "/music/a.mp3")
+            .unwrap();
+        assert!(library.revision().unwrap() > linked, "left a playlist");
+    }
+
+    #[test]
+    fn queue_source_paths_list_a_playlist_in_its_order() {
+        let library = open_test_library().unwrap();
+        let playlist = library.create_playlist("Mix", None).unwrap();
+        {
+            let connection = library.lock_connection().unwrap();
+            for id in ["a", "b"] {
+                let track = Track {
+                    title: id.into(),
+                    ..sample_track(id, &format!("/music/{id}.mp3"))
+                };
+                upsert_track(&*connection, &track).unwrap();
+            }
+        }
+        library
+            .append_import_entries(
+                &playlist.id,
+                &[
+                    ImportEntry::Known("b".into()),
+                    ImportEntry::Known("a".into()),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            library.queue_source_paths(&playlist.id).unwrap(),
+            ["/music/b.mp3", "/music/a.mp3"]
+        );
+        let library_id = library.default_playlist_id().unwrap();
+        assert_eq!(library.queue_source_paths(&library_id).unwrap().len(), 2);
     }
 }

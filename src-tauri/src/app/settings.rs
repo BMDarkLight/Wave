@@ -32,6 +32,8 @@ pub struct AppSettings {
     pub last_queue_index: Option<usize>,
     /// The saved queue is a mashup of several albums or playlists.
     pub last_queue_mashup: bool,
+    /// The playlist the saved queue plays, so it keeps following it.
+    pub last_queue_source: Option<SavedQueueSource>,
     pub shuffle: bool,
     pub repeat: RepeatMode,
     // Media folders scanned for music (content:// URIs on Android, paths on desktop).
@@ -129,6 +131,14 @@ pub struct AppSettings {
     pub auto_update_enabled: bool,
 }
 
+/// The playlist a saved queue was started from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedQueueSource {
+    pub playlist_id: String,
+    /// The queue kept the playlist's own order rather than a sorted view's.
+    pub in_playlist_order: bool,
+}
+
 /// Two songs, by path, that always play back to back: `first`, then
 /// `second`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +197,7 @@ impl Default for AppSettings {
             last_queue: Vec::new(),
             last_queue_index: None,
             last_queue_mashup: false,
+            last_queue_source: None,
             shuffle: false,
             repeat: RepeatMode::Off,
             media_folders: Vec::new(),

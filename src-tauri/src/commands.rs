@@ -13,8 +13,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::app::updater::UpdaterState;
-use crate::app_settings::{AppSettings, AppSettingsState, SongCouple};
-use crate::audio::player::AudioPlayer;
+use crate::app_settings::{AppSettings, AppSettingsState, SavedQueueSource, SongCouple};
+use crate::audio::player::{AudioPlayer, QueueSource};
 use crate::audio::sleep_timer::{SleepRequest, SleepTimerStatus};
 use crate::dto::{
     AlbumSummaryDto, ArtistSummaryDto, CloseAction, EqSettingsDto, HomeSuggestionsDto,
@@ -192,6 +192,10 @@ pub(crate) fn persist_playback_state(app: &tauri::AppHandle) {
     settings.last_queue = player.queue.tracks().to_vec();
     settings.last_queue_index = player.queue.current_index();
     settings.last_queue_mashup = player.queue.is_mashup();
+    settings.last_queue_source = player.queue.source().map(|source| SavedQueueSource {
+        playlist_id: source.playlist_id().to_string(),
+        in_playlist_order: source.in_playlist_order(),
+    });
     settings.shuffle = player.queue.is_shuffled();
     settings.repeat = player.repeat.clone();
     let _ = settings.save(app);
@@ -546,23 +550,124 @@ where
         .map_err(|e| format!("Background task failed: {e}"))?
 }
 
-fn sync_queue_from_tracks(player: &mut AudioPlayer, tracks: &[Track], index: usize) {
-    let new_paths: Vec<String> = tracks.iter().map(|track| track.path.clone()).collect();
-    let old_paths: Vec<String> = player.queue.tracks().to_vec();
-
-    // Preserve any manually-added queue items (those not in the new playlist).
-    let manual: Vec<String> = old_paths
-        .into_iter()
-        .filter(|p| !new_paths.contains(p))
-        .collect();
-
-    player.queue.set_tracks(new_paths);
+/// Replace the queue with a playlist's songs and pick `index` to play. Songs
+/// queued by hand that had yet to play go on after the playlist; whatever
+/// else the old queue held, such as the rest of an album, is dropped.
+fn start_playlist_queue(
+    player: &mut AudioPlayer,
+    queue_paths: Vec<String>,
+    source: QueueSource,
+    index: usize,
+) {
+    let manual = player.queue.upcoming_manual();
+    player.queue.set_tracks(queue_paths);
+    player.queue.set_source(source);
     if player.queue.pick(index).is_none() {
         tracing::warn!("Failed to align playback queue with playlist index {index}");
     }
-    // Re-append manual items so they play after the playlist finishes.
     for path in manual {
-        player.queue.enqueue(path);
+        if !player.queue.tracks().contains(&path) {
+            player.queue.enqueue(path);
+        }
+    }
+}
+
+/// The library revision last acted on; `i64::MIN` until the first check.
+static SEEN_LIBRARY_REVISION: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(i64::MIN);
+
+/// Notice library changes made anywhere (a folder sync, a remote source, an
+/// Android scan, the CLI), tell the window, and have a queue that plays a
+/// playlist pick up the songs added to it or taken out of it.
+pub(crate) fn tick_library_changes(app: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+
+    let source = {
+        let state = app.state::<PlayerState>();
+        let Ok(slot) = state.0.lock() else {
+            return;
+        };
+        slot.as_ref()
+            .and_then(|player| player.queue.source())
+            .map(|source| source.playlist_id().to_string())
+    };
+
+    // A sync holds the library between batches; try again next tick rather
+    // than hold up playback waiting for it.
+    let (revision, library_paths) = {
+        let state = app.state::<LibraryState>();
+        let Ok(lib) = state.0.try_lock() else {
+            return;
+        };
+        let Ok(revision) = lib.revision() else {
+            return;
+        };
+        let seen = SEEN_LIBRARY_REVISION.load(Ordering::Relaxed);
+        // The first check also reads a queue restored from the last session.
+        if revision == seen {
+            return;
+        }
+        let paths = match &source {
+            Some(id) => match lib.queue_source_paths(id) {
+                Ok(paths) => Some(paths),
+                Err(error) => {
+                    tracing::warn!("Could not read the playing playlist: {error}");
+                    return;
+                }
+            },
+            None => None,
+        };
+        (revision, paths)
+    };
+    let first_check = SEEN_LIBRARY_REVISION.swap(revision, Ordering::Relaxed) == i64::MIN;
+    if !first_check {
+        let _ = app.emit("library-changed", ());
+    }
+
+    let (Some(playlist_id), Some(library_paths)) = (source, library_paths) else {
+        return;
+    };
+    let unseen: Vec<String> = {
+        let state = app.state::<PlayerState>();
+        let Ok(slot) = state.0.lock() else {
+            return;
+        };
+        let Some(player) = slot.as_ref() else {
+            return;
+        };
+        player
+            .queue
+            .unseen_source_paths(&library_paths)
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    };
+    let resolved: std::collections::HashMap<String, String> = unseen
+        .into_iter()
+        .filter_map(|path| {
+            let playable = crate::android::import::resolve_playback_source(app, &path)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to resolve track {path}: {e}");
+                    path.clone()
+                });
+            (playable != path).then_some((path, playable))
+        })
+        .collect();
+
+    let changed = {
+        let state = app.state::<PlayerState>();
+        let Ok(mut slot) = state.0.lock() else {
+            return;
+        };
+        let Some(player) = slot.as_mut() else {
+            return;
+        };
+        player.follow_queue_source(&playlist_id, &library_paths, &resolved)
+    };
+    if changed {
+        persist_playback_state(app);
+        let _ = app.emit("queue-changed", ());
     }
 }
 
@@ -2333,7 +2438,7 @@ pub async fn clear_favorites(library: tauri::State<'_, LibraryState>) -> Result<
 #[tauri::command]
 pub async fn play_track_from_playlist(index: usize, app: tauri::AppHandle) -> Result<(), String> {
     let app_clone = app.clone();
-    let (raw_tracks, track) = blocking(move || {
+    let (raw_tracks, track, library_id) = blocking(move || {
         let library = app_clone.state::<LibraryState>();
         let lib = library.0.lock().map_err(|e| e.to_string())?;
         let tracks = lib.get_default_playlist_tracks()?;
@@ -2341,7 +2446,7 @@ pub async fn play_track_from_playlist(index: usize, app: tauri::AppHandle) -> Re
             .get(index)
             .ok_or_else(|| format!("Track not found at index {index}"))?
             .clone();
-        Ok((tracks, track))
+        Ok((tracks, track, lib.default_playlist_id()?))
     })
     .await?;
 
@@ -2370,6 +2475,14 @@ pub async fn play_track_from_playlist(index: usize, app: tauri::AppHandle) -> Re
         return Err(format!("Audio file not found for track at index {index}"));
     }
 
+    let source = QueueSource::new(
+        library_id,
+        true,
+        raw_tracks
+            .iter()
+            .map(|t| t.path.clone())
+            .zip(materialized_paths.iter().cloned()),
+    );
     let tracks: Vec<Track> = raw_tracks
         .into_iter()
         .zip(materialized_paths)
@@ -2380,12 +2493,12 @@ pub async fn play_track_from_playlist(index: usize, app: tauri::AppHandle) -> Re
         .collect();
 
     let app_clone = app.clone();
-    let tracks_clone = tracks.clone();
+    let queue_paths: Vec<String> = tracks.iter().map(|t| t.path.clone()).collect();
     let first = local_path.clone();
     let played = blocking(move || {
         prepare_remote_for_play(&first)?;
         with_app_player(&app_clone, |player| {
-            sync_queue_from_tracks(player, &tracks_clone, index);
+            start_playlist_queue(player, queue_paths, source, index);
             player
                 .play_current()
                 .map_err(|e| format!("Playback failed: {e}"))
@@ -3106,10 +3219,11 @@ pub async fn play_track_from_specific_playlist(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let app_clone = app.clone();
+    let lookup_id = playlist_id.clone();
     let raw_tracks = blocking(move || {
         let library = app_clone.state::<LibraryState>();
         let lib = library.0.lock().map_err(|e| e.to_string())?;
-        lib.get_playlist_tracks(&playlist_id)
+        lib.get_playlist_tracks(&lookup_id)
     })
     .await?;
 
@@ -3156,34 +3270,18 @@ pub async fn play_track_from_specific_playlist(
         .cloned()
         .unwrap_or_else(|| placeholder_track(&original_path));
 
+    let source = QueueSource::new(
+        playlist_id,
+        ordered_paths.is_none(),
+        original_paths.into_iter().zip(materialized.iter().cloned()),
+    );
     let queue_for_sync = materialized;
-    let originals_for_filter = original_paths;
     let app_clone = app.clone();
     let first = local_path.clone();
     let played = blocking(move || {
         prepare_remote_for_play(&first)?;
         with_app_player(&app_clone, |player| {
-            let playlist_set: std::collections::HashSet<&str> =
-                queue_for_sync.iter().map(String::as_str).collect();
-            let original_set: std::collections::HashSet<&str> =
-                originals_for_filter.iter().map(String::as_str).collect();
-            let manual: Vec<String> = player
-                .queue
-                .tracks()
-                .iter()
-                .filter(|p| {
-                    !playlist_set.contains(p.as_str()) && !original_set.contains(p.as_str())
-                })
-                .cloned()
-                .collect();
-
-            player.queue.set_tracks(queue_for_sync);
-            if player.queue.pick(index).is_none() {
-                tracing::warn!("Failed to align playback queue with playlist index {index}");
-            }
-            for path in manual {
-                player.queue.enqueue(path);
-            }
+            start_playlist_queue(player, queue_for_sync, source, index);
             player
                 .play_current()
                 .map_err(|e| format!("Playback failed: {e}"))

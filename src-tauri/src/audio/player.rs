@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -156,6 +157,74 @@ pub struct Queue {
     /// The queue mixes several albums or playlists. Replacing the queue ends
     /// the mashup.
     mashup: bool,
+    /// The playlist the queue was started from, so songs added to or taken
+    /// out of it while it plays show up in the queue too.
+    source: Option<QueueSource>,
+    /// Paths queued by hand with "Play next" or "Add to queue". Starting a
+    /// playlist keeps the ones still to come and drops the rest of the old
+    /// queue.
+    manual: HashSet<String>,
+}
+
+/// Where a song new to the source playlist goes in the queue.
+enum Placement {
+    /// Right after this queue path, its neighbour in the playlist.
+    After(String),
+    /// Right before this queue path: the song is the playlist's new first.
+    Before(String),
+    End,
+}
+
+/// The playlist a queue plays, and which of its songs the queue already has.
+#[derive(Debug, Clone)]
+pub struct QueueSource {
+    playlist_id: String,
+    /// The queue was built in the playlist's own order, so a song added to
+    /// the playlist goes in beside its neighbours there. A queue started from
+    /// a sorted view gets new songs at the end instead.
+    in_playlist_order: bool,
+    /// Each library path in the playlist, mapped to the path the queue plays
+    /// it from. The two differ for some Android and remote songs.
+    members: HashMap<String, String>,
+    /// Restored from the last session: the playlist's songs are read on the
+    /// first library check, and only later changes are followed.
+    awaiting_baseline: bool,
+}
+
+impl QueueSource {
+    pub fn new(
+        playlist_id: String,
+        in_playlist_order: bool,
+        members: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        Self {
+            playlist_id,
+            in_playlist_order,
+            members: members.into_iter().collect(),
+            awaiting_baseline: false,
+        }
+    }
+
+    /// A source saved with the queue, whose songs are not known yet.
+    pub fn restored(playlist_id: String, in_playlist_order: bool) -> Self {
+        Self {
+            awaiting_baseline: true,
+            ..Self::new(playlist_id, in_playlist_order, [])
+        }
+    }
+
+    pub fn playlist_id(&self) -> &str {
+        &self.playlist_id
+    }
+
+    pub fn in_playlist_order(&self) -> bool {
+        self.in_playlist_order
+    }
+}
+
+/// A random number in `0..=max`.
+fn random_up_to(max: usize) -> usize {
+    (uuid::Uuid::new_v4().as_u64_pair().0 % (max as u64 + 1)) as usize
 }
 
 /// A random order of `0..len`, by Fisher-Yates.
@@ -187,6 +256,188 @@ impl Queue {
         self.unshuffled_rank = None;
         self.fresh = true;
         self.mashup = false;
+        self.source = None;
+        self.manual.clear();
+    }
+
+    /// Tie the queue just set to the playlist it was built from.
+    pub fn set_source(&mut self, source: QueueSource) {
+        self.source = Some(source);
+    }
+
+    pub fn source(&self) -> Option<&QueueSource> {
+        self.source.as_ref()
+    }
+
+    /// Hand-queued songs still to come, in the order they would play.
+    pub fn upcoming_manual(&self) -> Vec<String> {
+        let start = self.current_index.map_or(0, |current| current + 1);
+        self.tracks
+            .iter()
+            .skip(start)
+            .filter(|path| self.manual.contains(*path))
+            .cloned()
+            .collect()
+    }
+
+    /// Paths in `library_paths` the source has not seen yet, which have to be
+    /// resolved to playable paths before [`Queue::follow_source`].
+    pub fn unseen_source_paths<'a>(&self, library_paths: &'a [String]) -> Vec<&'a str> {
+        match &self.source {
+            Some(source) if !source.awaiting_baseline => library_paths
+                .iter()
+                .filter(|path| !source.members.contains_key(*path))
+                .map(String::as_str)
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Bring the queue in line with its playlist after the library changed.
+    /// `library_paths` is the playlist as it is now, in its own order, and
+    /// `resolved` maps a song new to the queue to the path it plays from.
+    ///
+    /// A song gone from the playlist leaves the queue, unless it is playing
+    /// or was queued by hand as well. A new song joins: beside its neighbours
+    /// in a queue in playlist order, at a random spot still to come in a
+    /// shuffled one, and at the end otherwise. Returns whether anything
+    /// changed.
+    pub fn follow_source(
+        &mut self,
+        playlist_id: &str,
+        library_paths: &[String],
+        resolved: &HashMap<String, String>,
+    ) -> bool {
+        let Some(mut source) = self.source.take() else {
+            return false;
+        };
+        if source.playlist_id != playlist_id {
+            self.source = Some(source);
+            return false;
+        }
+        if std::mem::take(&mut source.awaiting_baseline) {
+            source.members = library_paths
+                .iter()
+                .map(|path| (path.clone(), path.clone()))
+                .collect();
+            self.source = Some(source);
+            return false;
+        }
+
+        let mut changed = false;
+        let now: HashSet<&str> = library_paths.iter().map(String::as_str).collect();
+        let gone: Vec<String> = source
+            .members
+            .iter()
+            .filter(|(library, _)| !now.contains(library.as_str()))
+            .map(|(_, queued)| queued.clone())
+            .collect();
+        source
+            .members
+            .retain(|library, _| now.contains(library.as_str()));
+        for queued in gone {
+            if source.members.values().any(|q| *q == queued) {
+                continue;
+            }
+            // Queued by hand as well: that copy, the last one, stays.
+            let keep = self
+                .manual
+                .contains(&queued)
+                .then(|| self.tracks.iter().rposition(|p| *p == queued))
+                .flatten();
+            for index in (0..self.tracks.len()).rev() {
+                if self.tracks[index] == queued
+                    && self.current_index != Some(index)
+                    && keep != Some(index)
+                {
+                    self.remove_at(index);
+                    changed = true;
+                }
+            }
+        }
+
+        let mut previous: Option<String> = None;
+        for (at, library) in library_paths.iter().enumerate() {
+            if let Some(queued) = source.members.get(library) {
+                previous = Some(queued.clone());
+                continue;
+            }
+            let queued = resolved
+                .get(library)
+                .cloned()
+                .unwrap_or_else(|| library.clone());
+            if !self.tracks.contains(&queued) {
+                let placement = match (&previous, source.in_playlist_order) {
+                    (_, false) => Placement::End,
+                    (Some(before), true) => Placement::After(before.clone()),
+                    // A new first song goes in front of the next one the
+                    // queue already has.
+                    (None, true) => library_paths[at + 1..]
+                        .iter()
+                        .find_map(|next| source.members.get(next))
+                        .map_or(Placement::End, |next| Placement::Before(next.clone())),
+                };
+                self.add_from_source(queued.clone(), placement);
+                changed = true;
+            }
+            source.members.insert(library.clone(), queued.clone());
+            previous = Some(queued);
+        }
+
+        if changed && !self.fresh {
+            self.keep_couples_together();
+        }
+        self.source = Some(source);
+        changed
+    }
+
+    /// Place a song that just joined the source playlist.
+    fn add_from_source(&mut self, path: String, placement: Placement) {
+        // Its slot in playlist order, when the queue keeps that order.
+        let in_order = match &placement {
+            Placement::After(before) => self
+                .tracks
+                .iter()
+                .position(|p| p == before)
+                .map(|index| index + 1),
+            Placement::Before(next) => self.tracks.iter().position(|p| p == next),
+            Placement::End => None,
+        };
+
+        if self.shuffle && !self.fresh {
+            let start = self.current_index.map_or(0, |current| current + 1);
+            let index = start + random_up_to(self.tracks.len().saturating_sub(start));
+            // Turning shuffle off later puts it back beside its neighbour.
+            let rank = match (&self.unshuffled_rank, in_order) {
+                (Some(ranks), Some(slot)) => match placement {
+                    Placement::Before(_) => ranks[slot],
+                    _ => ranks[slot - 1] + 1,
+                },
+                (Some(ranks), None) => ranks.len(),
+                (None, _) => 0,
+            };
+            self.insert_ranked(index, path, rank);
+        } else {
+            let index = in_order.unwrap_or(self.tracks.len());
+            self.insert_at(index, path);
+        }
+    }
+
+    /// Insert `path` at `index` in play order and at slot `rank` in the
+    /// unshuffled order.
+    fn insert_ranked(&mut self, index: usize, path: String, rank: usize) {
+        self.tracks.insert(index, path);
+        if let Some(current) = self.current_index.filter(|&current| current >= index) {
+            self.current_index = Some(current + 1);
+        }
+        if let Some(ref mut ranks) = self.unshuffled_rank {
+            for r in ranks.iter_mut() {
+                if *r >= rank {
+                    *r += 1;
+                }
+            }
+            ranks.insert(index, rank);
+        }
     }
 
     /// Mark the queue just set as a mashup of several albums or playlists.
@@ -460,6 +711,7 @@ impl Queue {
 
     /// Append a track to the end of the queue.
     pub fn enqueue(&mut self, path: String) {
+        self.manual.insert(path.clone());
         self.tracks.push(path);
         if let Some(ref mut ranks) = self.unshuffled_rank {
             ranks.push(ranks.len());
@@ -473,6 +725,7 @@ impl Queue {
             Some(idx) => (idx + 1).min(self.tracks.len()),
             None => self.tracks.len(),
         };
+        self.manual.insert(path.clone());
         self.tracks.insert(insert_at, path);
         if let Some(ref mut ranks) = self.unshuffled_rank {
             // Unshuffled, it still follows the track it was queued behind.
@@ -517,6 +770,9 @@ impl Queue {
                     *r -= 1;
                 }
             }
+        }
+        if !self.tracks.contains(&removed) {
+            self.manual.remove(&removed);
         }
 
         Some(removed)
@@ -567,6 +823,8 @@ impl Queue {
         } else {
             self.tracks.clear();
         }
+        let kept = &self.tracks;
+        self.manual.retain(|path| kept.contains(path));
         self.unshuffled_rank = self.shuffle.then(|| (0..self.tracks.len()).collect());
     }
 
@@ -2962,6 +3220,22 @@ impl AudioPlayer {
         self.sync_preload();
     }
 
+    /// Have the queue follow its source playlist; see [`Queue::follow_source`].
+    pub fn follow_queue_source(
+        &mut self,
+        playlist_id: &str,
+        library_paths: &[String],
+        resolved: &HashMap<String, String>,
+    ) -> bool {
+        let changed = self
+            .queue
+            .follow_source(playlist_id, library_paths, resolved);
+        if changed {
+            self.sync_preload();
+        }
+        changed
+    }
+
     pub fn enqueue(&mut self, path: &str) {
         self.queue.enqueue(path.to_string());
         self.sync_preload();
@@ -3092,6 +3366,162 @@ mod tests {
         assert_eq!(queue.pick(0), Some("/a"));
         let x = queue.tracks().iter().position(|p| p == "/x").unwrap();
         assert_eq!(queue.pick(x), Some("/x"));
+    }
+
+    // ── Following the source playlist ────────────────────────────────────
+
+    fn strings(paths: &[&str]) -> Vec<String> {
+        paths.iter().map(|p| p.to_string()).collect()
+    }
+
+    /// A queue playing `paths` as playlist "p", started from `start`.
+    fn playing(paths: &[&str], start: usize, in_order: bool) -> Queue {
+        let mut queue = queue_of(paths);
+        queue.set_source(QueueSource::new(
+            "p".into(),
+            in_order,
+            paths.iter().map(|p| (p.to_string(), p.to_string())),
+        ));
+        queue.pick(start);
+        queue
+    }
+
+    fn follow(queue: &mut Queue, paths: &[&str]) -> bool {
+        queue.follow_source("p", &strings(paths), &HashMap::new())
+    }
+
+    #[test]
+    fn a_song_added_to_the_playlist_joins_beside_its_neighbour() {
+        let mut queue = playing(&["/a", "/c", "/e"], 0, true);
+        assert!(follow(&mut queue, &["/a", "/b", "/c", "/d", "/e"]));
+        assert_eq!(queue.tracks(), ["/a", "/b", "/c", "/d", "/e"]);
+        assert_eq!(queue.current_index(), Some(0));
+    }
+
+    #[test]
+    fn a_new_first_song_goes_in_front_of_the_old_first() {
+        let mut queue = playing(&["/b", "/c"], 1, true);
+        assert!(follow(&mut queue, &["/a", "/b", "/c"]));
+        assert_eq!(queue.tracks(), ["/a", "/b", "/c"]);
+        assert_eq!(queue.current_index(), Some(2), "still on /c");
+    }
+
+    #[test]
+    fn a_sorted_queue_gets_new_songs_at_the_end() {
+        let mut queue = playing(&["/c", "/a"], 0, false);
+        assert!(follow(&mut queue, &["/a", "/b", "/c"]));
+        assert_eq!(queue.tracks(), ["/c", "/a", "/b"]);
+    }
+
+    #[test]
+    fn a_song_taken_out_of_the_playlist_leaves_the_queue_unless_playing() {
+        let mut queue = playing(&["/a", "/b", "/c", "/d"], 2, true);
+        assert!(follow(&mut queue, &["/a", "/d"]));
+        assert_eq!(queue.tracks(), ["/a", "/c", "/d"], "/c is playing");
+        assert_eq!(queue.current_index(), Some(1));
+        assert_eq!(queue.next(&RepeatMode::Off), Some("/d"));
+    }
+
+    #[test]
+    fn a_song_queued_by_hand_stays_when_the_playlist_drops_it() {
+        let mut queue = playing(&["/a", "/b"], 0, true);
+        queue.enqueue("/b".into());
+        assert!(follow(&mut queue, &["/a"]));
+        assert_eq!(queue.tracks(), ["/a", "/b"]);
+    }
+
+    #[test]
+    fn nothing_changes_when_the_playlist_did_not() {
+        let mut queue = playing(&["/a", "/b"], 0, true);
+        assert!(!follow(&mut queue, &["/a", "/b"]));
+        assert!(!queue.follow_source("other", &strings(&["/x"]), &HashMap::new()));
+        assert_eq!(queue.tracks(), ["/a", "/b"]);
+    }
+
+    #[test]
+    fn a_shuffled_queue_takes_new_songs_among_those_still_to_come() {
+        for _ in 0..50 {
+            let mut queue = Queue::default();
+            queue.set_shuffle(true);
+            let paths = ["/a", "/b", "/c", "/d"];
+            queue.set_tracks(strings(&paths));
+            queue.set_source(QueueSource::new(
+                "p".into(),
+                true,
+                paths.iter().map(|p| (p.to_string(), p.to_string())),
+            ));
+            queue.pick(2);
+            queue.next(&RepeatMode::Off);
+            let played: Vec<String> = queue.tracks()[..=queue.current_index().unwrap()].to_vec();
+
+            assert!(follow(&mut queue, &["/a", "/b", "/b2", "/c", "/d"]));
+            let current = queue.current_index().unwrap();
+            assert_eq!(
+                queue.tracks()[..=current],
+                played[..],
+                "history is untouched"
+            );
+            assert!(queue.tracks()[current + 1..].contains(&"/b2".to_string()));
+
+            // Unshuffled, it sits beside its neighbour in the playlist.
+            queue.set_shuffle(false);
+            assert_eq!(queue.tracks(), ["/a", "/b", "/b2", "/c", "/d"]);
+        }
+    }
+
+    #[test]
+    fn songs_added_before_the_first_play_are_shuffled_in_with_the_rest() {
+        let mut queue = Queue::default();
+        queue.set_shuffle(true);
+        queue.set_tracks(strings(&["/a", "/b"]));
+        queue.set_source(QueueSource::new(
+            "p".into(),
+            true,
+            ["/a", "/b"].map(|p| (p.to_string(), p.to_string())),
+        ));
+        assert!(follow(&mut queue, &["/a", "/b", "/c"]));
+        assert_eq!(queue.tracks().len(), 3);
+        queue.jump(0);
+        let mut seen: Vec<String> = queue.tracks().to_vec();
+        seen.sort();
+        assert_eq!(seen, ["/a", "/b", "/c"]);
+    }
+
+    #[test]
+    fn a_restored_source_learns_the_playlist_before_following_it() {
+        let mut queue = queue_of(&["/a", "/b"]);
+        queue.set_source(QueueSource::restored("p".into(), true));
+        assert!(queue
+            .unseen_source_paths(&strings(&["/a", "/b"]))
+            .is_empty());
+        assert!(!follow(&mut queue, &["/a", "/b"]));
+        assert!(follow(&mut queue, &["/a", "/b", "/c"]));
+        assert_eq!(queue.tracks(), ["/a", "/b", "/c"]);
+    }
+
+    #[test]
+    fn a_new_song_plays_from_the_path_it_was_resolved_to() {
+        let mut queue = playing(&["/a"], 0, true);
+        let resolved = HashMap::from([("content://b".to_string(), "/cache/b".to_string())]);
+        assert_eq!(
+            queue.unseen_source_paths(&strings(&["/a", "content://b"])),
+            ["content://b"]
+        );
+        assert!(queue.follow_source("p", &strings(&["/a", "content://b"]), &resolved));
+        assert_eq!(queue.tracks(), ["/a", "/cache/b"]);
+        assert!(queue.follow_source("p", &strings(&["/a"]), &HashMap::new()));
+        assert_eq!(queue.tracks(), ["/a"]);
+    }
+
+    #[test]
+    fn only_hand_queued_songs_still_to_come_count_as_manual() {
+        let mut queue = playing(&["/a", "/b", "/c"], 1, true);
+        queue.enqueue("/x".into());
+        queue.insert_next("/y".into());
+        assert_eq!(queue.upcoming_manual(), ["/y", "/x"]);
+        queue.set_tracks(strings(&["/z"]));
+        assert!(queue.upcoming_manual().is_empty());
+        assert!(queue.source().is_none());
     }
 
     // ── set_tracks ───────────────────────────────────────────────────────
