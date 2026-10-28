@@ -27,6 +27,7 @@ import {
   BiX,
 } from "react-icons/bi";
 import Artwork from "../Artwork";
+import { useDragSelect } from "../../hooks/useDragSelect";
 import Select from "../Select";
 import VirtualizedList from "../VirtualizedList";
 import {
@@ -328,6 +329,48 @@ export default function AddFromLibraryDialog({
     rangeAnchor.current = { list, index };
   };
 
+  // Press a song and slide over others to pick (or unpick) them all. The
+  // slide starts from the picks as they were, so sliding back undoes it.
+  const slideRef = useRef<{
+    rows: Track[];
+    before: Map<string, Pick>;
+    on: boolean;
+  } | null>(null);
+  const rowsFor = (list: string) => {
+    if (list === "songs") return songs;
+    if (list === "picked") return pickedTracks;
+    return openCollection?.tracks ?? [];
+  };
+  const dragSelect = useDragSelect({
+    scrollSelector: ".song-picker-scroll",
+    onStart: (list, index) => {
+      const rows = rowsFor(list);
+      slideRef.current = {
+        rows,
+        before: picks,
+        on: !picks.has(rows[index]?.path),
+      };
+      rangeAnchor.current = { list, index };
+    },
+    onSpan: (anchor, current) => {
+      const slide = slideRef.current;
+      if (!slide) return;
+      // In the order the slide passed over them, for "Order picked".
+      const passed =
+        current >= anchor
+          ? slide.rows.slice(anchor, current + 1)
+          : slide.rows.slice(current, anchor + 1).reverse();
+      const next = new Map(slide.before);
+      for (const track of passed) {
+        if (!slide.on) next.delete(track.path);
+        else if (canPick(track) && !next.has(track.path)) {
+          next.set(track.path, { track, rank: Math.random() });
+        }
+      }
+      setPicks(next);
+    },
+  });
+
   const loadPlaylist = async (collection: Collection) => {
     if (collection.tracks) return collection.tracks;
     const tracks = await getPlaylistTracksById(collection.key).catch(
@@ -385,14 +428,21 @@ export default function AddFromLibraryDialog({
     const track = rows[index];
     const inPlaylist = !canPick(track);
     const picked = picks.has(track.path);
+    // Unpicking by sliding in the Picked tab would pull rows out from under
+    // the finger, so there a tap drops one song at a time.
+    const slides = list !== "picked";
     return (
       <button
         type="button"
         role="option"
         aria-selected={picked}
-        className={`song-picker-row${picked ? " is-picked" : ""}`}
+        className={`song-picker-row${picked ? " is-picked" : ""}${dragSelect.isHolding(list, index) ? " is-holding" : ""}`}
         disabled={inPlaylist || adding}
-        onClick={(event) => onSongClick(list, rows, index, event)}
+        {...(slides ? dragSelect.rowProps(list, index) : {})}
+        onClick={(event) => {
+          if (dragSelect.consumeClick()) return;
+          onSongClick(list, rows, index, event);
+        }}
       >
         <span className="song-picker-check" aria-hidden>
           {picked && <BiCheck />}

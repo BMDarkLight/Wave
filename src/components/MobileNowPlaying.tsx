@@ -461,8 +461,9 @@ const dockTop = () =>
   document.querySelector(".mobile-dock-glass")?.getBoundingClientRect().top ??
   window.innerHeight;
 
-/** How long a queue row is held before it lifts out to be dragged. */
-const HOLD_TO_DRAG_MS = 2000;
+/** How long a finger holds a queue row before it lifts out to be dragged.
+ * A mouse lifts it as soon as it moves. */
+const HOLD_TO_DRAG_MS = 400;
 /** How far a finger may drift during that hold and still count as held. */
 const HOLD_SLOP_PX = 12;
 
@@ -1127,13 +1128,25 @@ export default function MobileNowPlaying({
                       const hold = holdRef.current;
                       if (!hold || hold.pointerId !== e.pointerId) return;
                       hold.lastY = e.clientY;
-                      // Moving before the hold completes is a scroll.
                       if (
                         Math.hypot(
                           e.clientX - hold.startX,
                           e.clientY - hold.startY,
-                        ) > HOLD_SLOP_PX
+                        ) <= HOLD_SLOP_PX
                       ) {
+                        return;
+                      }
+                      // A mouse dragging a row means to move it. A finger
+                      // moving before the hold is up is scrolling the list.
+                      if (e.pointerType === "mouse") {
+                        startQueueDrag(
+                          hold.index,
+                          hold.el,
+                          hold.startY,
+                          e.pointerId,
+                        );
+                        moveQueueDrag(e.clientY);
+                      } else {
                         cancelQueueHold();
                       }
                     }}

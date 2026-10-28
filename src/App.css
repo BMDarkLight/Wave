@@ -3192,6 +3192,21 @@ img.queue-thumb {
   cursor: pointer;
 }
 
+.song-picker-list {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* A finger resting on a row: it sinks a little until sliding picks. */
+.song-picker-row.is-holding {
+  background: rgba(var(--ink), 0.08);
+  transform: scale(0.98);
+  transition:
+    transform 0.35s cubic-bezier(0.2, 0, 0.2, 1),
+    background 0.2s ease;
+}
+
 .song-picker-row:hover:not(:disabled):not(.is-picked) {
   background: rgba(var(--ink), 0.06);
 }
@@ -6420,7 +6435,7 @@ div.album-hero-cover {
   background: rgba(var(--ink), 0.08) !important;
   transform: scale(0.97);
   transition:
-    transform 2s cubic-bezier(0.2, 0, 0.2, 1),
+    transform 0.4s cubic-bezier(0.2, 0, 0.2, 1),
     background 0.3s ease;
 }
 
