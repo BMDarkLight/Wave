@@ -11,6 +11,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import MiniPlayer from "./components/MiniPlayer";
 import { initTouchHoverGuards } from "./utils/touchHover";
 
 // Defeat sticky :hover/:focus on Android WebView before first paint when possible.
@@ -21,9 +22,12 @@ initTouchHoverGuards();
 // still open before this runs.
 document.addEventListener("contextmenu", (event) => event.preventDefault());
 
+// The mini player window loads this same page with `#mini`.
+const isMiniPlayer = window.location.hash === "#mini";
+
 // Render immediately - let the App component handle Tauri detection
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    {isMiniPlayer ? <MiniPlayer /> : <App />}
   </React.StrictMode>,
 );

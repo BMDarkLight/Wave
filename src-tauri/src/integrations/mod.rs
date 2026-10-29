@@ -6,5 +6,9 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
+#[cfg(target_os = "macos")]
+pub mod app_menu;
 pub mod gui_tray;
 pub mod media_controls;
+#[cfg(not(target_os = "android"))]
+pub mod mini_player;

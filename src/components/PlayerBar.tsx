@@ -10,6 +10,7 @@
 
 import { useRef, type RefObject } from "react";
 import {
+  BiExitFullscreen,
   BiListUl,
   BiMusic,
   BiPause,
@@ -71,6 +72,7 @@ export default function PlayerBar({
   onSeekCommit,
   onToggleLyrics,
   onToggleQueue,
+  onMiniPlayer,
   onToggleEqPanel,
   onVolumeChange,
   onToggleDevice,
@@ -111,6 +113,8 @@ export default function PlayerBar({
   onSeekCommit: (value: number) => void;
   onToggleLyrics: () => void;
   onToggleQueue: () => void;
+  /** Desktop only: swap this window for the mini player. */
+  onMiniPlayer?: () => void;
   onToggleEqPanel: () => void;
   onVolumeChange: (value: number) => void;
   onToggleDevice: () => void;
@@ -393,6 +397,17 @@ export default function PlayerBar({
           >
             <BiListUl />
           </button>
+          {onMiniPlayer && (
+            <button
+              className="control-btn desktop-only-control"
+              onClick={onMiniPlayer}
+              type="button"
+              title="Mini player"
+              aria-label="Mini player"
+            >
+              <BiExitFullscreen />
+            </button>
+          )}
           <span
             className={`status-dot ${playbackState.is_playing ? "playing" : playbackState.is_paused ? "paused" : ""}`}
           />

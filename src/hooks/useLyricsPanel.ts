@@ -109,13 +109,14 @@ export function useLyricsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lyricsPanelTrack?.path]);
 
-  // Close lyrics panel and auto-fetch lyrics when track changes
+  // An open lyrics panel follows the song that is playing, and lyrics are
+  // fetched for it when needed.
   useEffect(() => {
     if (!currentTrack) {
       setLyricsFetchPath(null);
       return;
     }
-    setLyricsPanelTrack(null);
+    setLyricsPanelTrack((open) => (open ? currentTrack : null));
     if (
       currentTrack.lyrics &&
       (hasTimestamps(currentTrack.lyrics) ||

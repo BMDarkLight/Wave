@@ -29,6 +29,21 @@ fn main() {
         return;
     }
 
+    // Audio files from the file manager ("Open With", a double click) open in
+    // the app rather than the CLI. A Wave that is already running takes them,
+    // and this launch ends there.
+    if let Some(files) = wave_lib::open_files::audio_files_in_args(&args) {
+        if wave_lib::single_instance::gui_is_running() {
+            if let Err(e) = wave_lib::open_files::hand_off(&files) {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        wave_lib::run();
+        return;
+    }
+
     if args.len() > 1 {
         // Playback daemon is running: allow all CLI commands (library + IPC).
         if wave_lib::playback_daemon::daemon_is_running() {

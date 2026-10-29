@@ -1852,3 +1852,35 @@ export const scanDirectoryRecursive = async (
     );
   }
 };
+
+// ── Desktop windows ───────────────────────────────────────────────────────────
+
+/** Desktop only. Swaps the full window for the mini player. */
+export const showMiniPlayer = (): Promise<void> => {
+  return safeInvoke("show_mini_player");
+};
+
+/** Desktop only. Brings back the full window and puts the mini player away. */
+export const expandMiniPlayer = (): Promise<void> => {
+  return safeInvoke("expand_mini_player");
+};
+
+/**
+ * Desktop only. Hides the mini player, or, when it is the only window, does
+ * what closing the main window does.
+ */
+export const closeMiniPlayer = (): Promise<void> => {
+  return safeInvoke("close_mini_player");
+};
+
+export interface Dropped {
+  /** Audio files that started playing. */
+  played: number;
+  /** Folders in the drop, to become playlists. */
+  folders: string[];
+}
+
+/** Desktop only. Plays the audio files among dropped `paths`. */
+export const openDropped = (paths: string[]): Promise<Dropped> => {
+  return safeInvoke<Dropped>("open_dropped", { paths });
+};

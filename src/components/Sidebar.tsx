@@ -13,6 +13,7 @@ import {
   BiCog,
   BiEditAlt,
   BiExport,
+  BiFolderPlus,
   BiHeart,
   BiHistory,
   BiHomeAlt2,
@@ -50,6 +51,7 @@ export default function Sidebar({
   onGoMostPlayed,
   onSelectPlaylist,
   onImportPlaylist,
+  onAddFolder,
   onCreatePlaylist,
   onSyncPlaylist,
   onExportPlaylist,
@@ -71,6 +73,8 @@ export default function Sidebar({
   onGoMostPlayed: () => void;
   onSelectPlaylist: (id: string) => void;
   onImportPlaylist: () => void;
+  /** Make a playlist from a folder, kept in step with it. */
+  onAddFolder: () => void;
   onCreatePlaylist: () => void;
   onSyncPlaylist: (id: string) => void;
   onExportPlaylist: (id: string, name: string) => void;
@@ -169,6 +173,15 @@ export default function Sidebar({
           </button>
           <button
             className="playlist-add-btn"
+            onClick={onAddFolder}
+            type="button"
+            title="Add a folder as a playlist"
+            aria-label="Add a folder as a playlist"
+          >
+            <BiFolderPlus />
+          </button>
+          <button
+            className="playlist-add-btn"
             onClick={onCreatePlaylist}
             type="button"
             title="Create playlist"
@@ -186,6 +199,13 @@ export default function Sidebar({
                 type="button"
               >
                 Create one
+              </button>
+              <button
+                className="btn-ghost btn-sm"
+                onClick={onAddFolder}
+                type="button"
+              >
+                Add a folder
               </button>
             </div>
           ) : (

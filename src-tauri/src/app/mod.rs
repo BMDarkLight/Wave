@@ -8,7 +8,11 @@
 
 #[cfg(not(target_os = "android"))]
 pub mod desktop_update;
+#[cfg(not(target_os = "android"))]
+pub mod launch;
 pub mod library_recovery;
+#[cfg(not(target_os = "android"))]
+pub mod open_files;
 pub mod paths;
 pub mod settings;
 pub mod single_instance;

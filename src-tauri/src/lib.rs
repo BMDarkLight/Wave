@@ -30,6 +30,10 @@ mod tag_edit;
 mod waveform_service;
 pub mod win_console;
 
+#[cfg(not(target_os = "android"))]
+use app::launch;
+#[cfg(not(target_os = "android"))]
+pub use app::open_files;
 pub use app::paths as app_paths;
 pub use app::settings as app_settings;
 pub use app::single_instance;
@@ -50,6 +54,11 @@ pub fn run() {
     #[cfg(not(target_os = "android"))]
     let _instance = single_instance::try_acquire(single_instance::InstanceMode::Gui)
         .unwrap_or_else(|e| {
+            // Launched again while Wave sits hidden in the tray: bring that
+            // one up instead of failing.
+            if single_instance::gui_is_running() && open_files::hand_off(&[]).is_ok() {
+                std::process::exit(0);
+            }
             eprintln!("{e}");
             std::process::exit(1);
         });
@@ -199,6 +208,36 @@ pub fn run() {
                 tracing::warn!("System tray unavailable: {e}");
             }
 
+            #[cfg(target_os = "macos")]
+            {
+                let menu = integrations::app_menu::build(app.handle())?;
+                app.set_menu(menu)?;
+                app.on_menu_event(|app, event| {
+                    integrations::app_menu::handle(app, event.id().as_ref())
+                });
+            }
+
+            // Files opened from the file manager play in the mini player, and
+            // the full window stays hidden for them.
+            #[cfg(not(target_os = "android"))]
+            {
+                let handoff_app = app.handle().clone();
+                if let Err(e) = open_files::listen(move |files| {
+                    if files.is_empty() {
+                        let _ = integrations::mini_player::expand(&handoff_app);
+                    } else {
+                        commands::open_audio_files(&handoff_app, files, true);
+                    }
+                }) {
+                    tracing::warn!("Opening files from a second launch is unavailable: {e}");
+                }
+                let args: Vec<String> = std::env::args().collect();
+                match open_files::audio_files_in_args(&args) {
+                    Some(files) => commands::open_audio_files(app.handle(), files, true),
+                    None => launch::show_main_window_soon(app.handle()),
+                }
+            }
+
             // Auto-advance when the current track ends. The playback daemon
             // does this for headless mode; the GUI needs its own tick,
             // especially on Android, where sink-empty detection via frontend
@@ -276,6 +315,14 @@ pub fn run() {
                     crate::app::theme::keep_chosen(&webview, mode, *shown);
                 }
             }
+            #[cfg(not(target_os = "android"))]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == integrations::mini_player::LABEL {
+                    api.prevent_close();
+                    integrations::mini_player::close(window.app_handle());
+                    return;
+                }
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle();
 
@@ -303,6 +350,15 @@ pub fn run() {
                     CloseAction::Quit if share::in_background(app) => {
                         api.prevent_close();
                         let _ = window.hide();
+                    }
+                    // The hidden mini player would otherwise keep Wave running.
+                    #[cfg(not(target_os = "android"))]
+                    CloseAction::Quit
+                        if app
+                            .get_webview_window(integrations::mini_player::LABEL)
+                            .is_some() =>
+                    {
+                        app.exit(0);
                     }
                     CloseAction::Quit => {}
                 }
@@ -460,6 +516,14 @@ pub fn run() {
             commands::open_release_page,
             commands::open_repository,
             commands::open_crash_issue,
+            #[cfg(not(target_os = "android"))]
+            commands::open_dropped,
+            #[cfg(not(target_os = "android"))]
+            commands::show_mini_player,
+            #[cfg(not(target_os = "android"))]
+            commands::expand_mini_player,
+            #[cfg(not(target_os = "android"))]
+            commands::close_mini_player,
             commands::get_close_action,
             commands::set_close_action,
             commands::toggle_close_action,
@@ -521,9 +585,15 @@ pub fn run() {
                     let _ = window.set_focus();
                 }
             }
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = &_event {
+                launch::opened(_app, urls);
+            }
             // Say goodbye on the network, so players drop the shared library
             // now rather than when its announcement runs out.
             if let tauri::RunEvent::Exit = _event {
+                #[cfg(not(target_os = "android"))]
+                open_files::stop_listening();
                 // On Android the window can go while the process stays to
                 // share in the background, held by its foreground service.
                 let sharing_on = cfg!(target_os = "android") && share::in_background(_app);

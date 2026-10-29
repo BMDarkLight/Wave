@@ -44,11 +44,18 @@ export default function QueuePanel({
   return (
     <div className="right-panel-content">
       <div className="right-panel-header">
-        <h2>Queue</h2>
+        <h2>
+          Queue
+          {tracks.length > 0 && (
+            <span className="right-panel-count">
+              {tracks.length === 1 ? "1 song" : `${tracks.length} songs`}
+            </span>
+          )}
+        </h2>
         <div className="right-panel-header-actions">
           {tracks.length > 0 && (
             <button
-              className="btn-ghost btn-sm"
+              className="right-panel-text-btn"
               onClick={onClear}
               type="button"
             >
@@ -85,7 +92,7 @@ export default function QueuePanel({
               const unavailable = unavailableReason(track, remoteStatus);
               return (
                 <div
-                  className={`queue-item ${currentIndex === index ? "active" : ""} ${menuIndex === index ? "menu-open" : ""} ${unavailable ? "track-unavailable" : ""}`}
+                  className={`queue-item ${currentIndex === index ? "active" : ""} ${currentIndex !== null && index < currentIndex ? "played" : ""} ${menuIndex === index ? "menu-open" : ""} ${unavailable ? "track-unavailable" : ""}`}
                   title={unavailable ?? undefined}
                   onClick={() => onPlayFromQueue(index)}
                   onContextMenu={(event) => {

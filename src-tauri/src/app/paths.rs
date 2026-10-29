@@ -30,6 +30,12 @@ pub fn daemon_state_path() -> PathBuf {
     data_dir().join("playback-daemon.json")
 }
 
+/// Where the desktop app publishes the loopback port (and token) that a second
+/// launch uses to hand it files to open.
+pub fn gui_handoff_path() -> PathBuf {
+    data_dir().join("wave-gui.json")
+}
+
 /// Cache for audio streamed from a remote source. Files here are disposable:
 /// they back `source_state = 'cached'` rows and are evicted under a size cap.
 pub fn source_cache_dir() -> PathBuf {

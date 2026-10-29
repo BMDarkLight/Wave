@@ -48,6 +48,95 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "mp3"
+        ],
+        "name": "MP3 audio",
+        "description": "MP3 audio",
+        "mimeType": "audio/mpeg",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "flac"
+        ],
+        "name": "FLAC audio",
+        "description": "FLAC audio",
+        "mimeType": "audio/flac",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "m4a",
+          "m4b",
+          "aac",
+          "alac"
+        ],
+        "name": "MPEG-4 audio",
+        "description": "MPEG-4 audio",
+        "mimeType": "audio/mp4",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "ogg",
+          "oga"
+        ],
+        "name": "Ogg audio",
+        "description": "Ogg audio",
+        "mimeType": "audio/ogg",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "opus"
+        ],
+        "name": "Opus audio",
+        "description": "Opus audio",
+        "mimeType": "audio/opus",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "wav",
+          "wave"
+        ],
+        "name": "WAV audio",
+        "description": "WAV audio",
+        "mimeType": "audio/wav",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "aiff",
+          "aif"
+        ],
+        "name": "AIFF audio",
+        "description": "AIFF audio",
+        "mimeType": "audio/aiff",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "mka"
+        ],
+        "name": "Matroska audio",
+        "description": "Matroska audio",
+        "mimeType": "audio/x-matroska",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "weba"
+        ],
+        "name": "WebM audio",
+        "description": "WebM audio",
+        "mimeType": "audio/webm",
+        "role": "Viewer"
+      }
+    ],
     "android": {
       "minSdkVersion": 24
     },

@@ -307,7 +307,20 @@ genres — computed locally from your own playback history.
 
 ### Desktop & OS integration
 
-- **System tray / menu bar** icon with transport controls and a playlist submenu.
+- **Opens your files.** Wave registers for common audio formats, so a double
+  click or "Open With" plays a song in the **mini player**, a small window
+  that stays on top. If Wave is already running, the files go to it. Drop
+  songs on the window to play them, or drop a folder to make a playlist that
+  stays in step with it (also under **Add a folder as a playlist** in the
+  sidebar).
+- **System tray / menu bar** icon: one click plays or pauses, a double click
+  brings Wave up, and the menu shows what is playing, transport controls,
+  your playlists and the mini player.
+- **Menu bar and shortcuts.** On macOS, a full menu bar. Everywhere,
+  Cmd/Ctrl with: Right/Left to skip, Up/Down for volume, O to open files,
+  Shift+O to add a folder, N for a new playlist, F to search, U for the
+  queue, L for lyrics, Shift+M for the mini player, and Space to play or
+  pause.
 - **OS media controls** — the platform's own now-playing widget, media keys, and
   lock-screen artwork stay in sync.
 - **Close-to-tray** — choose whether the close button quits Wave or hides it.

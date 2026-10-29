@@ -67,6 +67,11 @@ import {
   getMostPlayed,
   getFileName,
   updateTrackMetadata,
+  showMiniPlayer,
+  selectAudioFile,
+  selectAudioFolder,
+  selectMediaFolder,
+  openDropped,
   type PlaylistInfo,
   type TagEdit,
   type Track,
@@ -89,6 +94,8 @@ import {
 import { useEqualizerSettings } from "./hooks/useEqualizerSettings";
 import { useTheme } from "./hooks/useTheme";
 import { useAppUpdate } from "./hooks/useAppUpdate";
+import { useFileDrop } from "./hooks/useFileDrop";
+import { useAppCommands } from "./hooks/useAppCommands";
 import { useSongCoupling } from "./hooks/useSongCoupling";
 import {
   usePlaylistMashing,
@@ -390,13 +397,16 @@ function App() {
     void setPlayerVolume(1);
   }, [androidHost]);
 
-  // Opening search dismisses drawers/panels that would cover it.
+  // Opening search on a phone dismisses drawers and panels that would cover
+  // it. On desktop the side panel sits beside the results, so it stays.
   useEffect(() => {
     if (!mainSearchOpen) return;
     setMobileNavOpen(false);
-    setShowQueue(false);
-    setShowDeviceList(false);
-    setLyricsPanelTrack(null);
+    if (isMobileLayout()) {
+      setShowQueue(false);
+      setShowDeviceList(false);
+      setLyricsPanelTrack(null);
+    }
     // Wait for the search field (the mobile Search page) to be mounted.
     const id = window.setTimeout(() => focusMainSearchInput(), 50);
     return () => window.clearTimeout(id);
@@ -767,9 +777,11 @@ function App() {
   const handleOpenMobileSettings = () => {
     setMobileNavOpen(false);
     closeMainSearch();
-    setShowQueue(false);
-    setShowDeviceList(false);
-    setLyricsPanelTrack(null);
+    if (isMobileLayout()) {
+      setShowQueue(false);
+      setShowDeviceList(false);
+      setLyricsPanelTrack(null);
+    }
     forceCloseMobilePlayer();
     void loadEqSettings();
     if (isMobileLayout()) {
@@ -1393,6 +1405,131 @@ function App() {
 
   // ── Playlist management ────────────────────────────────────────────────────
 
+  /** Make a playlist that stays in step with `folder`, and fill it. */
+  const createFolderPlaylist = async (name: string, folder: string) => {
+    const info = await createPlaylist(name, folder);
+    await loadPlaylists();
+    setActivePlaylistId(info.id);
+    setMainView("playlist");
+    await loadPlaylistTracks(info.id);
+    const paths = androidHost
+      ? await scanDirectoryRecursive(folder)
+      : await scanDirectory(folder);
+    if (!paths.length) {
+      setError(`No audio files found in the selected folder.`);
+      return;
+    }
+    beginPlaylistImport(info.id);
+    setIsScanningFolder(true);
+    setFolderScanIsSync(true);
+    setImportedCount(0);
+    const stopProgress = await listenToSyncProgress((p) => {
+      if (typeof p.processed === "number") setImportedCount(p.processed);
+      else if (typeof p.extracted === "number") setImportedCount(p.extracted);
+      else if (typeof p.added === "number") setImportedCount(p.added);
+    }).catch(() => null);
+    try {
+      // Playlist was created with sync_folder — use the batched sync path.
+      const syncResult = await syncPlaylistFolder(info.id, paths);
+      if (syncResult.errors?.length) {
+        setError(`Imported with ${syncResult.errors.length} error(s).`);
+      }
+      await loadPlaylists();
+      await new Promise((r) => setTimeout(r, 0));
+      await loadPlaylistTracks(info.id);
+    } finally {
+      stopProgress?.();
+      endPlaylistImport(info.id);
+      setIsScanningFolder(false);
+      setFolderScanIsSync(false);
+    }
+  };
+
+  /** Pick a folder (or take a dropped one) and make it a synced playlist. */
+  const addFolderAsPlaylist = async (folder?: string) => {
+    try {
+      let chosen = folder ?? null;
+      if (!chosen) {
+        chosen = androidHost
+          ? ((await selectMediaFolder())?.uri ?? null)
+          : await selectAudioFolder();
+      }
+      if (!chosen) return;
+      const name = getFileName(chosen.replace(/[\\/]+$/, "")) || "Folder";
+      await createFolderPlaylist(name, chosen);
+    } catch (err) {
+      setError(formatInvokeError(err, "Could not add the folder"));
+    }
+  };
+
+  const dropActive = useFileDrop(!androidHost, addFolderAsPlaylist, setError);
+
+  const openFilesFromDialog = async () => {
+    try {
+      const paths = await selectAudioFile(true);
+      if (paths?.length) await openDropped(paths);
+    } catch (err) {
+      setError(formatInvokeError(err, "Could not open the files"));
+    }
+  };
+
+  useAppCommands(!androidHost, (command) => {
+    const VOLUME_STEP = 0.05;
+    switch (command) {
+      case "play_pause":
+        void handlePlayPause();
+        break;
+      case "next":
+        void handleNext();
+        break;
+      case "previous":
+        void handlePrevious();
+        break;
+      case "volume_up":
+        void handleVolume(Math.min(1, volumeValue + VOLUME_STEP));
+        break;
+      case "volume_down":
+        void handleVolume(Math.max(0, volumeValue - VOLUME_STEP));
+        break;
+      case "shuffle":
+        void handleToggleShuffle();
+        break;
+      case "repeat":
+        void handleCycleRepeat();
+        break;
+      case "search":
+        openMainSearch();
+        break;
+      case "queue":
+        handleToggleQueue();
+        break;
+      case "lyrics":
+        handleToggleLyrics();
+        break;
+      case "mini_player":
+        void showMiniPlayer().catch((err) =>
+          setError(formatInvokeError(err, "Could not open the mini player")),
+        );
+        break;
+      case "settings":
+        handleOpenMobileSettings();
+        break;
+      case "open_files":
+        void openFilesFromDialog();
+        break;
+      case "add_folder":
+        void addFolderAsPlaylist();
+        break;
+      case "new_playlist":
+        openCreatePlaylistDialog();
+        break;
+      case "check_updates":
+        handleOpenMobileSettings();
+        appUpdate.checkNow();
+        break;
+    }
+  });
+
   const submitPlaylistDialog = async () => {
     if (!playlistDialog) return;
 
@@ -1407,50 +1544,16 @@ function App() {
       setPlaylistDialogError(null);
 
       if (playlistDialog.mode === "create") {
-        const info = await createPlaylist(
-          name,
-          playlistSyncFolder || undefined,
-        );
+        if (playlistSyncFolder) {
+          closePlaylistDialog();
+          await createFolderPlaylist(name, playlistSyncFolder);
+          return;
+        }
+        const info = await createPlaylist(name);
         await loadPlaylists();
         setActivePlaylistId(info.id);
         setMainView("playlist");
         await loadPlaylistTracks(info.id);
-        if (playlistSyncFolder) {
-          closePlaylistDialog();
-          const paths = androidHost
-            ? await scanDirectoryRecursive(playlistSyncFolder)
-            : await scanDirectory(playlistSyncFolder);
-          if (!paths.length) {
-            setError(`No audio files found in the selected folder.`);
-            return;
-          }
-          beginPlaylistImport(info.id);
-          setIsScanningFolder(true);
-          setFolderScanIsSync(true);
-          setImportedCount(0);
-          const stopProgress = await listenToSyncProgress((p) => {
-            if (typeof p.processed === "number") setImportedCount(p.processed);
-            else if (typeof p.extracted === "number")
-              setImportedCount(p.extracted);
-            else if (typeof p.added === "number") setImportedCount(p.added);
-          }).catch(() => null);
-          try {
-            // Playlist was created with sync_folder — use the batched sync path.
-            const syncResult = await syncPlaylistFolder(info.id, paths);
-            if (syncResult.errors?.length) {
-              setError(`Imported with ${syncResult.errors.length} error(s).`);
-            }
-            await loadPlaylists();
-            await new Promise((r) => setTimeout(r, 0));
-            await loadPlaylistTracks(info.id);
-          } finally {
-            stopProgress?.();
-            endPlaylistImport(info.id);
-            setIsScanningFolder(false);
-            setFolderScanIsSync(false);
-          }
-          return;
-        }
         closePlaylistDialog();
         // A playlist started from a song gets that song; a blank one opens
         // straight onto the picker, since filling it is the next step anyway.
@@ -2253,6 +2356,7 @@ function App() {
             onGoMostPlayed={goMostPlayed}
             onSelectPlaylist={handleSelectPlaylist}
             onImportPlaylist={() => void handleImportPlaylist()}
+            onAddFolder={() => void addFolderAsPlaylist()}
             onCreatePlaylist={openCreatePlaylistDialog}
             onSyncPlaylist={(id) => void handleSyncPlaylistFolder(id)}
             onExportPlaylist={handleExportPlaylistById}
@@ -2907,6 +3011,19 @@ function App() {
             onSeekCommit={(value) => void handleSeek(value)}
             onToggleLyrics={handleToggleLyrics}
             onToggleQueue={handleToggleQueue}
+            onMiniPlayer={
+              androidHost
+                ? undefined
+                : () =>
+                    void showMiniPlayer().catch((err) =>
+                      setError(
+                        formatInvokeError(
+                          err,
+                          "Could not open the mini player",
+                        ),
+                      ),
+                    )
+            }
             onToggleEqPanel={() => void handleToggleEqPanel()}
             onVolumeChange={(value) => void handleVolume(value)}
             onToggleDevice={handleToggleDevice}
@@ -3139,6 +3256,14 @@ function App() {
             isLoading={isLoading}
           />
           <UpdateToast update={appUpdate} />
+          {dropActive && (
+            <div className="drop-overlay" aria-hidden>
+              <div className="drop-overlay-card">
+                <strong>Drop to play</strong>
+                <span>Songs start playing. A folder becomes a playlist.</span>
+              </div>
+            </div>
+          )}
         </div>
       </SongCouplingContext.Provider>
     </RemoteStatusContext.Provider>

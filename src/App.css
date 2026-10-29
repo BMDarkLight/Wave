@@ -746,6 +746,9 @@ img.track-thumb {
 }
 
 .home-page > * {
+  /* The page scrolls, so its sections keep their full height. Rows that
+     scroll sideways would otherwise be squeezed and spill into the gap below. */
+  flex-shrink: 0;
   padding-left: 24px;
   padding-right: 24px;
 }
@@ -9355,4 +9358,191 @@ div.album-hero-cover {
   padding: 8px 10px;
   font: inherit;
   font-size: 0.95rem;
+}
+
+/* Shown while files or folders are dragged over the desktop window. */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+  background: rgba(var(--well), 0.55);
+  pointer-events: none;
+}
+
+.drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 28px 40px;
+  border: 2px dashed rgba(var(--ink), 0.45);
+  border-radius: 16px;
+  background: var(--panel-raised);
+  color: var(--text);
+  text-align: center;
+}
+
+.drop-overlay-card strong {
+  font-size: 20px;
+}
+
+.drop-overlay-card span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* Desktop density. The shared styles are sized for touch; with a mouse and a
+   keyboard the same layout reads better tighter, so more of the library fits
+   on screen. Phones keep the sizes above. */
+@media (min-width: 901px) {
+  .brand-mark {
+    min-height: 52px;
+    padding: 10px;
+  }
+
+  .brand-logo {
+    width: 34px;
+    height: 34px;
+  }
+
+  .sidebar-pins {
+    gap: 2px;
+    padding: 8px;
+  }
+
+  .sidebar-pin {
+    padding: 7px 12px;
+    font-size: 14px;
+  }
+
+  .playlist-item {
+    padding: 6px 12px;
+    font-size: 14px;
+  }
+
+  .hero-copy h1 {
+    font-size: clamp(26px, 3vw, 40px);
+  }
+
+  .home-header h1 {
+    font-size: clamp(24px, 3vw, 36px);
+  }
+
+  .home-featured {
+    grid-template-columns: minmax(140px, 200px) minmax(0, 1fr);
+  }
+
+  .home-featured-copy h2 {
+    font-size: clamp(20px, 2.6vw, 32px);
+  }
+
+  .track-item {
+    min-height: 52px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
+  .track-thumb {
+    width: 38px;
+    height: 38px;
+  }
+}
+
+/* Side panel headers: a count beside the title, and quiet text actions. */
+.right-panel-count {
+  margin-left: 8px;
+  color: var(--quiet);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.right-panel-text-btn {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.right-panel-text-btn:hover {
+  background: rgba(var(--ink), 0.08);
+  color: var(--text);
+}
+
+/* Songs the queue has already played sit back, so what is playing and what
+   comes next stand out. */
+.queue-item.played:not(:hover) {
+  opacity: 0.5;
+}
+
+@media (min-width: 901px) {
+  .right-panel-header {
+    padding: 12px 14px 12px 18px;
+  }
+
+  /* Sized by its grid column less the margin, so the gap on the right edge
+     matches the sidebar's on the left. At 100% width the margin pushed the
+     panel past the window edge, where it was clipped. */
+  .right-panel {
+    width: auto;
+  }
+}
+
+/* Desktop: the middle column runs to the bottom of the window and scrolls
+   under the frosted player bar. The last stretch of the scroll is a spacer in
+   the window colour, cut with rounded corners, so at the end the card stops
+   with the same radius and the same gap above the bar as the side panels. */
+@media (min-width: 901px) {
+  /* Two classes, to win over pages that set their own bottom padding: the
+     spacer below has to be the very end of the scroll, or the card would
+     stop short of the line the side panels end on. */
+  .app-container .main-content {
+    --card-radius: 10px;
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  /* The scroll area reaches under the player bar, but its scrollbar stops
+     where the card does. */
+  .app-container .main-content::-webkit-scrollbar-track {
+    margin-top: var(--card-radius);
+    margin-bottom: calc(
+      var(--player-height) + var(--section-inset) + var(--card-radius)
+    );
+  }
+
+  .app-container .main-content::after {
+    content: "";
+    display: block;
+    flex: none;
+    grid-column: 1 / -1;
+    /* The card's own bottom padding, then its rounded corners, then the gap
+       and the room under the player bar. */
+    height: calc(
+      var(--player-height) + var(--section-inset) + var(--card-radius)
+    );
+    margin-top: calc(24px - var(--card-radius));
+    background:
+      radial-gradient(
+          circle at 100% 0,
+          transparent calc(var(--card-radius) - 0.5px),
+          var(--bg) var(--card-radius)
+        )
+        top left / var(--card-radius) var(--card-radius) no-repeat,
+      radial-gradient(
+          circle at 0 0,
+          transparent calc(var(--card-radius) - 0.5px),
+          var(--bg) var(--card-radius)
+        )
+        top right / var(--card-radius) var(--card-radius) no-repeat,
+      linear-gradient(var(--bg), var(--bg)) bottom / 100%
+        calc(100% - var(--card-radius)) no-repeat;
+    pointer-events: none;
+  }
 }

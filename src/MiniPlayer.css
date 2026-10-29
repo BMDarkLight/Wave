@@ -1,0 +1,191 @@
+/*
+ * Wave
+ * Copyright (C) 2025 BMDarkLight
+ *
+ * Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+ * See the LICENSE file in the project root for the full license text
+ * and additional terms (attribution and fork-marking requirements).
+ * https://github.com/BMDarkLight/Wave
+ */
+
+/* The mini player window: cover on the left, title and controls beside it,
+   and a thin seek bar along the bottom edge. The whole card drags the
+   window, except for the controls. */
+
+html:has(.mini-player),
+body:has(.mini-player) {
+  height: 100%;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.mini-player {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  height: 100vh;
+  padding: 12px 12px 18px;
+  box-sizing: border-box;
+  background: var(--panel);
+  color: var(--text);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+.mini-art {
+  flex: none;
+  width: 88px;
+  height: 88px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--art-placeholder);
+  display: grid;
+  place-items: center;
+  color: var(--quiet);
+  font-size: 28px;
+}
+
+.mini-body {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+  flex: 1;
+  height: 88px;
+}
+
+.mini-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.mini-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  padding-top: 2px;
+}
+
+.mini-title,
+.mini-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.mini-subtitle {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.mini-problem {
+  color: var(--danger-text);
+}
+
+.mini-window-btn,
+.mini-btn {
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.mini-window-btn {
+  width: 24px;
+  height: 24px;
+  font-size: 16px;
+}
+
+.mini-window-btn:hover,
+.mini-btn:hover {
+  color: var(--text);
+  background: rgba(var(--ink), 0.08);
+}
+
+.mini-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mini-btn {
+  width: 32px;
+  height: 32px;
+  font-size: 22px;
+}
+
+.mini-btn.mini-play {
+  width: 36px;
+  height: 36px;
+  font-size: 22px;
+  background: var(--green);
+  color: var(--on-green);
+}
+
+.mini-btn.mini-play:hover {
+  background: var(--green-hot);
+  color: var(--on-green);
+  transform: scale(1.04);
+}
+
+.mini-time {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--quiet);
+  font-variant-numeric: tabular-nums;
+}
+
+.mini-seek {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 6px;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(var(--ink), 0.12) linear-gradient(var(--text), var(--text))
+    no-repeat;
+  cursor: pointer;
+}
+
+.mini-seek:disabled {
+  cursor: default;
+}
+
+.mini-seek::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.mini-player:hover .mini-seek:not(:disabled)::-webkit-slider-thumb {
+  opacity: 1;
+}
+
+.mini-btn:focus-visible,
+.mini-window-btn:focus-visible,
+.mini-seek:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}

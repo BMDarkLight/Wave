@@ -1,5 +1,18 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Wave",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "visible": false
+      }
+    ]
+  },
   "bundle": {
     "targets": ["nsis"],
     "resources": {

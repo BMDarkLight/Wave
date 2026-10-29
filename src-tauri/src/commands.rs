@@ -705,9 +705,24 @@ pub(crate) fn is_preview_path(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Files opened from the file manager, with the tags read from them. They
+/// are not in the library, and this lets the queue and the mini player show
+/// their real title and cover instead of a name guessed from the file.
+fn opened_registry() -> &'static std::sync::Mutex<std::collections::HashMap<String, Track>> {
+    static REGISTRY: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Track>>,
+    > = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 fn placeholder_track(path: &str) -> Track {
     // A cached preview has real metadata even though it has no library row.
     if let Ok(map) = preview_registry().lock() {
+        if let Some(track) = map.get(path) {
+            return track.clone();
+        }
+    }
+    if let Ok(map) = opened_registry().lock() {
         if let Some(track) = map.get(path) {
             return track.clone();
         }
@@ -771,6 +786,14 @@ fn placeholder_track(path: &str) -> Track {
 }
 
 /// Look up a track by path in the library, falling back to a placeholder.
+/// The track at `path` as the queue shows it, for the tray.
+#[cfg(not(target_os = "android"))]
+pub(crate) fn track_for_path(app: &tauri::AppHandle, path: &str) -> Option<Track> {
+    let library = app.try_state::<LibraryState>()?;
+    let library = library.0.lock().ok()?;
+    Some(resolve_track(&library, path))
+}
+
 fn resolve_track(library: &Library, path: &str) -> Track {
     match library.get_tracks_by_paths(&[path.to_string()]) {
         Ok(results) if results.first().is_some_and(Option::is_some) => {
@@ -1479,6 +1502,117 @@ pub async fn reshuffle_mashup(
 }
 
 /// Replace the queue with `paths` and play `paths[index]`.
+#[cfg(not(target_os = "android"))]
+static LAST_OPEN: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+#[cfg(not(target_os = "android"))]
+const OPEN_BATCH_GAP: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Play audio files opened from outside Wave, in order, replacing the queue.
+/// With `mini`, they play in the mini player.
+#[cfg(not(target_os = "android"))]
+pub(crate) fn open_audio_files(app: &tauri::AppHandle, files: Vec<String>, mini: bool) {
+    if files.is_empty() {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let reader = app.clone();
+        let paths = files.clone();
+        let _ = blocking(move || {
+            let known = reader
+                .state::<LibraryState>()
+                .0
+                .lock()
+                .ok()
+                .and_then(|lib| lib.get_tracks_by_paths(&paths).ok())
+                .unwrap_or_default();
+            for (i, path) in paths.iter().enumerate() {
+                if known.get(i).is_some_and(Option::is_some) {
+                    continue;
+                }
+                match crate::metadata::extract_track_for_bulk(Some(&reader), path) {
+                    Ok(track) => {
+                        if let Ok(mut map) = opened_registry().lock() {
+                            map.insert(path.clone(), track);
+                        }
+                    }
+                    Err(e) => tracing::warn!("Could not read the tags of {path}: {e}"),
+                }
+            }
+            Ok(())
+        })
+        .await;
+        // Explorer starts Wave once per selected file, so a selection arrives
+        // as several opens in quick succession: those join the queue.
+        let joins_queue = {
+            let mut last = LAST_OPEN.lock().unwrap_or_else(|e| e.into_inner());
+            let recent = last.is_some_and(|at| at.elapsed() < OPEN_BATCH_GAP);
+            *last = Some(std::time::Instant::now());
+            recent
+        };
+        if joins_queue {
+            let queued = with_app_player(&app, |player| {
+                for file in files {
+                    player.queue.enqueue(file);
+                }
+                Ok(())
+            });
+            if let Err(e) = queued {
+                tracing::warn!("Could not queue the opened files: {e}");
+            }
+        } else if let Err(e) = start_queue(files, 0, false, app.clone()).await {
+            tracing::warn!("Could not play the opened files: {e}");
+            return;
+        }
+        persist_playback_state(&app);
+        let _ = app.emit("queue-changed", ());
+        if mini {
+            if let Err(e) = crate::integrations::mini_player::show(&app) {
+                tracing::warn!("{e}");
+            }
+        }
+    });
+}
+
+/// Play the audio files dropped on a window, and return the folders in the
+/// drop, which the frontend turns into playlists. Anything else is ignored.
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn open_dropped(
+    paths: Vec<String>,
+    app: tauri::AppHandle,
+) -> Result<crate::dto::DroppedDto, String> {
+    let folders: Vec<String> = paths
+        .iter()
+        .filter(|path| Path::new(path).is_dir())
+        .cloned()
+        .collect();
+    let files =
+        crate::app::open_files::audio_files_only(paths.into_iter().map(std::path::PathBuf::from));
+    let played = files.len();
+    open_audio_files(&app, files, false);
+    Ok(crate::dto::DroppedDto { played, folders })
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn show_mini_player(app: tauri::AppHandle) -> Result<(), String> {
+    crate::integrations::mini_player::collapse(&app)
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn expand_mini_player(app: tauri::AppHandle) -> Result<(), String> {
+    crate::integrations::mini_player::expand(&app)
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn close_mini_player(app: tauri::AppHandle) -> Result<(), String> {
+    crate::integrations::mini_player::close(&app);
+    Ok(())
+}
+
 async fn start_queue(
     paths: Vec<String>,
     index: usize,

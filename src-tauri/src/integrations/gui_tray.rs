@@ -9,15 +9,15 @@
 #[cfg(not(target_os = "android"))]
 mod inner {
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
     #[cfg(target_os = "macos")]
     use tauri::image::Image;
     use tauri::{
-        menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
-        tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-        AppHandle, Manager,
+        menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
+        tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
+        AppHandle, Manager, Wry,
     };
 
     use crate::audio::player::AudioPlayer;
@@ -27,6 +27,21 @@ mod inner {
     static TRAY_CLICK_STATE: Mutex<Option<Instant>> = Mutex::new(None);
     static TRAY_CLICK_GENERATION: AtomicU64 = AtomicU64::new(0);
     const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(350);
+
+    /// How often the menu catches up with playback and the playlists.
+    const REFRESH: Duration = Duration::from_secs(1);
+    /// Longest song line in the menu before it is cut short.
+    const MAX_LABEL_CHARS: usize = 48;
+
+    /// The parts of the menu that change while Wave runs.
+    struct LiveMenu {
+        tray: TrayIcon<Wry>,
+        now_playing: MenuItem<Wry>,
+        play_pause: MenuItem<Wry>,
+        playlists: Submenu<Wry>,
+    }
+
+    static LIVE: OnceLock<LiveMenu> = OnceLock::new();
 
     fn with_player<R>(
         app: &AppHandle,
@@ -47,7 +62,8 @@ mod inner {
     }
 
     pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-        let playlists_sub = build_playlists_submenu(app)?;
+        let playlists = Submenu::with_id(app, "tray_playlists", "Play Playlist", true)?;
+        fill_playlists(app.handle(), &playlists, &playlist_entries(app.handle()))?;
         let sleep_sub = Submenu::with_id(app, "tray_sleep", "Sleep Timer", true)?;
         for (choice, label) in SLEEP_MENU {
             let item = MenuItem::with_id(
@@ -59,26 +75,37 @@ mod inner {
             )?;
             sleep_sub.append(&item)?;
         }
-        let play_pause =
-            MenuItem::with_id(app, "tray_play_pause", "Play / Pause", true, None::<&str>)?;
+        let now_playing = MenuItem::with_id(
+            app,
+            "tray_now_playing",
+            "Nothing playing",
+            false,
+            None::<&str>,
+        )?;
+        let play_pause = MenuItem::with_id(app, "tray_play_pause", "Play", true, None::<&str>)?;
         let prev = MenuItem::with_id(app, "tray_prev", "Previous", true, None::<&str>)?;
         let next = MenuItem::with_id(app, "tray_next", "Next", true, None::<&str>)?;
         let stop = MenuItem::with_id(app, "tray_stop", "Stop", true, None::<&str>)?;
-        let show = MenuItem::with_id(app, "tray_show", "Show Window", true, None::<&str>)?;
-        let quit = MenuItem::with_id(app, "tray_quit", "Quit", true, None::<&str>)?;
+        let mini = MenuItem::with_id(app, "tray_mini", "Mini Player", true, None::<&str>)?;
+        let show = MenuItem::with_id(app, "tray_show", "Show Wave", true, None::<&str>)?;
+        let quit = MenuItem::with_id(app, "tray_quit", "Quit Wave", true, None::<&str>)?;
 
         let menu = Menu::with_items(
             app,
             &[
-                &playlists_sub,
+                &now_playing,
                 &PredefinedMenuItem::separator(app)?,
                 &play_pause,
                 &prev,
                 &next,
                 &stop,
+                &PredefinedMenuItem::separator(app)?,
+                &playlists,
                 &sleep_sub,
                 &PredefinedMenuItem::separator(app)?,
+                &mini,
                 &show,
+                &PredefinedMenuItem::separator(app)?,
                 &quit,
             ],
         )?;
@@ -91,6 +118,8 @@ mod inner {
             .cloned()
             .ok_or("No default window icon")?;
 
+        // A click plays or pauses, a double click brings Wave up, and the
+        // menu is on the right click.
         let tray = TrayIconBuilder::with_id("wave-tray")
             .icon(icon)
             .icon_as_template(cfg!(target_os = "macos"))
@@ -104,10 +133,9 @@ mod inner {
                     ..
                 } = event
                 {
-                    show_main_window(tray.app_handle());
+                    bring_up(tray.app_handle());
                     return;
                 }
-
                 if let TrayIconEvent::Click {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
@@ -118,31 +146,149 @@ mod inner {
                 }
             })
             .build(app)?;
-
         let _ = tray.set_show_menu_on_left_click(false);
+
+        let _ = LIVE.set(LiveMenu {
+            tray,
+            now_playing,
+            play_pause,
+            playlists,
+        });
+        let handle = app.handle().clone();
+        std::thread::spawn(move || keep_menu_current(&handle));
 
         Ok(())
     }
 
-    fn build_playlists_submenu(app: &mut tauri::App) -> Result<Submenu<tauri::Wry>, tauri::Error> {
-        let sub = Submenu::with_id(app, "tray_playlists", "Playlists", true)?;
-        if let Some(library_state) = app.try_state::<LibraryState>() {
-            if let Ok(lib) = library_state.0.lock() {
-                if let Ok(playlists) = lib.list_playlists(None) {
-                    for pl in playlists.iter().take(30) {
-                        let item = MenuItem::with_id(
-                            app,
-                            format!("tray_playlist:{}", pl.id),
-                            &pl.name,
-                            true,
-                            None::<&str>,
-                        )?;
-                        sub.append(&item)?;
+    /// What the menu shows, so it is only touched when something changed.
+    #[derive(PartialEq, Default)]
+    struct Shown {
+        song: Option<String>,
+        playing: bool,
+        playlists: Vec<(String, String)>,
+    }
+
+    fn keep_menu_current(app: &AppHandle) {
+        let Some(live) = LIVE.get() else {
+            return;
+        };
+        let mut shown = Shown {
+            playlists: playlist_entries(app),
+            ..Shown::default()
+        };
+        loop {
+            std::thread::sleep(REFRESH);
+            let (path, playing) = with_player(app, |p| {
+                let path = p
+                    .get_current_path()
+                    .and_then(|path| path.to_str().map(str::to_string));
+                Ok((path, p.is_playing()))
+            })
+            .unwrap_or((None, false));
+
+            let song = path.and_then(|path| {
+                crate::commands::track_for_path(app, &path).map(|track| {
+                    let title = if track.title.trim().is_empty() {
+                        track.name.clone()
+                    } else {
+                        track.title.clone()
+                    };
+                    if track.artist.trim().is_empty() {
+                        title
+                    } else {
+                        format!("{title} - {}", track.artist)
                     }
+                })
+            });
+            if song != shown.song {
+                let label = song.as_deref().map_or("Nothing playing".to_string(), short);
+                let _ = live.now_playing.set_text(&label);
+                let tooltip = song
+                    .as_deref()
+                    .map_or("Wave".to_string(), |s| format!("Wave: {s}"));
+                let _ = live.tray.set_tooltip(Some(&tooltip));
+                shown.song = song;
+            }
+            if playing != shown.playing {
+                let _ = live
+                    .play_pause
+                    .set_text(if playing { "Pause" } else { "Play" });
+                shown.playing = playing;
+            }
+            let playlists = playlist_entries(app);
+            if playlists != shown.playlists {
+                if let Err(e) = fill_playlists(app, &live.playlists, &playlists) {
+                    tracing::warn!("Could not update the tray playlists: {e}");
                 }
+                shown.playlists = playlists;
             }
         }
-        Ok(sub)
+    }
+
+    fn short(text: &str) -> String {
+        if text.chars().count() <= MAX_LABEL_CHARS {
+            return text.to_string();
+        }
+        let cut: String = text.chars().take(MAX_LABEL_CHARS - 3).collect();
+        format!("{}...", cut.trim_end())
+    }
+
+    /// Ids and names of the playlists the menu offers, at most 30.
+    fn playlist_entries(app: &AppHandle) -> Vec<(String, String)> {
+        let Some(library_state) = app.try_state::<LibraryState>() else {
+            return Vec::new();
+        };
+        let Ok(lib) = library_state.0.lock() else {
+            return Vec::new();
+        };
+        lib.list_playlists(None)
+            .map(|playlists| {
+                playlists
+                    .into_iter()
+                    .take(30)
+                    .map(|pl| (pl.id, pl.name))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn fill_playlists<M: Manager<Wry>>(
+        manager: &M,
+        sub: &Submenu<Wry>,
+        entries: &[(String, String)],
+    ) -> tauri::Result<()> {
+        for item in sub.items()? {
+            sub.remove(&item as &dyn IsMenuItem<Wry>)?;
+        }
+        if entries.is_empty() {
+            let none = MenuItem::new(manager, "No playlists yet", false, None::<&str>)?;
+            return sub.append(&none);
+        }
+        for (id, name) in entries {
+            let item = MenuItem::with_id(
+                manager,
+                format!("tray_playlist:{id}"),
+                short(name),
+                true,
+                None::<&str>,
+            )?;
+            sub.append(&item)?;
+        }
+        Ok(())
+    }
+
+    /// Show whichever window was last in use: the mini player when it is up
+    /// and the main window is not, otherwise the main window.
+    fn bring_up(app: &AppHandle) {
+        let mini_visible = app
+            .get_webview_window(crate::integrations::mini_player::LABEL)
+            .and_then(|w| w.is_visible().ok())
+            .unwrap_or(false);
+        if mini_visible {
+            let _ = crate::integrations::mini_player::show(app);
+        } else {
+            show_main_window(app);
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -197,7 +343,11 @@ mod inner {
             return;
         }
         if id == "tray_show" {
-            show_main_window(app);
+            let _ = crate::integrations::mini_player::expand(app);
+            return;
+        }
+        if id == "tray_mini" {
+            let _ = crate::integrations::mini_player::collapse(app);
             return;
         }
         if id == "tray_quit" {
@@ -224,7 +374,7 @@ mod inner {
             if now.duration_since(prev) <= DOUBLE_CLICK_WINDOW {
                 *state = None;
                 TRAY_CLICK_GENERATION.fetch_add(1, Ordering::SeqCst);
-                show_main_window(app);
+                bring_up(app);
                 return;
             }
         }

@@ -57,6 +57,15 @@ pub struct UpdateCheckDto {
     pub notifications_blocked: bool,
 }
 
+/// What a drop on the window turned into.
+#[derive(Debug, Clone, Serialize)]
+pub struct DroppedDto {
+    /// Audio files that started playing.
+    pub played: usize,
+    /// Folders in the drop, to become playlists.
+    pub folders: Vec<String>,
+}
+
 /// Payload of `update-download-progress`, in bytes.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct UpdateProgressDto {

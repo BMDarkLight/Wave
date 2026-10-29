@@ -3,12 +3,12 @@ Type=Application
 Name={{name}}
 GenericName=Music Player
 {{#if comment}}Comment={{comment}}{{/if}}
-# No %U/%F: any argument puts the binary into CLI mode, so a launcher handing it
-# a file path would run a command instead of playing the file. Add these back
-# together with file associations and argument routing in the app.
-Exec={{exec}}
+# %F hands over local file paths. When every argument is an audio file, the
+# binary opens the app (or passes them to the running one) instead of the CLI.
+Exec={{exec}} %F
 Icon={{icon}}
 Categories={{categories}}
+{{#if mime_type}}MimeType={{mime_type}};{{/if}}
 Keywords=music;audio;player;mp3;flac;playlist;library;lyrics;equalizer;offline;
 Terminal=false
 # GTK derives WM_CLASS from the executable name, which this project pins to
