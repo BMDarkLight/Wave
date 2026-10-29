@@ -267,7 +267,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-    - name: Check every platform is in latest.json
+    # On a draft, tauri-action can only link API asset URLs, which count
+    # against GitHub's 60 requests an hour for anonymous callers. Point them
+    # at the release download links instead, which work once the draft is
+    # published. Immutable releases rule this out after publishing.
+    - name: Link latest.json to the release downloads
       shell: bash
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -275,6 +279,25 @@ jobs:
       run: |
         set -euo pipefail
         gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir /tmp/updater
+        gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+          --jq "[.[] | select(.tag_name == \"$TAG\") | .assets[] | {key: (.id | tostring), value: .name}] | from_entries" \
+          > /tmp/updater/assets.json
+        jq --slurpfile names /tmp/updater/assets.json \
+           --arg base "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/" '
+          .platforms |= with_entries(
+            ((.value.url | capture("/releases/assets/(?<id>[0-9]+)$") | .id) // null) as $id
+            | if $id != null and $names[0][$id] then .value.url = $base + $names[0][$id] else . end)
+        ' /tmp/updater/latest.json > /tmp/updater/linked.json
+        mv /tmp/updater/linked.json /tmp/updater/latest.json
+        gh release upload "$TAG" /tmp/updater/latest.json --clobber --repo "$GITHUB_REPOSITORY"
+
+    - name: Check every platform is in latest.json
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
         cat /tmp/updater/latest.json
         missing=0
         for platform in windows-x86_64 darwin-aarch64 darwin-x86_64 \
