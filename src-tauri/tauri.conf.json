@@ -87,5 +87,16 @@
     "macOS": {
       "minimumSystemVersion": "10.15"
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ2QzJDQjc5NDY3MzdCM0MKUldROGUzTkdlY3ZDUmpNWUUyd0JoUWpCUzMxaEk2cTFlbWpoTzg5ek9nU1lvR1Q2RzRBUHEzSHMK",
+      "endpoints": [
+        "https://github.com/BMDarkLight/Wave/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

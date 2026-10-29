@@ -6,6 +6,8 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
+#[cfg(not(target_os = "android"))]
+pub mod desktop_update;
 pub mod library_recovery;
 pub mod paths;
 pub mod settings;

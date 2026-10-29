@@ -316,6 +316,12 @@ genres — computed locally from your own playback history.
   the one you pick in Settings.
 - **Single instance** — a second launch hands off to the running app instead of
   starting a competing audio engine.
+- **Updates itself.** With **Auto update** on, Wave downloads a new release in
+  the background and offers **Restart to update** when it is ready. The
+  package is signed, and Wave checks the signature before installing it. This
+  works for the Windows installer, the macOS app and the AppImage; `.deb` and
+  `.rpm` installs ask for your password once. Copies from Flatpak or the AUR
+  say which command updates them instead.
 
 ### Command line
 
@@ -369,8 +375,8 @@ directly — no copying your music into app storage.
   the APK for your phone in the background, with its progress in a
   notification. When it is done, a notification says the update is ready;
   tap it to install. Android asks you to confirm the install. Turn it off and
-  Settings shows a **Check for updates** button instead. Desktop builds check
-  the same way and link to the release page.
+  Settings shows a **Check for updates** button instead. Desktop builds
+  update themselves too, see [Desktop & OS integration](#desktop--os-integration).
 - Built for `arm64-v8a` and `armeabi-v7a`, `minSdkVersion 24`.
 
 <div align="center">

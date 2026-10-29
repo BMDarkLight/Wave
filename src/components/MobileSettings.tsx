@@ -135,6 +135,8 @@ function UpdateStatusRow({ update }: { update: AppUpdate }) {
             Download
           </button>
         );
+      } else if (update.updateHint) {
+        hint ??= update.updateHint;
       } else {
         hint ??= "Get it from the release page.";
         action = (
@@ -157,14 +159,16 @@ function UpdateStatusRow({ update }: { update: AppUpdate }) {
       break;
     case "ready":
       label = `Wave ${latest} is ready to install`;
-      hint = "Android asks you to confirm the install.";
+      hint = update.installsOnRestart
+        ? "Wave restarts to finish the update."
+        : "Android asks you to confirm the install.";
       action = (
         <button
           className="btn-primary btn-sm"
           type="button"
           onClick={update.install}
         >
-          Install
+          {update.installsOnRestart ? "Restart now" : "Install"}
         </button>
       );
       break;

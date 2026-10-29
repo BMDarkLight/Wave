@@ -1473,13 +1473,20 @@ export interface UpdateCheck {
   /** Set only when the release is newer than this build. */
   latest_version: string | null;
   release_url: string;
-  /**
-   * Bytes of the APK this device would download. Null on desktop, and on
-   * Android when the release has no APK for this phone.
-   */
+  /** Bytes to download, when the release says. */
   download_size: number | null;
-  /** The APK is downloaded and ready to install. */
+  /**
+   * Wave can download and install this release itself: the APK for this
+   * phone on Android, the signed package on desktop.
+   */
+  downloadable: boolean;
+  /** The download is done and ready to install. */
   downloaded: boolean;
+  /**
+   * Desktop: a package manager looks after this copy, and this says how to
+   * update it there.
+   */
+  update_hint: string | null;
   /**
    * Android only: notifications are off, so the toast announces the update
    * even in the phone layout.
@@ -1510,12 +1517,15 @@ export const checkForUpdate = (): Promise<UpdateCheck> => {
   return safeInvoke<UpdateCheck>("check_for_update");
 };
 
-/** Android only. Resolves once the APK is downloaded and checked. */
+/** Resolves once the update is downloaded and checked. */
 export const downloadUpdate = (): Promise<void> => {
   return safeInvoke("download_update");
 };
 
-/** Android only. Opens the system installer, which asks to confirm. */
+/**
+ * Android opens the system installer, which asks to confirm. Desktop
+ * installs the update and restarts Wave, so this does not resolve there.
+ */
 export const installUpdate = (): Promise<void> => {
   return safeInvoke("install_update");
 };

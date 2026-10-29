@@ -32,6 +32,10 @@ cask "wave" do
     strategy :github_latest
   end
 
+  # Wave installs its own updates, so brew should not treat a newer app as
+  # out of step with the cask.
+  auto_updates true
+
   app "Wave.app"
 
   # Puts the `wave` command on PATH. The same executable serves both roles:

@@ -9,10 +9,16 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use crate::app_paths::{data_dir, instance_lock_path};
+
+/// Set by a Wave that restarts itself after an update. Tauri starts the new
+/// process before the old one has exited and let go of the lock.
+pub const RELAUNCH_ENV: &str = "WAVE_RELAUNCHED";
+const RELAUNCH_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -50,8 +56,18 @@ pub fn try_acquire(mode: InstanceMode) -> Result<InstanceGuard, String> {
         .open(lock_path())
         .map_err(|e| format!("Failed to open instance lock: {e}"))?;
 
-    file.try_lock_exclusive()
-        .map_err(|_| already_running_message())?;
+    // A relaunch waits for the Wave it replaces to finish quitting.
+    let relaunched = std::env::var_os(RELAUNCH_ENV).is_some();
+    if relaunched {
+        std::env::remove_var(RELAUNCH_ENV);
+    }
+    let started = Instant::now();
+    while file.try_lock_exclusive().is_err() {
+        if !relaunched || started.elapsed() >= RELAUNCH_WAIT {
+            return Err(already_running_message());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 
     let data = InstanceLockData {
         pid: std::process::id(),

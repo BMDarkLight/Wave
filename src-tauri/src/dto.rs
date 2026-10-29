@@ -42,11 +42,16 @@ pub struct UpdateCheckDto {
     /// Set only when the release is newer than this build.
     pub latest_version: Option<String>,
     pub release_url: String,
-    /// Size of the APK this device would download. `None` on desktop, and on
-    /// Android when the release has no APK for this CPU.
+    /// Size of the download, when the release says.
     pub download_size: Option<u64>,
-    /// The APK is already downloaded and ready to install.
+    /// Wave can download and install this release itself: the APK for this
+    /// CPU on Android, the signed package on desktop.
+    pub downloadable: bool,
+    /// The download is done and ready to install.
     pub downloaded: bool,
+    /// Desktop: a package manager looks after this copy, and this says how
+    /// to update it there.
+    pub update_hint: Option<String>,
     /// Android only: notifications are off, so the update can't be announced
     /// there and the in-app toast has to do it, phone layout included.
     pub notifications_blocked: bool,

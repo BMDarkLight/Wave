@@ -61,7 +61,12 @@ pub fn run() {
 
     os_media::set_app_user_model_id("app.bmdarklight.wave");
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Installs signed desktop releases; Android updates through its own APK flow.
+    #[cfg(not(target_os = "android"))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         // No-op on desktop; on Android/iOS owns MediaSession + media notification.

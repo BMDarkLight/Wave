@@ -176,6 +176,30 @@ already open before installing. Open a new one and try again.
 
 ---
 
+## Updating
+
+You install Wave by hand once. After that it updates itself: with **Auto
+update** on (Settings), it downloads each new release in the background and
+shows **Restart to update** when it is ready.
+
+| Installed from                      | How the update installs                         |
+| ----------------------------------- | ----------------------------------------------- |
+| Windows installer, winget, Chocolatey | The installer runs with only a progress bar   |
+| macOS `.dmg` or Homebrew            | The app is replaced in place                    |
+| AppImage                            | The AppImage file is replaced in place          |
+| `.deb` or `.rpm`                    | The new package installs after your password    |
+| Flatpak                             | `flatpak update app.bmdarklight.wave`           |
+| Arch (AUR)                          | Your AUR helper, for example `yay -Syu`         |
+
+Each package is signed in the release workflow, and Wave refuses one whose
+signature does not match the key built into the app. Signing needs two
+repository secrets: `TAURI_SIGNING_PRIVATE_KEY` (the contents of the private
+key made with `npx tauri signer generate`) and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (empty if the key has none). The public
+half is `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
+
+---
+
 ## Packaging sources
 
 Everything used to produce these packages lives in

@@ -8,8 +8,8 @@
 
 //! Looks for a newer Wave release on GitHub. On Android it also downloads the
 //! release's APK for this phone's CPU and hands it to the system installer.
-//! Desktop builds report the release and open its page, since each desktop
-//! package format installs its own way.
+//! Desktop builds install the release's signed package in place (see
+//! `desktop_update`), and fall back to its page when they can't.
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -36,9 +36,9 @@ const REPOSITORY_PAGE: &str = "https://github.com/BMDarkLight/Wave";
 const NEW_ISSUE_PAGE: &str = "https://github.com/BMDarkLight/Wave/issues/new";
 /// GitHub turns away issue links much past 8 KB, so a long report is cut to fit.
 const MAX_ISSUE_QUERY_BYTES: usize = 7000;
-const PROGRESS_EVENT: &str = "update-download-progress";
+pub(super) const PROGRESS_EVENT: &str = "update-download-progress";
 const UPDATES_DIR: &str = "updates";
-const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
+pub(super) const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Deserialize)]
 struct Release {
@@ -67,12 +67,22 @@ struct Found {
     version: Version,
     release_url: String,
     apk: Option<Asset>,
+    /// Desktop: the package size, for download progress.
+    #[cfg(not(target_os = "android"))]
+    download_size: Option<u64>,
 }
 
 #[derive(Default)]
 pub struct UpdaterState {
     found: Mutex<Option<Found>>,
     downloading: AtomicBool,
+    /// Desktop: the signed package for the release the last check found.
+    #[cfg(not(target_os = "android"))]
+    package: Mutex<Option<tauri_plugin_updater::Update>>,
+    /// Desktop: that package once downloaded and verified, until Wave
+    /// restarts into it.
+    #[cfg(not(target_os = "android"))]
+    package_bytes: Mutex<Option<(Version, Vec<u8>)>>,
 }
 
 impl UpdaterState {
@@ -81,6 +91,35 @@ impl UpdaterState {
             .lock()
             .map(|found| found.clone())
             .map_err(|_| "Update state lock poisoned".to_string())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn package(&self) -> Result<Option<tauri_plugin_updater::Update>, String> {
+        self.package
+            .lock()
+            .map(|package| package.clone())
+            .map_err(|_| "Update state lock poisoned".to_string())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn forget_package(&self) -> Result<(), String> {
+        *self
+            .package
+            .lock()
+            .map_err(|_| "Update state lock poisoned")? = None;
+        *self
+            .package_bytes
+            .lock()
+            .map_err(|_| "Update state lock poisoned")? = None;
+        Ok(())
+    }
+
+    /// Whether the package for `version` is downloaded and waiting.
+    #[cfg(not(target_os = "android"))]
+    fn package_ready(&self, version: Version) -> bool {
+        self.package_bytes
+            .lock()
+            .is_ok_and(|bytes| bytes.as_ref().is_some_and(|(v, _)| *v == version))
     }
 }
 
@@ -139,6 +178,13 @@ fn pick_apk<'a>(assets: &'a [Asset], abi: &str) -> Option<&'a Asset> {
             .filter(is_apk)
             .find(|a| a.name.to_ascii_lowercase().contains("universal"))
     })
+}
+
+/// Size of the release asset `latest.json` points at, for the Settings page.
+#[cfg(not(target_os = "android"))]
+fn package_size(assets: &[Asset], url: &str) -> Option<u64> {
+    let name = url.rsplit('/').next()?;
+    assets.iter().find(|a| a.name == name).map(|a| a.size)
 }
 
 fn client() -> Result<&'static Client, String> {
@@ -209,6 +255,8 @@ pub fn check(app: &AppHandle, state: &UpdaterState) -> Result<UpdateCheckDto, St
             .found
             .lock()
             .map_err(|_| "Update state lock poisoned")? = None;
+        #[cfg(not(target_os = "android"))]
+        state.forget_package()?;
         // A "ready to install" left from the update that is now running.
         #[cfg(target_os = "android")]
         crate::android::update_notice::cancel();
@@ -221,7 +269,9 @@ pub fn check(app: &AppHandle, state: &UpdaterState) -> Result<UpdateCheckDto, St
             latest_version: None,
             release_url: LATEST_RELEASE_PAGE.to_string(),
             download_size: None,
+            downloadable: false,
             downloaded: false,
+            update_hint: None,
             notifications_blocked: false,
         });
     };
@@ -236,10 +286,20 @@ pub fn check(app: &AppHandle, state: &UpdaterState) -> Result<UpdateCheckDto, St
     } else {
         LATEST_RELEASE_PAGE.to_string()
     };
+    #[cfg(target_os = "android")]
     let downloaded = match &apk {
         Some(asset) => is_downloaded(&apk_path(app, version)?, asset),
         None => false,
     };
+    #[cfg(target_os = "android")]
+    let offer = Offer {
+        download_size: apk.as_ref().map(|asset| asset.size),
+        downloadable: apk.is_some(),
+        downloaded,
+        update_hint: None,
+    };
+    #[cfg(not(target_os = "android"))]
+    let offer = desktop_offer(app, state, version, &release.assets)?;
     // Downloaded on an earlier launch and not installed yet: say so again.
     // Not downloaded and nothing downloading: a progress notification left by
     // a download the system killed would otherwise stay up for good, since it
@@ -254,8 +314,10 @@ pub fn check(app: &AppHandle, state: &UpdaterState) -> Result<UpdateCheckDto, St
         current_version: current.to_string(),
         latest_version: Some(version.to_string()),
         release_url: release_url.clone(),
-        download_size: apk.as_ref().map(|asset| asset.size),
-        downloaded,
+        download_size: offer.download_size,
+        downloadable: offer.downloadable,
+        downloaded: offer.downloaded,
+        update_hint: offer.update_hint,
         notifications_blocked: notifications_blocked(),
     };
     *state
@@ -265,8 +327,61 @@ pub fn check(app: &AppHandle, state: &UpdaterState) -> Result<UpdateCheckDto, St
         version,
         release_url,
         apk,
+        #[cfg(not(target_os = "android"))]
+        download_size: offer.download_size,
     });
     Ok(dto)
+}
+
+/// What this device can do with the release a check found.
+struct Offer {
+    download_size: Option<u64>,
+    downloadable: bool,
+    downloaded: bool,
+    update_hint: Option<String>,
+}
+
+/// Look up the signed package for `version`, unless a package manager looks
+/// after this copy of Wave, and remember it for the download.
+#[cfg(not(target_os = "android"))]
+fn desktop_offer(
+    app: &AppHandle,
+    state: &UpdaterState,
+    version: Version,
+    assets: &[Asset],
+) -> Result<Offer, String> {
+    let update_hint = super::desktop_update::managed_elsewhere();
+    let package = if update_hint.is_some() {
+        None
+    } else {
+        match super::desktop_update::find(app) {
+            Ok(Some(update)) if parse_version(&update.version) == Some(version) => Some(update),
+            Ok(_) => None,
+            // An older release without signed packages, or GitHub is
+            // unreachable: the release page still works.
+            Err(e) => {
+                tracing::warn!("No update package to install: {e}");
+                None
+            }
+        }
+    };
+    let downloaded = package.is_some() && state.package_ready(version);
+    if !downloaded {
+        state.forget_package()?;
+    }
+    let offer = Offer {
+        download_size: package
+            .as_ref()
+            .and_then(|update| package_size(assets, update.download_url.as_str())),
+        downloadable: package.is_some(),
+        downloaded,
+        update_hint,
+    };
+    *state
+        .package
+        .lock()
+        .map_err(|_| "Update state lock poisoned")? = package;
+    Ok(offer)
 }
 
 struct ClearOnDrop<'a>(&'a AtomicBool);
@@ -295,6 +410,10 @@ pub fn download(app: &AppHandle, state: &UpdaterState) -> Result<(), String> {
     let found = state
         .found()?
         .ok_or("There is no update to download. Check for updates first.")?;
+    #[cfg(not(target_os = "android"))]
+    if let Some(package) = state.package()? {
+        return download_package(app, state, &found, &package);
+    }
     let asset = found
         .apk
         .ok_or("This release has no download for this device.")?;
@@ -330,6 +449,28 @@ pub fn download(app: &AppHandle, state: &UpdaterState) -> Result<(), String> {
         Err(e) => crate::android::update_notice::failed(&version, e),
     }
     result
+}
+
+#[cfg(not(target_os = "android"))]
+fn download_package(
+    app: &AppHandle,
+    state: &UpdaterState,
+    found: &Found,
+    package: &tauri_plugin_updater::Update,
+) -> Result<(), String> {
+    if state.package_ready(found.version) {
+        return Ok(());
+    }
+    if state.downloading.swap(true, Ordering::SeqCst) {
+        return Err("The update is already downloading.".into());
+    }
+    let _busy = ClearOnDrop(&state.downloading);
+    let bytes = super::desktop_update::download(app, package, found.download_size)?;
+    *state
+        .package_bytes
+        .lock()
+        .map_err(|_| "Update state lock poisoned")? = Some((found.version, bytes));
+    Ok(())
 }
 
 fn fetch(app: &AppHandle, version: &str, asset: &Asset, dest: &Path) -> Result<(), String> {
@@ -403,6 +544,17 @@ pub fn install(app: &AppHandle, state: &UpdaterState) -> Result<(), String> {
     let found = state
         .found()?
         .ok_or("There is no update to install. Check for updates first.")?;
+    #[cfg(not(target_os = "android"))]
+    if let Some(package) = state.package()? {
+        let bytes = state
+            .package_bytes
+            .lock()
+            .map_err(|_| "Update state lock poisoned")?;
+        let Some((_, bytes)) = bytes.as_ref().filter(|(v, _)| *v == found.version) else {
+            return Err("The update has not finished downloading.".into());
+        };
+        return super::desktop_update::install_and_restart(app, &package, bytes);
+    }
     let asset = found
         .apk
         .ok_or("This release has no download for this device.")?;
@@ -573,6 +725,22 @@ mod tests {
         assert_eq!(
             pick_apk(&assets, "arm64-v8a").map(|a| a.name.as_str()),
             Some("Wave_1.1.0_arm64-v8a.apk")
+        );
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn sizes_the_package_latest_json_points_at() {
+        let assets = [
+            asset("Wave_1.3.0_x64-setup.exe"),
+            asset("Wave_1.3.0_x64-setup.exe.sig"),
+        ];
+        let url =
+            "https://github.com/BMDarkLight/Wave/releases/download/v1.3.0/Wave_1.3.0_x64-setup.exe";
+        assert_eq!(package_size(&assets, url), Some(1));
+        assert_eq!(
+            package_size(&assets, "https://example.invalid/other.exe"),
+            None
         );
     }
 

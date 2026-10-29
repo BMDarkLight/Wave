@@ -21,6 +21,7 @@ import {
   type UpdateCheck,
 } from "../utils/player";
 import { formatInvokeError } from "../utils/errors";
+import { isAndroid } from "../utils/platform";
 
 export type UpdateStatus =
   | "idle"
@@ -36,7 +37,8 @@ const LAUNCH_CHECK_DELAY_MS = 4000;
 
 /**
  * Looks for a newer Wave release. With auto update on, that happens at launch,
- * and on Android the APK is downloaded too, ready to install. With it off, the
+ * and the update is downloaded too, ready to install: the APK on Android, the
+ * signed package on desktop, which installs on restart. With it off, the
  * Settings page offers a manual check.
  */
 export function useAppUpdate(setError: (message: string | null) => void) {
@@ -49,11 +51,16 @@ export function useAppUpdate(setError: (message: string | null) => void) {
   /** Why the last check or download failed, shown in Settings. */
   const [problem, setProblem] = useState<string | null>(null);
   const [toastDismissed, setToastDismissed] = useState(false);
+  /** Desktop installs by restarting Wave; Android hands off to its installer. */
+  const [android, setAndroid] = useState(false);
   const busy = useRef(false);
 
   useEffect(() => {
     getAppVersion()
       .then(setCurrentVersion)
+      .catch(() => {});
+    isAndroid()
+      .then(setAndroid)
       .catch(() => {});
   }, []);
 
@@ -93,7 +100,7 @@ export function useAppUpdate(setError: (message: string | null) => void) {
     }
   }, []);
 
-  /** With `fetch`, also download the APK when this device has one. */
+  /** With `fetch`, also download the update when Wave can install it. */
   const runCheck = useCallback(
     async (fetch: boolean) => {
       if (busy.current) return;
@@ -115,7 +122,7 @@ export function useAppUpdate(setError: (message: string | null) => void) {
       setToastDismissed(false);
       if (!result.latest_version) setStatus("current");
       else if (result.downloaded) setStatus("ready");
-      else if (fetch && result.download_size !== null) await download();
+      else if (fetch && result.downloadable) await download();
       else setStatus("available");
     },
     [download],
@@ -154,7 +161,7 @@ export function useAppUpdate(setError: (message: string | null) => void) {
     if (!enabled) return;
     if (status === "idle" || status === "error" || status === "current") {
       void runCheck(true);
-    } else if (status === "available" && check?.download_size != null) {
+    } else if (status === "available" && check?.downloadable) {
       void download();
     }
   };
@@ -163,7 +170,7 @@ export function useAppUpdate(setError: (message: string | null) => void) {
     try {
       await installUpdate();
     } catch (err) {
-      setError(formatInvokeError(err, "Could not open the installer"));
+      setError(formatInvokeError(err, "Could not install the update"));
     }
   };
 
@@ -180,8 +187,7 @@ export function useAppUpdate(setError: (message: string | null) => void) {
   const showToast =
     autoUpdate &&
     !toastDismissed &&
-    (status === "ready" ||
-      (status === "available" && check?.download_size == null));
+    (status === "ready" || (status === "available" && !check?.downloadable));
 
   return {
     autoUpdate,
@@ -189,8 +195,10 @@ export function useAppUpdate(setError: (message: string | null) => void) {
     status,
     currentVersion,
     latestVersion: check?.latest_version ?? null,
-    canDownload: check?.download_size != null,
+    canDownload: check?.downloadable ?? false,
     downloadSize: check?.download_size ?? null,
+    updateHint: check?.update_hint ?? null,
+    installsOnRestart: !android,
     progress,
     problem,
     checkNow: () => void runCheck(false),

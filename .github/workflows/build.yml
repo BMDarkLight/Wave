@@ -104,6 +104,27 @@ jobs:
     - name: Install npm dependencies
       run: npm ci
 
+    # Release builds also make the signed packages the in-app updater
+    # installs, and tauri-action lists them in latest.json on the release.
+    # Branch and PR builds skip them, so they need no signing key.
+    - name: Turn on signed update packages
+      if: startsWith(github.ref, 'refs/tags/v')
+      shell: bash
+      env:
+        TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      run: |
+        if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+          echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is not set, so the update packages can't be signed."
+          exit 1
+        fi
+        node -e '
+          const fs = require("fs");
+          const file = "src-tauri/tauri.conf.json";
+          const config = JSON.parse(fs.readFileSync(file, "utf8"));
+          config.bundle.createUpdaterArtifacts = true;
+          fs.writeFileSync(file, JSON.stringify(config, null, 2));
+        '
+
     # Builds every installer for the platform. On a v* tag it also uploads them
     # to a draft GitHub Release; on branches and PRs tagName is empty, so the
     # packages are built and checked but nothing is published.
@@ -111,6 +132,8 @@ jobs:
       uses: tauri-apps/tauri-action@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       with:
         args: ${{ matrix.args }}
         tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
@@ -234,3 +257,36 @@ jobs:
           src-tauri/target/release/bundle/
           src-tauri/target/*/release/bundle/
         if-no-files-found: error
+
+  # Every build job adds its platform to latest.json on the draft release.
+  # Before the draft is published, make sure none of them went missing, or
+  # that platform would never be offered the update.
+  updater-manifest:
+    name: Check latest.json
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check every platform is in latest.json
+      shell: bash
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TAG: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+        gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir /tmp/updater
+        cat /tmp/updater/latest.json
+        missing=0
+        for platform in windows-x86_64 darwin-aarch64 darwin-x86_64 \
+                        linux-x86_64 linux-x86_64-deb linux-x86_64-rpm; do
+          if ! jq -e --arg p "$platform" '.platforms[$p].signature | length > 0' \
+              /tmp/updater/latest.json > /dev/null; then
+            echo "::error::latest.json has no signed package for $platform. Re-run that build job."
+            missing=1
+          fi
+        done
+        if [ "$(jq -r .version /tmp/updater/latest.json)" != "${TAG#v}" ]; then
+          echo "::error::latest.json is not for $TAG."
+          missing=1
+        fi
+        exit "$missing"

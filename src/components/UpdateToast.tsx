@@ -15,28 +15,40 @@ import type { AppUpdate } from "../hooks/useAppUpdate";
 export default function UpdateToast({ update }: { update: AppUpdate }) {
   if (!update.showToast || !update.latestVersion) return null;
   const ready = update.status === "ready";
+  // A package manager looks after this copy: say how, with nothing to click.
+  const hint = !ready ? update.updateHint : null;
+  let text = `Wave ${update.latestVersion} is out`;
+  if (ready) {
+    text = update.installsOnRestart
+      ? `Wave ${update.latestVersion} is ready`
+      : `Wave ${update.latestVersion} is ready to install`;
+  } else if (hint) {
+    text = `Wave ${update.latestVersion} is out. ${hint}`;
+  }
   return (
     <div
       className={`update-toast${update.notificationsBlocked ? " update-toast-keep" : ""}`}
       role="status"
       aria-live="polite"
     >
-      <span className="update-toast-text">
-        {ready
-          ? `Wave ${update.latestVersion} is ready to install`
-          : `Wave ${update.latestVersion} is out`}
-      </span>
-      <button
-        className="btn-primary"
-        type="button"
-        onClick={() => {
-          if (ready) update.install();
-          else update.openPage();
-          update.dismissToast();
-        }}
-      >
-        {ready ? "Install" : "Get it"}
-      </button>
+      <span className="update-toast-text">{text}</span>
+      {!hint && (
+        <button
+          className="btn-primary"
+          type="button"
+          onClick={() => {
+            if (ready) update.install();
+            else update.openPage();
+            update.dismissToast();
+          }}
+        >
+          {ready
+            ? update.installsOnRestart
+              ? "Restart to update"
+              : "Install"
+            : "Get it"}
+        </button>
+      )}
       <button
         className="update-toast-close"
         type="button"
