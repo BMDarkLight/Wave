@@ -160,9 +160,14 @@ mod inner {
         Ok(())
     }
 
+    /// Playlists are read every this many refreshes: counting tracks can be
+    /// a real query on a big library.
+    const PLAYLIST_EVERY: u32 = 5;
+
     /// What the menu shows, so it is only touched when something changed.
     #[derive(PartialEq, Default)]
     struct Shown {
+        path: Option<String>,
         song: Option<String>,
         playing: bool,
         playlists: Vec<(String, String)>,
@@ -176,8 +181,10 @@ mod inner {
             playlists: playlist_entries(app),
             ..Shown::default()
         };
+        let mut ticks: u32 = 0;
         loop {
             std::thread::sleep(REFRESH);
+            ticks = ticks.wrapping_add(1);
             let (path, playing) = with_player(app, |p| {
                 let path = p
                     .get_current_path()
@@ -186,34 +193,40 @@ mod inner {
             })
             .unwrap_or((None, false));
 
-            let song = path.and_then(|path| {
-                crate::commands::track_for_path(app, &path).map(|track| {
-                    let title = if track.title.trim().is_empty() {
-                        track.name.clone()
-                    } else {
-                        track.title.clone()
-                    };
-                    if track.artist.trim().is_empty() {
-                        title
-                    } else {
-                        format!("{title} - {}", track.artist)
-                    }
-                })
-            });
-            if song != shown.song {
-                let label = song.as_deref().map_or("Nothing playing".to_string(), short);
-                let _ = live.now_playing.set_text(&label);
-                let tooltip = song
-                    .as_deref()
-                    .map_or("Wave".to_string(), |s| format!("Wave: {s}"));
-                let _ = live.tray.set_tooltip(Some(&tooltip));
-                shown.song = song;
+            if path != shown.path {
+                shown.path = path.clone();
+                let song = path.and_then(|path| {
+                    crate::commands::track_for_path(app, &path).map(|track| {
+                        let title = if track.title.trim().is_empty() {
+                            track.name.clone()
+                        } else {
+                            track.title.clone()
+                        };
+                        if track.artist.trim().is_empty() {
+                            title
+                        } else {
+                            format!("{title} - {}", track.artist)
+                        }
+                    })
+                });
+                if song != shown.song {
+                    let label = song.as_deref().map_or("Nothing playing".to_string(), short);
+                    let _ = live.now_playing.set_text(&label);
+                    let tooltip = song
+                        .as_deref()
+                        .map_or("Wave".to_string(), |s| format!("Wave: {s}"));
+                    let _ = live.tray.set_tooltip(Some(&tooltip));
+                    shown.song = song;
+                }
             }
             if playing != shown.playing {
                 let _ = live
                     .play_pause
                     .set_text(if playing { "Pause" } else { "Play" });
                 shown.playing = playing;
+            }
+            if !ticks.is_multiple_of(PLAYLIST_EVERY) {
+                continue;
             }
             let playlists = playlist_entries(app);
             if playlists != shown.playlists {
@@ -280,11 +293,13 @@ mod inner {
     /// Show whichever window was last in use: the mini player when it is up
     /// and the main window is not, otherwise the main window.
     fn bring_up(app: &AppHandle) {
-        let mini_visible = app
-            .get_webview_window(crate::integrations::mini_player::LABEL)
-            .and_then(|w| w.is_visible().ok())
-            .unwrap_or(false);
-        if mini_visible {
+        let visible = |label: &str| {
+            app.get_webview_window(label)
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(false)
+        };
+        use crate::integrations::mini_player::{LABEL, MAIN};
+        if visible(LABEL) && !visible(MAIN) {
             let _ = crate::integrations::mini_player::show(app);
         } else {
             show_main_window(app);

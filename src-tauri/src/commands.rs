@@ -1502,10 +1502,16 @@ pub async fn reshuffle_mashup(
 }
 
 /// Replace the queue with `paths` and play `paths[index]`.
+/// When the last file-manager open arrived, to tell a multi-file selection
+/// apart from a new choice.
 #[cfg(not(target_os = "android"))]
 static LAST_OPEN: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+/// Opens run one at a time, so a later batch never lands in a queue that an
+/// earlier one is about to replace.
 #[cfg(not(target_os = "android"))]
-const OPEN_BATCH_GAP: std::time::Duration = std::time::Duration::from_secs(2);
+static OPENING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+#[cfg(not(target_os = "android"))]
+const OPEN_BATCH_GAP: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Play audio files opened from outside Wave, in order, replacing the queue.
 /// With `mini`, they play in the mini player.
@@ -1514,8 +1520,18 @@ pub(crate) fn open_audio_files(app: &tauri::AppHandle, files: Vec<String>, mini:
     if files.is_empty() {
         return;
     }
+    // Explorer starts Wave once per selected file, so a selection arrives as
+    // several opens in quick succession: those join the queue. Drops and the
+    // Open dialog hand over the whole selection at once and always replace it.
+    let joins_queue = mini && {
+        let mut last = LAST_OPEN.lock().unwrap_or_else(|e| e.into_inner());
+        let recent = last.is_some_and(|at| at.elapsed() < OPEN_BATCH_GAP);
+        *last = Some(std::time::Instant::now());
+        recent
+    };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let _turn = OPENING.lock().await;
         let reader = app.clone();
         let paths = files.clone();
         let _ = blocking(move || {
@@ -1542,14 +1558,6 @@ pub(crate) fn open_audio_files(app: &tauri::AppHandle, files: Vec<String>, mini:
             Ok(())
         })
         .await;
-        // Explorer starts Wave once per selected file, so a selection arrives
-        // as several opens in quick succession: those join the queue.
-        let joins_queue = {
-            let mut last = LAST_OPEN.lock().unwrap_or_else(|e| e.into_inner());
-            let recent = last.is_some_and(|at| at.elapsed() < OPEN_BATCH_GAP);
-            *last = Some(std::time::Instant::now());
-            recent
-        };
         if joins_queue {
             let queued = with_app_player(&app, |player| {
                 for file in files {
