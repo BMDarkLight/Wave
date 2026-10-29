@@ -9502,10 +9502,18 @@ div.album-hero-cover {
      stop short of the line the side panels end on. */
   .app-container .main-content {
     --card-radius: 10px;
+    /* A column, so a page shorter than the window still puts the spacer at
+       the bottom, below an empty stretch of card. */
+    display: flex;
+    flex-direction: column;
     margin-bottom: 0;
     padding-bottom: 0;
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
+  }
+
+  .app-container .main-content > * {
+    flex-shrink: 0;
   }
 
   /* The scroll area reaches under the player bar, but its scrollbar stops
@@ -9527,7 +9535,8 @@ div.album-hero-cover {
     height: calc(
       var(--player-height) + var(--section-inset) + var(--card-radius)
     );
-    margin-top: calc(24px - var(--card-radius));
+    margin-top: auto;
+    border-top: calc(24px - var(--card-radius)) solid transparent;
     background:
       radial-gradient(
           circle at 100% 0,
@@ -9543,6 +9552,7 @@ div.album-hero-cover {
         top right / var(--card-radius) var(--card-radius) no-repeat,
       linear-gradient(var(--bg), var(--bg)) bottom / 100%
         calc(100% - var(--card-radius)) no-repeat;
+    background-clip: padding-box;
     pointer-events: none;
   }
 }
