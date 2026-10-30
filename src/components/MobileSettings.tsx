@@ -76,6 +76,8 @@ import { isAndroid } from "../utils/platform";
 import { formatBytes } from "../utils/format";
 import { clearSourceCache, getSourceCacheUsage } from "../utils/remote";
 import LibrarySharingRow from "./LibrarySharingRow";
+import ConnectedDevices from "./ConnectedDevices";
+import type { PeerEvent, WavePeer } from "../utils/peers";
 import AddSourceChooser from "./AddSourceChooser";
 import RemoteSourceList from "./RemoteSourceList";
 import Select from "./Select";
@@ -397,6 +399,12 @@ interface MobileSettingsProps {
   onSelectOutputDevice: (name: string) => Promise<void>;
   onResetApp: () => Promise<void>;
   update: AppUpdate;
+  /** Other Waves on the network. */
+  wavePeers: WavePeer[];
+  onWavePeersChanged: () => void;
+  /** Open the song picker to choose what a Wave sees. */
+  onChooseWaveShare: (peer: PeerEvent, answering: boolean) => void;
+  setError: (message: string | null) => void;
 }
 
 export default function MobileSettings({
@@ -449,6 +457,10 @@ export default function MobileSettings({
   onSelectOutputDevice,
   onResetApp,
   update,
+  wavePeers,
+  onWavePeersChanged,
+  onChooseWaveShare,
+  setError,
 }: MobileSettingsProps) {
   // Both the embedded desktop pane and the mobile sheet can be mounted at
   // once, so the credential fields need ids unique to this instance.
@@ -981,6 +993,15 @@ export default function MobileSettings({
                 sourceSettings={sourceSettings}
                 onSourceSettingsChange={onSourceSettingsChange}
                 idPrefix={keyIdPrefix}
+              />
+            )}
+
+            {sourceSettings.remote_sources_enabled && (
+              <ConnectedDevices
+                peers={wavePeers}
+                onChanged={onWavePeersChanged}
+                onChoose={onChooseWaveShare}
+                setError={setError}
               />
             )}
 

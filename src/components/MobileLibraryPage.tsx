@@ -21,6 +21,7 @@ import {
   BiCog,
   BiHistory,
   BiImport,
+  BiDevices,
   BiListUl,
   BiMusic,
   BiPlus,
@@ -45,6 +46,8 @@ interface MobileLibraryPageProps {
   onRefresh: () => void;
   refreshing: boolean;
   refreshCooldownSeconds: number;
+  /** Whether each paired device's playlist can play right now, by id. */
+  deviceOnline: Record<string, boolean>;
 }
 
 function Row({
@@ -53,6 +56,7 @@ function Row({
   label,
   count,
   synced = false,
+  device,
   onClick,
 }: {
   icon: ReactNode;
@@ -61,6 +65,8 @@ function Row({
   count?: number;
   /** Kept in step with a music folder. */
   synced?: boolean;
+  /** A paired device's playlist, and whether that device is in reach. */
+  device?: { online: boolean };
   onClick: () => void;
 }) {
   return (
@@ -79,6 +85,15 @@ function Row({
             title="Synced with a folder"
             aria-label="Synced with a folder"
           />
+        )}
+        {device && (
+          <span className="mlib-row-device">
+            <span
+              className={`device-status-dot${device.online ? " online" : ""}`}
+              aria-hidden
+            />
+            {device.online ? "Available" : "Offline"}
+          </span>
         )}
       </span>
       {count !== undefined && (
@@ -104,6 +119,7 @@ export default function MobileLibraryPage({
   onRefresh,
   refreshing,
   refreshCooldownSeconds,
+  deviceOnline,
 }: MobileLibraryPageProps) {
   return (
     <main className="main-content mobile-library-page">
@@ -194,10 +210,15 @@ export default function MobileLibraryPage({
             userPlaylists.map((playlist) => (
               <Row
                 key={playlist.id}
-                icon={<BiListUl />}
+                icon={playlist.peer_source_id ? <BiDevices /> : <BiListUl />}
                 label={playlist.name}
                 count={playlist.track_count}
                 synced={!!playlist.sync_folder}
+                device={
+                  playlist.peer_source_id
+                    ? { online: !!deviceOnline[playlist.id] }
+                    : undefined
+                }
                 onClick={() => onSelectPlaylist(playlist.id)}
               />
             ))

@@ -90,6 +90,7 @@ export default function LibraryTrackList({
   mainSearchResultsSubtitle,
   mainSearchResultsPanel,
   selectedPlaylist,
+  deviceOnline,
   playlist,
   sortedPlaylist,
   isLoadingPlaylist,
@@ -140,6 +141,8 @@ export default function LibraryTrackList({
   mainSearchResultsSubtitle: string;
   mainSearchResultsPanel: ReactNode;
   selectedPlaylist: PlaylistInfo | null;
+  /** For a paired device's playlist: whether that device is in reach. */
+  deviceOnline?: boolean;
   playlist: Track[];
   sortedPlaylist: Track[];
   isLoadingPlaylist: boolean;
@@ -465,6 +468,19 @@ export default function LibraryTrackList({
                 style={{ cursor: "pointer" }}
               >
                 <BiSync /> Synced folder
+              </span>
+            </span>
+          ) : !mainSearchQuery.trim() && selectedPlaylist?.peer_source_id ? (
+            <span className="playlist-synced-note">
+              {" · "}
+              <span className="playlist-device-badge">
+                <span
+                  className={`device-status-dot${deviceOnline ? " online" : ""}`}
+                  aria-hidden
+                />
+                {deviceOnline
+                  ? "Available"
+                  : "Offline: its songs play when it's back"}
               </span>
             </span>
           ) : null}

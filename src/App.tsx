@@ -96,6 +96,14 @@ import { useTheme } from "./hooks/useTheme";
 import { useAppUpdate } from "./hooks/useAppUpdate";
 import { useFileDrop } from "./hooks/useFileDrop";
 import { useAppCommands } from "./hooks/useAppCommands";
+import { useWavePeers } from "./hooks/useWavePeers";
+import PeerPrompts from "./components/PeerPrompts";
+import {
+  answerWaveRequest,
+  getWaveSharePaths,
+  setWaveShare,
+  type PeerEvent,
+} from "./utils/peers";
 import { useSongCoupling } from "./hooks/useSongCoupling";
 import {
   usePlaylistMashing,
@@ -168,6 +176,9 @@ import "./touch-hover.css";
 
 /** How long Wave has to be out of sight before coming back resyncs folders. */
 const RESYNC_AFTER_AWAY_MS = 30 * 1000;
+
+/** The share picker has nothing it can't pick. */
+const NO_PATHS = new Set<string>();
 
 function App() {
   useSoftKeyboard();
@@ -1464,6 +1475,51 @@ function App() {
 
   const dropActive = useFileDrop(!androidHost, addFolderAsPlaylist, setError);
 
+  // ── Other Waves on the network ──────────────────────────────────────────
+  const wavePeers = useWavePeers(sourceSettings.remote_sources_enabled);
+  const [waveShareTarget, setWaveShareTarget] = useState<{
+    peer: PeerEvent;
+    /** Its request still waits for an answer. */
+    answering: boolean;
+    initial: string[];
+  } | null>(null);
+  const [waveShareBusy, setWaveShareBusy] = useState(false);
+  const deviceOnline = useMemo(
+    () =>
+      Object.fromEntries(
+        wavePeers.peers
+          .filter((p) => p.playlist_id)
+          .map((p) => [p.playlist_id as string, p.online]),
+      ),
+    [wavePeers.peers],
+  );
+
+  const chooseWaveShare = async (peer: PeerEvent, answering: boolean) => {
+    const initial = answering
+      ? []
+      : await getWaveSharePaths(peer.id).catch(() => []);
+    setWaveShareTarget({ peer, answering, initial });
+  };
+
+  const shareWithWave = async (paths: string[]) => {
+    if (!waveShareTarget) return;
+    const { peer, answering } = waveShareTarget;
+    setWaveShareBusy(true);
+    try {
+      if (answering) {
+        await answerWaveRequest(peer.id, true, { kind: "songs", paths });
+      } else {
+        await setWaveShare(peer.id, { kind: "songs", paths });
+      }
+      setWaveShareTarget(null);
+    } catch (err) {
+      setError(formatInvokeError(err, `Couldn't share with ${peer.name}`));
+    } finally {
+      setWaveShareBusy(false);
+      wavePeers.refresh();
+    }
+  };
+
   const openFilesFromDialog = async () => {
     try {
       const paths = await selectAudioFile(true);
@@ -2357,6 +2413,7 @@ function App() {
             onSelectPlaylist={handleSelectPlaylist}
             onImportPlaylist={() => void handleImportPlaylist()}
             onAddFolder={() => void addFolderAsPlaylist()}
+            deviceOnline={deviceOnline}
             onCreatePlaylist={openCreatePlaylistDialog}
             onSyncPlaylist={(id) => void handleSyncPlaylistFolder(id)}
             onExportPlaylist={handleExportPlaylistById}
@@ -2515,6 +2572,7 @@ function App() {
             />
           ) : mainView === "library" && !mainSearchQuery.trim() ? (
             <MobileLibraryPage
+              deviceOnline={deviceOnline}
               libraryPlaylist={libraryPlaylist}
               favoritesPlaylist={favoritesPlaylist}
               userPlaylists={userPlaylists}
@@ -2596,9 +2654,18 @@ function App() {
               onSelectOutputDevice={handleSelectOutputDeviceSettings}
               onResetApp={handleResetApp}
               update={appUpdate}
+              wavePeers={wavePeers.peers}
+              onWavePeersChanged={wavePeers.refresh}
+              onChooseWaveShare={(peer, answering) =>
+                void chooseWaveShare(peer, answering)
+              }
+              setError={setError}
             />
           ) : (
             <LibraryTrackList
+              deviceOnline={
+                !!selectedPlaylistId && !!deviceOnline[selectedPlaylistId]
+              }
               // A new playlist is a new page: it fades in and starts at the top.
               key={selectedPlaylistId ?? "library"}
               mainSearchQuery={mainSearchQuery}
@@ -3173,6 +3240,12 @@ function App() {
               onSelectOutputDevice={handleSelectOutputDeviceSettings}
               onResetApp={handleResetApp}
               update={appUpdate}
+              wavePeers={wavePeers.peers}
+              onWavePeersChanged={wavePeers.refresh}
+              onChooseWaveShare={(peer, answering) =>
+                void chooseWaveShare(peer, answering)
+              }
+              setError={setError}
             />
           )}
 
@@ -3256,6 +3329,29 @@ function App() {
             isLoading={isLoading}
           />
           <UpdateToast update={appUpdate} />
+          <PeerPrompts
+            prompt={wavePeers.current}
+            onSettled={wavePeers.settle}
+            onChoose={(peer, answering) =>
+              void chooseWaveShare(peer, answering)
+            }
+            setError={setError}
+          />
+          {waveShareTarget && (
+            <AddFromLibraryDialog
+              mode="share"
+              targetPlaylistId=""
+              targetName={waveShareTarget.peer.name}
+              libraryPlaylistId={libraryPlaylist?.id ?? null}
+              playlists={playlists}
+              existingPaths={NO_PATHS}
+              initialPaths={waveShareTarget.initial}
+              adding={waveShareBusy}
+              onClose={() => setWaveShareTarget(null)}
+              onPickFile={() => {}}
+              onAdd={(paths) => void shareWithWave(paths)}
+            />
+          )}
           {dropActive && (
             <div className="drop-overlay" aria-hidden>
               <div className="drop-overlay-card">

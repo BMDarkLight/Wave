@@ -214,6 +214,26 @@ nothing outside your network can reach them. Turn on **Keep sharing in the
 background** to keep it up after you close Wave: on desktop it stays in the
 tray, on Android it shows a notification while it shares.
 
+**Wave devices.** With Outside Sourcing on, Wave looks for other copies of
+Wave on your network whenever it runs, and says when it finds one. Choose
+**Share libraries** and the other device asks its owner first. Each side then
+picks what the other may see: everything, nothing, or songs chosen in the same
+picker used to add songs to a playlist. Paired devices find each other again
+on their own, even after one gets a new address.
+
+- Each device gets its own playlist, named after it, listing everything it
+  shares. While the device is off or away, the playlist stays and its songs are
+  marked offline; they leave your library until it is back.
+- Songs you already have are not added twice. Wave compares the audio itself,
+  ignoring tags, so a song renamed on one device still counts as the same. A
+  different recording with the same name (a live take, a remaster) is kept, and
+  shows the cloud while it plays from the other device.
+- A song from another device appears only once its title, artist, album and
+  cover are in, so nothing fills in after the fact.
+- **Settings → Wave devices** lists them with a live dot, what each can see,
+  and "Playing from you" while one plays your music. Deleting a device's
+  playlist forgets the device on both sides.
+
 - Playback starts while the track is still downloading, then the whole file is
   kept in the cache, so the next play is instant and works offline. Seeking
   ahead fetches that part first.

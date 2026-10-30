@@ -194,6 +194,8 @@ export interface PlaylistInfo {
   updated_at: number;
   /** Folder path/URI this playlist is media-synced with, if any. */
   sync_folder?: string | null;
+  /** Set on a paired Wave's playlist: that Wave's remote source id. */
+  peer_source_id?: string | null;
 }
 
 export interface QueueTrackState {

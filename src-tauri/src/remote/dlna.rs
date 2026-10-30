@@ -64,6 +64,9 @@ pub struct DlnaConfig {
     pub service_type: String,
 }
 
+/// When searches go out again while waiting for answers.
+const RESEND_AFTER: [Duration; 2] = [Duration::from_millis(1000), Duration::from_millis(2500)];
+
 /// Searches the local network for media servers and returns the description
 /// URL of each that answers within `wait`.
 pub fn discover(gate: &NetworkGate, wait: Duration) -> Result<Vec<String>, RemoteError> {
@@ -90,26 +93,41 @@ pub fn discover(gate: &NetworkGate, wait: Duration) -> Result<Vec<String>, Remot
     // while a VPN is up, so a server on the LAN would never hear the search.
     // Each interface gets its own copy, and each copy goes twice because UDP
     // can drop a datagram.
-    let mut sent = false;
-    for interface in multicast_interfaces() {
-        if !interface.is_unspecified() && socket.set_multicast_if_v4(&interface).is_err() {
-            continue;
+    let send_round = || {
+        let mut sent = false;
+        for interface in multicast_interfaces() {
+            if !interface.is_unspecified() && socket.set_multicast_if_v4(&interface).is_err() {
+                continue;
+            }
+            for _ in 0..2 {
+                sent |= socket.send_to(search.as_bytes(), &target.into()).is_ok();
+            }
         }
-        for _ in 0..2 {
-            sent |= socket.send_to(search.as_bytes(), &target.into()).is_ok();
-        }
-    }
-    if !sent {
+        sent
+    };
+    if !send_round() {
         return Err(unreachable());
     }
-    let socket: UdpSocket = socket.into();
-    socket
+    let replies: UdpSocket = socket.try_clone().map_err(|_| unreachable())?.into();
+    replies
         .set_read_timeout(Some(Duration::from_millis(250)))
         .map_err(|_| unreachable())?;
-    let deadline = Instant::now() + wait;
+    let started = Instant::now();
+    let deadline = started + wait;
     let mut found = Vec::new();
     let mut buf = [0u8; 2048];
+    // Searches go out again during the wait: a busy Wi-Fi network or a
+    // sleeping phone often misses the first ones.
+    let mut resends = RESEND_AFTER.iter().peekable();
     while Instant::now() < deadline {
+        if resends
+            .peek()
+            .is_some_and(|after| started.elapsed() >= **after)
+        {
+            resends.next();
+            send_round();
+        }
+        let socket = &replies;
         let Ok((n, _)) = socket.recv_from(&mut buf) else {
             continue;
         };

@@ -724,7 +724,7 @@ pub async fn dlna_discover() -> Result<Vec<DlnaServerDto>, String> {
     let gate = NetworkGate::global();
     gate.check().map_err(remote_error)?;
     blocking(move || {
-        let locations = dlna::discover(gate, Duration::from_secs(3)).map_err(remote_error)?;
+        let locations = dlna::discover(gate, Duration::from_secs(4)).map_err(remote_error)?;
         // Descriptions are read side by side so one slow box doesn't hold up
         // the list.
         let handles: Vec<_> = locations

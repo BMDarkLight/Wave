@@ -12,6 +12,7 @@ import {
   BiBarChartAlt2,
   BiCog,
   BiEditAlt,
+  BiDevices,
   BiExport,
   BiFolderPlus,
   BiHeart,
@@ -52,6 +53,7 @@ export default function Sidebar({
   onSelectPlaylist,
   onImportPlaylist,
   onAddFolder,
+  deviceOnline,
   onCreatePlaylist,
   onSyncPlaylist,
   onExportPlaylist,
@@ -75,6 +77,8 @@ export default function Sidebar({
   onImportPlaylist: () => void;
   /** Make a playlist from a folder, kept in step with it. */
   onAddFolder: () => void;
+  /** Whether each paired device's playlist can play right now, by id. */
+  deviceOnline: Record<string, boolean>;
   onCreatePlaylist: () => void;
   onSyncPlaylist: (id: string) => void;
   onExportPlaylist: (id: string, name: string) => void;
@@ -216,6 +220,12 @@ export default function Sidebar({
                 onClick={() => onSelectPlaylist(pl.id)}
               >
                 <span className="playlist-item-name" title={pl.name}>
+                  {pl.peer_source_id && (
+                    <BiDevices
+                      className="playlist-device-icon"
+                      aria-label="A paired device's songs"
+                    />
+                  )}
                   {pl.sync_folder &&
                   !(
                     isScanningFolder &&
@@ -248,6 +258,13 @@ export default function Sidebar({
                     />
                   ) : null}
                   <span className="playlist-item-label">{pl.name}</span>
+                  {pl.peer_source_id && (
+                    <span
+                      className={`device-status-dot${deviceOnline[pl.id] ? " online" : ""}`}
+                      title={deviceOnline[pl.id] ? "Available" : "Offline"}
+                      aria-label={deviceOnline[pl.id] ? "Available" : "Offline"}
+                    />
+                  )}
                 </span>
                 <span className="playlist-item-count">{pl.track_count}</span>
                 <div className="playlist-item-actions">

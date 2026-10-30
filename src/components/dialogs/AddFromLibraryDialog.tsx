@@ -120,6 +120,8 @@ export default function AddFromLibraryDialog({
   onClose,
   onPickFile,
   onAdd,
+  mode = "add",
+  initialPaths,
 }: {
   targetName: string;
   libraryPlaylistId: string | null;
@@ -131,7 +133,12 @@ export default function AddFromLibraryDialog({
   onClose: () => void;
   onPickFile: () => void;
   onAdd: (paths: string[]) => void;
+  /** "share" picks the songs another Wave may see, not songs to add. */
+  mode?: "add" | "share";
+  /** Songs picked when the picker opens. */
+  initialPaths?: string[];
 }) {
+  const sharing = mode === "share";
   const [library, setLibrary] = useState<Track[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [query, setQuery] = useState("");
@@ -165,6 +172,21 @@ export default function AddFromLibraryDialog({
       cancelled = true;
     };
   }, [libraryPlaylistId]);
+
+  // Start from what was picked before, once the library has loaded.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current || !library || !initialPaths?.length) return;
+    seeded.current = true;
+    const wanted = new Set(initialPaths);
+    const next = new Map<string, Pick>();
+    for (const track of library) {
+      if (wanted.has(track.path)) {
+        next.set(track.path, { track, rank: next.size });
+      }
+    }
+    setPicks(next);
+  }, [library, initialPaths]);
 
   const trimmed = query.trim();
   const allTracks = useMemo(() => library ?? [], [library]);
@@ -661,7 +683,11 @@ export default function AddFromLibraryDialog({
       <div
         className="modal-dialog song-picker"
         role="dialog"
-        aria-label={`Add songs to ${targetName}`}
+        aria-label={
+          sharing
+            ? `Share songs with ${targetName}`
+            : `Add songs to ${targetName}`
+        }
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           if (event.key !== "Escape") return;
@@ -676,8 +702,10 @@ export default function AddFromLibraryDialog({
       >
         <div className="modal-header">
           <h2 className="song-picker-heading">
-            Add songs
-            <span title={targetName}>to {targetName}</span>
+            {sharing ? "Share songs" : "Add songs"}
+            <span title={targetName}>
+              {sharing ? "with" : "to"} {targetName}
+            </span>
           </h2>
           <button
             className="modal-close-btn"
@@ -741,36 +769,40 @@ export default function AddFromLibraryDialog({
         </div>
 
         <div className="song-picker-footer">
-          <div className="song-picker-order">
-            <span className="song-picker-order-label">Add as</span>
-            <Select
-              aria-label="Order to add the songs in"
-              value={addOrder}
-              options={ORDER_OPTIONS}
-              onChange={(value) => setAddOrder(value as AddOrder)}
-              disabled={adding}
-            />
-            {addOrder === "shuffle" && (
+          {!sharing && (
+            <div className="song-picker-order">
+              <span className="song-picker-order-label">Add as</span>
+              <Select
+                aria-label="Order to add the songs in"
+                value={addOrder}
+                options={ORDER_OPTIONS}
+                onChange={(value) => setAddOrder(value as AddOrder)}
+                disabled={adding}
+              />
+              {addOrder === "shuffle" && (
+                <button
+                  type="button"
+                  className="song-picker-reshuffle"
+                  onClick={reshuffle}
+                  disabled={adding || pickedCount < 2}
+                  title="Shuffle again"
+                >
+                  <BiShuffle />
+                </button>
+              )}
+            </div>
+          )}
+          <div className="song-picker-actions">
+            {!sharing && (
               <button
+                className="btn-ghost"
                 type="button"
-                className="song-picker-reshuffle"
-                onClick={reshuffle}
-                disabled={adding || pickedCount < 2}
-                title="Shuffle again"
+                onClick={onPickFile}
+                disabled={adding}
               >
-                <BiShuffle />
+                Pick files…
               </button>
             )}
-          </div>
-          <div className="song-picker-actions">
-            <button
-              className="btn-ghost"
-              type="button"
-              onClick={onPickFile}
-              disabled={adding}
-            >
-              Pick files…
-            </button>
             <span className="song-picker-summary">
               {pickedCount > 0 &&
                 `${plural(pickedCount, "song")}${pickedSeconds > 0 ? ` · ${formatListenDuration(pickedSeconds)}` : ""}`}
@@ -781,11 +813,15 @@ export default function AddFromLibraryDialog({
               onClick={() => onAdd(pickedTracks.map((track) => track.path))}
               disabled={adding || pickedCount === 0}
             >
-              {adding
-                ? "Adding…"
-                : pickedCount > 0
-                  ? `Add ${pickedCount}`
-                  : "Add"}
+              {sharing
+                ? adding
+                  ? "Sharing…"
+                  : `Share ${pickedCount}`
+                : adding
+                  ? "Adding…"
+                  : pickedCount > 0
+                    ? `Add ${pickedCount}`
+                    : "Add"}
             </button>
           </div>
         </div>

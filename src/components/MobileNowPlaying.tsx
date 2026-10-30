@@ -17,6 +17,7 @@ import { useLyricsSheet } from "../hooks/useLyricsSheet";
 import { LyricsLines } from "./LyricsLines";
 import {
   BiChevronDown,
+  BiCloud,
   BiHeart,
   BiSolidHeart,
   BiShuffle,
@@ -34,6 +35,7 @@ import {
   BiVolumeLow,
   BiVolumeFull,
 } from "react-icons/bi";
+import { isRemote } from "../utils/remote";
 import MashupButton from "./MashupButton";
 import {
   getTrackFullCover,
@@ -978,7 +980,16 @@ export default function MobileNowPlaying({
         >
           <BiChevronDown />
         </button>
-        <span className="mnp-header-label">Now Playing</span>
+        <span className="mnp-header-label">
+          {isRemote(track) && (
+            <BiCloud
+              className="mnp-remote"
+              title="Playing from another device"
+              aria-label="Playing from another device"
+            />
+          )}
+          Now Playing
+        </span>
         <button
           className={`mnp-icon-btn ${isFavorite ? "active" : ""}`}
           onClick={onToggleFavorite}

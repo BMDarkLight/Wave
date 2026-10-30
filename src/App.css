@@ -9640,3 +9640,194 @@ div.album-hero-cover {
     font-size: 16px;
   }
 }
+
+/* ── Other Waves on the network ──────────────────────────────────────────── */
+
+.peer-toast {
+  padding-left: 14px;
+}
+
+.peer-toast-icon {
+  flex-shrink: 0;
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.peer-dialog {
+  text-align: center;
+}
+
+.peer-dialog .modal-header {
+  justify-content: center;
+}
+
+.peer-dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  background: rgba(var(--ink), 0.08);
+  color: var(--text);
+  font-size: 26px;
+}
+
+.peer-actions {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.wave-devices {
+  padding: 4px 14px 14px;
+}
+
+.wave-devices-title {
+  margin: 6px 0 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.wave-devices-empty {
+  margin: 0;
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.wave-devices-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wave-device {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(var(--ink), 0.05);
+}
+
+.wave-device-icon {
+  flex-shrink: 0;
+  font-size: 20px;
+  color: var(--muted);
+}
+
+.wave-device-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 140px;
+}
+
+.wave-device-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.wave-device-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.wave-device-dot,
+.device-status-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--quiet);
+}
+
+.wave-device-dot.online,
+.device-status-dot.online {
+  background: #3ecf8e;
+  box-shadow: 0 0 0 3px rgba(62, 207, 142, 0.18);
+}
+
+.wave-device-live {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(62, 207, 142, 0.16);
+  color: #3ecf8e;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.wave-device-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wave-device-forget {
+  color: var(--danger-text);
+}
+
+.playlist-device-icon {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.playlist-item-name .device-status-dot {
+  margin-left: 2px;
+}
+
+.playlist-device-badge,
+.mlib-row-device {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mlib-row-device {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Playing from another device. */
+.now-playing-remote,
+.mnp-remote {
+  flex-shrink: 0;
+  color: var(--tint-blue);
+}
+
+.now-playing-remote {
+  margin-left: 6px;
+  vertical-align: -2px;
+  font-size: 15px;
+}
+
+.mnp-header-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  /* Buttons go on their own row under the name, all on one line. */
+  .wave-device-actions {
+    flex-basis: 100%;
+    padding-left: 30px;
+  }
+
+  .wave-device-actions .btn-sm {
+    padding: 7px 12px;
+  }
+}
