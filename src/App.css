@@ -9940,3 +9940,215 @@ div.album-hero-cover {
 .mnp-sheet-scroll > .cast-devices {
   padding: 0 4px 12px;
 }
+
+.cast-manage {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: none;
+  border-top: 1px solid rgba(var(--ink), 0.08);
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cast-manage:hover {
+  color: var(--text);
+}
+
+/* ── Wave devices page ──────────────────────────────────────────────────── */
+
+.sidebar-pin-count.devices-online {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  color: var(--muted);
+}
+
+.sidebar-pin-count.devices-online .wave-device-dot {
+  width: 6px;
+  height: 6px;
+  box-shadow: none;
+}
+
+.sidebar-pin-count.devices-asking {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #3ecf8e;
+  color: #0b2a1c;
+  text-align: center;
+}
+
+.mlib-row-alert {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(62, 207, 142, 0.16);
+  color: #3ecf8e;
+}
+
+.wdev-search.searching svg {
+  animation: spin 1s linear infinite;
+}
+
+.wdev-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 720px;
+  padding: 0 32px 32px;
+}
+
+.wdev-section {
+  margin: 14px 0 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.wdev-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(var(--ink), 0.05);
+}
+
+.wdev-asking {
+  box-shadow: inset 0 0 0 1px rgba(62, 207, 142, 0.45);
+}
+
+.wdev-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.wdev-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(var(--ink), 0.08);
+  color: var(--text);
+  font-size: 22px;
+}
+
+.wdev-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.wdev-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.wdev-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.wdev-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wdev-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.wdev-searching {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 2px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.wdev-searching .import-spinner {
+  width: 16px;
+  height: 16px;
+}
+
+.wdev-tips {
+  flex-direction: row;
+  align-items: flex-start;
+}
+
+.wdev-tips-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 22px;
+}
+
+.wdev-tips-title {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.wdev-tips ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.wdev-self {
+  gap: 4px;
+  padding: 6px 4px;
+}
+
+.wdev-off {
+  align-items: center;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.wdev-off h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.wdev-off p {
+  max-width: 420px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.wdev-off-icon {
+  color: var(--muted);
+  font-size: 40px;
+}
+
+@media (max-width: 768px) {
+  .wdev-body {
+    padding: 0 16px 24px;
+  }
+}

@@ -28,11 +28,12 @@ use super::client;
 /// The SSDP type every Wave announces and answers to.
 pub const WAVE_DEVICE: &str = "urn:bmdarklight-app:device:Wave:1";
 
-/// When searches go out after start, then how often after that.
+/// When searches go out after start, or after a search asked for, each after
+/// the one before; then how often after that.
 const FIRST_SEARCHES: [Duration; 3] = [
     Duration::ZERO,
     Duration::from_secs(2),
-    Duration::from_secs(6),
+    Duration::from_secs(4),
 ];
 const SEARCH_EVERY: Duration = Duration::from_secs(120);
 /// How often known devices are asked directly.
@@ -43,6 +44,15 @@ const GONE_AFTER: Duration = Duration::from_secs(95);
 const PROBE_GAP: Duration = Duration::from_secs(20);
 
 const GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
+
+/// Set when someone asks to look again now rather than at the next round.
+static SEARCH_NOW: AtomicBool = AtomicBool::new(false);
+
+/// Searches the network and asks every known device again, as soon as the
+/// running discovery gets to it.
+pub fn search_now() {
+    SEARCH_NOW.store(true, Ordering::Relaxed);
+}
 
 /// The LOCATION of a Wave in a search reply or an `ssdp:alive`, if the
 /// message is about one.
@@ -148,11 +158,19 @@ pub fn run(service: Arc<PeerService>, stop: Arc<AtomicBool>, heard: Receiver<Str
     };
 
     while !stop.load(Ordering::Relaxed) {
+        let asked = SEARCH_NOW.swap(false, Ordering::Relaxed);
+        if asked {
+            // A few searches close together, as at start, and every known
+            // device asked again straight away.
+            searched = 0;
+            probed.clear();
+        }
         if let Some(socket) = &socket {
-            let due = match FIRST_SEARCHES.get(searched) {
-                Some(after) => started.elapsed() >= *after,
-                None => last_search.elapsed() >= SEARCH_EVERY,
-            };
+            let due = asked
+                || match FIRST_SEARCHES.get(searched) {
+                    Some(after) => searched == 0 || last_search.elapsed() >= *after,
+                    None => last_search.elapsed() >= SEARCH_EVERY,
+                };
             if due {
                 search(socket);
                 searched += 1;
@@ -177,7 +195,7 @@ pub fn run(service: Arc<PeerService>, stop: Arc<AtomicBool>, heard: Receiver<Str
                 probe(&base, &mut probed);
             }
         }
-        if last_check.elapsed() >= CHECK_EVERY {
+        if asked || last_check.elapsed() >= CHECK_EVERY {
             last_check = Instant::now();
             // Every device known so far, and paired ones at their last
             // address, asked directly.

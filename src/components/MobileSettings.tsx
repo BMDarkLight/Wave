@@ -75,9 +75,7 @@ import type {
 import { isAndroid } from "../utils/platform";
 import { formatBytes } from "../utils/format";
 import { clearSourceCache, getSourceCacheUsage } from "../utils/remote";
-import LibrarySharingRow from "./LibrarySharingRow";
-import ConnectedDevices from "./ConnectedDevices";
-import type { PeerEvent, WavePeer } from "../utils/peers";
+import type { WavePeer } from "../utils/peers";
 import AddSourceChooser from "./AddSourceChooser";
 import RemoteSourceList from "./RemoteSourceList";
 import Select from "./Select";
@@ -401,10 +399,23 @@ interface MobileSettingsProps {
   update: AppUpdate;
   /** Other Waves on the network. */
   wavePeers: WavePeer[];
-  onWavePeersChanged: () => void;
-  /** Open the song picker to choose what a Wave sees. */
-  onChooseWaveShare: (peer: PeerEvent, answering: boolean) => void;
-  setError: (message: string | null) => void;
+  /** Open the Devices page. */
+  onOpenWaveDevices: () => void;
+}
+
+/** "2 paired, 1 asking" and the like, for the Settings row. */
+function waveDevicesSummary(peers: WavePeer[]): string {
+  const paired = peers.filter((p) => p.paired).length;
+  const asking = peers.filter((p) => !p.paired && p.asking).length;
+  const nearby = peers.filter((p) => !p.paired && !p.asking).length;
+  const parts = [
+    paired > 0 && `${paired} paired`,
+    asking > 0 && `${asking} waiting for you`,
+    nearby > 0 && `${nearby} nearby`,
+  ].filter(Boolean);
+  return parts.length > 0
+    ? parts.join(", ")
+    : "Pair with your other Waves, share music and play on them";
 }
 
 export default function MobileSettings({
@@ -458,9 +469,7 @@ export default function MobileSettings({
   onResetApp,
   update,
   wavePeers,
-  onWavePeersChanged,
-  onChooseWaveShare,
-  setError,
+  onOpenWaveDevices,
 }: MobileSettingsProps) {
   // Both the embedded desktop pane and the mobile sheet can be mounted at
   // once, so the credential fields need ids unique to this instance.
@@ -989,19 +998,21 @@ export default function MobileSettings({
             )}
 
             {sourceSettings.remote_sources_enabled && (
-              <>
-                <ConnectedDevices
-                  peers={wavePeers}
-                  onChanged={onWavePeersChanged}
-                  onChoose={onChooseWaveShare}
-                  setError={setError}
-                />
-                <LibrarySharingRow
-                  sourceSettings={sourceSettings}
-                  onSourceSettingsChange={onSourceSettingsChange}
-                  idPrefix={keyIdPrefix}
-                />
-              </>
+              <div className="mset-row mset-nested-row">
+                <span className="mset-row-text">
+                  <span className="mset-row-label">Devices</span>
+                  <span className="mset-row-value">
+                    {waveDevicesSummary(wavePeers)}
+                  </span>
+                </span>
+                <button
+                  className="btn-secondary mset-row-btn"
+                  type="button"
+                  onClick={onOpenWaveDevices}
+                >
+                  Open
+                </button>
+              </div>
             )}
 
             {/* Desktop has no media source folders, so remote sources are

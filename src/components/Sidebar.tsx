@@ -36,6 +36,7 @@ export type MainView =
   | "playlist"
   | "recently_played"
   | "most_played"
+  | "devices"
   | "settings";
 
 export default function Sidebar({
@@ -50,6 +51,9 @@ export default function Sidebar({
   onGoHome,
   onGoRecentlyPlayed,
   onGoMostPlayed,
+  onGoDevices,
+  devicesOnline,
+  devicesAsking,
   onSelectPlaylist,
   onImportPlaylist,
   onAddFolder,
@@ -73,6 +77,12 @@ export default function Sidebar({
   onGoHome: () => void;
   onGoRecentlyPlayed: () => void;
   onGoMostPlayed: () => void;
+  /** The Devices page; its entry is hidden while Outside Sourcing is off. */
+  onGoDevices: (() => void) | null;
+  /** Paired Waves in reach right now. */
+  devicesOnline: number;
+  /** Waves waiting for an answer to share libraries. */
+  devicesAsking: number;
   onSelectPlaylist: (id: string) => void;
   onImportPlaylist: () => void;
   /** Make a playlist from a folder, kept in step with it. */
@@ -163,6 +173,36 @@ export default function Sidebar({
             <BiBarChartAlt2 />
           </span>
         </button>
+        {onGoDevices && (
+          <button
+            className={`sidebar-pin ${!isBrowsing && mainView === "devices" ? "active" : ""}`}
+            onClick={onGoDevices}
+            type="button"
+          >
+            <span className="sidebar-pin-label">Devices</span>
+            {devicesAsking > 0 ? (
+              <span
+                className="sidebar-pin-count devices-asking"
+                title={`${devicesAsking} waiting for your answer`}
+              >
+                {devicesAsking}
+              </span>
+            ) : (
+              devicesOnline > 0 && (
+                <span
+                  className="sidebar-pin-count devices-online"
+                  title={`${devicesOnline} in reach`}
+                >
+                  <span className="wave-device-dot online" aria-hidden />
+                  {devicesOnline}
+                </span>
+              )
+            )}
+            <span className="sidebar-pin-icon" aria-hidden>
+              <BiDevices />
+            </span>
+          </button>
+        )}
       </div>
       <div className="playlist-section">
         <div className="playlist-section-header">

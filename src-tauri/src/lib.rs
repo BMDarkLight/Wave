@@ -536,6 +536,7 @@ pub fn run() {
             peers::commands::dismiss_wave_peer,
             peers::commands::forget_wave_peer,
             peers::commands::cast_to_wave,
+            peers::commands::search_wave_peers,
             peers::commands::stop_casting,
             commands::get_close_action,
             commands::set_close_action,

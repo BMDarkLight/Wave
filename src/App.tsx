@@ -154,6 +154,7 @@ import QueuePanel from "./components/QueuePanel";
 import LyricsPanel from "./components/LyricsPanel";
 import DeviceListPanel from "./components/DeviceListPanel";
 import CastDeviceList from "./components/CastDeviceList";
+import WaveDevicesPage from "./components/WaveDevicesPage";
 import PlayerBar from "./components/PlayerBar";
 import Sidebar, { type MainView } from "./components/Sidebar";
 import LibraryTrackList from "./components/LibraryTrackList";
@@ -1076,7 +1077,11 @@ function App() {
     if (viewingArtist) {
       return { kind: "artist", name: viewingArtist };
     }
-    if (mainView === "home" || mainView === "settings") {
+    if (
+      mainView === "home" ||
+      mainView === "settings" ||
+      mainView === "devices"
+    ) {
       return { kind: "library" };
     }
     if (mainView === "recently_played" || mainView === "most_played") {
@@ -1529,6 +1534,12 @@ function App() {
   // ── Playing on another Wave ─────────────────────────────────────────────
   const [castBusy, setCastBusy] = useState<string | null>(null);
   const castDevice = playbackState.cast_device ?? null;
+  const devicesOnline = wavePeers.peers.filter(
+    (p) => p.paired && p.online,
+  ).length;
+  const devicesAsking = wavePeers.peers.filter(
+    (p) => !p.paired && p.asking,
+  ).length;
 
   const onCastChanged = useEffectEvent(() => {
     updatePlaybackState().catch(() => {});
@@ -1595,6 +1606,11 @@ function App() {
       busy={castBusy}
       onPickOutput={(name) => void playOnOutput(name)}
       onPickPeer={(peer) => void playOnWave(peer)}
+      onManage={() => {
+        setMobilePlayerMenuOpen(false);
+        if (mobilePlayerOpen) forceCloseMobilePlayer();
+        goDevices();
+      }}
       onPair={(peer) =>
         void connectWavePeer(peer.id)
           .catch((err) =>
@@ -1801,6 +1817,22 @@ function App() {
     setMenuTrack(null);
     setMobileNavOpen(false);
     setMainView("most_played");
+  };
+
+  // Devices goes away with Outside Sourcing, page and all.
+  useEffect(() => {
+    if (mainView === "devices" && !sourceSettings.remote_sources_enabled) {
+      setMainView("home");
+    }
+  }, [mainView, sourceSettings.remote_sources_enabled]);
+
+  const goDevices = () => {
+    clearBrowse();
+    closeMainSearch();
+    setMenuTrack(null);
+    setMobileNavOpen(false);
+    setShowDeviceList(false);
+    setMainView("devices");
   };
 
   // Every list lives under the Library tab, so it stays lit on them too.
@@ -2022,6 +2054,7 @@ function App() {
           : mainView === "playlist" ||
               mainView === "recently_played" ||
               mainView === "most_played" ||
+              mainView === "devices" ||
               mainView === "albums" ||
               mainView === "artists"
             ? 2
@@ -2495,6 +2528,11 @@ function App() {
             onGoHome={goHome}
             onGoRecentlyPlayed={goRecentlyPlayed}
             onGoMostPlayed={goMostPlayed}
+            onGoDevices={
+              sourceSettings.remote_sources_enabled ? goDevices : null
+            }
+            devicesOnline={devicesOnline}
+            devicesAsking={devicesAsking}
             onSelectPlaylist={handleSelectPlaylist}
             onImportPlaylist={() => void handleImportPlaylist()}
             onAddFolder={() => void addFolderAsPlaylist()}
@@ -2648,6 +2686,23 @@ function App() {
                 });
               }}
             />
+          ) : mainView === "devices" && !mainSearchQuery.trim() ? (
+            <WaveDevicesPage
+              peers={wavePeers.peers}
+              searching={wavePeers.searching}
+              onSearch={wavePeers.search}
+              onChanged={wavePeers.refresh}
+              onChoose={(peer, answering) =>
+                void chooseWaveShare(peer, answering)
+              }
+              setError={setError}
+              sourceSettings={sourceSettings}
+              onSourceSettingsChange={handleSourceSettingsChange}
+              castDeviceId={castDevice?.id ?? null}
+              onPlayThere={(peer) => void playOnWave(peer)}
+              onOpenPlaylist={handleSelectPlaylist}
+              onBack={goLibrary}
+            />
           ) : mainView === "albums" && !mainSearchQuery.trim() ? (
             <MobileAlbumsPage onOpenAlbum={openAlbumPage} onBack={goLibrary} />
           ) : mainView === "artists" && !mainSearchQuery.trim() ? (
@@ -2664,6 +2719,11 @@ function App() {
               onSelectPlaylist={handleSelectPlaylist}
               onGoRecentlyPlayed={goRecentlyPlayed}
               onGoMostPlayed={goMostPlayed}
+              onGoDevices={
+                sourceSettings.remote_sources_enabled ? goDevices : null
+              }
+              devicesOnline={devicesOnline}
+              devicesAsking={devicesAsking}
               onGoAlbums={goAlbums}
               onGoArtists={goArtists}
               onOpenSettings={handleOpenMobileSettings}
@@ -2740,11 +2800,7 @@ function App() {
               onResetApp={handleResetApp}
               update={appUpdate}
               wavePeers={wavePeers.peers}
-              onWavePeersChanged={wavePeers.refresh}
-              onChooseWaveShare={(peer, answering) =>
-                void chooseWaveShare(peer, answering)
-              }
-              setError={setError}
+              onOpenWaveDevices={goDevices}
             />
           ) : (
             <LibraryTrackList
@@ -3311,11 +3367,10 @@ function App() {
               onResetApp={handleResetApp}
               update={appUpdate}
               wavePeers={wavePeers.peers}
-              onWavePeersChanged={wavePeers.refresh}
-              onChooseWaveShare={(peer, answering) =>
-                void chooseWaveShare(peer, answering)
-              }
-              setError={setError}
+              onOpenWaveDevices={() => {
+                handleCloseMobileSettings();
+                goDevices();
+              }}
             />
           )}
 

@@ -108,8 +108,8 @@ export default function LibrarySharingRow({
           </span>
           <span className="mset-gapless-hint">
             {onAndroid
-              ? "Your Wave devices can play your music and play to this phone after you leave Wave, with a notification while it runs."
-              : "Closing the window hides Wave instead of quitting, so your Wave devices can still reach it."}
+              ? "Your other Waves can play your music and play to this phone after you leave Wave, with a notification while it runs."
+              : "Closing the window hides Wave instead of quitting, so your other Waves can still reach it."}
           </span>
         </span>
       </label>

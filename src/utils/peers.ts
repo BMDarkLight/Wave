@@ -62,6 +62,10 @@ export const dismissWavePeer = (id: string): Promise<void> =>
 export const forgetWavePeer = (id: string): Promise<void> =>
   safeInvoke("forget_wave_peer", { id });
 
+/** Look for other Waves now rather than at the next round. */
+export const searchWavePeers = (): Promise<void> =>
+  safeInvoke("search_wave_peers");
+
 /** Play on a paired Wave from now on, starting with what is loaded here. */
 export const castToWave = (id: string): Promise<void> =>
   safeInvoke("cast_to_wave", { id });

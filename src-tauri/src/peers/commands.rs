@@ -282,6 +282,13 @@ pub async fn dismiss_wave_peer(id: String, app: AppHandle) -> Result<(), String>
     Ok(())
 }
 
+/// Look for other Waves now, instead of at the next round.
+#[tauri::command]
+pub async fn search_wave_peers() -> Result<(), String> {
+    super::discovery::search_now();
+    Ok(())
+}
+
 /// Play on a paired Wave from now on, starting with what is loaded here.
 #[tauri::command]
 pub async fn cast_to_wave(id: String, app: AppHandle) -> Result<(), String> {

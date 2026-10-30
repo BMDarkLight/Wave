@@ -222,9 +222,12 @@ on their own, even after one gets a new address.
   shows the cloud while it plays from the other device.
 - A song from another device appears only once its title, artist, album and
   cover are in, so nothing fills in after the fact.
-- **Settings → Wave devices** lists them with a live dot, what each can see,
-  and "Playing from you" while one plays your music. Deleting a device's
-  playlist forgets the device on both sides.
+- **Devices**, in the sidebar on desktop and in Library on a phone, lists
+  them with a live dot, what each can see, and "Playing from you" while one
+  plays your music. It shows who is waiting for an answer, pairs with Waves
+  nearby, searches again on request, and holds this device's name. It is
+  hidden while Outside Sourcing is off. Deleting a device's playlist forgets
+  the device on both sides.
 - **Play on another Wave.** The Devices panel (the output name in the player
   bar, or the devices button in Now Playing on a phone) lists your paired
   Waves. Pick one and the music moves there, picking up where it was, while
@@ -233,7 +236,7 @@ on their own, even after one gets a new address.
   streams from this one and is not added to its library. Pick this device to
   bring the music back. If the other Wave goes away, playback comes back here,
   paused.
-- **Stay reachable in the background** keeps Wave answering your other Waves
+- **Stay reachable in the background**, on the Devices page, keeps Wave answering your other Waves
   after you close it: in the tray on desktop, with a notification on Android.
 
 - Playback starts while the track is still downloading, then the whole file is

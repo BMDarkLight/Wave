@@ -38,6 +38,12 @@ interface MobileLibraryPageProps {
   onSelectPlaylist: (id: string) => void;
   onGoRecentlyPlayed: () => void;
   onGoMostPlayed: () => void;
+  /** The Devices page; its row is hidden while Outside Sourcing is off. */
+  onGoDevices: (() => void) | null;
+  /** Paired Waves in reach right now. */
+  devicesOnline: number;
+  /** Waves waiting for an answer to share libraries. */
+  devicesAsking: number;
   onGoAlbums: () => void;
   onGoArtists: () => void;
   onOpenSettings: () => void;
@@ -57,6 +63,8 @@ function Row({
   count,
   synced = false,
   device,
+  note,
+  alert = false,
   onClick,
 }: {
   icon: ReactNode;
@@ -67,6 +75,9 @@ function Row({
   synced?: boolean;
   /** A paired device's playlist, and whether that device is in reach. */
   device?: { online: boolean };
+  /** A short status after the label, highlighted with `alert`. */
+  note?: string;
+  alert?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -85,6 +96,14 @@ function Row({
             title="Synced with a folder"
             aria-label="Synced with a folder"
           />
+        )}
+        {note && (
+          <span className={`mlib-row-device${alert ? " mlib-row-alert" : ""}`}>
+            {!alert && (
+              <span className="device-status-dot online" aria-hidden />
+            )}
+            {note}
+          </span>
         )}
         {device && (
           <span className="mlib-row-device">
@@ -111,6 +130,9 @@ export default function MobileLibraryPage({
   onSelectPlaylist,
   onGoRecentlyPlayed,
   onGoMostPlayed,
+  onGoDevices,
+  devicesOnline,
+  devicesAsking,
   onGoAlbums,
   onGoArtists,
   onOpenSettings,
@@ -191,6 +213,21 @@ export default function MobileLibraryPage({
             label="Most Played"
             onClick={onGoMostPlayed}
           />
+          {onGoDevices && (
+            <Row
+              icon={<BiDevices />}
+              label="Devices"
+              note={
+                devicesAsking > 0
+                  ? `${devicesAsking} waiting for you`
+                  : devicesOnline > 0
+                    ? `${devicesOnline} in reach`
+                    : undefined
+              }
+              alert={devicesAsking > 0}
+              onClick={onGoDevices}
+            />
+          )}
         </div>
 
         <h2 className="mlib-section-title">Playlists</h2>

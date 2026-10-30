@@ -8,7 +8,13 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { BiDesktop, BiDevices, BiHeadphone, BiMobile } from "react-icons/bi";
+import {
+  BiChevronRight,
+  BiDesktop,
+  BiDevices,
+  BiHeadphone,
+  BiMobile,
+} from "react-icons/bi";
 import type { WavePeer } from "../utils/peers";
 
 /**
@@ -26,6 +32,7 @@ export default function CastDeviceList({
   onPickOutput,
   onPickPeer,
   onPair,
+  onManage,
 }: {
   onPhone: boolean;
   /** This device's own audio outputs; empty where the OS picks one. */
@@ -41,6 +48,8 @@ export default function CastDeviceList({
   onPickOutput: (name: string | null) => void;
   onPickPeer: (peer: WavePeer) => void;
   onPair: (peer: WavePeer) => void;
+  /** Open the Devices page. */
+  onManage: () => void;
 }) {
   const here = onPhone ? "This phone" : "This computer";
   const HereIcon = onPhone ? BiMobile : BiDesktop;
@@ -179,6 +188,12 @@ export default function CastDeviceList({
             </button>
           );
         })
+      )}
+      {sourcingOn && (
+        <button className="cast-manage" type="button" onClick={onManage}>
+          Pair and manage devices
+          <BiChevronRight aria-hidden />
+        </button>
       )}
     </div>
   );
