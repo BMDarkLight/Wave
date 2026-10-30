@@ -10374,6 +10374,34 @@ div.album-hero-cover {
   gap: 6px;
 }
 
+.oobe-progress {
+  margin-top: 18px;
+}
+
+/* Small, so finishing the import stays the obvious path. */
+.oobe-background {
+  padding: 6px 2px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.oobe-background:hover {
+  color: var(--text);
+}
+
+.oobe-error {
+  margin: 14px 0 0;
+  color: #ff6b6b;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .oobe-dots {
   display: flex;
   justify-content: center;

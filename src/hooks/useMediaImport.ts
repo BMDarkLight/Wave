@@ -297,6 +297,37 @@ export function useMediaImport({
 
   /** `showProgress` opens the import progress dialog once a folder is
    *  picked. The Welcome dialog uses it; the import runs the same either way. */
+  /** Counts and the progress screen follow the backend's sync events. */
+  const followImport = (
+    p: Parameters<Parameters<typeof listenToSyncProgress>[0]>[0],
+  ) => {
+    if (typeof p.processed === "number") setImportedCount(p.processed);
+    else if (typeof p.extracted === "number") setImportedCount(p.extracted);
+    else if (typeof p.added === "number") setImportedCount(p.added);
+    if (p.phase === "diff" || p.phase === "extract") {
+      setImportProgress(
+        (current) =>
+          current && {
+            ...current,
+            phase: "adding",
+            total: p.to_add ?? current.total,
+            processed: p.processed ?? current.processed,
+          },
+      );
+    }
+  };
+
+  const finishImport = (added: number) =>
+    setImportProgress(
+      (current) =>
+        current && {
+          ...current,
+          phase: "done",
+          processed: current.total,
+          added,
+        },
+    );
+
   const handleAddFolderAndroid = async ({
     showProgress = false,
   }: { showProgress?: boolean } = {}) => {
@@ -353,34 +384,13 @@ export function useMediaImport({
       await saveMediaFolder(directory).catch(() => {});
 
       beginPlaylistImport(playlistId);
-      const stopProgress = await listenToSyncProgress((p) => {
-        if (typeof p.processed === "number") setImportedCount(p.processed);
-        else if (typeof p.extracted === "number") setImportedCount(p.extracted);
-        else if (typeof p.added === "number") setImportedCount(p.added);
-        if (p.phase === "diff" || p.phase === "extract") {
-          setImportProgress(
-            (current) =>
-              current && {
-                ...current,
-                phase: "adding",
-                total: p.to_add ?? current.total,
-                processed: p.processed ?? current.processed,
-              },
-          );
-        }
-      }).catch(() => null);
+      const stopProgress = await listenToSyncProgress(followImport).catch(
+        () => null,
+      );
 
       try {
         const syncResult = await syncPlaylistFolder(playlistId, paths);
-        setImportProgress(
-          (current) =>
-            current && {
-              ...current,
-              phase: "done",
-              processed: current.total,
-              added: syncResult.added,
-            },
-        );
+        finishImport(syncResult.added);
         if (syncResult.errors?.length) {
           setError(
             `Imported with ${syncResult.errors.length} error(s) — ${syncResult.errors.slice(0, 2).join(" | ")}`,
@@ -413,20 +423,31 @@ export function useMediaImport({
   /** Mobile Settings "Media Source Folders" — Android uses the SAF folder
    *  picker; a desktop window narrowed into the mobile layout falls back to
    *  the regular directory picker, mirroring handleAddFolderAndroid. */
-  const handleAddMediaSource = async () => {
+  const handleAddMediaSource = async ({
+    showProgress = false,
+  }: { showProgress?: boolean } = {}) => {
     if (androidHost) {
-      await handleAddFolderAndroid();
+      await handleAddFolderAndroid({ showProgress });
       return;
     }
     try {
       setError(null);
       const directory = await selectAudioFolder();
       if (!directory) return;
+      if (showProgress) {
+        setImportProgress({
+          phase: "finding",
+          processed: 0,
+          total: 0,
+          added: 0,
+        });
+      }
       setIsScanningFolder(true);
       setFolderScanIsSync(true);
       setImportedCount(0);
       const paths = await scanDirectory(directory);
       if (!paths.length) {
+        setImportProgress(null);
         setError("No audio files found in the selected folder.");
         setIsScanningFolder(false);
         setFolderScanIsSync(false);
@@ -437,6 +458,7 @@ export function useMediaImport({
         list.find((p) => isLibraryPlaylistName(p.name))?.id ??
         getDefaultPlaylistId(list);
       if (!playlistId) {
+        setImportProgress(null);
         setIsScanningFolder(false);
         setFolderScanIsSync(false);
         return;
@@ -444,13 +466,12 @@ export function useMediaImport({
       await setPlaylistSyncFolder(playlistId, directory);
       await saveMediaFolder(directory).catch(() => {});
       beginPlaylistImport(playlistId);
-      const stopProgress = await listenToSyncProgress((p) => {
-        if (typeof p.processed === "number") setImportedCount(p.processed);
-        else if (typeof p.extracted === "number") setImportedCount(p.extracted);
-        else if (typeof p.added === "number") setImportedCount(p.added);
-      }).catch(() => null);
+      const stopProgress = await listenToSyncProgress(followImport).catch(
+        () => null,
+      );
       try {
-        await syncPlaylistFolder(playlistId, paths);
+        const synced = await syncPlaylistFolder(playlistId, paths);
+        finishImport(synced.added);
         setActivePlaylistId(playlistId);
         setMainView("playlist");
         await loadPlaylists();
@@ -463,6 +484,7 @@ export function useMediaImport({
         setFolderScanIsSync(false);
       }
     } catch (err) {
+      setImportProgress(null);
       endPlaylistImport();
       setIsScanningFolder(false);
       setFolderScanIsSync(false);

@@ -11,6 +11,9 @@
 import { useEffect, useState } from "react";
 import { BiFolderOpen } from "react-icons/bi";
 import SourcingChoice from "./SourcingChoice";
+import type { ImportProgress } from "../hooks/useMediaImport";
+
+const count = new Intl.NumberFormat();
 
 /** The wave in Wave's logo. */
 const WAVE_PATH =
@@ -21,7 +24,7 @@ const INTRO_MS = 1900;
 /** How long the screen takes to fade out over the app. */
 const LEAVE_MS = 450;
 
-type Step = "welcome" | "music" | "sourcing";
+type Step = "welcome" | "music" | "importing" | "sourcing";
 
 function WaveMark({ className }: { className: string }) {
   return (
@@ -39,6 +42,9 @@ export default function Onboarding({
   animate,
   askForMusic,
   onPickMusic,
+  progress,
+  error,
+  onLeaveImport,
   onFinish,
   onDone,
 }: {
@@ -46,8 +52,14 @@ export default function Onboarding({
   animate: boolean;
   /** The library is empty, so offer to add a folder. */
   askForMusic: boolean;
-  /** Opens the folder picker; the import carries on behind the next step. */
+  /** Opens the folder picker and imports what was picked. */
   onPickMusic: () => void;
+  /** The import the picked folder started, while there is one to show. */
+  progress: ImportProgress | null;
+  /** Why the picked folder didn't import, shown on the music step. */
+  error: string | null;
+  /** Stop showing the import; it carries on in the background. */
+  onLeaveImport: () => void;
   /** Saves the answers, as soon as the last one is in. */
   onFinish: (outsideSourcing: boolean) => void;
   /** The screen is gone and the app shows. */
@@ -60,7 +72,14 @@ export default function Onboarding({
   const steps: Step[] = askForMusic
     ? ["welcome", "music", "sourcing"]
     : ["welcome", "sourcing"];
-  const at = steps.indexOf(step);
+  // The import belongs to the music step as far as the dots go.
+  const at = steps.indexOf(step === "importing" ? "music" : step);
+
+  // A folder was picked: follow its import. A cancelled picker leaves the
+  // question where it was.
+  useEffect(() => {
+    if (step === "music" && progress) setStep("importing");
+  }, [step, progress]);
 
   useEffect(() => {
     if (!intro) return;
@@ -69,6 +88,11 @@ export default function Onboarding({
   }, [intro]);
 
   const next = () => setStep(steps[Math.min(at + 1, steps.length - 1)]);
+
+  const leaveImport = () => {
+    onLeaveImport();
+    setStep("sourcing");
+  };
 
   const finish = () => {
     onFinish(outside);
@@ -125,15 +149,24 @@ export default function Onboarding({
                 <button
                   className="btn-primary"
                   type="button"
-                  onClick={() => {
-                    onPickMusic();
-                    next();
-                  }}
+                  onClick={onPickMusic}
                 >
                   <BiFolderOpen aria-hidden /> Choose a folder
                 </button>
               </div>
+              {error && (
+                <p className="oobe-error" role="alert">
+                  {error}
+                </p>
+              )}
             </>
+          )}
+          {step === "importing" && (
+            <ImportStep
+              progress={progress}
+              onBackground={leaveImport}
+              onContinue={leaveImport}
+            />
           )}
           {step === "sourcing" && (
             <>
@@ -154,5 +187,73 @@ export default function Onboarding({
         </div>
       </div>
     </div>
+  );
+}
+
+/** The picked folder coming in: found, added one by one, then done. */
+function ImportStep({
+  progress,
+  onBackground,
+  onContinue,
+}: {
+  progress: ImportProgress | null;
+  onBackground: () => void;
+  onContinue: () => void;
+}) {
+  const phase = progress?.phase ?? "finding";
+  const total = progress?.total ?? 0;
+  const processed = progress?.processed ?? 0;
+  const added = progress?.added ?? 0;
+  const fraction = total > 0 ? Math.min(processed / total, 1) : 0;
+  const done = phase === "done";
+
+  return (
+    <>
+      <h1>
+        {done
+          ? "Your Library is ready"
+          : phase === "finding"
+            ? "Finding your music"
+            : "Adding your songs"}
+      </h1>
+      <p aria-live="polite">
+        {done
+          ? added === 1
+            ? "1 song added."
+            : added > 0
+              ? `${count.format(added)} songs added.`
+              : "Everything in that folder is already in your Library."
+          : phase === "finding" || total === 0
+            ? "Looking through the folder you picked…"
+            : `${count.format(processed)} of ${count.format(total)}`}
+      </p>
+      {!done && (
+        <div
+          className={`import-progress-bar oobe-progress${phase === "finding" || total === 0 ? " indeterminate" : ""}`}
+          role="progressbar"
+          aria-label="Importing your music"
+          aria-valuemin={0}
+          aria-valuemax={total || undefined}
+          aria-valuenow={total ? processed : undefined}
+        >
+          <span style={{ width: `${fraction * 100}%` }} />
+        </div>
+      )}
+      <div className="oobe-actions">
+        {done ? (
+          <button className="btn-primary" type="button" onClick={onContinue}>
+            Continue
+          </button>
+        ) : (
+          <button
+            className="oobe-background"
+            type="button"
+            onClick={onBackground}
+          >
+            Keep going in the background
+          </button>
+        )}
+      </div>
+    </>
   );
 }

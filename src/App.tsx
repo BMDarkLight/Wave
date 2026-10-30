@@ -3427,10 +3427,11 @@ function App() {
               animate={animationsEnabled && !reduceMotionEnabled}
               askForMusic={(libraryPlaylist?.track_count ?? 0) === 0}
               onPickMusic={() =>
-                void (androidHost
-                  ? handleAddFolderAndroid({ showProgress: true })
-                  : handleAddMediaSource())
+                void handleAddMediaSource({ showProgress: true })
               }
+              progress={importProgress}
+              error={error}
+              onLeaveImport={closeImportProgress}
               onFinish={(outside) => {
                 chooseSourcing(outside);
                 // The folder question was part of it.
@@ -3477,7 +3478,7 @@ function App() {
               </div>
             )}
 
-          {importProgress && (
+          {importProgress && !onboarding && (
             <ImportProgressDialog
               progress={importProgress}
               onClose={closeImportProgress}
