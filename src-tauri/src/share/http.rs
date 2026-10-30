@@ -259,6 +259,21 @@ fn handle(mut stream: TcpStream, server: &Server) -> io::Result<()> {
             &p["/media/".len()..],
             head_only,
         ),
+        // Players show this beside the server's name.
+        ("GET" | "HEAD", "/icon/128.png") => respond(
+            &mut stream,
+            "200 OK",
+            &[("Content-Type", "image/png".to_string())],
+            include_bytes!("../../icons/128x128.png"),
+            head_only,
+        ),
+        ("GET" | "HEAD", "/icon/64.png") => respond(
+            &mut stream,
+            "200 OK",
+            &[("Content-Type", "image/png".to_string())],
+            include_bytes!("../../icons/64x64.png"),
+            head_only,
+        ),
         ("GET" | "HEAD", p) if p.starts_with("/art/") => {
             art(&mut stream, server, &p["/art/".len()..], head_only)
         }
@@ -272,29 +287,48 @@ fn track_id_from(name: &str) -> Option<String> {
     crate::remote::uri::percent_decode(stem).filter(|id| !id.is_empty())
 }
 
-/// `bytes=a-b`, `bytes=a-` or `bytes=-n`, resolved against `len`. `None` for
-/// a range that can't be met.
-fn parse_range(value: &str, len: u64) -> Option<(u64, u64)> {
-    let spec = value.trim().strip_prefix("bytes=")?;
-    // Only the first of several ranges is served.
-    let spec = spec.split(',').next()?.trim();
-    let (start, end) = spec.split_once('-')?;
-    if start.is_empty() {
-        let suffix: u64 = end.parse().ok()?;
-        if suffix == 0 || len == 0 {
-            return None;
-        }
-        return Some((len.saturating_sub(suffix), len - 1));
-    }
-    let start: u64 = start.parse().ok()?;
-    if start >= len {
-        return None;
-    }
-    let end = match end {
-        "" => len - 1,
-        e => e.parse::<u64>().ok()?.min(len - 1),
+/// What a `Range` header asks for.
+#[derive(Debug, PartialEq)]
+enum Wanted {
+    /// No usable byte range: the whole file goes, as RFC 9110 says for a
+    /// range in another unit or one that does not parse.
+    Whole,
+    Part(u64, u64),
+    /// A byte range that starts past the end.
+    Unsatisfiable,
+}
+
+/// `bytes=a-b`, `bytes=a-` or `bytes=-n`, resolved against `len`. Only the
+/// first of several ranges is served.
+fn wanted_range(value: &str, len: u64) -> Wanted {
+    let Some(spec) = value.trim().strip_prefix("bytes=") else {
+        return Wanted::Whole;
     };
-    (start <= end).then_some((start, end))
+    let Some((start, end)) = spec.split(',').next().unwrap_or("").trim().split_once('-') else {
+        return Wanted::Whole;
+    };
+    if start.is_empty() {
+        return match end.parse::<u64>() {
+            Ok(0) => Wanted::Unsatisfiable,
+            Ok(_) if len == 0 => Wanted::Unsatisfiable,
+            Ok(suffix) => Wanted::Part(len.saturating_sub(suffix), len - 1),
+            Err(_) => Wanted::Whole,
+        };
+    }
+    let Ok(start) = start.parse::<u64>() else {
+        return Wanted::Whole;
+    };
+    let end = match end {
+        "" => None,
+        e => match e.parse::<u64>() {
+            Ok(end) if end >= start => Some(end),
+            _ => return Wanted::Whole,
+        },
+    };
+    if start >= len {
+        return Wanted::Unsatisfiable;
+    }
+    Wanted::Part(start, end.map_or(len - 1, |end| end.min(len - 1)))
 }
 
 fn media(
@@ -326,24 +360,25 @@ fn media(
         ("transferMode.dlna.org", "Streaming".to_string()),
         ("contentFeatures.dlna.org", dlna_features(&extension)),
     ];
-    let (status, start, end) = match request.header("Range") {
-        None => ("200 OK", 0, len.saturating_sub(1)),
-        Some(range) => match parse_range(range, len) {
-            Some((start, end)) => {
-                headers.push(("Content-Range", format!("bytes {start}-{end}/{len}")));
-                ("206 Partial Content", start, end)
-            }
-            None => {
-                headers.push(("Content-Range", format!("bytes */{len}")));
-                return respond(
-                    stream,
-                    "416 Range Not Satisfiable",
-                    &headers,
-                    b"",
-                    head_only,
-                );
-            }
-        },
+    let wanted = request
+        .header("Range")
+        .map_or(Wanted::Whole, |range| wanted_range(range, len));
+    let (status, start, end) = match wanted {
+        Wanted::Whole => ("200 OK", 0, len.saturating_sub(1)),
+        Wanted::Part(start, end) => {
+            headers.push(("Content-Range", format!("bytes {start}-{end}/{len}")));
+            ("206 Partial Content", start, end)
+        }
+        Wanted::Unsatisfiable => {
+            headers.push(("Content-Range", format!("bytes */{len}")));
+            return respond(
+                stream,
+                "416 Range Not Satisfiable",
+                &headers,
+                b"",
+                head_only,
+            );
+        }
     };
     let length = if len == 0 { 0 } else { end - start + 1 };
     let mut out = format!(
@@ -599,6 +634,10 @@ pub fn device_description(server: &Server) -> String {
 <modelURL>https://github.com/BMDarkLight/Wave</modelURL>
 <UDN>uuid:{uuid}</UDN>
 <dlna:X_DLNADOC>DMS-1.50</dlna:X_DLNADOC>
+<iconList>
+<icon><mimetype>image/png</mimetype><width>128</width><height>128</height><depth>24</depth><url>/icon/128.png</url></icon>
+<icon><mimetype>image/png</mimetype><width>64</width><height>64</height><depth>24</depth><url>/icon/64.png</url></icon>
+</iconList>
 <serviceList>
 <service>
 <serviceType>{CONTENT_DIRECTORY}</serviceType>
@@ -809,13 +848,18 @@ mod tests {
 
     #[test]
     fn ranges_follow_rfc_7233() {
-        assert_eq!(parse_range("bytes=0-499", 1000), Some((0, 499)));
-        assert_eq!(parse_range("bytes=500-", 1000), Some((500, 999)));
-        assert_eq!(parse_range("bytes=-100", 1000), Some((900, 999)));
-        assert_eq!(parse_range("bytes=900-5000", 1000), Some((900, 999)));
-        assert_eq!(parse_range("bytes=1000-", 1000), None);
-        assert_eq!(parse_range("bytes=5-2", 1000), None);
-        assert_eq!(parse_range("items=0-1", 1000), None);
+        assert_eq!(wanted_range("bytes=0-499", 1000), Wanted::Part(0, 499));
+        assert_eq!(wanted_range("bytes=500-", 1000), Wanted::Part(500, 999));
+        assert_eq!(wanted_range("bytes=-100", 1000), Wanted::Part(900, 999));
+        assert_eq!(wanted_range("bytes=900-5000", 1000), Wanted::Part(900, 999));
+        assert_eq!(wanted_range("bytes=0-9,20-29", 1000), Wanted::Part(0, 9));
+        assert_eq!(wanted_range("bytes=1000-", 1000), Wanted::Unsatisfiable);
+        assert_eq!(wanted_range("bytes=-0", 1000), Wanted::Unsatisfiable);
+        // Not a byte range Wave can read: the whole file, not an error.
+        assert_eq!(wanted_range("bytes=5-2", 1000), Wanted::Whole);
+        assert_eq!(wanted_range("items=0-1", 1000), Wanted::Whole);
+        assert_eq!(wanted_range("bytes=abc-", 1000), Wanted::Whole);
+        assert_eq!(wanted_range("bytes=", 1000), Wanted::Whole);
     }
 
     #[test]
@@ -840,6 +884,19 @@ mod tests {
         for scpd in ["/ContentDirectory.xml", "/ConnectionManager.xml"] {
             let (_, body) = exchange(port, &format!("GET {scpd} HTTP/1.1\r\n\r\n"));
             assert!(roxmltree::Document::parse(std::str::from_utf8(&body).unwrap()).is_ok());
+        }
+        // Every icon the description lists is there.
+        let description = roxmltree::Document::parse(&body).unwrap();
+        let icons: Vec<_> = description
+            .descendants()
+            .filter(|n| n.has_tag_name("url"))
+            .filter_map(|n| n.text())
+            .collect();
+        assert_eq!(icons.len(), 2);
+        for icon in icons {
+            let (head, body) = exchange(port, &format!("GET {icon} HTTP/1.1\r\n\r\n"));
+            assert!(head.starts_with("HTTP/1.1 200"), "{icon}: {head}");
+            assert!(body.starts_with(b"\x89PNG"));
         }
         stop.store(true, Ordering::Relaxed);
     }
