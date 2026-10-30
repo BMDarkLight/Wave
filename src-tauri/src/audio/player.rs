@@ -494,8 +494,9 @@ impl Queue {
     }
 
     /// Move each couple's second song right after its first, among the tracks
-    /// still to play. A pair the current track splits is left alone, since
-    /// half of it has already played.
+    /// still to play, queueing it there when the queue does not have it (a
+    /// short list such as a Home row). A pair the current track splits is left
+    /// alone, since half of it has already played.
     fn keep_couples_together(&mut self) {
         for (first, second) in self.couples.clone() {
             let floor = self.current_index.unwrap_or(0);
@@ -503,6 +504,9 @@ impl Queue {
                 continue;
             };
             let Some(b) = self.tracks.iter().position(|p| *p == second) else {
+                if a >= floor {
+                    self.insert_at(a + 1, second);
+                }
                 continue;
             };
             if a < floor || b < floor || Some(b) == self.current_index || b == a + 1 {
@@ -3358,6 +3362,22 @@ mod tests {
         assert_eq!(queue.pick(3), Some("/a"));
         assert_eq!(queue.next(&RepeatMode::Off), Some("/b"));
         assert_eq!(queue.tracks().len(), 5);
+    }
+
+    #[test]
+    fn a_first_song_brings_its_missing_second_along() {
+        let mut queue = coupled(&["/x", "/a", "/y"], "/a", "/b");
+        assert_eq!(queue.pick(1), Some("/a"));
+        assert_eq!(queue.tracks(), ["/x", "/a", "/b", "/y"]);
+        assert_eq!(queue.next(&RepeatMode::Off), Some("/b"));
+        assert_eq!(queue.next(&RepeatMode::Off), Some("/y"));
+    }
+
+    #[test]
+    fn a_first_song_already_played_does_not_bring_its_second_back() {
+        let mut queue = coupled(&["/a", "/x", "/y"], "/a", "/b");
+        assert_eq!(queue.pick(1), Some("/x"));
+        assert_eq!(queue.tracks(), ["/a", "/x", "/y"]);
     }
 
     #[test]
