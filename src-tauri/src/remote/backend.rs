@@ -29,6 +29,9 @@ pub struct RemoteTrackMeta {
     pub part_key: String,
     pub art_ref: Option<String>,
     pub updated_at: Option<i64>,
+    /// The audio's fingerprint (see `fingerprint`), from servers that send
+    /// one: only another Wave does.
+    pub audio_fingerprint: Option<String>,
 }
 
 /// One page of a remote catalog. `next` is the cursor for the following page,

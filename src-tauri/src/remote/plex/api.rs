@@ -98,6 +98,7 @@ fn map_track(raw: RawTrack) -> Option<RemoteTrackMeta> {
         .unwrap_or_else(|| "Unknown Artist".to_string());
 
     Some(RemoteTrackMeta {
+        audio_fingerprint: None,
         remote_id: raw.rating_key,
         title: raw.title.unwrap_or_default(),
         artist,

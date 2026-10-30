@@ -15,6 +15,7 @@ mod cover_art;
 mod dto;
 mod enrichment;
 mod error;
+mod fingerprint;
 mod integrations;
 mod library;
 mod listen;
@@ -22,6 +23,7 @@ pub mod lyrics;
 mod metadata;
 mod os_media;
 mod path_validation;
+mod peers;
 pub mod playback_daemon;
 mod remote;
 mod share;
@@ -272,6 +274,8 @@ pub fn run() {
             {
                 commands::restore_saved_playback(app.handle());
             }
+
+            fingerprint::fill_in_background(app_handle.clone());
 
             let tick_app = app_handle.clone();
             std::thread::spawn(move || {
@@ -524,6 +528,13 @@ pub fn run() {
             commands::expand_mini_player,
             #[cfg(not(target_os = "android"))]
             commands::close_mini_player,
+            peers::commands::list_wave_peers,
+            peers::commands::connect_wave_peer,
+            peers::commands::answer_wave_request,
+            peers::commands::set_wave_share,
+            peers::commands::get_wave_share_paths,
+            peers::commands::dismiss_wave_peer,
+            peers::commands::forget_wave_peer,
             commands::get_close_action,
             commands::set_close_action,
             commands::toggle_close_action,

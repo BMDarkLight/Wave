@@ -142,6 +142,7 @@ fn song_to_meta(song: &Value) -> Option<RemoteTrackMeta> {
         .map(|(_, ext)| ext.to_ascii_lowercase())
         .filter(|ext| crate::metadata::supported_audio_extensions().contains(ext))?;
     Some(RemoteTrackMeta {
+        audio_fingerprint: None,
         remote_id: id,
         title: text(song, "title")
             .or_else(|| text(song, "label"))

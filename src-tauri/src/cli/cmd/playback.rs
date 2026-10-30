@@ -423,6 +423,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             sync_folder: None,
+            peer_source_id: None,
         }
     }
 

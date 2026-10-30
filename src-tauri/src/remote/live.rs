@@ -383,6 +383,8 @@ fn live_shared_library_round_trip() {
         uuid: uuid.clone(),
         db_path,
         opener: crate::share::file_opener(None),
+        dlna: true,
+        peers: None,
     }));
     let status = crate::share::status();
     assert!(status.running, "{:?}", status.error);

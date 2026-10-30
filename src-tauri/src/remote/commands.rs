@@ -1429,11 +1429,13 @@ pub fn apply_sharing(app: &AppHandle) {
         .name("wave-share-apply".into())
         .spawn(move || {
             let config = sharing_config(&app);
-            let background = config.as_ref().is_some_and(|_| {
-                app.try_state::<AppSettingsState>()
+            // The background service is for sharing with DLNA players; paired
+            // Waves alone don't keep Wave running with its window closed.
+            let background = config.as_ref().is_some_and(|c| c.dlna)
+                && app
+                    .try_state::<AppSettingsState>()
                     .and_then(|s| s.0.lock().ok().map(|s| s.share_in_background))
-                    .unwrap_or(false)
-            });
+                    .unwrap_or(false);
             #[cfg(target_os = "android")]
             let name = config.as_ref().map(|c| c.name.clone());
             crate::share::apply(config);
@@ -1468,9 +1470,12 @@ fn sharing_config(app: &AppHandle) -> Option<crate::share::ShareConfig> {
         .unwrap_or_else(crate::app::paths::library_db_path);
     let state = app.try_state::<AppSettingsState>()?;
     let mut settings = state.0.lock().ok()?;
-    if !(settings.remote_sources_enabled && settings.library_sharing_enabled) {
+    // Paired Waves are served whenever Outside Sourcing is on; DLNA players
+    // only while "Share my library" is on too.
+    if !settings.remote_sources_enabled {
         return None;
     }
+    let dlna = settings.library_sharing_enabled;
     let uuid = match settings.share_device_id.clone() {
         Some(id) => id,
         None => {
@@ -1490,6 +1495,8 @@ fn sharing_config(app: &AppHandle) -> Option<crate::share::ShareConfig> {
         uuid,
         db_path,
         opener: crate::share::file_opener(Some(app.clone())),
+        dlna,
+        peers: Some(crate::peers::service(app)),
     })
 }
 
@@ -1517,6 +1524,9 @@ pub fn event_sink(app: AppHandle) -> Box<dyn Fn(RemoteEvent) + Send + Sync> {
                 "remote-sync-finished",
                 serde_json::json!({ "source_id": source_id, "error": error }),
             );
+            let _ = app.emit("library-changed", ());
+        }
+        RemoteEvent::LibraryChanged => {
             let _ = app.emit("library-changed", ());
         }
         RemoteEvent::StatusChanged => {
@@ -1585,6 +1595,99 @@ pub fn start(app: &AppHandle, rt: &'static RemoteRuntime) {
     if let Err(e) = spawned {
         tracing::warn!("Could not start remote sources: {e}");
     }
+}
+
+// ── Paired Waves ───────────────────────────────────────────────────────────
+
+/// The remote source a paired Wave's songs live under.
+pub(crate) fn wave_source_id(peer_id: &str) -> String {
+    format!("wave-{}", crate::remote::uri::percent_encode(peer_id))
+}
+
+/// Start reading what a newly paired Wave shares. Pairing again with a Wave
+/// that was paired before picks its old songs back up.
+pub(crate) fn add_wave_source(app: &AppHandle, peer: &crate::peers::PeerRecord) {
+    let Ok(rt) = runtime() else {
+        return;
+    };
+    let config = crate::remote::wave::WaveConfig {
+        peer_id: peer.id.clone(),
+    };
+    let Ok(json) = serde_json::to_string(&config) else {
+        return;
+    };
+    let id = wave_source_id(&peer.id);
+    let added = rt.with_library(|library| {
+        match library.insert_remote_source("wave", &peer.id, &peer.name, &json) {
+            Ok(_) => {}
+            Err(_) => library.update_remote_source_config(&id, &json)?,
+        }
+        rt.reload_sources(library);
+        Ok::<_, String>(())
+    });
+    if let Err(e) = added {
+        tracing::warn!("Couldn't add {}'s music: {e}", peer.name);
+        return;
+    }
+    sync_one_in_background(app, rt, id);
+    let _ = app.emit("remote-status-changed", ());
+}
+
+/// Drop a forgotten Wave's songs and its playlist.
+pub(crate) fn remove_wave_source(app: &AppHandle, peer_id: &str) {
+    remove_wave_source_by_id(app, &wave_source_id(peer_id));
+}
+
+pub(crate) fn remove_wave_source_by_id(app: &AppHandle, id: &str) {
+    let Ok(rt) = runtime() else {
+        return;
+    };
+    let id = id.to_string();
+    let enabled = remote_enabled(app);
+    let removed = rt.with_library(|library| {
+        library.delete_device_playlist(&id)?;
+        let cached = library.tombstone_remote_source(&id)?;
+        for uri in cached {
+            delete_cache_files(library, &uri);
+        }
+        rt.reload_sources(library);
+        library.recompute_remote_visibility(enabled)
+    });
+    if let Err(e) = removed {
+        tracing::warn!("Couldn't remove a forgotten device's music: {e}");
+    }
+    let _ = app.emit("remote-status-changed", ());
+    let _ = app.emit("library-changed", ());
+}
+
+/// A paired Wave came into reach or left it: its songs show or hide, and on
+/// return its catalog is read again.
+pub(crate) fn set_wave_reachable(app: &AppHandle, peer_id: &str, online: bool) {
+    let Ok(rt) = runtime() else {
+        return;
+    };
+    let id = wave_source_id(peer_id);
+    if rt.backend(&id).is_none() {
+        return;
+    }
+    rt.set_status(
+        &id,
+        if online {
+            SourceState::Ok
+        } else {
+            SourceState::Unreachable
+        },
+    );
+    super::store::set_source_offline(&id, !online);
+    let enabled = remote_enabled(app);
+    if let Err(e) = rt.with_library(|library| library.recompute_remote_visibility(enabled)) {
+        tracing::warn!("Couldn't update which songs show: {e}");
+    }
+    if online {
+        sync_one_in_background(app, rt, id);
+    }
+    let _ = app.emit("remote-status-changed", ());
+    let _ = app.emit("library-changed", ());
 }
 
 #[cfg(test)]

@@ -180,6 +180,7 @@ pub fn song_to_meta(song: &Song) -> Option<RemoteTrackMeta> {
         return None;
     }
     Some(RemoteTrackMeta {
+        audio_fingerprint: None,
         remote_id: song.id.clone(),
         title: text(&Some(song.title.clone()), "Untitled"),
         artist: text(&song.artist, "Unknown Artist"),

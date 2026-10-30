@@ -99,6 +99,24 @@ pub fn sync_source(
 
     if result.is_ok() {
         artwork_pass(rt, source_id);
+        // A paired Wave's songs wait for their covers before they show, and
+        // its playlist follows what it shares.
+        if rt.backend(source_id).is_some_and(|b| b.kind() == "wave") {
+            let refreshed = rt.with_library(|library| {
+                library.recompute_remote_visibility(remote_enabled)?;
+                let name = library
+                    .list_remote_sources()?
+                    .into_iter()
+                    .find(|row| row.id == source_id)
+                    .map(|row| row.display_name)
+                    .unwrap_or_else(|| "Wave".to_string());
+                library.sync_device_playlist(source_id, &name).map(drop)
+            });
+            if let Err(e) = refreshed {
+                tracing::warn!("Couldn't update a paired device's songs: {e}");
+            }
+            rt.emit(RemoteEvent::LibraryChanged);
+        }
     }
     result
 }
@@ -190,6 +208,14 @@ pub fn artwork_pass(rt: &RemoteRuntime, source_id: &str) {
                 }
             }
             Err(RemoteError::Blocked(_) | RemoteError::Unreachable(_)) => break,
+            Err(RemoteError::Http(404)) => {
+                let cleared = rt.with_library(|library| {
+                    library.clear_remote_album_art_ref(source_id, album, album_artist)
+                });
+                if let Err(detail) = cleared {
+                    tracing::warn!("{detail}");
+                }
+            }
             Err(_) => {}
         }
     }
@@ -331,6 +357,7 @@ mod tests {
 
     fn meta(id: &str, album: &str, art: Option<&str>) -> RemoteTrackMeta {
         RemoteTrackMeta {
+            audio_fingerprint: None,
             remote_id: id.to_string(),
             title: format!("Song {id}"),
             artist: "Band".to_string(),

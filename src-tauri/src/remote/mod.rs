@@ -9,6 +9,7 @@
 pub mod audius;
 pub mod backend;
 pub mod commands;
+pub mod devices;
 pub mod dlna;
 pub mod gate;
 pub(crate) mod http;
@@ -23,6 +24,7 @@ pub mod subsonic;
 pub mod sync;
 pub mod tags;
 pub mod uri;
+pub mod wave;
 pub mod webdav;
 
 #[cfg(test)]
@@ -77,6 +79,8 @@ pub enum RemoteEvent {
         error: Option<String>,
     },
     StatusChanged,
+    /// Which songs the library shows changed outside a sync.
+    LibraryChanged,
     StreamFailed {
         path: String,
         message: String,
@@ -250,6 +254,12 @@ impl RemoteRuntime {
                 "kodi" => match serde_json::from_str::<kodi::KodiConfig>(&row.config_json) {
                     Ok(config) => {
                         backends.insert(row.id, Arc::new(kodi::KodiBackend::new(config)));
+                    }
+                    Err(_) => tracing::warn!("Unreadable config for remote source {}", row.id),
+                },
+                "wave" => match serde_json::from_str::<wave::WaveConfig>(&row.config_json) {
+                    Ok(config) => {
+                        backends.insert(row.id, Arc::new(wave::WaveBackend::new(config)));
                     }
                     Err(_) => tracing::warn!("Unreadable config for remote source {}", row.id),
                 },

@@ -201,6 +201,7 @@ pub fn item_to_meta(item: &Item) -> Option<RemoteTrackMeta> {
         None
     };
     Some(RemoteTrackMeta {
+        audio_fingerprint: None,
         remote_id: item.id.clone(),
         title: item
             .name

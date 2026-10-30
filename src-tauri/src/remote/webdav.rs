@@ -560,6 +560,7 @@ impl WebDavBackend {
             .tags_for(tags, entry, relative, &extension)
             .unwrap_or_default();
         RemoteTrackMeta {
+            audio_fingerprint: None,
             remote_id: remote_id_for(relative),
             title: read.title.unwrap_or(path.title),
             artist: read

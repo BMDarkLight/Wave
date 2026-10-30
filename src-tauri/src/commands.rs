@@ -2835,7 +2835,18 @@ pub async fn set_playlist_sync_folder(
 pub async fn delete_playlist(
     id: String,
     library: tauri::State<'_, LibraryState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
+    // A paired device's playlist going means forgetting the device.
+    let device = lock_library(&library)?.device_of_playlist(&id)?;
+    if let Some(source_id) = device {
+        let app = app.clone();
+        return blocking(move || {
+            crate::peers::forget_by_source(&app, &source_id);
+            Ok(())
+        })
+        .await;
+    }
     lock_library(&library)?.delete_playlist(&id)
 }
 

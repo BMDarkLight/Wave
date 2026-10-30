@@ -44,6 +44,9 @@ pub struct ShareConfig {
     pub uuid: String,
     pub db_path: PathBuf,
     pub opener: Opener,
+    /// Serve DLNA players too, not only paired Waves.
+    pub dlna: bool,
+    pub peers: Option<Arc<crate::peers::api::PeerService>>,
 }
 
 /// The settings screen's view of the server.
@@ -113,7 +116,7 @@ impl Catalog for LibraryCatalog {
 }
 
 struct Running {
-    config_key: (String, String, PathBuf),
+    config_key: (String, String, PathBuf, bool),
     port: u16,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
@@ -152,6 +155,8 @@ fn start(config: ShareConfig) -> Result<Running, String> {
         uuid: config.uuid.clone(),
         catalog: catalog.clone(),
         opener: config.opener.clone(),
+        dlna: config.dlna,
+        peers: config.peers.clone(),
     });
 
     let mut threads = Vec::new();
@@ -165,11 +170,14 @@ fn start(config: ShareConfig) -> Result<Running, String> {
     let ssdp_stop = stop.clone();
     let ssdp_error = error.clone();
     let uuid = config.uuid.clone();
+    let dlna = config.dlna;
+    let (heard_tx, heard_rx) = std::sync::mpsc::channel();
+    let heard = config.peers.is_some().then_some(heard_tx);
     threads.push(
         std::thread::Builder::new()
             .name("wave-share-ssdp".into())
             .spawn(move || {
-                if let Err(e) = ssdp::run(uuid, port, ssdp_stop) {
+                if let Err(e) = ssdp::run(uuid, port, dlna, ssdp_stop, heard) {
                     tracing::warn!("Library sharing can't announce itself: {e}");
                     *ssdp_error.lock() = Some(format!(
                         "Other devices can't find Wave on their own ({e}); they can still add it at its address"
@@ -178,11 +186,25 @@ fn start(config: ShareConfig) -> Result<Running, String> {
             })
             .map_err(|e| e.to_string())?,
     );
+    if let Some(peers) = config.peers.clone() {
+        let discovery_stop = stop.clone();
+        threads.push(
+            std::thread::Builder::new()
+                .name("wave-peer-discovery".into())
+                .spawn(move || crate::peers::discovery::run(peers, discovery_stop, heard_rx))
+                .map_err(|e| e.to_string())?,
+        );
+    }
     #[cfg(target_os = "android")]
     crate::android::multicast::acquire();
     tracing::info!("Sharing the library as \"{}\" on port {port}", config.name);
     Ok(Running {
-        config_key: (config.name.clone(), config.uuid, config.db_path),
+        config_key: (
+            config.name.clone(),
+            config.uuid,
+            config.db_path,
+            config.dlna,
+        ),
         port,
         stop,
         threads,
@@ -207,7 +229,7 @@ pub fn apply(config: Option<ShareConfig>) {
     let mut slot = state().lock();
     let wanted = config
         .as_ref()
-        .map(|c| (c.name.clone(), c.uuid.clone(), c.db_path.clone()));
+        .map(|c| (c.name.clone(), c.uuid.clone(), c.db_path.clone(), c.dlna));
     if slot.as_ref().map(|r| r.config_key.clone()) == wanted {
         return;
     }
@@ -226,15 +248,26 @@ pub fn apply(config: Option<ShareConfig>) {
     }
 }
 
+#[cfg(target_os = "android")]
 pub fn is_running() -> bool {
     state().lock().is_some()
+}
+
+/// The port the server answers on, while it runs.
+pub fn port() -> Option<u16> {
+    state().lock().as_ref().map(|r| r.port)
+}
+
+/// Running and open to DLNA players, not only to paired Waves.
+pub fn serving_dlna() -> bool {
+    state().lock().as_ref().is_some_and(|r| r.config_key.3)
 }
 
 /// True while the library is shared and set to stay shared with Wave closed,
 /// so closing or quitting from the window must leave the process running.
 pub fn in_background(app: &tauri::AppHandle) -> bool {
     use tauri::Manager;
-    is_running()
+    serving_dlna()
         && app
             .try_state::<crate::app_settings::AppSettingsState>()
             .and_then(|state| state.0.lock().ok().map(|s| s.share_in_background))

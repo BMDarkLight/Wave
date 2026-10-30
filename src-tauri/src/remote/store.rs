@@ -290,9 +290,11 @@ fn upsert_one(
             ],
         )
         .map_err(sql_error("update remote track"))?;
+        set_audio_fingerprint(tx, &id, meta)?;
         return Ok((outcome, orphaned));
     }
 
+    let new_id = Uuid::new_v4().to_string();
     tx.execute(
         "INSERT INTO tracks (
             id, path, name, title, artist, album, album_artist, genre, year, track_number,
@@ -306,7 +308,7 @@ fn upsert_one(
             0, 0, ?21, ?22
         )",
         params![
-            Uuid::new_v4().to_string(),
+            new_id,
             path,
             name,
             meta.title,
@@ -331,7 +333,25 @@ fn upsert_one(
         ],
     )
     .map_err(sql_error("insert remote track"))?;
+    set_audio_fingerprint(tx, &new_id, meta)?;
     Ok((Outcome::Inserted, None))
+}
+
+/// Keeps a remote row's audio fingerprint, for servers that send one.
+fn set_audio_fingerprint(
+    tx: &Transaction<'_>,
+    id: &str,
+    meta: &RemoteTrackMeta,
+) -> Result<(), String> {
+    if meta.audio_fingerprint.is_none() {
+        return Ok(());
+    }
+    tx.execute(
+        "UPDATE tracks SET audio_fingerprint = ?2 WHERE id = ?1",
+        params![id, meta.audio_fingerprint],
+    )
+    .map(drop)
+    .map_err(sql_error("store a remote fingerprint"))
 }
 
 /// Remote rows are only searchable while they are visible, so after any
@@ -361,6 +381,11 @@ struct Candidate {
     source_order: i64,
     missing: bool,
     visible: bool,
+    fingerprint: Option<String>,
+    /// From a source that can't be reached right now.
+    offline: bool,
+    /// A paired Wave's song whose cover has not arrived yet.
+    waiting_for_art: bool,
 }
 
 impl Library {
@@ -654,15 +679,20 @@ impl Library {
             .map_err(sql_error("hide remote tracks"))?;
         } else {
             let candidates = remote_candidates(&tx)?;
-            let local_keys = local_keys_among(&tx, &candidates)?;
+            let local = local_songs_among(&tx, &candidates)?;
 
             let rank = |c: &Candidate| (!c.complete, c.created_at, c.source_order, c.id.clone());
-            let mut best: HashMap<&SongKey, &Candidate> = HashMap::new();
-            for candidate in candidates.iter().filter(|c| !c.missing) {
-                if local_keys.contains(&candidate.key) {
+            // Copies of one song share a key and, where known, a fingerprint;
+            // two recordings under one name are two songs.
+            let mut best: HashMap<(&SongKey, Option<&String>), &Candidate> = HashMap::new();
+            for candidate in candidates
+                .iter()
+                .filter(|c| !c.missing && !c.offline && !c.waiting_for_art)
+            {
+                if local.has(candidate) {
                     continue;
                 }
-                best.entry(&candidate.key)
+                best.entry((&candidate.key, candidate.fingerprint.as_ref()))
                     .and_modify(|current| {
                         if rank(candidate) < rank(current) {
                             *current = candidate;
@@ -860,6 +890,26 @@ impl Library {
         tx.commit().map_err(sql_error("commit album art update"))
     }
 
+    /// The server has no cover for this album after all: stop waiting for
+    /// one, so a paired Wave's songs without art still show.
+    pub fn clear_remote_album_art_ref(
+        &self,
+        source_id: &str,
+        album: &str,
+        album_artist: &str,
+    ) -> Result<(), String> {
+        self.write_connection()
+            .execute(
+                &format!(
+                    "UPDATE tracks SET remote_art_ref = NULL
+                     WHERE remote_source_id = ?1 AND album = ?2 AND {ALBUM_ARTIST_SQL} = ?3"
+                ),
+                params![source_id, album, album_artist],
+            )
+            .map(drop)
+            .map_err(sql_error("clear a missing cover"))
+    }
+
     /// `(album, album_artist, art_ref)` for each album of the source that has
     /// artwork on the server but none stored here.
     pub fn remote_albums_missing_art(
@@ -895,16 +945,21 @@ fn remote_candidates(tx: &Transaction<'_>) -> Result<Vec<Candidate>, String> {
             "SELECT t.id, lower(trim(t.artist)), lower(trim(t.album)), lower(trim(t.title)),
                     t.cache_state, t.remote_missing, t.remote_visible,
                     COALESCE(rs.created_at, 9223372036854775807),
-                    COALESCE(rs.rowid, 9223372036854775807)
+                    COALESCE(rs.rowid, 9223372036854775807),
+                    t.audio_fingerprint, t.remote_source_id,
+                    rs.kind = 'wave' AND t.remote_art_ref IS NOT NULL
+                        AND t.album_art_id IS NULL
              FROM tracks t
              LEFT JOIN remote_sources rs ON rs.id = t.remote_source_id
              WHERE t.source_state = 'remote' AND t.remote_source_id IS NOT 'search'",
         )
         .map_err(sql_error("prepare visibility query"))?;
+    let offline = offline_sources().lock().clone();
     let rows = statement
         .query_map([], |row| {
             let id: String = row.get(0)?;
             let title: String = row.get(3)?;
+            let source: Option<String> = row.get(10)?;
             // A row with no title matches nothing but itself.
             let key = if title.is_empty() {
                 (format!("\0{id}"), String::new(), String::new())
@@ -919,6 +974,9 @@ fn remote_candidates(tx: &Transaction<'_>) -> Result<Vec<Candidate>, String> {
                 visible: row.get(6)?,
                 created_at: row.get(7)?,
                 source_order: row.get(8)?,
+                fingerprint: row.get(9)?,
+                offline: source.is_some_and(|s| offline.contains(&s)),
+                waiting_for_art: row.get::<_, Option<bool>>(11)?.unwrap_or(false),
             })
         })
         .map_err(sql_error("query visibility"))?
@@ -927,35 +985,84 @@ fn remote_candidates(tx: &Transaction<'_>) -> Result<Vec<Candidate>, String> {
     Ok(rows)
 }
 
-/// The keys of local files (including downloads) that some remote row shares.
-fn local_keys_among(
-    tx: &Transaction<'_>,
-    candidates: &[Candidate],
-) -> Result<HashSet<SongKey>, String> {
+/// Remote sources that can't be reached right now, whose songs stay out of
+/// the library until they can.
+fn offline_sources() -> &'static parking_lot::Mutex<HashSet<String>> {
+    static OFFLINE: std::sync::OnceLock<parking_lot::Mutex<HashSet<String>>> =
+        std::sync::OnceLock::new();
+    OFFLINE.get_or_init(Default::default)
+}
+
+pub fn set_source_offline(source_id: &str, offline: bool) {
+    let mut sources = offline_sources().lock();
+    if offline {
+        sources.insert(source_id.to_string());
+    } else {
+        sources.remove(source_id);
+    }
+}
+
+/// What the library itself holds, for deciding which remote copies are
+/// duplicates: the fingerprints of local songs under each key some remote
+/// row shares (`None` where a song has none yet), and every local
+/// fingerprint.
+struct LocalSongs {
+    by_key: HashMap<SongKey, Vec<Option<String>>>,
+    fingerprints: HashSet<String>,
+}
+
+impl LocalSongs {
+    /// Whether this library already has `candidate`. The audio decides when
+    /// both sides have a fingerprint; otherwise the name does, which keeps
+    /// duplicates out while fingerprints are still being taken.
+    fn has(&self, candidate: &Candidate) -> bool {
+        let Some(print) = &candidate.fingerprint else {
+            return self.by_key.contains_key(&candidate.key);
+        };
+        if self.fingerprints.contains(print) {
+            return true;
+        }
+        self.by_key
+            .get(&candidate.key)
+            .is_some_and(|prints| prints.iter().any(Option::is_none))
+    }
+}
+
+/// Local files (including downloads) as far as remote rows need them.
+fn local_songs_among(tx: &Transaction<'_>, candidates: &[Candidate]) -> Result<LocalSongs, String> {
     let remote_keys: HashSet<&SongKey> = candidates.iter().map(|c| &c.key).collect();
     let mut statement = tx
         .prepare(
-            "SELECT lower(trim(artist)), lower(trim(album)), lower(trim(title))
+            "SELECT lower(trim(artist)), lower(trim(album)), lower(trim(title)), audio_fingerprint
              FROM tracks WHERE source_state IS NULL OR source_state = 'downloaded'",
         )
         .map_err(sql_error("prepare local key query"))?;
     let rows = statement
         .query_map([], |row| {
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
+                (
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ),
+                row.get::<_, Option<String>>(3)?,
             ))
         })
         .map_err(sql_error("query local keys"))?;
-    let mut shared = HashSet::new();
+    let mut local = LocalSongs {
+        by_key: HashMap::new(),
+        fingerprints: HashSet::new(),
+    };
     for row in rows {
-        let key = row.map_err(sql_error("read local key"))?;
+        let (key, print) = row.map_err(sql_error("read local key"))?;
+        if let Some(print) = &print {
+            local.fingerprints.insert(print.clone());
+        }
         if remote_keys.contains(&key) {
-            shared.insert(key);
+            local.by_key.entry(key).or_default().push(print);
         }
     }
-    Ok(shared)
+    Ok(local)
 }
 
 #[cfg(test)]
@@ -989,6 +1096,7 @@ mod tests {
             part_key: format!("/library/parts/{id}/file.flac"),
             art_ref: None,
             updated_at: Some(5),
+            audio_fingerprint: None,
         }
     }
 
@@ -1057,6 +1165,107 @@ mod tests {
                 params![playlist_id, track_id],
             )
             .unwrap();
+    }
+
+    // ── Paired Waves ──────────────────────────────────────────────────────
+
+    fn wave_meta(id: &str, title: &str, fingerprint: Option<&str>) -> RemoteTrackMeta {
+        RemoteTrackMeta {
+            audio_fingerprint: fingerprint.map(str::to_string),
+            ..meta(id, title, "Band", "Album", 100.0)
+        }
+    }
+
+    fn set_local_fingerprint(library: &Library, id: &str, fingerprint: &str) {
+        library
+            .set_audio_fingerprint(id, Some(fingerprint), "1")
+            .unwrap();
+    }
+
+    /// A source under its own id: the offline set is shared by every test.
+    fn wave_source(library: &Library) -> String {
+        library
+            .insert_remote_source("wave", &Uuid::new_v4().to_string(), "Wave on Android", "{}")
+            .unwrap()
+    }
+
+    #[test]
+    fn the_same_audio_is_not_shown_twice() {
+        let library = test_library();
+        insert_local(&library, "mine", "Song", "Band", "Album");
+        set_local_fingerprint(&library, "mine", "a1:same");
+        let source = wave_source(&library);
+        walk(
+            &library,
+            &source,
+            &[wave_meta("1", "Song (retagged)", Some("a1:same"))],
+        );
+        library.recompute_remote_visibility(true).unwrap();
+        assert_eq!(library_titles(&library), ["Song"]);
+    }
+
+    #[test]
+    fn a_different_recording_with_the_same_name_shows_as_its_own_song() {
+        let library = test_library();
+        insert_local(&library, "mine", "Song", "Band", "Album");
+        set_local_fingerprint(&library, "mine", "a1:studio");
+        let source = wave_source(&library);
+        walk(
+            &library,
+            &source,
+            &[wave_meta("1", "Song", Some("a1:live"))],
+        );
+        library.recompute_remote_visibility(true).unwrap();
+        assert_eq!(library_titles(&library), ["Song", "Song"]);
+    }
+
+    #[test]
+    fn without_fingerprints_the_name_still_keeps_duplicates_out() {
+        let library = test_library();
+        insert_local(&library, "mine", "Song", "Band", "Album");
+        let source = wave_source(&library);
+        walk(
+            &library,
+            &source,
+            &[wave_meta("1", "Song", Some("a1:remote"))],
+        );
+        library.recompute_remote_visibility(true).unwrap();
+        assert_eq!(library_titles(&library), ["Song"]);
+    }
+
+    #[test]
+    fn an_offline_device_hides_its_songs_until_it_is_back() {
+        let library = test_library();
+        let source = wave_source(&library);
+        walk(&library, &source, &[wave_meta("1", "Away", None)]);
+        set_source_offline(&source, true);
+        library.recompute_remote_visibility(true).unwrap();
+        assert!(library_titles(&library).is_empty());
+        set_source_offline(&source, false);
+        library.recompute_remote_visibility(true).unwrap();
+        assert_eq!(library_titles(&library), ["Away"]);
+    }
+
+    #[test]
+    fn a_wave_song_waits_for_its_cover() {
+        let library = test_library();
+        let source = wave_source(&library);
+        let with_art = RemoteTrackMeta {
+            art_ref: Some("1".into()),
+            ..wave_meta("1", "Covered", None)
+        };
+        walk(&library, &source, &[with_art]);
+        library.recompute_remote_visibility(true).unwrap();
+        assert!(library_titles(&library).is_empty());
+        library
+            .write_connection()
+            .execute(
+                "UPDATE tracks SET album_art_id = 'art' WHERE remote_source_id = ?1",
+                [&source],
+            )
+            .unwrap();
+        library.recompute_remote_visibility(true).unwrap();
+        assert_eq!(library_titles(&library), ["Covered"]);
     }
 
     #[test]

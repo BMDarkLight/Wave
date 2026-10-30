@@ -493,6 +493,7 @@ pub(crate) mod testkit {
                 .insert_remote_source("plex", &Uuid::new_v4().to_string(), "Home", "{}")
                 .unwrap();
             let meta = RemoteTrackMeta {
+                audio_fingerprint: None,
                 remote_id: "1".into(),
                 title: "Song".into(),
                 artist: "Band".into(),

@@ -114,6 +114,7 @@ fn track_to_meta(item: &serde_json::Value) -> Option<RemoteTrackMeta> {
         .get("album_backlink")
         .and_then(|album| str_field(album, "playlist_name"));
     Some(RemoteTrackMeta {
+        audio_fingerprint: None,
         title: str_field(item, "title").unwrap_or_else(|| "Untitled".to_string()),
         artist: item
             .get("user")

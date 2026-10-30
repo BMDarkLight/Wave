@@ -301,6 +301,11 @@ impl Snapshot {
         self.tracks.len()
     }
 
+    /// Every shared track, in library order.
+    pub fn tracks(&self) -> &[Track] {
+        &self.tracks
+    }
+
     /// A shared track by its library id.
     pub fn track(&self, id: &str) -> Option<&Track> {
         self.track_index.get(id).map(|&i| &self.tracks[i])

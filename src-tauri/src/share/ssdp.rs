@@ -28,18 +28,32 @@ const MAX_AGE: u64 = 1800;
 /// Announce again well inside `MAX_AGE`, as the spec recommends.
 const REANNOUNCE: Duration = Duration::from_secs(600);
 
+/// One thing the server announces: its notification type, USN, and the
+/// path its LOCATION points at.
+pub type Target = (String, String, &'static str);
+
 /// The notification types and their USNs, per Device Architecture 1.1.2.
-pub fn targets(uuid: &str) -> Vec<(String, String)> {
+/// Other Waves look for the Wave type, which is announced either way; the
+/// media server set only while DLNA players are served.
+pub fn targets(uuid: &str, dlna: bool) -> Vec<Target> {
     let device = format!("uuid:{uuid}");
-    let mut out = vec![
-        (
-            "upnp:rootdevice".to_string(),
-            format!("{device}::upnp:rootdevice"),
-        ),
-        (device.clone(), device.clone()),
-    ];
+    let wave = crate::peers::discovery::WAVE_DEVICE;
+    let mut out = vec![(wave.to_string(), format!("{device}::{wave}"), "/wave/hello")];
+    if !dlna {
+        return out;
+    }
+    out.push((
+        "upnp:rootdevice".to_string(),
+        format!("{device}::upnp:rootdevice"),
+        "/rootDesc.xml",
+    ));
+    out.push((device.clone(), device.clone(), "/rootDesc.xml"));
     for kind in [MEDIA_SERVER, CONTENT_DIRECTORY, CONNECTION_MANAGER] {
-        out.push((kind.to_string(), format!("{device}::{kind}")));
+        out.push((
+            kind.to_string(),
+            format!("{device}::{kind}"),
+            "/rootDesc.xml",
+        ));
     }
     out
 }
@@ -52,8 +66,8 @@ fn server_token() -> String {
     )
 }
 
-fn location(ip: Ipv4Addr, http_port: u16) -> String {
-    format!("http://{ip}:{http_port}/rootDesc.xml")
+fn location(ip: Ipv4Addr, http_port: u16, path: &str) -> String {
+    format!("http://{ip}:{http_port}{path}")
 }
 
 pub fn alive(nt: &str, usn: &str, location: &str) -> String {
@@ -137,11 +151,11 @@ pub fn parse_search(message: &str) -> Option<(String, u64)> {
 }
 
 /// The replies a search for `st` should get, one per matching target.
-pub fn matching<'a>(st: &str, targets: &'a [(String, String)]) -> Vec<&'a (String, String)> {
+pub fn matching<'a>(st: &str, targets: &'a [Target]) -> Vec<&'a Target> {
     if st == "ssdp:all" {
         return targets.iter().collect();
     }
-    targets.iter().filter(|(nt, _)| nt == st).collect()
+    targets.iter().filter(|(nt, _, _)| nt == st).collect()
 }
 
 /// The local address a packet to `peer` would leave from.
@@ -163,18 +177,17 @@ fn interfaces() -> Vec<Ipv4Addr> {
 
 /// Sends each target's message on every interface, with that interface's
 /// address in LOCATION.
-fn announce(socket: &socket2::Socket, uuid: &str, http_port: u16, leaving: bool) {
+fn announce(socket: &socket2::Socket, targets: &[Target], http_port: u16, leaving: bool) {
     let group: SocketAddr = (GROUP, PORT).into();
     for interface in interfaces() {
         if socket.set_multicast_if_v4(&interface).is_err() {
             continue;
         }
-        let here = location(interface, http_port);
-        for (nt, usn) in targets(uuid) {
+        for (nt, usn, path) in targets {
             let message = if leaving {
-                byebye(&nt, &usn)
+                byebye(nt, usn)
             } else {
-                alive(&nt, &usn, &here)
+                alive(nt, usn, &location(interface, http_port, path))
             };
             let _ = socket.send_to(message.as_bytes(), &group.into());
         }
@@ -205,20 +218,27 @@ fn bind() -> std::io::Result<socket2::Socket> {
     Ok(socket)
 }
 
-/// Announces and answers until `stop` is set, then says goodbye.
-pub fn run(uuid: String, http_port: u16, stop: Arc<AtomicBool>) -> std::io::Result<()> {
+/// Announces and answers until `stop` is set, then says goodbye. Other
+/// Waves' announcements heard on the way go to `heard`.
+pub fn run(
+    uuid: String,
+    http_port: u16,
+    dlna: bool,
+    stop: Arc<AtomicBool>,
+    heard: Option<std::sync::mpsc::Sender<String>>,
+) -> std::io::Result<()> {
     let socket = bind()?;
-    let targets = targets(&uuid);
+    let targets = targets(&uuid, dlna);
     // UDP may drop one; the spec suggests sending a few.
     for _ in 0..2 {
-        announce(&socket, &uuid, http_port, false);
+        announce(&socket, &targets, http_port, false);
         std::thread::sleep(Duration::from_millis(100));
     }
     let mut last_announce = Instant::now();
     let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 2048];
     while !stop.load(Ordering::Relaxed) {
         if last_announce.elapsed() >= REANNOUNCE {
-            announce(&socket, &uuid, http_port, false);
+            announce(&socket, &targets, http_port, false);
             last_announce = Instant::now();
         }
         let Ok((n, from)) = socket.recv_from(&mut buf) else {
@@ -235,13 +255,20 @@ pub fn run(uuid: String, http_port: u16, stop: Arc<AtomicBool>) -> std::io::Resu
             .iter()
             .map(|b| unsafe { b.assume_init() })
             .collect();
-        let Some((st, mx)) = parse_search(&String::from_utf8_lossy(&bytes)) else {
+        let message = String::from_utf8_lossy(&bytes);
+        if let Some(location) = crate::peers::discovery::wave_location(&message) {
+            if let Some(heard) = &heard {
+                let _ = heard.send(location);
+            }
+            continue;
+        }
+        let Some((st, mx)) = parse_search(&message) else {
             continue;
         };
         let replies: Vec<String> = match local_address_for(peer) {
             Some(ip) => matching(&st, &targets)
                 .into_iter()
-                .map(|(nt, usn)| search_reply(nt, usn, &location(ip, http_port)))
+                .map(|(nt, usn, path)| search_reply(nt, usn, &location(ip, http_port, path)))
                 .collect(),
             None => continue,
         };
@@ -264,7 +291,7 @@ pub fn run(uuid: String, http_port: u16, stop: Arc<AtomicBool>) -> std::io::Resu
                 }
             });
     }
-    announce(&socket, &uuid, http_port, true);
+    announce(&socket, &targets, http_port, true);
     Ok(())
 }
 
@@ -274,17 +301,25 @@ mod tests {
 
     #[test]
     fn targets_and_usns_follow_the_device_architecture() {
-        let all = targets("abc");
-        assert_eq!(all.len(), 5);
-        assert_eq!(
-            all[0],
-            ("upnp:rootdevice".into(), "uuid:abc::upnp:rootdevice".into())
-        );
-        assert_eq!(all[1], ("uuid:abc".into(), "uuid:abc".into()));
+        let all = targets("abc", true);
+        assert_eq!(all.len(), 6);
+        assert!(all.contains(&(
+            "upnp:rootdevice".into(),
+            "uuid:abc::upnp:rootdevice".into(),
+            "/rootDesc.xml"
+        )));
+        assert!(all.contains(&("uuid:abc".into(), "uuid:abc".into(), "/rootDesc.xml")));
         assert!(all.contains(&(
             MEDIA_SERVER.to_string(),
-            format!("uuid:abc::{MEDIA_SERVER}")
+            format!("uuid:abc::{MEDIA_SERVER}"),
+            "/rootDesc.xml"
         )));
+        let wave = crate::peers::discovery::WAVE_DEVICE;
+        assert!(all.contains(&(wave.to_string(), format!("uuid:abc::{wave}"), "/wave/hello")));
+        // With DLNA off only other Waves can find it.
+        let quiet = targets("abc", false);
+        assert_eq!(quiet.len(), 1);
+        assert_eq!(quiet[0].0, wave);
     }
 
     #[test]
@@ -292,9 +327,9 @@ mod tests {
         let search = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: urn:schemas-upnp-org:device:MediaServer:1\r\n\r\n";
         let (st, mx) = parse_search(search).unwrap();
         assert_eq!((st.as_str(), mx), (MEDIA_SERVER, 2));
-        let all = targets("abc");
+        let all = targets("abc", true);
         assert_eq!(matching(&st, &all).len(), 1);
-        assert_eq!(matching("ssdp:all", &all).len(), 5);
+        assert_eq!(matching("ssdp:all", &all).len(), 6);
         assert!(matching("urn:schemas-upnp-org:device:MediaRenderer:1", &all).is_empty());
         // No MAN header, or a NOTIFY, is not a search.
         assert!(parse_search("M-SEARCH * HTTP/1.1\r\nST: ssdp:all\r\n\r\n").is_none());

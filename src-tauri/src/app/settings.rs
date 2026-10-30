@@ -111,6 +111,9 @@ pub struct AppSettings {
     /// it across launches.
     #[serde(default)]
     pub share_device_id: Option<String>,
+    /// Other Waves this one is paired with, and what it shares with each.
+    #[serde(default)]
+    pub wave_peers: Vec<crate::peers::PeerRecord>,
     /// Plex client identifier, generated once and then kept so the server
     /// sees the same device across launches.
     #[serde(default)]
@@ -220,6 +223,7 @@ impl Default for AppSettings {
             share_name: None,
             share_in_background: false,
             share_device_id: None,
+            wave_peers: Vec::new(),
             plex_client_identifier: None,
             song_coupling_enabled: false,
             song_couples: Vec::new(),

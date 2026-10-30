@@ -546,6 +546,7 @@ fn item_to_meta(item: &DidlItem) -> RemoteTrackMeta {
         None => Some(super::webdav::name_meta(&item.title, None)),
     };
     RemoteTrackMeta {
+        audio_fingerprint: None,
         remote_id: remote_id_for(&item.res_url),
         title: named
             .as_ref()

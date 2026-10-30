@@ -104,6 +104,10 @@ pub struct PlaylistInfo {
     /// Optional folder path/URI this playlist stays synced with.
     /// Desktop: filesystem path. Android: SAF `content://…/tree/…` URI.
     pub sync_folder: Option<String>,
+    /// The paired Wave this playlist lists the shared songs of (its remote
+    /// source id). Deleting the playlist forgets the device.
+    #[serde(default)]
+    pub peer_source_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -439,6 +443,10 @@ impl Library {
         ensure_track_column(&connection, "cache_state", "TEXT")?;
         ensure_track_column(&connection, "remote_updated_at", "INTEGER")?;
         ensure_track_column(&connection, "remote_art_ref", "TEXT")?;
+        // Tag-independent audio fingerprint (see `fingerprint`), and the file
+        // size it was taken at, so a changed file gets a new one.
+        ensure_track_column(&connection, "audio_fingerprint", "TEXT")?;
+        ensure_track_column(&connection, "audio_fingerprint_key", "TEXT")?;
         ensure_lyrics_synced_column(&connection)?;
         ensure_library_revision(&connection)?;
         // Which analysis made a saved waveform. Rows from before the column
@@ -482,6 +490,7 @@ impl Library {
         ensure_library_tracks_view(&connection)
             .map_err(|error| format!("Failed to initialize source schema: {error}"))?;
         ensure_playlist_column(&connection, "sync_folder", "TEXT")?;
+        ensure_playlist_column(&connection, "peer_source_id", "TEXT")?;
         ensure_table_column(&connection, "artist_similar", "similar_mbid", "TEXT")?;
         ensure_table_column(
             &connection,
@@ -1212,7 +1221,7 @@ impl Library {
 
         let mut sql = "
             SELECT p.id, p.profile_id, p.name, COUNT(pt.track_id), p.created_at, p.updated_at,
-                   p.sync_folder
+                   p.sync_folder, p.peer_source_id
             FROM playlists p
             LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
         "
@@ -2264,7 +2273,7 @@ impl Library {
         let mut info = connection
             .query_row(
                 "SELECT p.id, p.profile_id, p.name, COUNT(pt.track_id), p.created_at, p.updated_at,
-                        p.sync_folder
+                        p.sync_folder, p.peer_source_id
                  FROM playlists p
                  LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
                  WHERE p.id = ?1
@@ -2386,7 +2395,7 @@ impl Library {
         let mut stmt = connection
             .prepare(
                 "SELECT p.id, p.profile_id, p.name, COUNT(pt.track_id), p.created_at, p.updated_at,
-                        p.sync_folder
+                        p.sync_folder, p.peer_source_id
                  FROM playlists p
                  LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
                  WHERE p.name LIKE ?1 ESCAPE '\\'
@@ -3905,6 +3914,7 @@ fn row_to_playlist(row: &rusqlite::Row<'_>) -> rusqlite::Result<PlaylistInfo> {
         created_at: row.get(4)?,
         updated_at: row.get(5)?,
         sync_folder: row.get(6)?,
+        peer_source_id: row.get(7)?,
     })
 }
 

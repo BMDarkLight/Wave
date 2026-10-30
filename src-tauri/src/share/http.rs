@@ -44,6 +44,10 @@ pub struct Server {
     pub uuid: String,
     pub catalog: Arc<dyn Catalog>,
     pub opener: Opener,
+    /// Whether DLNA players are served. Off leaves only the `/wave/` API,
+    /// for paired Waves.
+    pub dlna: bool,
+    pub peers: Option<Arc<crate::peers::api::PeerService>>,
 }
 
 /// Whether `ip` can only be on this machine or its local network.
@@ -207,12 +211,17 @@ fn handle(mut stream: TcpStream, server: &Server) -> io::Result<()> {
         IpAddr::V4(v4) => format!("http://{v4}:{}", local.port()),
     };
     let head_only = request.method == "HEAD";
-    let path = request
+    let (path, query) = request
         .path
-        .split('?')
-        .next()
-        .unwrap_or_default()
-        .to_string();
+        .split_once('?')
+        .unwrap_or((request.path.as_str(), ""));
+    let path = path.to_string();
+    if path.starts_with("/wave/") {
+        return wave(&mut stream, server, &request, &path, query, head_only);
+    }
+    if !server.dlna {
+        return respond(&mut stream, "404 Not Found", &[], b"", head_only);
+    }
     match (request.method.as_str(), path.as_str()) {
         ("GET" | "HEAD", "/rootDesc.xml") => xml(
             &mut stream,
@@ -278,6 +287,54 @@ fn handle(mut stream: TcpStream, server: &Server) -> io::Result<()> {
             art(&mut stream, server, &p["/art/".len()..], head_only)
         }
         _ => respond(&mut stream, "404 Not Found", &[], b"", head_only),
+    }
+}
+
+/// A request for the API paired Waves use.
+fn wave(
+    stream: &mut TcpStream,
+    server: &Server,
+    request: &Request,
+    path: &str,
+    query: &str,
+    head_only: bool,
+) -> io::Result<()> {
+    let Some(peers) = server.peers.as_ref() else {
+        return respond(stream, "404 Not Found", &[], b"", head_only);
+    };
+    let from = stream.peer_addr()?.ip();
+    let snapshot = server.catalog.snapshot().ok();
+    let reply = peers.handle(
+        &crate::peers::api::PeerRequest {
+            method: &request.method,
+            path,
+            query,
+            peer: request.header("X-Wave-Peer"),
+            secret: request.header("X-Wave-Secret"),
+            body: &request.body,
+            from,
+        },
+        snapshot.as_deref(),
+    );
+    use crate::peers::api::PeerReply;
+    match reply {
+        Some(PeerReply::Json(status, body)) => respond(
+            stream,
+            status,
+            &[("Content-Type", "application/json".to_string())],
+            body.as_bytes(),
+            head_only,
+        ),
+        // Back in the `<id>.<extension>` form the DLNA endpoints read.
+        Some(PeerReply::Media(id)) => {
+            let name = format!("{}.x", crate::remote::uri::percent_encode(&id));
+            media(stream, server, request, &name, head_only)
+        }
+        Some(PeerReply::Art(id)) => {
+            let name = format!("{}.x", crate::remote::uri::percent_encode(&id));
+            art(stream, server, &name, head_only)
+        }
+        None => respond(stream, "404 Not Found", &[], b"", head_only),
     }
 }
 
@@ -769,8 +826,43 @@ mod tests {
         }
     }
 
+    /// A paired Wave with id "phone" and secret `PEER_SECRET`, shared `share`.
+    struct OnePeer(crate::peers::ShareScope);
+    const PEER_SECRET: &str = "0123456789abcdef0123";
+    impl crate::peers::api::Host for OnePeer {
+        fn identity(&self) -> (String, String) {
+            ("1234".into(), "Wave on test".into())
+        }
+        fn peers(&self) -> Vec<crate::peers::PeerRecord> {
+            vec![crate::peers::PeerRecord {
+                id: "phone".into(),
+                name: "Wave on Android".into(),
+                address: "http://127.0.0.1:1".into(),
+                secret: PEER_SECRET.into(),
+                share: self.0.clone(),
+                source_id: None,
+                paired_at: 0,
+            }]
+        }
+        fn update_peers(&self, _change: &mut dyn FnMut(&mut Vec<crate::peers::PeerRecord>)) {}
+        fn fingerprints(&self) -> std::collections::HashMap<String, String> {
+            Default::default()
+        }
+        fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+        fn paired(&self, _peer: &crate::peers::PeerRecord) {}
+        fn forgotten(&self, _peer_id: &str) {}
+        fn reachable(&self, _peer_id: &str, _online: bool) {}
+    }
+
     /// A running server over one 1000-byte song, and its port.
     fn running() -> (u16, Arc<AtomicBool>, std::path::PathBuf) {
+        running_with(true, crate::peers::ShareScope::Everything)
+    }
+
+    fn running_with(
+        dlna: bool,
+        share: crate::peers::ShareScope,
+    ) -> (u16, Arc<AtomicBool>, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("wave-share-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let song = dir.join("song.mp3");
@@ -796,6 +888,10 @@ mod tests {
             uuid: "1234".into(),
             catalog: Arc::new(Fixed(snapshot)),
             opener: Arc::new(|path: &str| std::fs::File::open(path)),
+            dlna,
+            peers: Some(Arc::new(crate::peers::api::PeerService::new(Arc::new(
+                OnePeer(share),
+            )))),
         });
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -860,6 +956,54 @@ mod tests {
         assert_eq!(wanted_range("items=0-1", 1000), Wanted::Whole);
         assert_eq!(wanted_range("bytes=abc-", 1000), Wanted::Whole);
         assert_eq!(wanted_range("bytes=", 1000), Wanted::Whole);
+    }
+
+    #[test]
+    fn with_dlna_off_only_paired_waves_are_served() {
+        let (port, stop, _) = running_with(false, crate::peers::ShareScope::Everything);
+        let (head, _) = exchange(port, "GET /rootDesc.xml HTTP/1.1\r\n\r\n");
+        assert!(head.starts_with("HTTP/1.1 404"), "{head}");
+        let (head, body) = exchange(port, "GET /wave/hello HTTP/1.1\r\n\r\n");
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        assert!(String::from_utf8_lossy(&body).contains("\"id\":\"1234\""));
+        stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn a_paired_wave_streams_what_it_was_given() {
+        let (port, stop, _) =
+            running_with(false, crate::peers::ShareScope::Tracks(vec!["t 1".into()]));
+        let auth = format!("X-Wave-Peer: phone\r\nX-Wave-Secret: {PEER_SECRET}\r\n");
+        let (head, body) = exchange(
+            port,
+            &format!("GET /wave/media/t%201.mp3 HTTP/1.1\r\n{auth}Range: bytes=10-19\r\n\r\n"),
+        );
+        assert!(head.starts_with("HTTP/1.1 206"), "{head}");
+        assert_eq!(
+            body,
+            (10..20u32).map(|i| (i % 251) as u8).collect::<Vec<_>>()
+        );
+        let (head, _) = exchange(port, "GET /wave/media/t%201.mp3 HTTP/1.1\r\n\r\n");
+        assert!(head.starts_with("HTTP/1.1 403"), "{head}");
+        let (head, body) = exchange(
+            port,
+            &format!("GET /wave/catalog?cursor=0 HTTP/1.1\r\n{auth}\r\n"),
+        );
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        assert!(String::from_utf8_lossy(&body).contains("\"total\":1"));
+        stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn a_paired_wave_gets_nothing_outside_its_share() {
+        let (port, stop, _) = running_with(true, crate::peers::ShareScope::Nothing);
+        let auth = format!("X-Wave-Peer: phone\r\nX-Wave-Secret: {PEER_SECRET}\r\n");
+        let (head, _) = exchange(
+            port,
+            &format!("GET /wave/media/t%201.mp3 HTTP/1.1\r\n{auth}\r\n"),
+        );
+        assert!(head.starts_with("HTTP/1.1 404"), "{head}");
+        stop.store(true, Ordering::Relaxed);
     }
 
     #[test]
@@ -1004,5 +1148,180 @@ mod tests {
         let (head, _) = exchange(port, "GET /art/unknown.jpg HTTP/1.1\r\n\r\n");
         assert!(head.starts_with("HTTP/1.1 404"));
         stop.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod pairing_tests {
+    use super::*;
+    use crate::metadata::Track;
+    use crate::peers::api::{AnswerBody, AskBody, Host, PeerService, UnpairBody};
+    use crate::peers::{client, PeerRecord, ShareScope};
+    use std::collections::HashMap;
+    use std::net::Ipv4Addr;
+    use std::sync::Mutex;
+
+    struct Fixed(Arc<Snapshot>);
+    impl Catalog for Fixed {
+        fn snapshot(&self) -> Result<Arc<Snapshot>, String> {
+            Ok(self.0.clone())
+        }
+    }
+
+    /// A Wave's settings and events, kept in memory.
+    struct MemHost {
+        id: String,
+        peers: Mutex<Vec<PeerRecord>>,
+        events: Mutex<Vec<String>>,
+    }
+
+    impl Host for MemHost {
+        fn identity(&self) -> (String, String) {
+            (self.id.clone(), format!("Wave on {}", self.id))
+        }
+        fn peers(&self) -> Vec<PeerRecord> {
+            self.peers.lock().unwrap().clone()
+        }
+        fn update_peers(&self, change: &mut dyn FnMut(&mut Vec<PeerRecord>)) {
+            change(&mut self.peers.lock().unwrap());
+        }
+        fn fingerprints(&self) -> HashMap<String, String> {
+            HashMap::new()
+        }
+        fn emit(&self, event: &str, _payload: serde_json::Value) {
+            self.events.lock().unwrap().push(event.to_string());
+        }
+        fn paired(&self, _peer: &PeerRecord) {}
+        fn forgotten(&self, _peer_id: &str) {}
+        fn reachable(&self, _peer_id: &str, _online: bool) {}
+    }
+
+    /// A Wave serving `songs` (1000-byte files), its peer service and port.
+    fn wave(id: &str, songs: &[&str]) -> (Arc<MemHost>, Arc<PeerService>, u16) {
+        let dir = std::env::temp_dir().join(format!("wave-pair-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tracks = songs
+            .iter()
+            .map(|name| {
+                let path = dir.join(format!("{name}.mp3"));
+                std::fs::write(&path, vec![name.as_bytes()[0]; 1000]).unwrap();
+                Track {
+                    id: name.to_string(),
+                    path: path.to_string_lossy().into_owned(),
+                    title: name.to_string(),
+                    format: "mp3".into(),
+                    file_size: 1000,
+                    ..Track::default()
+                }
+            })
+            .collect();
+        let host = Arc::new(MemHost {
+            id: id.into(),
+            peers: Mutex::new(Vec::new()),
+            events: Mutex::new(Vec::new()),
+        });
+        let peers = Arc::new(PeerService::new(host.clone()));
+        let server = Arc::new(Server {
+            name: format!("Wave on {id}"),
+            uuid: id.into(),
+            catalog: Arc::new(Fixed(Arc::new(Snapshot::build(1, tracks, Vec::new())))),
+            opener: Arc::new(|path: &str| std::fs::File::open(path)),
+            dlna: false,
+            peers: Some(peers.clone()),
+        });
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || serve(listener, server, Arc::new(AtomicBool::new(false))));
+        (host, peers, port)
+    }
+
+    #[test]
+    fn two_waves_pair_share_and_forget() {
+        let (pc_host, pc, pc_port) = wave("pc", &["pc-song"]);
+        let (phone_host, phone, phone_port) = wave("phone", &["a-song", "b-song", "c-song"]);
+        let phone_address = format!("http://127.0.0.1:{phone_port}");
+        let secret = "0123456789abcdef0123456789abcdef".to_string();
+
+        // The PC asks.
+        pc.asked("phone", "Wave on phone", &phone_address, &secret);
+        client::ask(
+            &phone_address,
+            &AskBody {
+                id: "pc".into(),
+                name: "Wave on pc".into(),
+                port: pc_port,
+                secret: secret.clone(),
+            },
+        )
+        .unwrap();
+        assert!(phone_host
+            .events
+            .lock()
+            .unwrap()
+            .contains(&"wave-peer-request".to_string()));
+
+        // The phone shares two of its songs, and says so.
+        let record = phone
+            .accept(
+                "pc",
+                ShareScope::Tracks(vec!["a-song".into(), "c-song".into()]),
+            )
+            .unwrap();
+        assert_eq!(record.address, format!("http://127.0.0.1:{pc_port}"));
+        client::answer(
+            &record.address,
+            &AnswerBody {
+                id: "phone".into(),
+                name: "Wave on phone".into(),
+                port: phone_port,
+                secret: record.secret.clone(),
+                accepted: true,
+            },
+        )
+        .unwrap();
+        let on_pc = pc_host.peers();
+        assert_eq!(on_pc.len(), 1);
+        assert_eq!(on_pc[0].address, phone_address);
+        assert!(pc_host
+            .events
+            .lock()
+            .unwrap()
+            .contains(&"wave-peer-answered".to_string()));
+
+        // The PC reads what it was given, and can play it.
+        let page = client::catalog(&on_pc[0], "pc", 0).unwrap();
+        let ids: Vec<_> = page.tracks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["a-song", "c-song"]);
+        let response = client::signed(
+            reqwest::blocking::Client::new().get(client::media_url(
+                &phone_address,
+                "c-song",
+                "mp3",
+            )),
+            "pc",
+            &on_pc[0],
+        )
+        .header("Range", "bytes=0-9")
+        .send()
+        .unwrap();
+        assert_eq!(response.status().as_u16(), 206);
+        assert_eq!(response.bytes().unwrap().as_ref(), &[b'c'; 10]);
+
+        // The PC forgets the phone; the phone drops the pairing too.
+        client::unpair(
+            &phone_address,
+            &UnpairBody {
+                id: "pc".into(),
+                secret: on_pc[0].secret.clone(),
+            },
+        )
+        .unwrap();
+        pc.forget("phone");
+        assert!(phone_host.peers().is_empty());
+        assert!(pc_host.peers().is_empty());
+        assert_eq!(
+            client::catalog(&on_pc[0], "pc", 0).unwrap_err(),
+            client::CallError::Forgotten
+        );
     }
 }
