@@ -17,6 +17,7 @@ import {
 } from "react";
 import { BiPlay, BiMusic, BiRefresh } from "react-icons/bi";
 import PullToRefresh from "./PullToRefresh";
+import HomeListening from "./HomeListening";
 import { isMobileLayout } from "../utils/platform";
 import {
   getHomeSuggestions,
@@ -251,6 +252,8 @@ type HomePageProps = {
   onOpenAlbum: (album: string, albumArtist: string | null) => void;
   onOpenArtist: (artist: string) => void;
   onOpenLibrary: () => void;
+  /** Opens the full listening stats. */
+  onOpenStats: () => void;
   /** Bumped after a library refresh; reloads the suggestions. */
   refreshKey: number;
   onRefresh: () => void;
@@ -292,6 +295,7 @@ export default function HomePage({
   onOpenAlbum,
   onOpenArtist,
   onOpenLibrary,
+  onOpenStats,
   refreshKey,
   onRefresh,
   refreshing,
@@ -724,6 +728,8 @@ export default function HomePage({
               </div>
             </section>
           )}
+
+          <HomeListening refreshKey={refreshKey} onOpenStats={onOpenStats} />
         </>,
       )}
     </main>

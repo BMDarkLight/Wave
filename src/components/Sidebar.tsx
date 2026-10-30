@@ -37,6 +37,7 @@ export type MainView =
   | "recently_played"
   | "most_played"
   | "devices"
+  | "stats"
   | "settings";
 
 export default function Sidebar({

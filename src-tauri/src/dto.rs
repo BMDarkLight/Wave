@@ -269,4 +269,10 @@ pub struct ListeningStatsDto {
     pub top_artists: Vec<ListenRankDto>,
     pub top_albums: Vec<ListenRankDto>,
     pub top_genres: Vec<ListenRankDto>,
+    /// Songs skipped before they ended, over all plays.
+    pub total_skips: i64,
+    /// Songs in the library, played or not.
+    pub library_tracks: i64,
+    /// Songs played in the last seven days.
+    pub played_this_week: i64,
 }

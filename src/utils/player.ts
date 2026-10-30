@@ -1074,6 +1074,12 @@ export interface ListeningStats {
   top_artists: ListenRank[];
   top_albums: ListenRank[];
   top_genres: ListenRank[];
+  /** Songs skipped before they ended, over all plays. */
+  total_skips: number;
+  /** Songs in the library, played or not. */
+  library_tracks: number;
+  /** Songs played in the last seven days. */
+  played_this_week: number;
 }
 
 export const getListeningStats = (limit = 5): Promise<ListeningStats> => {

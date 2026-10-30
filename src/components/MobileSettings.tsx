@@ -23,7 +23,6 @@ import {
   BiArrowBack,
   BiCloud,
   BiFolder,
-  BiHeadphone,
   BiListUl,
   BiMicrophone,
 } from "react-icons/bi";
@@ -58,20 +57,13 @@ import {
   listMediaFolders,
   listOutputDevices,
   getFileName,
-  getListeningStats,
-  formatListenDuration,
   EQ_BAND_LABELS,
   EQ_PRESETS,
   openRepository,
   getCloseAction,
   setCloseAction,
 } from "../utils/player";
-import type {
-  EqSettings,
-  ListeningStats,
-  PlaylistInfo,
-  ThemeMode,
-} from "../utils/player";
+import type { EqSettings, PlaylistInfo, ThemeMode } from "../utils/player";
 import { isAndroid } from "../utils/platform";
 import { formatBytes } from "../utils/format";
 import { clearSourceCache, getSourceCacheUsage } from "../utils/remote";
@@ -215,37 +207,6 @@ function UpdateStatusRow({ update }: { update: AppUpdate }) {
 const LIBRARY_PLAYLIST_NAME = "Library";
 const isLibraryPlaylistName = (name?: string | null) =>
   name === LIBRARY_PLAYLIST_NAME || name === "All Local Files";
-
-const getTrackTitle = (track: { title?: string; name?: string }) =>
-  track.title || track.name || "Unknown";
-
-function ListenRankList({
-  title,
-  items,
-}: {
-  title: string;
-  items: { name: string; listen_seconds: number; play_count: number }[];
-}) {
-  if (items.length === 0) return null;
-  return (
-    <div className="mset-listen-group">
-      <h3 className="mset-listen-group-title">{title}</h3>
-      <ul className="mset-listen-rank">
-        {items.map((item, index) => (
-          <li key={`${title}-${item.name}`} className="mset-listen-rank-row">
-            <span className="mset-listen-rank-index">{index + 1}</span>
-            <span className="mset-listen-rank-name" title={item.name}>
-              {item.name}
-            </span>
-            <span className="mset-listen-rank-meta">
-              {formatListenDuration(item.listen_seconds)}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
 
 /**
  * Range input that ignores accidental drags while the settings page scrolls.
@@ -484,7 +445,6 @@ export default function MobileSettings({
   const [entered, setEntered] = useState(false);
   const [resetConfirming, setResetConfirming] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [listenStats, setListenStats] = useState<ListeningStats | null>(null);
   const [lyricsBusy, setLyricsBusy] = useState(false);
   const [lyricsStatus, setLyricsStatus] = useState<string | null>(null);
   const [onAndroid, setOnAndroid] = useState(false);
@@ -497,15 +457,8 @@ export default function MobileSettings({
       .catch(() => {});
   };
 
-  const refreshListenStats = () => {
-    getListeningStats(5)
-      .then(setListenStats)
-      .catch(() => setListenStats(null));
-  };
-
   useEffect(() => {
     refreshMediaFolders();
-    refreshListenStats();
     void (async () => {
       // Android only exposes ExoPlayer (system default) — hide the section.
       if (await isAndroid()) {
@@ -520,11 +473,6 @@ export default function MobileSettings({
         .then(setOutputDevices)
         .catch(() => {});
     })();
-  }, []);
-
-  useEffect(() => {
-    const id = window.setInterval(refreshListenStats, 8000);
-    return () => window.clearInterval(id);
   }, []);
 
   useEffect(() => {
@@ -1127,84 +1075,6 @@ export default function MobileSettings({
         {settingUpRemote && (
           <RemoteSourceSetupDialog onClose={() => setSettingUpRemote(false)} />
         )}
-
-        <section className="mset-section">
-          <h2>
-            <BiHeadphone /> Listening
-          </h2>
-          <div className="mset-card">
-            {!listenStats ||
-            (listenStats.tracks_played <= 0 &&
-              listenStats.total_listen_seconds <= 0) ? (
-              <p className="mset-hint">
-                Play some music and Wave will summarize your listening here.
-              </p>
-            ) : (
-              <>
-                <div className="mset-listen-totals">
-                  <div className="mset-listen-stat">
-                    <span className="mset-listen-stat-value">
-                      {formatListenDuration(listenStats.total_listen_seconds)}
-                    </span>
-                    <span className="mset-listen-stat-label">Total time</span>
-                  </div>
-                  <div className="mset-listen-stat">
-                    <span className="mset-listen-stat-value">
-                      {listenStats.total_plays.toLocaleString()}
-                    </span>
-                    <span className="mset-listen-stat-label">Plays</span>
-                  </div>
-                  <div className="mset-listen-stat">
-                    <span className="mset-listen-stat-value">
-                      {listenStats.tracks_played.toLocaleString()}
-                    </span>
-                    <span className="mset-listen-stat-label">Tracks</span>
-                  </div>
-                </div>
-
-                {listenStats.top_tracks.length > 0 && (
-                  <div className="mset-listen-group">
-                    <h3 className="mset-listen-group-title">Top songs</h3>
-                    <ul className="mset-listen-rank">
-                      {listenStats.top_tracks.map((track, index) => (
-                        <li key={track.path} className="mset-listen-rank-row">
-                          <span className="mset-listen-rank-index">
-                            {index + 1}
-                          </span>
-                          <span
-                            className="mset-listen-rank-name"
-                            title={getTrackTitle(track)}
-                          >
-                            {getTrackTitle(track)}
-                            {track.artist ? (
-                              <span className="mset-listen-rank-sub">
-                                {" "}
-                                · {track.artist}
-                              </span>
-                            ) : null}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                <ListenRankList
-                  title="Top artists"
-                  items={listenStats.top_artists}
-                />
-                <ListenRankList
-                  title="Top albums"
-                  items={listenStats.top_albums}
-                />
-                <ListenRankList
-                  title="Top genres"
-                  items={listenStats.top_genres}
-                />
-              </>
-            )}
-          </div>
-        </section>
 
         <section className="mset-section">
           <div className="mset-section-header">

@@ -3204,18 +3204,38 @@ impl Library {
         let top_tracks = self.get_most_played(limit as u32)?;
         let connection = self.read_connection();
 
-        let (total_listen_seconds, total_plays, tracks_played): (f64, i64, i64) = connection
+        let week_ago = now_timestamp() - 7 * 24 * 60 * 60;
+        let (total_listen_seconds, total_plays, tracks_played, total_skips, played_this_week): (
+            f64,
+            i64,
+            i64,
+            i64,
+            i64,
+        ) = connection
             .query_row(
                 "SELECT
                     COALESCE(SUM(listen_seconds), 0),
                     COALESCE(SUM(play_count), 0),
-                    COUNT(*)
+                    COUNT(*),
+                    COALESCE(SUM(skip_count), 0),
+                    COALESCE(SUM(last_played_at >= ?1), 0)
                  FROM listen_stats
                  WHERE last_played_at > 0 OR listen_seconds > 0 OR play_count > 0",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                params![week_ago],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .map_err(|e| format!("Failed to query listen totals: {e}"))?;
+        let library_tracks: i64 = connection
+            .query_row("SELECT COUNT(*) FROM library_tracks", [], |row| row.get(0))
+            .map_err(|e| format!("Failed to count the library: {e}"))?;
 
         let mut artist_stmt = connection
             .prepare(
@@ -3288,6 +3308,9 @@ impl Library {
             top_artists,
             top_albums,
             top_genres,
+            total_skips,
+            library_tracks,
+            played_this_week,
         })
     }
 
@@ -5703,6 +5726,43 @@ mod tests {
         };
         library.initialize()?;
         Ok(library)
+    }
+
+    #[test]
+    fn listening_stats_count_skips_the_library_and_this_week() {
+        let library = open_test_library().unwrap();
+        {
+            let connection = library.lock_connection().unwrap();
+            for (id, path) in [("a", "/m/a.mp3"), ("b", "/m/b.mp3"), ("c", "/m/c.mp3")] {
+                upsert_track(&*connection, &sample_track(id, path)).unwrap();
+            }
+        }
+        library
+            .record_listen("/m/a.mp3", 200.0, true, false, None)
+            .unwrap();
+        library
+            .record_listen("/m/a.mp3", 200.0, true, false, None)
+            .unwrap();
+        library
+            .record_listen("/m/b.mp3", 20.0, false, true, None)
+            .unwrap();
+        // Played long ago: counts in the totals, not in this week.
+        library
+            .write_connection()
+            .execute(
+                "UPDATE listen_stats SET last_played_at = 1000
+                 WHERE track_id = (SELECT id FROM tracks WHERE path = '/m/b.mp3')",
+                [],
+            )
+            .unwrap();
+
+        let stats = library.get_listening_stats(5).unwrap();
+        assert_eq!(stats.total_plays, 2);
+        assert_eq!(stats.total_skips, 1);
+        assert_eq!(stats.tracks_played, 2);
+        assert_eq!(stats.played_this_week, 1);
+        assert_eq!(stats.library_tracks, 3);
+        assert_eq!(stats.total_listen_seconds, 420.0);
     }
 
     // ── Remote-source rows ────────────────────────────────────────────────

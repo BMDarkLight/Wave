@@ -7084,89 +7084,6 @@ div.album-hero-cover {
   padding-top: 0;
 }
 
-.mset-listen-totals {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  padding: 14px 14px 6px;
-}
-
-.mset-listen-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.mset-listen-stat-value {
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-
-.mset-listen-stat-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--quiet);
-}
-
-.mset-listen-group {
-  padding: 10px 14px 12px;
-}
-
-.mset-listen-group + .mset-listen-group {
-  border-top: 1px solid var(--line);
-}
-
-.mset-listen-group-title {
-  margin: 0 0 8px;
-  font-size: 12px;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--quiet);
-}
-
-.mset-listen-rank {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.mset-listen-rank-row {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: baseline;
-  font-size: 13px;
-}
-
-.mset-listen-rank-index {
-  color: var(--quiet);
-  font-variant-numeric: tabular-nums;
-}
-
-.mset-listen-rank-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mset-listen-rank-sub {
-  color: var(--quiet);
-  font-weight: 400;
-}
-
-.mset-listen-rank-meta {
-  color: var(--quiet);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
 .mset-folder-row .mset-row-value {
   flex: 1;
 }
@@ -10451,5 +10368,284 @@ div.album-hero-cover {
   .oobe-actions > button {
     flex: 1 1 auto;
     justify-content: center;
+  }
+}
+
+/* ── Listening stats ────────────────────────────────────────────────────── */
+
+.home-listening-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.home-listening-more {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.home-listening .stats-insights {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.stats-insights {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stats-insight {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  border-radius: 12px;
+  background: rgba(var(--ink), 0.05);
+}
+
+.stats-insight-value {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-insight-text {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.stats-body {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin-top: 20px;
+  padding: 0 24px 32px;
+}
+
+.stats-totals {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stats-total {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.stats-total-value {
+  color: var(--text);
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.stats-total-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.stats-group h2 {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.stats-songs,
+.stats-rank-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stats-song,
+.stats-rank-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  overflow: hidden;
+}
+
+button.stats-song,
+button.stats-rank-row {
+  cursor: pointer;
+}
+
+button.stats-song:hover,
+button.stats-rank-row:hover {
+  background: rgba(var(--ink), 0.07);
+}
+
+.stats-rank {
+  position: relative;
+  flex-shrink: 0;
+  width: 22px;
+  color: var(--quiet);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.stats-song-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.stats-song-title,
+.stats-song-artist,
+.stats-rank-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-song-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.stats-song-artist {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.stats-song-play {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 20px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.stats-song:hover .stats-song-play,
+.stats-song:focus-visible .stats-song-play {
+  opacity: 1;
+}
+
+.stats-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 24px;
+}
+
+/* Each row's share of the top one, drawn behind it. */
+.stats-bar {
+  position: absolute;
+  inset: 4px auto 4px 0;
+  border-radius: 6px;
+  background: rgba(var(--ink), 0.07);
+}
+
+.stats-rank-name {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.stats-rank-meta {
+  position: relative;
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 48px 16px;
+  text-align: center;
+}
+
+.stats-empty h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.stats-empty p {
+  max-width: 380px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.stats-empty-icon {
+  color: var(--muted);
+  font-size: 40px;
+}
+
+@media (max-width: 768px) {
+  .stats-body {
+    margin-top: 16px;
+    padding: 0 14px 24px;
+  }
+
+  .stats-totals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stats-insights {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stats-insight-value {
+    font-size: 22px;
+  }
+
+  .stats-song-play {
+    opacity: 1;
+  }
+
+  /* On a phone Home, one insight per line: the number beside its words. */
+  .home-listening .stats-insights {
+    grid-template-columns: 1fr;
+  }
+
+  .home-listening .stats-insight {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .home-listening .stats-insight-value {
+    flex-shrink: 0;
+    font-size: 20px;
   }
 }

@@ -155,6 +155,7 @@ import LyricsPanel from "./components/LyricsPanel";
 import DeviceListPanel from "./components/DeviceListPanel";
 import CastDeviceList from "./components/CastDeviceList";
 import WaveDevicesPage from "./components/WaveDevicesPage";
+import StatsPage from "./components/StatsPage";
 import Onboarding from "./components/Onboarding";
 import PlayerBar from "./components/PlayerBar";
 import Sidebar, { type MainView } from "./components/Sidebar";
@@ -1083,7 +1084,8 @@ function App() {
     if (
       mainView === "home" ||
       mainView === "settings" ||
-      mainView === "devices"
+      mainView === "devices" ||
+      mainView === "stats"
     ) {
       return { kind: "library" };
     }
@@ -1829,6 +1831,14 @@ function App() {
     }
   }, [mainView, sourceSettings.remote_sources_enabled]);
 
+  const goStats = () => {
+    clearBrowse();
+    closeMainSearch();
+    setMenuTrack(null);
+    setMobileNavOpen(false);
+    setMainView("stats");
+  };
+
   const goDevices = () => {
     clearBrowse();
     closeMainSearch();
@@ -1843,7 +1853,7 @@ function App() {
     ? "search"
     : viewingAlbum || viewingArtist
       ? null
-      : mainView === "home"
+      : mainView === "home" || mainView === "stats"
         ? "home"
         : mainView === "settings"
           ? null
@@ -2052,7 +2062,7 @@ function App() {
     libraryDepth:
       !isMobileLayout() || viewingAlbum || viewingArtist
         ? 0
-        : mainView === "library"
+        : mainView === "library" || mainView === "stats"
           ? 1
           : mainView === "playlist" ||
               mainView === "recently_played" ||
@@ -2681,6 +2691,7 @@ function App() {
               onOpenLibrary={() => {
                 if (libraryPlaylist) handleSelectPlaylist(libraryPlaylist.id);
               }}
+              onOpenStats={goStats}
               refreshKey={homeRefreshKey}
               onRefresh={() => void libraryRefresh.refresh()}
               refreshing={libraryRefresh.refreshing}
@@ -2708,6 +2719,24 @@ function App() {
                   loadQueueTracks();
                 });
               }}
+            />
+          ) : mainView === "stats" && !mainSearchQuery.trim() ? (
+            <StatsPage
+              onPlayTrack={(path, tracks) => {
+                const index = Math.max(
+                  0,
+                  tracks.findIndex((t) => t.path === path),
+                );
+                void playTracks(
+                  tracks.map((t) => t.path),
+                  index,
+                ).then(() => {
+                  updatePlaybackState();
+                  loadQueueTracks();
+                });
+              }}
+              onOpenArtist={openArtistPage}
+              onBack={goHome}
             />
           ) : mainView === "devices" && !mainSearchQuery.trim() ? (
             <WaveDevicesPage
