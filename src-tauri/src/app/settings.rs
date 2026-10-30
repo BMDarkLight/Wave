@@ -299,7 +299,20 @@ impl AppSettings {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create settings directory: {e}"))?;
         }
-        let json = serde_json::to_string_pretty(self)
+        let mut value =
+            serde_json::to_value(self).map_err(|e| format!("Failed to serialize settings: {e}"))?;
+        // Another version of Wave may share this file. Whatever it saved that
+        // this one does not know is written back as it was, so running an
+        // older build does not wipe a newer one's pairings and the like.
+        if let (Some(ours), Ok(Ok(serde_json::Value::Object(theirs)))) = (
+            value.as_object_mut(),
+            fs::read_to_string(path).map(|s| serde_json::from_str(&s)),
+        ) {
+            for (key, field) in theirs {
+                ours.entry(key).or_insert(field);
+            }
+        }
+        let json = serde_json::to_string_pretty(&value)
             .map_err(|e| format!("Failed to serialize settings: {e}"))?;
         // Saved every few seconds during playback, and the process can be
         // killed at any point (Android does so freely). Written beside the
@@ -499,6 +512,29 @@ mod tests {
             settings.active_song_couples(),
             [("a".to_string(), "b".to_string())]
         );
+    }
+
+    #[test]
+    fn settings_another_version_saved_are_kept() {
+        let dir = std::env::temp_dir().join(format!("wave-test-settings-{}", uuid::Uuid::new_v4()));
+        let path = dir.join(SETTINGS_FILE);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, r#"{"volume": 0.5, "from_a_newer_wave": [1, 2]}"#).unwrap();
+
+        let settings = AppSettings::load_from_path(&path);
+        assert_eq!(settings.volume, 0.5);
+        AppSettings {
+            volume: 0.25,
+            ..settings
+        }
+        .save_to_path(&path)
+        .unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["volume"], 0.25);
+        assert_eq!(saved["from_a_newer_wave"], serde_json::json!([1, 2]));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
