@@ -167,8 +167,43 @@ struct MediaBridge {
 
 /// Position reports within this many seconds of where the session already
 /// extrapolates are not worth a JNI round trip.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 const ANDROID_DRIFT_TOLERANCE_SECS: f64 = 1.0;
+
+/// What a routine position report (the playback tick, or the frontend while
+/// it runs) does to the Android session.
+#[cfg(any(target_os = "android", test))]
+#[derive(Debug, PartialEq)]
+enum PositionReport {
+    Ignore,
+    /// Play or pause changed: send the whole playback state.
+    Playback,
+    /// Only the position drifted: correct the timeline.
+    Timeline,
+}
+
+#[cfg(any(target_os = "android", test))]
+fn position_report(
+    cleared: bool,
+    last_playing: Option<bool>,
+    playing: bool,
+    drift_secs: f64,
+) -> PositionReport {
+    // Swiping the paused notification away clears the session but keeps the
+    // track loaded, so the queue survives. The tick goes on reporting that
+    // paused track, and treating it as a change put the notification straight
+    // back. Only music playing again brings the controls back on their own.
+    if cleared && !playing {
+        return PositionReport::Ignore;
+    }
+    if last_playing != Some(playing) {
+        return PositionReport::Playback;
+    }
+    if drift_secs.abs() < ANDROID_DRIFT_TOLERANCE_SECS {
+        return PositionReport::Ignore;
+    }
+    PositionReport::Timeline
+}
 
 #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
 struct MediaBridge {
@@ -402,20 +437,18 @@ impl MediaBridge {
     fn update_position(&mut self, position_secs: f64, playing: bool) {
         #[cfg(target_os = "android")]
         {
-            if self.last_playing != Some(playing) {
-                self.android_set_playback(playing, position_secs);
-                return;
+            // The session extrapolates position on its own, so a timeline
+            // correction only goes out when it has drifted, e.g. after a seek.
+            let drift = position_secs - self.android_expected_position();
+            match position_report(self.cleared, self.last_playing, playing, drift) {
+                PositionReport::Ignore => {}
+                PositionReport::Playback => self.android_set_playback(playing, position_secs),
+                PositionReport::Timeline => {
+                    crate::android::media_bridge::session_timeline(Some(position_secs), None, None);
+                    self.last_position = position_secs;
+                    self.last_sent = Some(std::time::Instant::now());
+                }
             }
-            // The session extrapolates position on its own. Only correct it
-            // when it has drifted, e.g. after a seek from the UI.
-            if (position_secs - self.android_expected_position()).abs()
-                < ANDROID_DRIFT_TOLERANCE_SECS
-            {
-                return;
-            }
-            crate::android::media_bridge::session_timeline(Some(position_secs), None, None);
-            self.last_position = position_secs;
-            self.last_sent = Some(std::time::Instant::now());
             return;
         }
 
@@ -630,6 +663,56 @@ impl MediaBridgeState {
         self.run_on_ui_thread(move |bridge| bridge.set_speed(speed, position_secs));
         #[cfg(not(target_os = "android"))]
         self.update_position(position_secs, playing);
+    }
+}
+
+#[cfg(test)]
+mod position_report_tests {
+    use super::{position_report, PositionReport};
+
+    #[test]
+    fn a_dismissed_session_stays_down_while_paused() {
+        // The paused notification was swiped away; the track is still loaded.
+        assert_eq!(
+            position_report(true, None, false, 0.0),
+            PositionReport::Ignore
+        );
+        assert_eq!(
+            position_report(true, None, false, 30.0),
+            PositionReport::Ignore
+        );
+    }
+
+    #[test]
+    fn a_dismissed_session_comes_back_when_music_plays() {
+        assert_eq!(
+            position_report(true, None, true, 0.0),
+            PositionReport::Playback
+        );
+    }
+
+    #[test]
+    fn play_or_pause_changing_sends_the_playback_state() {
+        assert_eq!(
+            position_report(false, Some(true), false, 0.0),
+            PositionReport::Playback
+        );
+        assert_eq!(
+            position_report(false, None, true, 0.0),
+            PositionReport::Playback
+        );
+    }
+
+    #[test]
+    fn only_real_drift_corrects_the_timeline() {
+        assert_eq!(
+            position_report(false, Some(true), true, 0.4),
+            PositionReport::Ignore
+        );
+        assert_eq!(
+            position_report(false, Some(true), true, -3.0),
+            PositionReport::Timeline
+        );
     }
 }
 
