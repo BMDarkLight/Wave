@@ -4493,6 +4493,8 @@ pub async fn reset_app(app: tauri::AppHandle) -> Result<ResetAppResult, String> 
         let mut settings = lock_settings(&settings_state)?;
         settings.media_folders.clear();
         settings.folder_setup_dismissed = false;
+        // A reset starts over from the first-run questions.
+        settings.sourcing_chosen = false;
         settings.save(&app)?;
     }
 

@@ -155,7 +155,7 @@ import LyricsPanel from "./components/LyricsPanel";
 import DeviceListPanel from "./components/DeviceListPanel";
 import CastDeviceList from "./components/CastDeviceList";
 import WaveDevicesPage from "./components/WaveDevicesPage";
-import SourcingChoice from "./components/SourcingChoice";
+import Onboarding from "./components/Onboarding";
 import PlayerBar from "./components/PlayerBar";
 import Sidebar, { type MainView } from "./components/Sidebar";
 import LibraryTrackList from "./components/LibraryTrackList";
@@ -2088,8 +2088,12 @@ function App() {
     sourceSettings.remote_sources_enabled &&
     sourceSettings.outside_sourcing_enabled;
 
-  // First run: Outside Sourcing stays off unless the user picks it.
-  const [sourcingPick, setSourcingPick] = useState(false);
+  // First run, and after a reset: the onboarding screen, which stays up
+  // until its fade-out is over even though the answer is saved before.
+  const [onboarding, setOnboarding] = useState(false);
+  useEffect(() => {
+    if (!sourceSettings.sourcing_chosen) setOnboarding(true);
+  }, [sourceSettings.sourcing_chosen]);
   const chooseSourcing = (enabled: boolean) => {
     if (sourceSettings.sourcing_chosen) return;
     handleSourceSettingsChange({
@@ -3418,79 +3422,60 @@ function App() {
             />
           )}
 
-          {!sourceSettings.sourcing_chosen &&
-            !(showFolderSetup && androidHost) && (
-              <div className="modal-backdrop">
+          {onboarding && (
+            <Onboarding
+              animate={animationsEnabled && !reduceMotionEnabled}
+              askForMusic={(libraryPlaylist?.track_count ?? 0) === 0}
+              onPickMusic={() =>
+                void (androidHost
+                  ? handleAddFolderAndroid({ showProgress: true })
+                  : handleAddMediaSource())
+              }
+              onFinish={(outside) => {
+                chooseSourcing(outside);
+                // The folder question was part of it.
+                if (androidHost) void skipFolderSetup();
+              }}
+              onDone={() => setOnboarding(false)}
+            />
+          )}
+
+          {showFolderSetup &&
+            androidHost &&
+            !onboarding &&
+            sourceSettings.sourcing_chosen && (
+              <div className="modal-backdrop" onClick={() => {}}>
                 <div
-                  className="modal-dialog sourcing-dialog"
-                  role="dialog"
-                  aria-label="Welcome to Wave"
+                  className="modal-dialog"
+                  onClick={(e) => e.stopPropagation()}
                 >
                   <h2>Welcome to Wave</h2>
                   <p className="modal-desc">
-                    Wave plays the music on this device. It can reach further
-                    too, if you'd like.
+                    Select a folder containing your music to get started. Wave
+                    indexes the files in place (no copies) and lists them in
+                    your Library.
                   </p>
-                  <SourcingChoice
-                    enabled={sourcingPick}
-                    onChange={setSourcingPick}
-                  />
                   <div className="modal-actions">
                     <button
-                      className="btn-primary"
-                      onClick={() => chooseSourcing(sourcingPick)}
+                      className="btn-ghost"
+                      onClick={() => void skipFolderSetup()}
                       type="button"
                     >
-                      Continue
+                      Skip for now
+                    </button>
+                    <button
+                      className="btn-primary"
+                      onClick={() =>
+                        void handleAddFolderAndroid({ showProgress: true })
+                      }
+                      type="button"
+                    >
+                      <BiFolderOpen /> Select Media Source
                     </button>
                   </div>
                 </div>
               </div>
             )}
-
-          {showFolderSetup && androidHost && (
-            <div className="modal-backdrop" onClick={() => {}}>
-              <div
-                className="modal-dialog"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <h2>Welcome to Wave</h2>
-                <p className="modal-desc">
-                  Select a folder containing your music to get started. Wave
-                  indexes the files in place (no copies) and lists them in your
-                  Library.
-                </p>
-                {!sourceSettings.sourcing_chosen && (
-                  <SourcingChoice
-                    enabled={sourcingPick}
-                    onChange={setSourcingPick}
-                  />
-                )}
-                <div className="modal-actions">
-                  <button
-                    className="btn-ghost"
-                    onClick={() => {
-                      chooseSourcing(sourcingPick);
-                      void skipFolderSetup();
-                    }}
-                    type="button"
-                  >
-                    Skip for now
-                  </button>
-                  <button
-                    className="btn-primary"
-                    onClick={() => {
-                      chooseSourcing(sourcingPick);
-                      void handleAddFolderAndroid({ showProgress: true });
-                    }}
-                    type="button"
-                  >
-                    <BiFolderOpen /> Select Media Source
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
 
           {importProgress && (
             <ImportProgressDialog

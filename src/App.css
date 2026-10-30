@@ -10166,10 +10166,6 @@ div.album-hero-cover {
 
 /* ── First run: Outside Sourcing ────────────────────────────────────────── */
 
-.sourcing-dialog {
-  max-width: 480px;
-}
-
 .sourcing-choice {
   display: flex;
   flex-direction: column;
@@ -10237,4 +10233,203 @@ div.album-hero-cover {
   color: var(--quiet);
   font-size: 11.5px;
   line-height: 1.5;
+}
+
+/* ── Onboarding ─────────────────────────────────────────────────────────── */
+
+.oobe {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: max(24px, env(safe-area-inset-top)) 16px
+    max(24px, env(safe-area-inset-bottom));
+  overflow-y: auto;
+  background:
+    radial-gradient(
+      120% 80% at 50% 0%,
+      rgba(var(--ink), 0.08),
+      transparent 60%
+    ),
+    var(--bg);
+  transition: opacity 0.45s ease;
+}
+
+.oobe--leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The logo draws itself from left to right, then the name comes in. */
+.oobe-intro {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  pointer-events: none;
+  transition:
+    opacity 0.6s ease,
+    transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.oobe--steps .oobe-intro {
+  opacity: 0;
+  transform: translateY(-48px) scale(0.6);
+}
+
+.oobe-intro-mark {
+  width: min(220px, 52vw);
+  fill: var(--text);
+  animation: oobe-draw 1.1s cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+
+.oobe-intro-name {
+  color: var(--text);
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  animation: oobe-rise 0.6s ease 0.75s both;
+}
+
+@keyframes oobe-draw {
+  from {
+    clip-path: inset(0 100% 0 0);
+    transform: translateX(-12px);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+    transform: none;
+  }
+}
+
+@keyframes oobe-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.oobe-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100%);
+  padding: 28px 28px 20px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+  transition:
+    opacity 0.5s ease 0.15s,
+    transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) 0.15s;
+}
+
+.oobe--intro .oobe-card {
+  opacity: 0;
+  transform: translateY(28px);
+  pointer-events: none;
+}
+
+.oobe-card-mark {
+  width: 56px;
+  margin-bottom: 14px;
+  fill: var(--text);
+}
+
+.oobe-step {
+  animation: oobe-rise 0.35s ease both;
+}
+
+.oobe-step h1 {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.oobe-step > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.oobe-step .sourcing-choice {
+  margin-top: 4px;
+}
+
+.oobe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.oobe-actions .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.oobe-dots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 18px;
+}
+
+.oobe-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(var(--ink), 0.2);
+  transition:
+    background 0.2s,
+    width 0.2s;
+}
+
+.oobe-dots span.on {
+  width: 16px;
+  border-radius: 3px;
+  background: var(--text);
+}
+
+.oobe--still,
+.oobe--still .oobe-card,
+.oobe--still .oobe-step {
+  transition: none;
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oobe,
+  .oobe-intro,
+  .oobe-intro-mark,
+  .oobe-intro-name,
+  .oobe-card,
+  .oobe-step {
+    transition: none;
+    animation: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .oobe-card {
+    padding: 24px 20px 16px;
+  }
+
+  .oobe-actions > button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
 }
