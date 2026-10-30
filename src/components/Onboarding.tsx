@@ -90,7 +90,6 @@ export default function Onboarding({
       {animate && (
         <div className="oobe-intro" aria-hidden>
           <WaveMark className="oobe-intro-mark" />
-          <span className="oobe-intro-name">Wave</span>
         </div>
       )}
 

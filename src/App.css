@@ -10261,7 +10261,7 @@ div.album-hero-cover {
   pointer-events: none;
 }
 
-/* The logo draws itself from left to right, then the name comes in. */
+/* The logo draws itself from left to right. */
 .oobe-intro {
   position: absolute;
   inset: 0;
@@ -10285,14 +10285,6 @@ div.album-hero-cover {
   width: min(220px, 52vw);
   fill: var(--text);
   animation: oobe-draw 1.1s cubic-bezier(0.65, 0, 0.35, 1) both;
-}
-
-.oobe-intro-name {
-  color: var(--text);
-  font-size: 34px;
-  font-weight: 800;
-  letter-spacing: -0.04em;
-  animation: oobe-rise 0.6s ease 0.75s both;
 }
 
 @keyframes oobe-draw {
@@ -10339,8 +10331,9 @@ div.album-hero-cover {
 }
 
 .oobe-card-mark {
-  width: 56px;
-  margin-bottom: 14px;
+  align-self: center;
+  width: 72px;
+  margin: 8px 0 26px;
   fill: var(--text);
 }
 
@@ -10415,7 +10408,6 @@ div.album-hero-cover {
   .oobe,
   .oobe-intro,
   .oobe-intro-mark,
-  .oobe-intro-name,
   .oobe-card,
   .oobe-step {
     transition: none;
