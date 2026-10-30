@@ -162,7 +162,8 @@ Search widens only as far as it has to, and never touches the network on its own
    filename, **and lyrics**, with badges showing which field matched and a
    snippet of the matching lyric line.
 3. **The internet** — an explicit button, never automatic. Off entirely unless
-   you enable **Search outside sources** in Settings.
+   you turn on **Outside Sourcing** and then **Search outside sources** under
+   it in Settings.
 
 <img src="docs/screenshots/desktop-search.png" alt="Library search with matched-field badges and lyric snippets" width="100%">
 
@@ -840,8 +841,10 @@ to check on a phone after changing them:
 
 ### Optional: remote sources
 
-Wave works fully offline. Searching the internet for music is opt-in — toggle
-**Search outside sources** in Settings.
+Wave works fully offline. On first run it asks whether to use **Outside
+Sourcing**; it stays off unless you pick it, and can be changed in Settings
+any time. Searching the internet for music is a second switch under it,
+**Search outside sources**, and does nothing while Outside Sourcing is off.
 
 Jamendo needs a free client ID from
 [developer.jamendo.com](https://developer.jamendo.com), entered in Settings.
@@ -852,9 +855,9 @@ saved to your library. Full-length audio comes from Jamendo, Audius, Internet
 Archive, ccMixter, and Wikimedia Commons. Audius tracks can be saved only when
 the artist allows downloads.
 
-Streaming from your own server, a WebDAV or DLNA share, Kodi or an Audius
-account is a separate switch, **Outside Sourcing**. Nothing contacts them while
-it is off.
+Streaming from your own server, a WebDAV or DLNA share, Kodi, an Audius
+account or your other Waves is **Outside Sourcing** itself. Nothing contacts
+them while it is off.
 
 ---
 

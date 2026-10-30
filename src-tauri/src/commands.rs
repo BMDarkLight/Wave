@@ -2127,6 +2127,9 @@ pub struct SourceSettingsDto {
     /// Keep sharing after the window is closed.
     #[serde(default)]
     pub share_in_background: bool,
+    /// Outside Sourcing was offered on first run; once set it stays set.
+    #[serde(default)]
+    pub sourcing_chosen: bool,
 }
 
 #[tauri::command]
@@ -2143,6 +2146,7 @@ pub async fn get_source_settings(
         cache_limit_mb: settings.source_cache_limit_mb,
         share_name: settings.share_name.clone().unwrap_or_default(),
         share_in_background: settings.share_in_background,
+        sourcing_chosen: settings.sourcing_chosen,
     })
 }
 
@@ -2174,6 +2178,7 @@ pub async fn set_source_settings(
         stored.remote_cellular_enabled = settings.remote_cellular_enabled;
         stored.share_name = normalise(&settings.share_name);
         stored.share_in_background = settings.share_in_background;
+        stored.sourcing_chosen |= settings.sourcing_chosen;
         stored.source_cache_limit_mb = settings.cache_limit_mb.max(MIN_CACHE_LIMIT_MB);
         stored.save(&app)?;
         (was_enabled, cap_shrank)
@@ -4697,7 +4702,7 @@ pub async fn search_sources(
     // Fail closed: if settings can't be read, assume the user has not opted in.
     if !app
         .try_state::<AppSettingsState>()
-        .and_then(|state| state.0.lock().ok().map(|s| s.outside_sourcing_enabled))
+        .and_then(|state| state.0.lock().ok().map(|s| s.searching_outside()))
         .unwrap_or(false)
     {
         // Master switch is off: no provider is contacted at all.

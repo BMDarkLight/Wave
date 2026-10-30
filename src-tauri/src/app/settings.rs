@@ -128,6 +128,11 @@ pub struct AppSettings {
     /// also downloaded, ready to install. Off leaves a manual check button.
     #[serde(default = "default_auto_update_enabled")]
     pub auto_update_enabled: bool,
+    /// Whether the user was asked about Outside Sourcing on first run. Off
+    /// only for a new install; settings saved before the question existed
+    /// read as asked, so nobody upgrading is asked.
+    #[serde(default = "default_sourcing_chosen")]
+    pub sourcing_chosen: bool,
 }
 
 /// The playlist a saved queue was started from.
@@ -185,6 +190,10 @@ fn default_auto_update_enabled() -> bool {
     true
 }
 
+fn default_sourcing_chosen() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -224,6 +233,7 @@ impl Default for AppSettings {
             song_couples: Vec::new(),
             playlist_mashing_enabled: false,
             auto_update_enabled: default_auto_update_enabled(),
+            sourcing_chosen: false,
         }
     }
 }
@@ -330,6 +340,12 @@ impl AppSettings {
             let _ = fs::remove_file(&temp);
             format!("Failed to write settings: {e}")
         })
+    }
+
+    /// Whether online catalogs may be searched: the search switch sits under
+    /// Outside Sourcing and does nothing while that is off.
+    pub fn searching_outside(&self) -> bool {
+        self.remote_sources_enabled && self.outside_sourcing_enabled
     }
 
     /// The pairs the player should keep together: none while coupling is off.
@@ -507,6 +523,15 @@ mod tests {
             settings.active_song_couples(),
             [("a".to_string(), "b".to_string())]
         );
+    }
+
+    #[test]
+    fn only_a_new_install_is_asked_about_outside_sourcing() {
+        assert!(!AppSettings::default().sourcing_chosen);
+        let mut saved = serde_json::to_value(AppSettings::default()).unwrap();
+        saved.as_object_mut().unwrap().remove("sourcing_chosen");
+        let upgraded: AppSettings = serde_json::from_value(saved).unwrap();
+        assert!(upgraded.sourcing_chosen);
     }
 
     #[test]

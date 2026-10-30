@@ -754,6 +754,8 @@ export interface SourceSettings {
   share_name: string;
   /** Stay reachable for other Waves after the window is closed. */
   share_in_background: boolean;
+  /** Outside Sourcing was offered on first run. */
+  sourcing_chosen: boolean;
 }
 
 export const getSourceSettings = (): Promise<SourceSettings> =>

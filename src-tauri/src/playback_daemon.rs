@@ -471,7 +471,7 @@ pub fn run_daemon() {
         tracing::warn!("Remote music won't play in the background: {e}");
     }
     crate::remote::gate::NetworkGate::global().set_policy(settings.remote_sources_enabled, true);
-    crate::remote::gate::NetworkGate::search().set_policy(settings.outside_sourcing_enabled, true);
+    crate::remote::gate::NetworkGate::search().set_policy(settings.searching_outside(), true);
 
     let state = Arc::new(Mutex::new(DaemonState {
         player,

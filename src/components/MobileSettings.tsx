@@ -556,9 +556,7 @@ export default function MobileSettings({
       .catch(() => setCacheUsage(null));
   };
 
-  const cacheShown =
-    sourceSettings.outside_sourcing_enabled ||
-    sourceSettings.remote_sources_enabled;
+  const cacheShown = sourceSettings.remote_sources_enabled;
   useEffect(() => {
     if (cacheShown) refreshCacheUsage();
   }, [cacheShown, sourceSettings.cache_limit_mb]);
@@ -877,87 +875,6 @@ export default function MobileSettings({
             <label className="mset-gapless-row">
               <input
                 type="checkbox"
-                checked={sourceSettings.outside_sourcing_enabled}
-                onChange={(event) =>
-                  onSourceSettingsChange({
-                    ...sourceSettings,
-                    outside_sourcing_enabled: event.target.checked,
-                  })
-                }
-              />
-              <span className="mset-gapless-copy">
-                <span className="mset-gapless-label">
-                  Search outside sources
-                </span>
-                <span className="mset-gapless-hint">
-                  Look online when your library comes up empty. Nothing is
-                  contacted until you ask for it.
-                </span>
-              </span>
-            </label>
-
-            {sourceSettings.outside_sourcing_enabled && (
-              <>
-                <div className="mset-playback-divider" role="separator" />
-                <div className="mset-key">
-                  <label
-                    className="mset-key-label"
-                    htmlFor={`${keyIdPrefix}src-jamendo`}
-                  >
-                    Jamendo
-                  </label>
-                  <input
-                    id={`${keyIdPrefix}src-jamendo`}
-                    type="text"
-                    className="mset-key-input"
-                    value={sourceSettings.jamendo_client_id}
-                    placeholder="Client ID"
-                    spellCheck={false}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    onChange={(event) =>
-                      onSourceSettingsChange({
-                        ...sourceSettings,
-                        jamendo_client_id: event.target.value,
-                      })
-                    }
-                  />
-                </div>
-                <div className="mset-key">
-                  <label
-                    className="mset-key-label"
-                    htmlFor={`${keyIdPrefix}src-spotify`}
-                  >
-                    Spotify
-                  </label>
-                  <input
-                    id={`${keyIdPrefix}src-spotify`}
-                    type="text"
-                    className="mset-key-input"
-                    value={sourceSettings.spotify_client_id}
-                    placeholder="Client ID"
-                    spellCheck={false}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    onChange={(event) =>
-                      onSourceSettingsChange({
-                        ...sourceSettings,
-                        spotify_client_id: event.target.value,
-                      })
-                    }
-                  />
-                </div>
-                <p className="mset-hint mset-key-note">
-                  Every other catalog needs no key. Deezer and iTunes return
-                  30-second clips; Spotify serves no audio at all.
-                </p>
-              </>
-            )}
-
-            <div className="mset-playback-divider" role="separator" />
-            <label className="mset-gapless-row">
-              <input
-                type="checkbox"
                 checked={sourceSettings.remote_sources_enabled}
                 onChange={(event) =>
                   onSourceSettingsChange({
@@ -975,6 +892,89 @@ export default function MobileSettings({
                 </span>
               </span>
             </label>
+
+            {sourceSettings.remote_sources_enabled && (
+              <>
+                <label className="mset-gapless-row mset-nested-row">
+                  <input
+                    type="checkbox"
+                    checked={sourceSettings.outside_sourcing_enabled}
+                    onChange={(event) =>
+                      onSourceSettingsChange({
+                        ...sourceSettings,
+                        outside_sourcing_enabled: event.target.checked,
+                      })
+                    }
+                  />
+                  <span className="mset-gapless-copy">
+                    <span className="mset-gapless-label">
+                      Search outside sources
+                    </span>
+                    <span className="mset-gapless-hint">
+                      Look online too when your library comes up empty. Nothing
+                      is contacted until you ask for it.
+                    </span>
+                  </span>
+                </label>
+
+                {sourceSettings.outside_sourcing_enabled && (
+                  <>
+                    <div className="mset-key mset-nested-row">
+                      <label
+                        className="mset-key-label"
+                        htmlFor={`${keyIdPrefix}src-jamendo`}
+                      >
+                        Jamendo
+                      </label>
+                      <input
+                        id={`${keyIdPrefix}src-jamendo`}
+                        type="text"
+                        className="mset-key-input"
+                        value={sourceSettings.jamendo_client_id}
+                        placeholder="Client ID"
+                        spellCheck={false}
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        onChange={(event) =>
+                          onSourceSettingsChange({
+                            ...sourceSettings,
+                            jamendo_client_id: event.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="mset-key mset-nested-row">
+                      <label
+                        className="mset-key-label"
+                        htmlFor={`${keyIdPrefix}src-spotify`}
+                      >
+                        Spotify
+                      </label>
+                      <input
+                        id={`${keyIdPrefix}src-spotify`}
+                        type="text"
+                        className="mset-key-input"
+                        value={sourceSettings.spotify_client_id}
+                        placeholder="Client ID"
+                        spellCheck={false}
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        onChange={(event) =>
+                          onSourceSettingsChange({
+                            ...sourceSettings,
+                            spotify_client_id: event.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <p className="mset-hint mset-key-note mset-nested-row">
+                      Every other catalog needs no key. Deezer and iTunes return
+                      30-second clips; Spotify serves no audio at all.
+                    </p>
+                  </>
+                )}
+              </>
+            )}
 
             {sourceSettings.remote_sources_enabled && onAndroid && (
               <label className="mset-gapless-row mset-nested-row">
@@ -1039,8 +1039,7 @@ export default function MobileSettings({
               </>
             )}
 
-            {(sourceSettings.outside_sourcing_enabled ||
-              sourceSettings.remote_sources_enabled) && (
+            {cacheShown && (
               <>
                 <div className="mset-playback-divider" role="separator" />
                 <div className="mset-row mset-cache-row">

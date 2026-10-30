@@ -155,6 +155,7 @@ import LyricsPanel from "./components/LyricsPanel";
 import DeviceListPanel from "./components/DeviceListPanel";
 import CastDeviceList from "./components/CastDeviceList";
 import WaveDevicesPage from "./components/WaveDevicesPage";
+import SourcingChoice from "./components/SourcingChoice";
 import PlayerBar from "./components/PlayerBar";
 import Sidebar, { type MainView } from "./components/Sidebar";
 import LibraryTrackList from "./components/LibraryTrackList";
@@ -204,6 +205,8 @@ function App() {
     cache_limit_mb: 2048,
     share_name: "",
     share_in_background: false,
+    // Asked, until the real value loads, so the question never flashes up.
+    sourcing_chosen: true,
   });
   const [crashReport, setCrashReport] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -2080,6 +2083,22 @@ function App() {
     );
   }, []);
 
+  // Online search sits under Outside Sourcing and is gone while it's off.
+  const searchingOutside =
+    sourceSettings.remote_sources_enabled &&
+    sourceSettings.outside_sourcing_enabled;
+
+  // First run: Outside Sourcing stays off unless the user picks it.
+  const [sourcingPick, setSourcingPick] = useState(false);
+  const chooseSourcing = (enabled: boolean) => {
+    if (sourceSettings.sourcing_chosen) return;
+    handleSourceSettingsChange({
+      ...sourceSettings,
+      remote_sources_enabled: enabled,
+      sourcing_chosen: true,
+    });
+  };
+
   // A download that fell back to another folder must say so — silently
   // saving somewhere the user didn't choose is worse than not saving.
   useEffect(() => {
@@ -2255,7 +2274,7 @@ function App() {
               Search full library
             </button>
           )}
-          {sourceSettings.outside_sourcing_enabled &&
+          {searchingOutside &&
             mainSearchQuery.trim() &&
             !sourceSearched &&
             !sourceLoading && (
@@ -2453,7 +2472,7 @@ function App() {
               Search full library
             </button>
           )}
-          {sourceSettings.outside_sourcing_enabled &&
+          {searchingOutside &&
             mainSearchQuery.trim() &&
             !sourceSearched &&
             !sourceLoading && (
@@ -3399,6 +3418,36 @@ function App() {
             />
           )}
 
+          {!sourceSettings.sourcing_chosen &&
+            !(showFolderSetup && androidHost) && (
+              <div className="modal-backdrop">
+                <div
+                  className="modal-dialog sourcing-dialog"
+                  role="dialog"
+                  aria-label="Welcome to Wave"
+                >
+                  <h2>Welcome to Wave</h2>
+                  <p className="modal-desc">
+                    Wave plays the music on this device. It can reach further
+                    too, if you'd like.
+                  </p>
+                  <SourcingChoice
+                    enabled={sourcingPick}
+                    onChange={setSourcingPick}
+                  />
+                  <div className="modal-actions">
+                    <button
+                      className="btn-primary"
+                      onClick={() => chooseSourcing(sourcingPick)}
+                      type="button"
+                    >
+                      Continue
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
           {showFolderSetup && androidHost && (
             <div className="modal-backdrop" onClick={() => {}}>
               <div
@@ -3411,19 +3460,29 @@ function App() {
                   indexes the files in place (no copies) and lists them in your
                   Library.
                 </p>
+                {!sourceSettings.sourcing_chosen && (
+                  <SourcingChoice
+                    enabled={sourcingPick}
+                    onChange={setSourcingPick}
+                  />
+                )}
                 <div className="modal-actions">
                   <button
                     className="btn-ghost"
-                    onClick={() => void skipFolderSetup()}
+                    onClick={() => {
+                      chooseSourcing(sourcingPick);
+                      void skipFolderSetup();
+                    }}
                     type="button"
                   >
                     Skip for now
                   </button>
                   <button
                     className="btn-primary"
-                    onClick={() =>
-                      void handleAddFolderAndroid({ showProgress: true })
-                    }
+                    onClick={() => {
+                      chooseSourcing(sourcingPick);
+                      void handleAddFolderAndroid({ showProgress: true });
+                    }}
                     type="button"
                   >
                     <BiFolderOpen /> Select Media Source

@@ -1384,7 +1384,7 @@ pub fn apply_settings(app: &AppHandle, was_enabled: bool) {
                 (
                     s.remote_sources_enabled,
                     s.remote_cellular_enabled,
-                    s.outside_sourcing_enabled,
+                    s.searching_outside(),
                 )
             })
         })
