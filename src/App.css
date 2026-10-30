@@ -753,6 +753,14 @@ img.track-thumb {
   padding-right: 24px;
 }
 
+/* On a phone the sections sit inside the pull-to-refresh wrapper, so the
+   wrapper spaces them the way the page does on desktop. */
+.home-page > .ptr-root {
+  display: flex;
+  flex-direction: column;
+  gap: inherit;
+}
+
 .home-header {
   padding-top: 4px;
   display: flex;
@@ -1214,7 +1222,7 @@ img.track-thumb {
   }
 
   .home-page {
-    gap: 24px;
+    gap: 32px;
   }
 
   /* Rows run to the screen edge and show part of a third card, so it is
@@ -8639,11 +8647,13 @@ div.album-hero-cover {
     left: 0;
     right: 0;
     z-index: 55;
-    height: calc(env(safe-area-inset-top, 0px) + 28px);
+    /* Covers the status bar and softens just below it, short of a search
+       bar or header pinned under the status bar. */
+    height: calc(env(safe-area-inset-top, 0px) + 10px);
     background: linear-gradient(
       to bottom,
-      rgba(var(--glass-card), 0.92) 0%,
-      rgba(var(--glass-card), 0.62) 55%,
+      rgba(var(--glass-card), 0.92) 0,
+      rgba(var(--glass-card), 0.8) env(safe-area-inset-top, 0px),
       rgba(var(--glass-card), 0) 100%
     );
     /* Clear at the top of a page; useStatusFade brings it in on scroll. */
@@ -9554,5 +9564,79 @@ div.album-hero-cover {
         calc(100% - var(--card-radius)) no-repeat;
     background-clip: padding-box;
     pointer-events: none;
+  }
+}
+
+/* The song picker on a phone: a full page like the others rather than a
+   stretched dialog. Compact controls up top, and a footer of one row of
+   options over a full-width Add button that clears the gesture bar. */
+@media (max-width: 900px) {
+  .song-picker-backdrop .song-picker {
+    background: var(--bg);
+    padding-top: calc(env(safe-area-inset-top, 0px) + 14px);
+    padding-bottom: calc(max(12px, env(safe-area-inset-bottom, 0px)) + 8px);
+  }
+
+  .song-picker .modal-header {
+    margin-bottom: 12px;
+  }
+
+  .song-picker-toolbar {
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .song-picker-toolbar .btn-sm,
+  .song-picker-toolbar .wave-select {
+    min-height: 34px;
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+
+  .song-picker-footer {
+    display: grid;
+    grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px 8px;
+  }
+
+  .song-picker-order,
+  .song-picker-actions {
+    display: contents;
+  }
+
+  .song-picker-order-label {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .song-picker-order .wave-select {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .song-picker-reshuffle {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .song-picker-actions .btn-ghost {
+    grid-column: 5;
+    grid-row: 1;
+    padding: 7px 14px;
+    font-size: 13px;
+  }
+
+  /* The Add button already counts the songs. */
+  .song-picker-summary {
+    display: none;
+  }
+
+  .song-picker-actions .btn-primary {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    min-height: 48px;
+    font-size: 16px;
   }
 }
