@@ -16,8 +16,8 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 
 /**
- * Keeps Wave running while it shares the library and its window is closed.
- * The media server itself lives in Rust threads of this process; the service
+ * Keeps Wave running for paired Waves while its window is closed. The
+ * server they talk to lives in Rust threads of this process; the service
  * only holds the process in the foreground, with a notification saying what
  * it is doing, so Android doesn't stop it. Type connectedDevice, which the
  * CHANGE_WIFI_MULTICAST_STATE permission sharing already holds qualifies for.
@@ -77,15 +77,15 @@ public final class ShareService extends Service {
                 (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
-                    CHANNEL, "Library sharing", NotificationManager.IMPORTANCE_LOW);
-            channel.setDescription("Shown while Wave shares your library in the background");
+                    CHANNEL, "Wave devices", NotificationManager.IMPORTANCE_LOW);
+            channel.setDescription("Shown while your other Waves can reach this one in the background");
             channel.setShowBadge(false);
             manager.createNotificationChannel(channel);
         }
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL)
                 .setSmallIcon(icon())
-                .setContentTitle("Sharing your library")
-                .setContentText("Players on your network can play it as “" + name + "”")
+                .setContentTitle("Reachable by your Wave devices")
+                .setContentText("They can play your music and play to “" + name + "”")
                 .setOngoing(true)
                 .setSilent(true)
                 .setCategory(NotificationCompat.CATEGORY_SERVICE)

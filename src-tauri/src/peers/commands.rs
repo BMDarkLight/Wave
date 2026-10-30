@@ -10,7 +10,7 @@
 //! answer a request, change what is shared, and forget one.
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use super::api::{AnswerBody, AskBody};
 use super::{client, service, ShareScope};
@@ -280,6 +280,43 @@ pub async fn get_wave_share_paths(id: String, app: AppHandle) -> Result<Vec<Stri
 pub async fn dismiss_wave_peer(id: String, app: AppHandle) -> Result<(), String> {
     service(&app).registry.lock().dismissed.insert(id);
     Ok(())
+}
+
+/// Play on a paired Wave from now on, starting with what is loaded here.
+#[tauri::command]
+pub async fn cast_to_wave(id: String, app: AppHandle) -> Result<(), String> {
+    blocking(move || {
+        let service = service(&app);
+        let peer = service
+            .host()
+            .peers()
+            .into_iter()
+            .find(|peer| peer.id == id)
+            .ok_or("That device isn't paired with this one")?;
+        if !service.registry.lock().found.contains_key(&peer.id) {
+            return Err(format!("{} isn't on the network right now", peer.name));
+        }
+        let output = super::cast::CastSender::start(service.clone(), &peer);
+        crate::commands::with_app_player(&app, |player| {
+            player.cast_to(Box::new(output)).map_err(|e| e.to_string())
+        })?;
+        let _ = app.emit("wave-cast-changed", ());
+        Ok(())
+    })
+    .await
+}
+
+/// Play on this device again, from where the other one was.
+#[tauri::command]
+pub async fn stop_casting(app: AppHandle) -> Result<(), String> {
+    blocking(move || {
+        crate::commands::with_app_player(&app, |player| {
+            player.end_cast(true).map_err(|e| e.to_string())
+        })?;
+        let _ = app.emit("wave-cast-changed", ());
+        Ok(())
+    })
+    .await
 }
 
 /// Forget a paired device on both sides.

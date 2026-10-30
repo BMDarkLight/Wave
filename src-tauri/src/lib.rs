@@ -535,6 +535,8 @@ pub fn run() {
             peers::commands::get_wave_share_paths,
             peers::commands::dismiss_wave_peer,
             peers::commands::forget_wave_peer,
+            peers::commands::cast_to_wave,
+            peers::commands::stop_casting,
             commands::get_close_action,
             commands::set_close_action,
             commands::toggle_close_action,

@@ -398,6 +398,18 @@ impl crate::library::Library {
             .map_err(|e| format!("Failed to save a fingerprint: {e}"))
     }
 
+    /// One song's fingerprint, once it has one.
+    pub fn audio_fingerprint_of(&self, track_id: &str) -> Option<String> {
+        self.read_connection()
+            .query_row(
+                "SELECT audio_fingerprint FROM tracks WHERE id = ?1",
+                rusqlite::params![track_id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten()
+    }
+
     /// Every local song's fingerprint, mapped to the song's id.
     pub fn local_fingerprints(&self) -> Result<std::collections::HashMap<String, String>, String> {
         let connection = self.read_connection();

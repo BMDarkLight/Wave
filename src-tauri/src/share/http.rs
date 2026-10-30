@@ -6,15 +6,13 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
-//! The media server's HTTP side: the device and service descriptions, SOAP
-//! control for ContentDirectory and ConnectionManager, and the songs and
-//! covers themselves, with byte ranges so a player can seek.
+//! The server paired Waves talk to: the `/wave/` API, and the songs and
+//! covers themselves, with byte ranges so the other side can seek.
 //!
 //! One thread per connection, one request per connection (`Connection:
-//! close`), which every UPnP control point handles. Only clients on the local
-//! network are answered.
+//! close`). Only clients on the local network are answered.
 
-use super::catalog::{dlna_features, escape, mime_for, Fault, Page, Snapshot, INVALID_ARGS};
+use super::catalog::{mime_for, Snapshot};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,10 +24,6 @@ const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 64 * 1024;
 const IDLE: Duration = Duration::from_secs(15);
 
-pub const CONTENT_DIRECTORY: &str = "urn:schemas-upnp-org:service:ContentDirectory:1";
-pub const CONNECTION_MANAGER: &str = "urn:schemas-upnp-org:service:ConnectionManager:1";
-pub const MEDIA_SERVER: &str = "urn:schemas-upnp-org:device:MediaServer:1";
-
 /// Opens a shared file for reading. Android `content://` documents need the
 /// app's ContentResolver; everything else is a plain path.
 pub type Opener = Arc<dyn Fn(&str) -> io::Result<std::fs::File> + Send + Sync>;
@@ -40,14 +34,9 @@ pub trait Catalog: Send + Sync {
 }
 
 pub struct Server {
-    pub name: String,
-    pub uuid: String,
     pub catalog: Arc<dyn Catalog>,
     pub opener: Opener,
-    /// Whether DLNA players are served. Off leaves only the `/wave/` API,
-    /// for paired Waves.
-    pub dlna: bool,
-    pub peers: Option<Arc<crate::peers::api::PeerService>>,
+    pub peers: Arc<crate::peers::api::PeerService>,
 }
 
 /// Whether `ip` can only be on this machine or its local network.
@@ -71,7 +60,7 @@ pub fn serve(listener: TcpListener, server: Arc<Server>, stop: Arc<AtomicBool>) 
         match listener.accept() {
             Ok((stream, peer)) => {
                 if !is_local(peer.ip()) {
-                    tracing::debug!("Refused a media server request from {peer}");
+                    tracing::debug!("Refused a request from {peer}");
                     continue;
                 }
                 let server = server.clone();
@@ -80,18 +69,18 @@ pub fn serve(listener: TcpListener, server: Arc<Server>, stop: Arc<AtomicBool>) 
                     .spawn(move || {
                         let _ = stream.set_nonblocking(false);
                         if let Err(e) = handle(stream, &server) {
-                            tracing::debug!("Media server request ended: {e}");
+                            tracing::debug!("A request from another Wave ended: {e}");
                         }
                     });
                 if let Err(e) = spawned {
-                    tracing::warn!("Could not answer a media server request: {e}");
+                    tracing::warn!("Could not answer another Wave: {e}");
                 }
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(e) => {
-                tracing::debug!("Media server accept failed: {e}");
+                tracing::debug!("Accepting a connection failed: {e}");
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
@@ -159,7 +148,7 @@ fn read_request(stream: &TcpStream) -> io::Result<Request> {
 
 fn server_header() -> String {
     format!(
-        "{}/1 UPnP/1.0 Wave/{}",
+        "{}/1 Wave/{}",
         std::env::consts::OS,
         env!("CARGO_PKG_VERSION")
     )
@@ -187,29 +176,10 @@ fn respond(
     stream.flush()
 }
 
-fn xml(stream: &mut TcpStream, status: &str, body: &str, head_only: bool) -> io::Result<()> {
-    respond(
-        stream,
-        status,
-        &[("Content-Type", r#"text/xml; charset="utf-8""#.to_string())],
-        body.as_bytes(),
-        head_only,
-    )
-}
-
 fn handle(mut stream: TcpStream, server: &Server) -> io::Result<()> {
     stream.set_read_timeout(Some(IDLE))?;
     stream.set_write_timeout(Some(IDLE))?;
     let request = read_request(&stream)?;
-    // The address the client reached us on is the one our URLs must use.
-    let local = stream.local_addr()?;
-    let base = match local.ip() {
-        IpAddr::V6(v6) if v6.to_ipv4_mapped().is_none() => {
-            format!("http://[{v6}]:{}", local.port())
-        }
-        IpAddr::V6(v6) => format!("http://{}:{}", v6.to_ipv4_mapped().unwrap(), local.port()),
-        IpAddr::V4(v4) => format!("http://{v4}:{}", local.port()),
-    };
     let head_only = request.method == "HEAD";
     let (path, query) = request
         .path
@@ -219,75 +189,7 @@ fn handle(mut stream: TcpStream, server: &Server) -> io::Result<()> {
     if path.starts_with("/wave/") {
         return wave(&mut stream, server, &request, &path, query, head_only);
     }
-    if !server.dlna {
-        return respond(&mut stream, "404 Not Found", &[], b"", head_only);
-    }
-    match (request.method.as_str(), path.as_str()) {
-        ("GET" | "HEAD", "/rootDesc.xml") => xml(
-            &mut stream,
-            "200 OK",
-            &device_description(server),
-            head_only,
-        ),
-        ("GET" | "HEAD", "/ContentDirectory.xml") => {
-            xml(&mut stream, "200 OK", CONTENT_DIRECTORY_SCPD, head_only)
-        }
-        ("GET" | "HEAD", "/ConnectionManager.xml") => {
-            xml(&mut stream, "200 OK", CONNECTION_MANAGER_SCPD, head_only)
-        }
-        ("POST", "/ctl/ContentDirectory") => {
-            let reply = content_directory(server, &request, &base);
-            soap_reply(&mut stream, CONTENT_DIRECTORY, reply)
-        }
-        ("POST", "/ctl/ConnectionManager") => {
-            let reply = connection_manager(&request);
-            soap_reply(&mut stream, CONNECTION_MANAGER, reply)
-        }
-        ("SUBSCRIBE", "/evt/ContentDirectory" | "/evt/ConnectionManager") => {
-            // Subscriptions are acknowledged so control points that insist on
-            // one carry on; changes are found through SystemUpdateID.
-            let sid = request
-                .header("SID")
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("uuid:{}", uuid::Uuid::new_v4()));
-            respond(
-                &mut stream,
-                "200 OK",
-                &[("SID", sid), ("TIMEOUT", "Second-1800".to_string())],
-                b"",
-                false,
-            )
-        }
-        ("UNSUBSCRIBE", "/evt/ContentDirectory" | "/evt/ConnectionManager") => {
-            respond(&mut stream, "200 OK", &[], b"", false)
-        }
-        ("GET" | "HEAD", p) if p.starts_with("/media/") => media(
-            &mut stream,
-            server,
-            &request,
-            &p["/media/".len()..],
-            head_only,
-        ),
-        // Players show this beside the server's name.
-        ("GET" | "HEAD", "/icon/128.png") => respond(
-            &mut stream,
-            "200 OK",
-            &[("Content-Type", "image/png".to_string())],
-            include_bytes!("../../icons/128x128.png"),
-            head_only,
-        ),
-        ("GET" | "HEAD", "/icon/64.png") => respond(
-            &mut stream,
-            "200 OK",
-            &[("Content-Type", "image/png".to_string())],
-            include_bytes!("../../icons/64x64.png"),
-            head_only,
-        ),
-        ("GET" | "HEAD", p) if p.starts_with("/art/") => {
-            art(&mut stream, server, &p["/art/".len()..], head_only)
-        }
-        _ => respond(&mut stream, "404 Not Found", &[], b"", head_only),
-    }
+    respond(&mut stream, "404 Not Found", &[], b"", head_only)
 }
 
 /// A request for the API paired Waves use.
@@ -299,9 +201,7 @@ fn wave(
     query: &str,
     head_only: bool,
 ) -> io::Result<()> {
-    let Some(peers) = server.peers.as_ref() else {
-        return respond(stream, "404 Not Found", &[], b"", head_only);
-    };
+    let peers = &server.peers;
     let from = stream.peer_addr()?.ip();
     let snapshot = server.catalog.snapshot().ok();
     let reply = peers.handle(
@@ -325,23 +225,10 @@ fn wave(
             body.as_bytes(),
             head_only,
         ),
-        // Back in the `<id>.<extension>` form the DLNA endpoints read.
-        Some(PeerReply::Media(id)) => {
-            let name = format!("{}.x", crate::remote::uri::percent_encode(&id));
-            media(stream, server, request, &name, head_only)
-        }
-        Some(PeerReply::Art(id)) => {
-            let name = format!("{}.x", crate::remote::uri::percent_encode(&id));
-            art(stream, server, &name, head_only)
-        }
+        Some(PeerReply::Media(id)) => media(stream, server, request, &id, head_only),
+        Some(PeerReply::Art(id)) => art(stream, server, &id, head_only),
         None => respond(stream, "404 Not Found", &[], b"", head_only),
     }
-}
-
-/// The track id in `<id>.<extension>`, percent-decoded.
-fn track_id_from(name: &str) -> Option<String> {
-    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
-    crate::remote::uri::percent_decode(stem).filter(|id| !id.is_empty())
 }
 
 /// What a `Range` header asks for.
@@ -392,13 +279,14 @@ fn media(
     stream: &mut TcpStream,
     server: &Server,
     request: &Request,
-    name: &str,
+    id: &str,
     head_only: bool,
 ) -> io::Result<()> {
-    let found = track_id_from(name).and_then(|id| {
-        let snapshot = server.catalog.snapshot().ok()?;
-        snapshot.track(&id).cloned()
-    });
+    let found = server
+        .catalog
+        .snapshot()
+        .ok()
+        .and_then(|snapshot| snapshot.track(id).cloned());
     let Some(track) = found else {
         return respond(stream, "404 Not Found", &[], b"", head_only);
     };
@@ -414,8 +302,6 @@ fn media(
     let mut headers = vec![
         ("Content-Type", mime_for(&extension).to_string()),
         ("Accept-Ranges", "bytes".to_string()),
-        ("transferMode.dlna.org", "Streaming".to_string()),
-        ("contentFeatures.dlna.org", dlna_features(&extension)),
     ];
     let wanted = request
         .header("Range")
@@ -467,8 +353,7 @@ fn media(
 
 /// The best cover there is for a track: the one inside its file at full
 /// size, else the 512px copy saved with the album art, else the 96px
-/// thumbnail. Players show covers large, and so does a copy of Wave that
-/// syncs this library, which keeps what it is sent.
+/// thumbnail. The other Wave keeps what it is sent and shows it large.
 fn best_cover(server: &Server, track: &crate::metadata::Track) -> Option<(Vec<u8>, String)> {
     if let Some(found) = (server.opener)(&track.path)
         .ok()
@@ -487,11 +372,12 @@ fn best_cover(server: &Server, track: &crate::metadata::Track) -> Option<(Vec<u8
         .map(|bytes| (bytes, "image/jpeg".to_string()))
 }
 
-fn art(stream: &mut TcpStream, server: &Server, name: &str, head_only: bool) -> io::Result<()> {
-    let cover = track_id_from(name).and_then(|id| {
-        let snapshot = server.catalog.snapshot().ok()?;
-        best_cover(server, snapshot.track(&id)?)
-    });
+fn art(stream: &mut TcpStream, server: &Server, id: &str, head_only: bool) -> io::Result<()> {
+    let cover = server
+        .catalog
+        .snapshot()
+        .ok()
+        .and_then(|snapshot| best_cover(server, snapshot.track(id)?));
     match cover {
         Some((bytes, mime)) => respond(
             stream,
@@ -503,315 +389,6 @@ fn art(stream: &mut TcpStream, server: &Server, name: &str, head_only: bool) -> 
         None => respond(stream, "404 Not Found", &[], b"", head_only),
     }
 }
-
-// ── SOAP ───────────────────────────────────────────────────────────────────
-
-/// An action's name and arguments, from the `SOAPACTION` header and body.
-fn soap_action(request: &Request) -> Option<(String, Vec<(String, String)>)> {
-    let body = std::str::from_utf8(&request.body).ok()?;
-    let doc = roxmltree::Document::parse(body).ok()?;
-    let from_header = request.header("SOAPACTION").and_then(|v| {
-        v.trim_matches('"')
-            .rsplit_once('#')
-            .map(|(_, a)| a.to_string())
-    });
-    let body_el = doc
-        .descendants()
-        .find(|n| n.is_element() && n.tag_name().name() == "Body")?;
-    let action_el = body_el.children().find(|n| n.is_element())?;
-    let name = from_header.unwrap_or_else(|| action_el.tag_name().name().to_string());
-    let args = action_el
-        .children()
-        .filter(|n| n.is_element())
-        .map(|n| {
-            (
-                n.tag_name().name().to_string(),
-                n.text().unwrap_or_default().to_string(),
-            )
-        })
-        .collect();
-    Some((name, args))
-}
-
-type SoapReply = Result<(String, Vec<(&'static str, String)>), Fault>;
-
-fn soap_reply(stream: &mut TcpStream, service: &str, reply: SoapReply) -> io::Result<()> {
-    match reply {
-        Ok((action, values)) => {
-            let args: String = values
-                .iter()
-                .map(|(name, value)| format!("<{name}>{}</{name}>", escape(value)))
-                .collect();
-            let body = format!(
-                r#"<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:{action}Response xmlns:u="{service}">{args}</u:{action}Response></s:Body></s:Envelope>"#
-            );
-            xml(stream, "200 OK", &body, false)
-        }
-        Err(fault) => {
-            let body = format!(
-                r#"<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><s:Fault><faultcode>s:Client</faultcode><faultstring>UPnPError</faultstring><detail><UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>{}</errorCode><errorDescription>{}</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>"#,
-                fault.code,
-                escape(fault.description)
-            );
-            xml(stream, "500 Internal Server Error", &body, false)
-        }
-    }
-}
-
-const INVALID_ACTION: u16 = 401;
-
-fn arg<'a>(args: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    args.iter()
-        .find(|(k, _)| k == name)
-        .map(|(_, v)| v.as_str())
-}
-
-fn number(args: &[(String, String)], name: &str) -> Result<usize, Fault> {
-    arg(args, name)
-        .unwrap_or("0")
-        .trim()
-        .parse()
-        .map_err(|_| Fault::new(INVALID_ARGS, "Invalid Args"))
-}
-
-fn page_reply(action: &str, page: Page, version: u32) -> (String, Vec<(&'static str, String)>) {
-    (
-        action.to_string(),
-        vec![
-            ("Result", page.didl),
-            ("NumberReturned", page.returned.to_string()),
-            ("TotalMatches", page.total.to_string()),
-            ("UpdateID", version.to_string()),
-        ],
-    )
-}
-
-fn content_directory(server: &Server, request: &Request, base: &str) -> SoapReply {
-    let (action, args) =
-        soap_action(request).ok_or(Fault::new(INVALID_ACTION, "Invalid Action"))?;
-    let snapshot = || {
-        server
-            .catalog
-            .snapshot()
-            .map_err(|_| Fault::new(501, "Action Failed"))
-    };
-    match action.as_str() {
-        "Browse" => {
-            let snap = snapshot()?;
-            let object = arg(&args, "ObjectID").unwrap_or("0");
-            let children = match arg(&args, "BrowseFlag") {
-                Some("BrowseDirectChildren") => true,
-                Some("BrowseMetadata") => false,
-                _ => return Err(Fault::new(INVALID_ARGS, "Invalid Args")),
-            };
-            let start = number(&args, "StartingIndex")?;
-            let count = number(&args, "RequestedCount")?;
-            let page = snap.browse(object, children, start, count, base)?;
-            Ok(page_reply("Browse", page, snap.version))
-        }
-        "Search" => {
-            let snap = snapshot()?;
-            let container = arg(&args, "ContainerID").unwrap_or("0");
-            let criteria = arg(&args, "SearchCriteria").unwrap_or("*");
-            let start = number(&args, "StartingIndex")?;
-            let count = number(&args, "RequestedCount")?;
-            let page = snap.search(container, criteria, start, count, base)?;
-            Ok(page_reply("Search", page, snap.version))
-        }
-        "GetSearchCapabilities" => Ok((
-            action,
-            vec![(
-                "SearchCaps",
-                "@id,@parentID,upnp:class,dc:title,dc:creator,upnp:artist,upnp:album,upnp:genre,dc:date"
-                    .to_string(),
-            )],
-        )),
-        // Sorting is not offered: results come in library order.
-        "GetSortCapabilities" => Ok((action, vec![("SortCaps", String::new())])),
-        "GetSystemUpdateID" => Ok((action, vec![("Id", snapshot()?.version.to_string())])),
-        _ => Err(Fault::new(INVALID_ACTION, "Invalid Action")),
-    }
-}
-
-/// Every format the server can send, for `GetProtocolInfo`.
-fn source_protocols() -> String {
-    ["mp3", "flac", "m4a", "ogg", "opus", "wav", "aiff"]
-        .iter()
-        .map(|ext| format!("http-get:*:{}:*", mime_for(ext)))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn connection_manager(request: &Request) -> SoapReply {
-    let (action, args) =
-        soap_action(request).ok_or(Fault::new(INVALID_ACTION, "Invalid Action"))?;
-    match action.as_str() {
-        "GetProtocolInfo" => Ok((
-            action,
-            vec![("Source", source_protocols()), ("Sink", String::new())],
-        )),
-        "GetCurrentConnectionIDs" => Ok((action, vec![("ConnectionIDs", "0".to_string())])),
-        "GetCurrentConnectionInfo" => {
-            if arg(&args, "ConnectionID").map(str::trim) != Some("0") {
-                // 706: Invalid connection reference.
-                return Err(Fault::new(706, "Invalid connection reference"));
-            }
-            Ok((
-                action,
-                vec![
-                    ("RcsID", "-1".to_string()),
-                    ("AVTransportID", "-1".to_string()),
-                    ("ProtocolInfo", String::new()),
-                    ("PeerConnectionManager", String::new()),
-                    ("PeerConnectionID", "-1".to_string()),
-                    ("Direction", "Output".to_string()),
-                    ("Status", "OK".to_string()),
-                ],
-            ))
-        }
-        _ => Err(Fault::new(INVALID_ACTION, "Invalid Action")),
-    }
-}
-
-// ── Descriptions ───────────────────────────────────────────────────────────
-
-pub fn device_description(server: &Server) -> String {
-    format!(
-        r#"<?xml version="1.0" encoding="utf-8"?>
-<root xmlns="urn:schemas-upnp-org:device-1-0" xmlns:dlna="urn:schemas-dlna-org:device-1-0">
-<specVersion><major>1</major><minor>0</minor></specVersion>
-<device>
-<deviceType>{MEDIA_SERVER}</deviceType>
-<friendlyName>{name}</friendlyName>
-<manufacturer>Wave</manufacturer>
-<manufacturerURL>https://github.com/BMDarkLight/Wave</manufacturerURL>
-<modelDescription>Wave music library</modelDescription>
-<modelName>Wave</modelName>
-<modelNumber>{version}</modelNumber>
-<modelURL>https://github.com/BMDarkLight/Wave</modelURL>
-<UDN>uuid:{uuid}</UDN>
-<dlna:X_DLNADOC>DMS-1.50</dlna:X_DLNADOC>
-<iconList>
-<icon><mimetype>image/png</mimetype><width>128</width><height>128</height><depth>24</depth><url>/icon/128.png</url></icon>
-<icon><mimetype>image/png</mimetype><width>64</width><height>64</height><depth>24</depth><url>/icon/64.png</url></icon>
-</iconList>
-<serviceList>
-<service>
-<serviceType>{CONTENT_DIRECTORY}</serviceType>
-<serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId>
-<SCPDURL>/ContentDirectory.xml</SCPDURL>
-<controlURL>/ctl/ContentDirectory</controlURL>
-<eventSubURL>/evt/ContentDirectory</eventSubURL>
-</service>
-<service>
-<serviceType>{CONNECTION_MANAGER}</serviceType>
-<serviceId>urn:upnp-org:serviceId:ConnectionManager</serviceId>
-<SCPDURL>/ConnectionManager.xml</SCPDURL>
-<controlURL>/ctl/ConnectionManager</controlURL>
-<eventSubURL>/evt/ConnectionManager</eventSubURL>
-</service>
-</serviceList>
-</device>
-</root>"#,
-        name = escape(&server.name),
-        version = env!("CARGO_PKG_VERSION"),
-        uuid = escape(&server.uuid),
-    )
-}
-
-/// The actions and state variables ContentDirectory:1 requires, plus Search.
-const CONTENT_DIRECTORY_SCPD: &str = r#"<?xml version="1.0" encoding="utf-8"?>
-<scpd xmlns="urn:schemas-upnp-org:service-1-0">
-<specVersion><major>1</major><minor>0</minor></specVersion>
-<actionList>
-<action><name>GetSearchCapabilities</name><argumentList>
-<argument><name>SearchCaps</name><direction>out</direction><relatedStateVariable>SearchCapabilities</relatedStateVariable></argument>
-</argumentList></action>
-<action><name>GetSortCapabilities</name><argumentList>
-<argument><name>SortCaps</name><direction>out</direction><relatedStateVariable>SortCapabilities</relatedStateVariable></argument>
-</argumentList></action>
-<action><name>GetSystemUpdateID</name><argumentList>
-<argument><name>Id</name><direction>out</direction><relatedStateVariable>SystemUpdateID</relatedStateVariable></argument>
-</argumentList></action>
-<action><name>Browse</name><argumentList>
-<argument><name>ObjectID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_ObjectID</relatedStateVariable></argument>
-<argument><name>BrowseFlag</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_BrowseFlag</relatedStateVariable></argument>
-<argument><name>Filter</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Filter</relatedStateVariable></argument>
-<argument><name>StartingIndex</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Index</relatedStateVariable></argument>
-<argument><name>RequestedCount</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
-<argument><name>SortCriteria</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_SortCriteria</relatedStateVariable></argument>
-<argument><name>Result</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Result</relatedStateVariable></argument>
-<argument><name>NumberReturned</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
-<argument><name>TotalMatches</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
-<argument><name>UpdateID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_UpdateID</relatedStateVariable></argument>
-</argumentList></action>
-<action><name>Search</name><argumentList>
-<argument><name>ContainerID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_ObjectID</relatedStateVariable></argument>
-<argument><name>SearchCriteria</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_SearchCriteria</relatedStateVariable></argument>
-<argument><name>Filter</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Filter</relatedStateVariable></argument>
-<argument><name>StartingIndex</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Index</relatedStateVariable></argument>
-<argument><name>RequestedCount</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
-<argument><name>SortCriteria</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_SortCriteria</relatedStateVariable></argument>
-<argument><name>Result</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Result</relatedStateVariable></argument>
-<argument><name>NumberReturned</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
-<argument><name>TotalMatches</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Count</relatedStateVariable></argument>
-<argument><name>UpdateID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_UpdateID</relatedStateVariable></argument>
-</argumentList></action>
-</actionList>
-<serviceStateTable>
-<stateVariable sendEvents="no"><name>SearchCapabilities</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>SortCapabilities</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="yes"><name>SystemUpdateID</name><dataType>ui4</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_ObjectID</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_Result</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_SearchCriteria</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_BrowseFlag</name><dataType>string</dataType>
-<allowedValueList><allowedValue>BrowseMetadata</allowedValue><allowedValue>BrowseDirectChildren</allowedValue></allowedValueList></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_Filter</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_SortCriteria</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_Index</name><dataType>ui4</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_Count</name><dataType>ui4</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_UpdateID</name><dataType>ui4</dataType></stateVariable>
-</serviceStateTable>
-</scpd>"#;
-
-const CONNECTION_MANAGER_SCPD: &str = r#"<?xml version="1.0" encoding="utf-8"?>
-<scpd xmlns="urn:schemas-upnp-org:service-1-0">
-<specVersion><major>1</major><minor>0</minor></specVersion>
-<actionList>
-<action><name>GetProtocolInfo</name><argumentList>
-<argument><name>Source</name><direction>out</direction><relatedStateVariable>SourceProtocolInfo</relatedStateVariable></argument>
-<argument><name>Sink</name><direction>out</direction><relatedStateVariable>SinkProtocolInfo</relatedStateVariable></argument>
-</argumentList></action>
-<action><name>GetCurrentConnectionIDs</name><argumentList>
-<argument><name>ConnectionIDs</name><direction>out</direction><relatedStateVariable>CurrentConnectionIDs</relatedStateVariable></argument>
-</argumentList></action>
-<action><name>GetCurrentConnectionInfo</name><argumentList>
-<argument><name>ConnectionID</name><direction>in</direction><relatedStateVariable>A_ARG_TYPE_ConnectionID</relatedStateVariable></argument>
-<argument><name>RcsID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_RcsID</relatedStateVariable></argument>
-<argument><name>AVTransportID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_AVTransportID</relatedStateVariable></argument>
-<argument><name>ProtocolInfo</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_ProtocolInfo</relatedStateVariable></argument>
-<argument><name>PeerConnectionManager</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_ConnectionManager</relatedStateVariable></argument>
-<argument><name>PeerConnectionID</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_ConnectionID</relatedStateVariable></argument>
-<argument><name>Direction</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_Direction</relatedStateVariable></argument>
-<argument><name>Status</name><direction>out</direction><relatedStateVariable>A_ARG_TYPE_ConnectionStatus</relatedStateVariable></argument>
-</argumentList></action>
-</actionList>
-<serviceStateTable>
-<stateVariable sendEvents="yes"><name>SourceProtocolInfo</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="yes"><name>SinkProtocolInfo</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="yes"><name>CurrentConnectionIDs</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_ConnectionStatus</name><dataType>string</dataType>
-<allowedValueList><allowedValue>OK</allowedValue><allowedValue>ContentFormatMismatch</allowedValue><allowedValue>InsufficientBandwidth</allowedValue><allowedValue>UnreliableChannel</allowedValue><allowedValue>Unknown</allowedValue></allowedValueList></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_ConnectionManager</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_Direction</name><dataType>string</dataType>
-<allowedValueList><allowedValue>Input</allowedValue><allowedValue>Output</allowedValue></allowedValueList></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_ProtocolInfo</name><dataType>string</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_ConnectionID</name><dataType>i4</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_AVTransportID</name><dataType>i4</dataType></stateVariable>
-<stateVariable sendEvents="no"><name>A_ARG_TYPE_RcsID</name><dataType>i4</dataType></stateVariable>
-</serviceStateTable>
-</scpd>"#;
 
 #[cfg(test)]
 mod tests {
@@ -856,13 +433,10 @@ mod tests {
 
     /// A running server over one 1000-byte song, and its port.
     fn running() -> (u16, Arc<AtomicBool>, std::path::PathBuf) {
-        running_with(true, crate::peers::ShareScope::Everything)
+        running_with(crate::peers::ShareScope::Everything)
     }
 
-    fn running_with(
-        dlna: bool,
-        share: crate::peers::ShareScope,
-    ) -> (u16, Arc<AtomicBool>, std::path::PathBuf) {
+    fn running_with(share: crate::peers::ShareScope) -> (u16, Arc<AtomicBool>, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("wave-share-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let song = dir.join("song.mp3");
@@ -882,15 +456,12 @@ mod tests {
             cover_art_data_url: Some(thumb.to_string_lossy().into_owned()),
             ..Track::default()
         };
-        let snapshot = Arc::new(Snapshot::build(42, vec![track], Vec::new()));
+        let snapshot = Arc::new(Snapshot::build(42, vec![track]));
         let server = Arc::new(Server {
-            name: "Wave on test & co".into(),
-            uuid: "1234".into(),
             catalog: Arc::new(Fixed(snapshot)),
             opener: Arc::new(|path: &str| std::fs::File::open(path)),
-            dlna,
-            peers: Some(Arc::new(crate::peers::api::PeerService::new(Arc::new(
-                OnePeer(share),
+            peers: Arc::new(crate::peers::api::PeerService::new(Arc::new(OnePeer(
+                share,
             )))),
         });
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -911,25 +482,6 @@ mod tests {
             String::from_utf8_lossy(&reply[..split]).into_owned(),
             reply[split + 4..].to_vec(),
         )
-    }
-
-    fn soap(port: u16, service: &str, action: &str, args: &str) -> (String, String) {
-        let body = format!(
-            r#"<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:{action} xmlns:u="{service}">{args}</u:{action}></s:Body></s:Envelope>"#
-        );
-        let path = if service == CONTENT_DIRECTORY {
-            "/ctl/ContentDirectory"
-        } else {
-            "/ctl/ConnectionManager"
-        };
-        let (head, body) = exchange(
-            port,
-            &format!(
-                "POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: text/xml\r\nSOAPACTION: \"{service}#{action}\"\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ),
-        );
-        (head, String::from_utf8(body).unwrap())
     }
 
     #[test]
@@ -959,8 +511,8 @@ mod tests {
     }
 
     #[test]
-    fn with_dlna_off_only_paired_waves_are_served() {
-        let (port, stop, _) = running_with(false, crate::peers::ShareScope::Everything);
+    fn only_the_wave_api_is_served() {
+        let (port, stop, _) = running();
         let (head, _) = exchange(port, "GET /rootDesc.xml HTTP/1.1\r\n\r\n");
         assert!(head.starts_with("HTTP/1.1 404"), "{head}");
         let (head, body) = exchange(port, "GET /wave/hello HTTP/1.1\r\n\r\n");
@@ -971,8 +523,7 @@ mod tests {
 
     #[test]
     fn a_paired_wave_streams_what_it_was_given() {
-        let (port, stop, _) =
-            running_with(false, crate::peers::ShareScope::Tracks(vec!["t 1".into()]));
+        let (port, stop, _) = running_with(crate::peers::ShareScope::Tracks(vec!["t 1".into()]));
         let auth = format!("X-Wave-Peer: phone\r\nX-Wave-Secret: {PEER_SECRET}\r\n");
         let (head, body) = exchange(
             port,
@@ -996,7 +547,7 @@ mod tests {
 
     #[test]
     fn a_paired_wave_gets_nothing_outside_its_share() {
-        let (port, stop, _) = running_with(true, crate::peers::ShareScope::Nothing);
+        let (port, stop, _) = running_with(crate::peers::ShareScope::Nothing);
         let auth = format!("X-Wave-Peer: phone\r\nX-Wave-Secret: {PEER_SECRET}\r\n");
         let (head, _) = exchange(
             port,
@@ -1007,133 +558,38 @@ mod tests {
     }
 
     #[test]
-    fn the_description_names_both_services() {
-        let (port, stop, _) = running();
-        let (head, body) = exchange(port, "GET /rootDesc.xml HTTP/1.1\r\nHost: x\r\n\r\n");
-        let body = String::from_utf8(body).unwrap();
-        assert!(head.starts_with("HTTP/1.1 200"));
-        assert!(body.contains("<friendlyName>Wave on test &amp; co</friendlyName>"));
-        assert!(body.contains("<UDN>uuid:1234</UDN>"));
-        assert!(body.contains(CONTENT_DIRECTORY) && body.contains(CONNECTION_MANAGER));
-        // Our own DLNA client must accept it.
-        let config = crate::remote::dlna::parse_description(
-            &body,
-            &format!("http://127.0.0.1:{port}/rootDesc.xml"),
-        )
-        .unwrap();
-        assert_eq!(
-            config.control_url,
-            format!("http://127.0.0.1:{port}/ctl/ContentDirectory")
-        );
-        for scpd in ["/ContentDirectory.xml", "/ConnectionManager.xml"] {
-            let (_, body) = exchange(port, &format!("GET {scpd} HTTP/1.1\r\n\r\n"));
-            assert!(roxmltree::Document::parse(std::str::from_utf8(&body).unwrap()).is_ok());
-        }
-        // Every icon the description lists is there.
-        let description = roxmltree::Document::parse(&body).unwrap();
-        let icons: Vec<_> = description
-            .descendants()
-            .filter(|n| n.has_tag_name("url"))
-            .filter_map(|n| n.text())
-            .collect();
-        assert_eq!(icons.len(), 2);
-        for icon in icons {
-            let (head, body) = exchange(port, &format!("GET {icon} HTTP/1.1\r\n\r\n"));
-            assert!(head.starts_with("HTTP/1.1 200"), "{icon}: {head}");
-            assert!(body.starts_with(b"\x89PNG"));
-        }
-        stop.store(true, Ordering::Relaxed);
-    }
-
-    #[test]
-    fn browse_and_search_answer_as_the_spec_shows() {
-        let (port, stop, _) = running();
-        let (head, body) = soap(
-            port,
-            CONTENT_DIRECTORY,
-            "Browse",
-            "<ObjectID>songs</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><Filter>*</Filter><StartingIndex>0</StartingIndex><RequestedCount>10</RequestedCount><SortCriteria></SortCriteria>",
-        );
-        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
-        let doc = roxmltree::Document::parse(&body).unwrap();
-        let text = |name: &str| {
-            doc.descendants()
-                .find(|n| n.tag_name().name() == name)
-                .and_then(|n| n.text())
-                .unwrap_or_default()
-                .to_string()
-        };
-        assert_eq!(text("NumberReturned"), "1");
-        assert_eq!(text("TotalMatches"), "1");
-        assert_eq!(text("UpdateID"), "42");
-        // Result is escaped DIDL-Lite that parses on its own.
-        let didl = text("Result");
-        let parsed = roxmltree::Document::parse(&didl).unwrap();
-        let res = parsed
-            .descendants()
-            .find(|n| n.tag_name().name() == "res")
-            .unwrap();
-        assert_eq!(
-            res.text().unwrap(),
-            format!("http://127.0.0.1:{port}/media/t%201.mp3")
-        );
-
-        let (_, body) = soap(
-            port,
-            CONTENT_DIRECTORY,
-            "Search",
-            r#"<ContainerID>0</ContainerID><SearchCriteria>upnp:class derivedfrom "object.item.audioItem"</SearchCriteria><Filter>*</Filter><StartingIndex>0</StartingIndex><RequestedCount>0</RequestedCount><SortCriteria></SortCriteria>"#,
-        );
-        assert!(body.contains("<TotalMatches>1</TotalMatches>"));
-
-        let (head, body) = soap(
-            port,
-            CONTENT_DIRECTORY,
-            "Browse",
-            "<ObjectID>nope</ObjectID><BrowseFlag>BrowseMetadata</BrowseFlag>",
-        );
-        assert!(head.starts_with("HTTP/1.1 500"));
-        assert!(body.contains("<errorCode>701</errorCode>"));
-
-        let (_, body) = soap(port, CONNECTION_MANAGER, "GetProtocolInfo", "");
-        assert!(body.contains("http-get:*:audio/flac:*"));
-        let (_, body) = soap(port, CONTENT_DIRECTORY, "GetSystemUpdateID", "");
-        assert!(body.contains("<Id>42</Id>"));
-        stop.store(true, Ordering::Relaxed);
-    }
-
-    #[test]
     fn media_is_served_whole_or_in_ranges() {
         let (port, stop, song) = running();
         let bytes = std::fs::read(&song).unwrap();
+        let get = |method: &str, path: &str, extra: &str| {
+            exchange(
+                port,
+                &format!(
+                    "{method} /wave/{path} HTTP/1.1\r\nX-Wave-Peer: phone\r\nX-Wave-Secret: {PEER_SECRET}\r\n{extra}\r\n"
+                ),
+            )
+        };
 
-        let (head, body) = exchange(port, "GET /media/t%201.mp3 HTTP/1.1\r\n\r\n");
-        assert!(head.starts_with("HTTP/1.1 200"));
+        let (head, body) = get("GET", "media/t%201.mp3", "");
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
         assert!(head.contains("Content-Type: audio/mpeg"));
         assert!(head.contains("Accept-Ranges: bytes"));
-        assert!(head.contains("contentFeatures.dlna.org: DLNA.ORG_PN=MP3;DLNA.ORG_OP=01"));
         assert_eq!(body, bytes);
 
-        let (head, body) = exchange(
-            port,
-            "GET /media/t%201.mp3 HTTP/1.1\r\nRange: bytes=100-199\r\n\r\n",
-        );
+        let (head, body) = get("GET", "media/t%201.mp3", "Range: bytes=100-199\r\n");
         assert!(head.starts_with("HTTP/1.1 206"));
         assert!(head.contains("Content-Range: bytes 100-199/1000"));
         assert_eq!(body, bytes[100..200]);
 
-        let (head, body) = exchange(port, "HEAD /media/t%201.mp3 HTTP/1.1\r\n\r\n");
+        let (head, body) = get("HEAD", "media/t%201.mp3", "");
         assert!(head.contains("Content-Length: 1000"));
         assert!(body.is_empty());
 
-        let (head, _) = exchange(
-            port,
-            "GET /media/t%201.mp3 HTTP/1.1\r\nRange: bytes=2000-\r\n\r\n",
-        );
+        let (head, _) = get("GET", "media/t%201.mp3", "Range: bytes=2000-\r\n");
         assert!(head.starts_with("HTTP/1.1 416"));
         assert!(head.contains("Content-Range: bytes */1000"));
 
-        let (head, _) = exchange(port, "GET /media/unknown.mp3 HTTP/1.1\r\n\r\n");
+        let (head, _) = get("GET", "media/unknown.mp3", "");
         assert!(head.starts_with("HTTP/1.1 404"));
         stop.store(true, Ordering::Relaxed);
     }
@@ -1141,11 +597,18 @@ mod tests {
     #[test]
     fn covers_are_served_from_the_thumbnail() {
         let (port, stop, _) = running();
-        let (head, body) = exchange(port, "GET /art/t%201.jpg HTTP/1.1\r\n\r\n");
+        let auth = format!("X-Wave-Peer: phone\r\nX-Wave-Secret: {PEER_SECRET}\r\n");
+        let (head, body) = exchange(
+            port,
+            &format!("GET /wave/art/t%201.jpg HTTP/1.1\r\n{auth}\r\n"),
+        );
         assert!(head.starts_with("HTTP/1.1 200"), "{head}");
         assert!(head.contains("Content-Type: image/jpeg"));
         assert_eq!(body, b"\xFF\xD8 a tiny jpeg");
-        let (head, _) = exchange(port, "GET /art/unknown.jpg HTTP/1.1\r\n\r\n");
+        let (head, _) = exchange(
+            port,
+            &format!("GET /wave/art/unknown.jpg HTTP/1.1\r\n{auth}\r\n"),
+        );
         assert!(head.starts_with("HTTP/1.1 404"));
         stop.store(true, Ordering::Relaxed);
     }
@@ -1155,7 +618,10 @@ mod tests {
 mod pairing_tests {
     use super::*;
     use crate::metadata::Track;
-    use crate::peers::api::{AnswerBody, AskBody, Host, PeerService, UnpairBody};
+    use crate::peers::api::{AnswerBody, AskBody, Host, PeerService, SharedTrack, UnpairBody};
+    use crate::peers::cast::{
+        CastControl, CastControlBody, CastItem, CastPhase, CastPlay, CastState,
+    };
     use crate::peers::{client, PeerRecord, ShareScope};
     use std::collections::HashMap;
     use std::net::Ipv4Addr;
@@ -1173,6 +639,8 @@ mod pairing_tests {
         id: String,
         peers: Mutex<Vec<PeerRecord>>,
         events: Mutex<Vec<String>>,
+        /// What paired devices asked this one to play, last first.
+        casts: Mutex<Vec<CastPlay>>,
     }
 
     impl Host for MemHost {
@@ -1194,10 +662,40 @@ mod pairing_tests {
         fn paired(&self, _peer: &PeerRecord) {}
         fn forgotten(&self, _peer_id: &str) {}
         fn reachable(&self, _peer_id: &str, _online: bool) {}
+        fn cast_play(&self, _from: &PeerRecord, play: CastPlay) -> Result<(), String> {
+            self.casts.lock().unwrap().insert(0, play);
+            Ok(())
+        }
+        fn cast_control(&self, _from: &PeerRecord, control: CastControlBody) -> Result<(), String> {
+            let mut casts = self.casts.lock().unwrap();
+            let current = casts.first_mut().filter(|c| c.session == control.session);
+            let current = current.ok_or("nothing of yours plays here")?;
+            if let CastControl::Pause = control.control {
+                current.playing = false;
+            }
+            Ok(())
+        }
+        fn cast_state(&self, _from: &PeerRecord) -> CastState {
+            let casts = self.casts.lock().unwrap();
+            let current = casts.first();
+            CastState {
+                session: current.map_or(0, |c| c.session),
+                phase: match current {
+                    Some(c) if c.playing => CastPhase::Playing,
+                    Some(_) => CastPhase::Paused,
+                    None => CastPhase::Idle,
+                },
+                position: current.map_or(0.0, |c| c.position),
+                duration: None,
+            }
+        }
     }
 
-    /// A Wave serving `songs` (1000-byte files), its peer service and port.
-    fn wave(id: &str, songs: &[&str]) -> (Arc<MemHost>, Arc<PeerService>, u16) {
+    /// A Wave's settings and events, its peer service and port.
+    type Running = (Arc<MemHost>, Arc<PeerService>, u16);
+
+    /// A Wave serving `songs` (1000-byte files).
+    fn wave(id: &str, songs: &[&str]) -> Running {
         let dir = std::env::temp_dir().join(format!("wave-pair-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let tracks = songs
@@ -1219,15 +717,13 @@ mod pairing_tests {
             id: id.into(),
             peers: Mutex::new(Vec::new()),
             events: Mutex::new(Vec::new()),
+            casts: Mutex::new(Vec::new()),
         });
         let peers = Arc::new(PeerService::new(host.clone()));
         let server = Arc::new(Server {
-            name: format!("Wave on {id}"),
-            uuid: id.into(),
-            catalog: Arc::new(Fixed(Arc::new(Snapshot::build(1, tracks, Vec::new())))),
+            catalog: Arc::new(Fixed(Arc::new(Snapshot::build(1, tracks)))),
             opener: Arc::new(|path: &str| std::fs::File::open(path)),
-            dlna: false,
-            peers: Some(peers.clone()),
+            peers: peers.clone(),
         });
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1323,5 +819,114 @@ mod pairing_tests {
             client::catalog(&on_pc[0], "pc", 0).unwrap_err(),
             client::CallError::Forgotten
         );
+    }
+
+    /// Pairs "pc" with "phone"; the phone shares nothing with the pc and the
+    /// pc nothing with the phone.
+    fn paired_pair() -> (Running, Running) {
+        let pc = wave("pc", &["pc-song"]);
+        let phone = wave("phone", &["a-song"]);
+        let secret = "0123456789abcdef0123456789abcdef".to_string();
+        let record = |id: &str, port: u16| PeerRecord {
+            id: id.into(),
+            name: format!("Wave on {id}"),
+            address: format!("http://127.0.0.1:{port}"),
+            secret: secret.clone(),
+            share: ShareScope::Nothing,
+            source_id: None,
+            paired_at: 0,
+        };
+        pc.0.peers.lock().unwrap().push(record("phone", phone.2));
+        phone.0.peers.lock().unwrap().push(record("pc", pc.2));
+        (pc, phone)
+    }
+
+    #[test]
+    fn a_wave_plays_to_another_and_lends_it_the_song() {
+        let ((pc_host, pc, _), (phone_host, _, _)) = paired_pair();
+        let phone = pc_host.peers()[0].clone();
+        let pc_song = Track {
+            id: "pc-song".into(),
+            title: "pc-song".into(),
+            format: "mp3".into(),
+            file_size: 1000,
+            ..Track::default()
+        };
+        let play = CastPlay {
+            session: 1,
+            item: CastItem::Sender {
+                track: Box::new(SharedTrack::of(&pc_song, None)),
+            },
+            position: 30.0,
+            playing: true,
+        };
+
+        // Not shared with the phone, so it can't stream it until the pc
+        // plays it there.
+        let stream = || {
+            client::signed(
+                reqwest::blocking::Client::new().get(client::media_url(
+                    &pc_host_address(&phone_host),
+                    "pc-song",
+                    "mp3",
+                )),
+                "phone",
+                &phone_host.peers()[0],
+            )
+            .header("Range", "bytes=0-3")
+            .send()
+            .unwrap()
+            .status()
+            .as_u16()
+        };
+        assert_eq!(stream(), 404);
+        pc.grant_cast("phone", "pc-song");
+        client::cast_play(&phone, "pc", &play).unwrap();
+        assert_eq!(stream(), 206);
+        assert_eq!(phone_host.casts.lock().unwrap()[0], play);
+
+        let state = client::cast_state(&phone, "pc").unwrap();
+        assert_eq!((state.session, state.phase), (1, CastPhase::Playing));
+        client::cast_control(
+            &phone,
+            "pc",
+            &CastControlBody {
+                session: 1,
+                control: CastControl::Pause,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            client::cast_state(&phone, "pc").unwrap().phase,
+            CastPhase::Paused
+        );
+        // A control for a track that is no longer playing is turned down.
+        assert!(matches!(
+            client::cast_control(
+                &phone,
+                "pc",
+                &CastControlBody {
+                    session: 9,
+                    control: CastControl::Resume,
+                },
+            ),
+            Err(client::CallError::Refused(400))
+        ));
+
+        // Only paired devices can play here.
+        let stranger = PeerRecord {
+            id: "stranger".into(),
+            secret: "ffffffffffffffffffffffffffffffff".into(),
+            ..phone.clone()
+        };
+        assert_eq!(
+            client::cast_play(&stranger, "stranger", &play),
+            Err(client::CallError::Forgotten)
+        );
+    }
+
+    /// Where the pc answers, from the phone's record of it.
+    fn pc_host_address(phone_host: &MemHost) -> String {
+        phone_host.peers()[0].address.clone()
     }
 }

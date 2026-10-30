@@ -102,6 +102,10 @@ export interface PlaybackState {
   speed: number;
   /** Playing silence while a remote track catches up with the network. */
   is_buffering?: boolean;
+  /** The paired Wave playing in place of this device's output. */
+  cast_device?: { id: string; name: string } | null;
+  /** The paired Wave playing to this one, by name. */
+  playing_from?: string | null;
 }
 
 export interface SleepTimerStatus {
@@ -746,11 +750,9 @@ export interface SourceSettings {
   remote_cellular_enabled: boolean;
   /** Size cap of the shared audio cache. */
   cache_limit_mb: number;
-  /** Share the library on the network while Outside Sourcing is on. */
-  library_sharing_enabled: boolean;
-  /** The name other devices see; "" for "Wave on <device>". */
+  /** The name other Waves see; "" for "Wave on <device>". */
   share_name: string;
-  /** Keep sharing after the window is closed. */
+  /** Stay reachable for other Waves after the window is closed. */
   share_in_background: boolean;
 }
 

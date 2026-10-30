@@ -1418,8 +1418,8 @@ pub fn apply_settings(app: &AppHandle, was_enabled: bool) {
     }
 }
 
-/// Starts or stops sharing the library to match the settings: it runs only
-/// while both Outside Sourcing and library sharing are on. Starting binds
+/// Starts or stops sharing with other Waves to match the settings: it runs
+/// while Outside Sourcing is on. Starting binds
 /// sockets and stopping joins threads, so the work runs on a thread of its
 /// own, which reads the settings as they are by then; a quick on-off-on lands
 /// on the last of them.
@@ -1429,9 +1429,7 @@ pub fn apply_sharing(app: &AppHandle) {
         .name("wave-share-apply".into())
         .spawn(move || {
             let config = sharing_config(&app);
-            // The background service is for sharing with DLNA players; paired
-            // Waves alone don't keep Wave running with its window closed.
-            let background = config.as_ref().is_some_and(|c| c.dlna)
+            let background = config.is_some()
                 && app
                     .try_state::<AppSettingsState>()
                     .and_then(|s| s.0.lock().ok().map(|s| s.share_in_background))
@@ -1470,12 +1468,9 @@ fn sharing_config(app: &AppHandle) -> Option<crate::share::ShareConfig> {
         .unwrap_or_else(crate::app::paths::library_db_path);
     let state = app.try_state::<AppSettingsState>()?;
     let mut settings = state.0.lock().ok()?;
-    // Paired Waves are served whenever Outside Sourcing is on; DLNA players
-    // only while "Share my library" is on too.
     if !settings.remote_sources_enabled {
         return None;
     }
-    let dlna = settings.library_sharing_enabled;
     let uuid = match settings.share_device_id.clone() {
         Some(id) => id,
         None => {
@@ -1495,8 +1490,7 @@ fn sharing_config(app: &AppHandle) -> Option<crate::share::ShareConfig> {
         uuid,
         db_path,
         opener: crate::share::file_opener(Some(app.clone())),
-        dlna,
-        peers: Some(crate::peers::service(app)),
+        peers: crate::peers::service(app),
     })
 }
 
@@ -1574,9 +1568,21 @@ pub fn start(app: &AppHandle, rt: &'static RemoteRuntime) {
         Err(e) => tracing::warn!("Plex is unavailable: {e}"),
     }
     let enabled = remote_enabled(app);
+    let paired: Vec<String> = app
+        .try_state::<AppSettingsState>()
+        .and_then(|state| {
+            state
+                .0
+                .lock()
+                .ok()
+                .map(|s| s.wave_peers.iter().map(|p| p.id.clone()).collect())
+        })
+        .unwrap_or_default();
+    let app_for_start = app.clone();
     let spawned = std::thread::Builder::new()
         .name("wave-remote-start".into())
         .spawn(move || {
+            drop_dlna_copies(&app_for_start, &paired);
             rt.with_library(|library| {
                 rt.reload_sources(library);
                 if let Err(e) = library.recompute_remote_visibility(enabled) {
@@ -1617,6 +1623,7 @@ pub(crate) fn add_wave_source(app: &AppHandle, peer: &crate::peers::PeerRecord) 
         return;
     };
     let id = wave_source_id(&peer.id);
+    drop_dlna_copies(app, std::slice::from_ref(&peer.id));
     let added = rt.with_library(|library| {
         match library.insert_remote_source("wave", &peer.id, &peer.name, &json) {
             Ok(_) => {}
@@ -1631,6 +1638,34 @@ pub(crate) fn add_wave_source(app: &AppHandle, peer: &crate::peers::PeerRecord) 
     }
     sync_one_in_background(app, rt, id);
     let _ = app.emit("remote-status-changed", ());
+}
+
+/// The DLNA sources that are paired Waves, added back when Wave also served
+/// DLNA. A Wave answers only paired Waves now, so they would stay offline.
+fn dlna_copies_of(rows: &[super::store::RemoteSourceRow], peer_ids: &[String]) -> Vec<String> {
+    rows.iter()
+        .filter(|row| row.kind == "dlna")
+        .filter(|row| {
+            serde_json::from_str::<super::dlna::DlnaConfig>(&row.config_json)
+                .is_ok_and(|config| peer_ids.iter().any(|id| config.udn == format!("uuid:{id}")))
+        })
+        .map(|row| row.id.clone())
+        .collect()
+}
+
+/// Removes the DLNA sources that are these Waves, songs and all.
+pub(crate) fn drop_dlna_copies(app: &AppHandle, peer_ids: &[String]) {
+    let Ok(rt) = runtime() else {
+        return;
+    };
+    let copies = rt
+        .with_library(|library| library.list_remote_sources())
+        .map(|rows| dlna_copies_of(&rows, peer_ids))
+        .unwrap_or_default();
+    for id in copies {
+        tracing::info!("Removing {id}: that Wave is paired now");
+        remove_wave_source_by_id(app, &id);
+    }
 }
 
 /// Drop a forgotten Wave's songs and its playlist.
@@ -1695,6 +1730,37 @@ mod tests {
     use super::*;
     use crate::remote::store::RemoteSourceRow;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn dlna_sources_that_are_paired_waves_are_picked_out() {
+        let row = |id: &str, kind: &str, config_json: &str| RemoteSourceRow {
+            id: id.into(),
+            kind: kind.into(),
+            display_name: id.into(),
+            config_json: config_json.into(),
+            created_at: 0,
+            last_sync_at: None,
+            last_sync_error: None,
+            track_count: 0,
+        };
+        let dlna = |udn: &str| {
+            serde_json::to_string(&super::super::dlna::DlnaConfig {
+                location: "http://10.0.0.2:50800/rootDesc.xml".into(),
+                udn: udn.into(),
+                name: "Wave on Android".into(),
+                control_url: "http://10.0.0.2:50800/ctl/ContentDirectory".into(),
+                service_type: "urn:schemas-upnp-org:service:ContentDirectory:1".into(),
+            })
+            .unwrap()
+        };
+        let rows = [
+            row("dlna-phone", "dlna", &dlna("uuid:phone")),
+            row("dlna-tv", "dlna", &dlna("uuid:tv")),
+            row("wave-phone", "wave", r#"{"peer_id":"phone"}"#),
+        ];
+        assert_eq!(dlna_copies_of(&rows, &["phone".into()]), ["dlna-phone"]);
+        assert!(dlna_copies_of(&rows, &[]).is_empty());
+    }
 
     #[test]
     fn sign_in_sessions_expire_after_15_minutes() {

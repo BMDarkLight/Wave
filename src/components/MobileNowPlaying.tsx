@@ -18,6 +18,7 @@ import { LyricsLines } from "./LyricsLines";
 import {
   BiChevronDown,
   BiCloud,
+  BiDevices,
   BiHeart,
   BiSolidHeart,
   BiShuffle,
@@ -456,6 +457,12 @@ interface MobileNowPlayingProps {
   onReorderQueue: (from: number, to: number) => void;
   onClearQueue: () => void;
   waveformEnabled: boolean;
+  /** Where music plays, for the Devices sheet. */
+  devices: ReactNode;
+  /** The paired Wave playing in place of this phone, by name. */
+  castName: string | null;
+  /** The paired Wave playing to this phone, by name. */
+  playingFrom: string | null;
 }
 
 /** Where the mini player and tabs begin, from the top of the screen. */
@@ -516,6 +523,9 @@ export default function MobileNowPlaying({
   onReorderQueue,
   onClearQueue,
   waveformEnabled,
+  devices,
+  castName,
+  playingFrom,
 }: MobileNowPlayingProps) {
   const seekSlider = (
     <input
@@ -590,8 +600,19 @@ export default function MobileNowPlaying({
   const [dismissOffset, setDismissOffset] = useState(0);
   const isPageClosing = closing || pageDismissing;
 
+  /** Which sheet the menu shows: volume and EQ, or where music plays. */
+  const [sheetKind, setSheetKind] = useState<"playback" | "devices">(
+    "playback",
+  );
   const closeSheet = () => onMenuOpenChange(false);
-  const openSheet = () => onMenuOpenChange(true);
+  const openSheet = () => {
+    setSheetKind("playback");
+    onMenuOpenChange(true);
+  };
+  const openDevices = () => {
+    setSheetKind("devices");
+    onMenuOpenChange(true);
+  };
 
   /** Step back through sheet → cover → dismiss, matching Android back. */
   const handleHeaderBack = () => {
@@ -988,7 +1009,19 @@ export default function MobileNowPlaying({
               aria-label="Playing from another device"
             />
           )}
-          Now Playing
+          {castName ? (
+            <span className="mnp-cast">
+              <BiDevices aria-hidden />
+              Playing on {castName}
+            </span>
+          ) : playingFrom ? (
+            <span className="mnp-cast">
+              <BiDevices aria-hidden />
+              From {playingFrom}
+            </span>
+          ) : (
+            "Now Playing"
+          )}
         </span>
         <button
           className={`mnp-icon-btn ${isFavorite ? "active" : ""}`}
@@ -1378,7 +1411,16 @@ export default function MobileNowPlaying({
           className="mnp-action-btn"
         />
         <button
-          className={`mnp-action-btn ${menuOpen ? "active" : ""}`}
+          className={`mnp-action-btn${castName ? " casting" : ""}${menuOpen && sheetKind === "devices" ? " active" : ""}`}
+          onClick={openDevices}
+          type="button"
+          title="Devices"
+          aria-label="Choose where music plays"
+        >
+          <BiDevices />
+        </button>
+        <button
+          className={`mnp-action-btn ${menuOpen && sheetKind === "playback" ? "active" : ""}`}
           onClick={openSheet}
           type="button"
           title="Volume & Equalizer"
@@ -1399,12 +1441,14 @@ export default function MobileNowPlaying({
           <div
             className={`mnp-sheet${sheetOpen ? " mnp-sheet-open" : ""}${sheetDismiss.dragging ? " mnp-sheet-dragging" : ""}`}
             role="dialog"
-            aria-label="Volume and equalizer"
+            aria-label={
+              sheetKind === "devices" ? "Devices" : "Volume and equalizer"
+            }
             style={sheetDragStyle}
           >
             <div className="mnp-sheet-handle" {...sheetDismiss.bind} />
             <div className="mnp-sheet-header" {...sheetDismiss.bind}>
-              <h3>Playback</h3>
+              <h3>{sheetKind === "devices" ? "Devices" : "Playback"}</h3>
               <button
                 className="mnp-icon-btn"
                 onClick={closeSheet}
@@ -1414,89 +1458,93 @@ export default function MobileNowPlaying({
                 <BiX />
               </button>
             </div>
-            <div className="mnp-sheet-scroll">
-              <div
-                className={`mnp-volume-section${hideVolume ? " mnp-volume-section--no-volume" : ""}`}
-              >
-                <ToneDial
-                  label="Bass"
-                  gain={bassGain}
-                  onChange={applyBassGain}
-                  size={hideVolume ? 120 : 104}
-                />
-                {!hideVolume && (
-                  <VolumeDial value={volumeValue} onChange={onVolumeChange} />
-                )}
-                <ToneDial
-                  label="Treble"
-                  gain={trebleGain}
-                  onChange={applyTrebleGain}
-                  size={hideVolume ? 120 : 104}
-                />
-              </div>
-              <div className="mnp-speed-section">
-                <SpeedRow
-                  id="mnp-speed-range"
-                  speed={speed}
-                  onChange={onSpeedChange}
-                />
-              </div>
-              <div className="mnp-eq-section">
-                <div className="mnp-eq-header">
-                  <span>Equalizer</span>
-                  <label className="eq-enable">
-                    <input
-                      type="checkbox"
-                      checked={eqSettings.enabled}
-                      onChange={(e) => onEqEnabledChange(e.target.checked)}
-                    />
-                    On
-                  </label>
-                </div>
-                <Select
-                  className="eq-preset-select mnp-eq-preset"
-                  value=""
-                  placeholder="Presets"
-                  options={EQ_PRESETS.map((preset) => ({
-                    value: preset.id,
-                    label: preset.label,
-                  }))}
-                  onChange={onEqPreset}
-                  aria-label="EQ preset"
-                />
+            {sheetKind === "devices" ? (
+              <div className="mnp-sheet-scroll">{devices}</div>
+            ) : (
+              <div className="mnp-sheet-scroll">
                 <div
-                  className={`mnp-eq-bands ${eqSettings.enabled ? "" : "disabled"}`}
+                  className={`mnp-volume-section${hideVolume ? " mnp-volume-section--no-volume" : ""}`}
                 >
-                  {EQ_BAND_LABELS.map((label, index) => (
-                    <div className="eq-band" key={label}>
-                      <span className="eq-band-gain">
-                        {(eqSettings.bands[index] ?? 0) > 0 ? "+" : ""}
-                        {(eqSettings.bands[index] ?? 0).toFixed(0)}
-                      </span>
-                      <input
-                        type="range"
-                        min={-12}
-                        max={12}
-                        step={0.5}
-                        value={eqSettings.bands[index] ?? 0}
-                        onChange={(e) =>
-                          onEqBandChange(index, Number(e.target.value))
-                        }
-                        aria-label={`${label} Hz`}
-                      />
-                      <span className="eq-band-label">{label}</span>
-                    </div>
-                  ))}
+                  <ToneDial
+                    label="Bass"
+                    gain={bassGain}
+                    onChange={applyBassGain}
+                    size={hideVolume ? 120 : 104}
+                  />
+                  {!hideVolume && (
+                    <VolumeDial value={volumeValue} onChange={onVolumeChange} />
+                  )}
+                  <ToneDial
+                    label="Treble"
+                    gain={trebleGain}
+                    onChange={applyTrebleGain}
+                    size={hideVolume ? 120 : 104}
+                  />
                 </div>
-                <button
-                  className="btn-ghost btn-sm mnp-eq-reset"
-                  onClick={onEqReset}
-                  type="button"
-                >
-                  Reset EQ
-                </button>
+                <div className="mnp-speed-section">
+                  <SpeedRow
+                    id="mnp-speed-range"
+                    speed={speed}
+                    onChange={onSpeedChange}
+                  />
+                </div>
+                <div className="mnp-eq-section">
+                  <div className="mnp-eq-header">
+                    <span>Equalizer</span>
+                    <label className="eq-enable">
+                      <input
+                        type="checkbox"
+                        checked={eqSettings.enabled}
+                        onChange={(e) => onEqEnabledChange(e.target.checked)}
+                      />
+                      On
+                    </label>
+                  </div>
+                  <Select
+                    className="eq-preset-select mnp-eq-preset"
+                    value=""
+                    placeholder="Presets"
+                    options={EQ_PRESETS.map((preset) => ({
+                      value: preset.id,
+                      label: preset.label,
+                    }))}
+                    onChange={onEqPreset}
+                    aria-label="EQ preset"
+                  />
+                  <div
+                    className={`mnp-eq-bands ${eqSettings.enabled ? "" : "disabled"}`}
+                  >
+                    {EQ_BAND_LABELS.map((label, index) => (
+                      <div className="eq-band" key={label}>
+                        <span className="eq-band-gain">
+                          {(eqSettings.bands[index] ?? 0) > 0 ? "+" : ""}
+                          {(eqSettings.bands[index] ?? 0).toFixed(0)}
+                        </span>
+                        <input
+                          type="range"
+                          min={-12}
+                          max={12}
+                          step={0.5}
+                          value={eqSettings.bands[index] ?? 0}
+                          onChange={(e) =>
+                            onEqBandChange(index, Number(e.target.value))
+                          }
+                          aria-label={`${label} Hz`}
+                        />
+                        <span className="eq-band-label">{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    className="btn-ghost btn-sm mnp-eq-reset"
+                    onClick={onEqReset}
+                    type="button"
+                  >
+                    Reset EQ
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </>
       )}

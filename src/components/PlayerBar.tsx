@@ -11,6 +11,7 @@
 import { useRef, type RefObject } from "react";
 import {
   BiCloud,
+  BiDevices,
   BiExitFullscreen,
   BiListUl,
   BiMusic,
@@ -451,15 +452,27 @@ export default function PlayerBar({
         </div>
         <div className="device-selector">
           <button
-            className="output-device-name"
+            className={`output-device-name${playbackState.cast_device ? " casting" : ""}`}
             onClick={() => {
               onRefreshOutputDevices();
               onToggleDevice();
             }}
-            title="Click to change audio output device"
+            title="Choose where music plays"
             type="button"
           >
-            {playbackState.output_device_name || "No device"}
+            {playbackState.cast_device ? (
+              <>
+                <BiDevices aria-hidden />
+                Playing on {playbackState.cast_device.name}
+              </>
+            ) : playbackState.playing_from ? (
+              <>
+                <BiDevices aria-hidden />
+                From {playbackState.playing_from}
+              </>
+            ) : (
+              playbackState.output_device_name || "No device"
+            )}
           </button>
         </div>
       </div>

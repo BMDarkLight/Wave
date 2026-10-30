@@ -102,6 +102,16 @@ pub struct PlaybackStateDto {
     pub speed: f32,
     /// Playing silence while a remote track catches up.
     pub is_buffering: bool,
+    /// The paired Wave playing in place of this device's output.
+    pub cast_device: Option<CastDeviceDto>,
+    /// The paired Wave that is playing to this one, by name.
+    pub playing_from: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CastDeviceDto {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

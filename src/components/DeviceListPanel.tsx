@@ -8,23 +8,20 @@
  * https://github.com/BMDarkLight/Wave
  */
 
+import type { ReactNode } from "react";
 import { BiX } from "react-icons/bi";
 
 export default function DeviceListPanel({
-  devices,
-  currentDeviceName,
   onClose,
-  onSelectDevice,
+  children,
 }: {
-  devices: string[];
-  currentDeviceName: string;
   onClose: () => void;
-  onSelectDevice: (name: string) => void;
+  children: ReactNode;
 }) {
   return (
     <div className="right-panel-content">
       <div className="right-panel-header">
-        <h2>Audio Output</h2>
+        <h2>Devices</h2>
         <button
           className="right-panel-close"
           onClick={onClose}
@@ -34,18 +31,7 @@ export default function DeviceListPanel({
           <BiX />
         </button>
       </div>
-      <div className="right-panel-list">
-        {devices.map((name) => (
-          <button
-            key={name}
-            className={`device-panel-item ${name === currentDeviceName ? "active" : ""}`}
-            onClick={() => onSelectDevice(name)}
-            type="button"
-          >
-            {name}
-          </button>
-        ))}
-      </div>
+      <div className="right-panel-list">{children}</div>
     </div>
   );
 }

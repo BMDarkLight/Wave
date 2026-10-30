@@ -62,6 +62,23 @@ export const dismissWavePeer = (id: string): Promise<void> =>
 export const forgetWavePeer = (id: string): Promise<void> =>
   safeInvoke("forget_wave_peer", { id });
 
+/** Play on a paired Wave from now on, starting with what is loaded here. */
+export const castToWave = (id: string): Promise<void> =>
+  safeInvoke("cast_to_wave", { id });
+
+/** Play on this device again, from where the other one was. */
+export const stopCasting = (): Promise<void> => safeInvoke("stop_casting");
+
+/** Playing to or from another Wave started, stopped or moved on. */
+export const onWaveCastChanged = (handler: () => void) =>
+  listenTo<unknown>("wave-cast-changed", () => handler());
+
+/** The Wave being played to went away; playback is back here, paused. */
+export const onWaveCastEnded = (handler: (reason: string) => void) =>
+  listenTo<{ reason: string }>("wave-cast-ended", (event) =>
+    handler(event.reason),
+  );
+
 export const onWavePeerFound = (handler: (peer: PeerEvent) => void) =>
   listenTo<PeerEvent>("wave-peer-found", handler);
 

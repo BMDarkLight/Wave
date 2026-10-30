@@ -206,14 +206,6 @@ Other places your music can live:
 The tracks join your library, albums, artists and search, marked with a small
 cloud.
 
-**Share my library**, under Outside Sourcing, turns Wave into a DLNA / UPnP
-media server for your network. TVs, VLC, Kodi and other players (another copy
-of Wave included) can browse your music by artist, album, song and playlist
-and play it with seeking. Only songs stored on your device are shared, and
-nothing outside your network can reach them. Turn on **Keep sharing in the
-background** to keep it up after you close Wave: on desktop it stays in the
-tray, on Android it shows a notification while it shares.
-
 **Wave devices.** With Outside Sourcing on, Wave looks for other copies of
 Wave on your network whenever it runs, and says when it finds one. Choose
 **Share libraries** and the other device asks its owner first. Each side then
@@ -233,6 +225,16 @@ on their own, even after one gets a new address.
 - **Settings → Wave devices** lists them with a live dot, what each can see,
   and "Playing from you" while one plays your music. Deleting a device's
   playlist forgets the device on both sides.
+- **Play on another Wave.** The Devices panel (the output name in the player
+  bar, or the devices button in Now Playing on a phone) lists your paired
+  Waves. Pick one and the music moves there, picking up where it was, while
+  this device stays the remote: the queue, skip, seek and volume all work as
+  before. A song the other Wave already has plays from its own copy; any other
+  streams from this one and is not added to its library. Pick this device to
+  bring the music back. If the other Wave goes away, playback comes back here,
+  paused.
+- **Stay reachable in the background** keeps Wave answering your other Waves
+  after you close it: in the tray on desktop, with a notification on Android.
 
 - Playback starts while the track is still downloading, then the whole file is
   kept in the cache, so the next play is instant and works offline. Seeking

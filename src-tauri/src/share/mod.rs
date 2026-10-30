@@ -6,24 +6,22 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
-//! Sharing the library on the local network as a DLNA / UPnP media server.
+//! Sharing the library with other Waves on the local network.
 //!
-//! Off unless both Outside Sourcing and "Share my library" are on. While it
-//! runs, any DLNA player on the network (a TV, VLC, Kodi, another copy of
-//! Wave) can browse the library by artist, album, song and playlist, and play
-//! the files with seeking. Nothing is reachable from outside the local
-//! network: requests from other addresses are dropped.
+//! Runs while Outside Sourcing is on. Other Waves find this one, ask to
+//! pair, and then read and play what they were given through the `/wave/`
+//! API. Nothing is reachable from outside the local network: requests from
+//! other addresses are dropped.
 //!
-//! The pieces are kept apart so later work can reuse them: [`catalog`] turns
-//! the library into objects, [`http`] serves them, [`ssdp`] makes the server
-//! findable.
+//! [`catalog`] reads the shared songs from the library, [`http`] serves
+//! them, [`ssdp`] makes this Wave findable.
 
 pub mod catalog;
 pub mod http;
 pub mod ssdp;
 
 use crate::library::Library;
-use catalog::{PlaylistSource, Snapshot};
+use catalog::Snapshot;
 use http::{Catalog, Opener, Server};
 use parking_lot::Mutex;
 use std::net::{Ipv4Addr, TcpListener};
@@ -44,9 +42,7 @@ pub struct ShareConfig {
     pub uuid: String,
     pub db_path: PathBuf,
     pub opener: Opener,
-    /// Serve DLNA players too, not only paired Waves.
-    pub dlna: bool,
-    pub peers: Option<Arc<crate::peers::api::PeerService>>,
+    pub peers: Arc<crate::peers::api::PeerService>,
 }
 
 /// The settings screen's view of the server.
@@ -68,29 +64,15 @@ struct LibraryCatalog {
     cached: Mutex<Option<(Arc<Snapshot>, Instant)>>,
 }
 
-/// How long a snapshot is trusted without asking the library again. A
-/// player seeking through a song sends a request per seek, and each version
-/// check counts the whole library.
+/// How long a snapshot is trusted without asking the library again. Seeking
+/// through a song sends a request per seek, and each version check counts
+/// the whole library.
 const FRESH_FOR: Duration = Duration::from_secs(2);
 
 impl LibraryCatalog {
     fn rebuild(&self, version: u32) -> Result<Arc<Snapshot>, String> {
-        let library = self.library.lock();
-        let tracks = library.shareable_tracks()?;
-        let default_playlist = library.default_playlist_id().ok();
-        let mut playlists = Vec::new();
-        for info in library.list_playlists(None)? {
-            // The default playlist is the whole library; it adds nothing.
-            if Some(&info.id) == default_playlist.as_ref() {
-                continue;
-            }
-            playlists.push(PlaylistSource {
-                paths: library.playlist_track_paths(&info.id)?,
-                id: info.id,
-                name: info.name,
-            });
-        }
-        Ok(Arc::new(Snapshot::build(version, tracks, playlists)))
+        let tracks = self.library.lock().shareable_tracks()?;
+        Ok(Arc::new(Snapshot::build(version, tracks)))
     }
 }
 
@@ -116,7 +98,7 @@ impl Catalog for LibraryCatalog {
 }
 
 struct Running {
-    config_key: (String, String, PathBuf, bool),
+    config_key: (String, String, PathBuf),
     port: u16,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
@@ -151,11 +133,8 @@ fn start(config: ShareConfig) -> Result<Running, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let error = Arc::new(Mutex::new(None));
     let server = Arc::new(Server {
-        name: config.name.clone(),
-        uuid: config.uuid.clone(),
         catalog: catalog.clone(),
         opener: config.opener.clone(),
-        dlna: config.dlna,
         peers: config.peers.clone(),
     });
 
@@ -170,41 +149,33 @@ fn start(config: ShareConfig) -> Result<Running, String> {
     let ssdp_stop = stop.clone();
     let ssdp_error = error.clone();
     let uuid = config.uuid.clone();
-    let dlna = config.dlna;
     let (heard_tx, heard_rx) = std::sync::mpsc::channel();
-    let heard = config.peers.is_some().then_some(heard_tx);
     threads.push(
         std::thread::Builder::new()
             .name("wave-share-ssdp".into())
             .spawn(move || {
-                if let Err(e) = ssdp::run(uuid, port, dlna, ssdp_stop, heard) {
-                    tracing::warn!("Library sharing can't announce itself: {e}");
+                if let Err(e) = ssdp::run(uuid, port, ssdp_stop, Some(heard_tx)) {
+                    tracing::warn!("Wave can't announce itself on the network: {e}");
                     *ssdp_error.lock() = Some(format!(
-                        "Other devices can't find Wave on their own ({e}); they can still add it at its address"
+                        "Other Waves can't find this one on their own ({e})"
                     ));
                 }
             })
             .map_err(|e| e.to_string())?,
     );
-    if let Some(peers) = config.peers.clone() {
-        let discovery_stop = stop.clone();
-        threads.push(
-            std::thread::Builder::new()
-                .name("wave-peer-discovery".into())
-                .spawn(move || crate::peers::discovery::run(peers, discovery_stop, heard_rx))
-                .map_err(|e| e.to_string())?,
-        );
-    }
+    let peers = config.peers.clone();
+    let discovery_stop = stop.clone();
+    threads.push(
+        std::thread::Builder::new()
+            .name("wave-peer-discovery".into())
+            .spawn(move || crate::peers::discovery::run(peers, discovery_stop, heard_rx))
+            .map_err(|e| e.to_string())?,
+    );
     #[cfg(target_os = "android")]
     crate::android::multicast::acquire();
     tracing::info!("Sharing the library as \"{}\" on port {port}", config.name);
     Ok(Running {
-        config_key: (
-            config.name.clone(),
-            config.uuid,
-            config.db_path,
-            config.dlna,
-        ),
+        config_key: (config.name.clone(), config.uuid, config.db_path),
         port,
         stop,
         threads,
@@ -229,7 +200,7 @@ pub fn apply(config: Option<ShareConfig>) {
     let mut slot = state().lock();
     let wanted = config
         .as_ref()
-        .map(|c| (c.name.clone(), c.uuid.clone(), c.db_path.clone(), c.dlna));
+        .map(|c| (c.name.clone(), c.uuid.clone(), c.db_path.clone()));
     if slot.as_ref().map(|r| r.config_key.clone()) == wanted {
         return;
     }
@@ -253,21 +224,26 @@ pub fn is_running() -> bool {
     state().lock().is_some()
 }
 
+/// The shared song stored at `path`, and its fingerprint, while the server
+/// runs. Reads through the server's own connection, so it never waits on
+/// the library the rest of the app holds.
+pub fn shared_track_at(path: &str) -> Option<(crate::metadata::Track, Option<String>)> {
+    let catalog = state().lock().as_ref()?.catalog.clone();
+    let track = catalog.snapshot().ok()?.track_at(path)?.clone();
+    let fingerprint = catalog.library.lock().audio_fingerprint_of(&track.id);
+    Some((track, fingerprint))
+}
+
 /// The port the server answers on, while it runs.
 pub fn port() -> Option<u16> {
     state().lock().as_ref().map(|r| r.port)
-}
-
-/// Running and open to DLNA players, not only to paired Waves.
-pub fn serving_dlna() -> bool {
-    state().lock().as_ref().is_some_and(|r| r.config_key.3)
 }
 
 /// True while the library is shared and set to stay shared with Wave closed,
 /// so closing or quitting from the window must leave the process running.
 pub fn in_background(app: &tauri::AppHandle) -> bool {
     use tauri::Manager;
-    serving_dlna()
+    state().lock().is_some()
         && app
             .try_state::<crate::app_settings::AppSettingsState>()
             .and_then(|state| state.0.lock().ok().map(|s| s.share_in_background))

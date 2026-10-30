@@ -961,8 +961,8 @@ export default function MobileSettings({
                 <span className="mset-gapless-label">Outside Sourcing</span>
                 <span className="mset-gapless-hint">
                   Play music from your own server, a WebDAV or DLNA share, Kodi,
-                  or an Audius account. Wave won't connect to anything while
-                  this is off.
+                  an Audius account or your other Waves. Wave won't connect to
+                  anything while this is off.
                 </span>
               </span>
             </label>
@@ -989,20 +989,19 @@ export default function MobileSettings({
             )}
 
             {sourceSettings.remote_sources_enabled && (
-              <LibrarySharingRow
-                sourceSettings={sourceSettings}
-                onSourceSettingsChange={onSourceSettingsChange}
-                idPrefix={keyIdPrefix}
-              />
-            )}
-
-            {sourceSettings.remote_sources_enabled && (
-              <ConnectedDevices
-                peers={wavePeers}
-                onChanged={onWavePeersChanged}
-                onChoose={onChooseWaveShare}
-                setError={setError}
-              />
+              <>
+                <ConnectedDevices
+                  peers={wavePeers}
+                  onChanged={onWavePeersChanged}
+                  onChoose={onChooseWaveShare}
+                  setError={setError}
+                />
+                <LibrarySharingRow
+                  sourceSettings={sourceSettings}
+                  onSourceSettingsChange={onSourceSettingsChange}
+                  idPrefix={keyIdPrefix}
+                />
+              </>
             )}
 
             {/* Desktop has no media source folders, so remote sources are

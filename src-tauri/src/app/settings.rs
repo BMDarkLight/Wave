@@ -96,10 +96,6 @@ pub struct AppSettings {
     /// Allow remote streaming and caching over a metered connection.
     #[serde(default)]
     pub remote_cellular_enabled: bool,
-    /// Share the library on the local network as a DLNA / UPnP media server.
-    /// Only takes effect while `remote_sources_enabled` is on.
-    #[serde(default)]
-    pub library_sharing_enabled: bool,
     /// The name other devices see; `None` uses "Wave on <device>".
     #[serde(default)]
     pub share_name: Option<String>,
@@ -107,8 +103,8 @@ pub struct AppSettings {
     /// instead of quitting, on Android a foreground service keeps it running.
     #[serde(default)]
     pub share_in_background: bool,
-    /// The shared server's UUID, made once so other devices keep recognising
-    /// it across launches.
+    /// This Wave's id, made once so other Waves keep recognising it across
+    /// launches.
     #[serde(default)]
     pub share_device_id: Option<String>,
     /// Other Waves this one is paired with, and what it shares with each.
@@ -219,7 +215,6 @@ impl Default for AppSettings {
             source_cache_limit_mb: default_source_cache_limit_mb(),
             remote_sources_enabled: false,
             remote_cellular_enabled: false,
-            library_sharing_enabled: false,
             share_name: None,
             share_in_background: false,
             share_device_id: None,

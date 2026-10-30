@@ -4826,6 +4826,14 @@ img.queue-thumb {
   color: var(--text);
 }
 
+.output-device-name.casting {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #3ecf8e;
+  font-weight: 700;
+}
+
 .device-selector {
   position: relative;
   max-width: 100%;
@@ -4834,32 +4842,6 @@ img.queue-thumb {
 .nav-backdrop,
 .mobile-status-fade {
   display: none;
-}
-
-.device-panel-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 10px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition:
-    background 0.16s ease,
-    color 0.16s ease;
-}
-
-.device-panel-item:hover {
-  background: rgba(var(--ink), 0.08);
-  color: var(--text);
-}
-
-.device-panel-item.active {
-  color: var(--text);
 }
 
 ::-webkit-scrollbar {
@@ -9830,4 +9812,131 @@ div.album-hero-cover {
   .wave-device-actions .btn-sm {
     padding: 7px 12px;
   }
+}
+
+/* ── Devices: where music plays ─────────────────────────────────────────── */
+
+.cast-devices {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cast-current {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 14px;
+  border-radius: 10px;
+  background: rgba(var(--ink), 0.07);
+}
+
+.cast-current-icon {
+  flex-shrink: 0;
+  font-size: 26px;
+  color: #3ecf8e;
+}
+
+.cast-current-name {
+  color: #3ecf8e;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.cast-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cast-text > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cast-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cast-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.cast-row:hover:not(:disabled):not(.cast-row--static) {
+  background: rgba(var(--ink), 0.08);
+}
+
+.cast-row:disabled {
+  cursor: default;
+}
+
+.cast-row:disabled:not(.active) .cast-name {
+  color: var(--muted);
+}
+
+.cast-row.active .cast-name {
+  color: #3ecf8e;
+}
+
+.cast-row--static {
+  cursor: default;
+}
+
+.cast-row-icon {
+  flex-shrink: 0;
+  font-size: 22px;
+  color: var(--muted);
+}
+
+.cast-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.cast-section {
+  margin: 14px 12px 4px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.cast-empty {
+  margin: 0 12px;
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mnp-cast {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #3ecf8e;
+}
+
+.mnp-action-btn.casting {
+  color: #3ecf8e;
+}
+
+.mnp-sheet-scroll > .cast-devices {
+  padding: 0 4px 12px;
 }

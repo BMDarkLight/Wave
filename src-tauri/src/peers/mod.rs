@@ -14,6 +14,7 @@
 //! device is known by its id, so a new address or name changes nothing.
 
 pub mod api;
+pub mod cast;
 pub mod client;
 pub mod commands;
 pub mod discovery;
@@ -120,6 +121,17 @@ pub struct Registry {
     pub announced: HashSet<String>,
     /// Devices that streamed a song from this one, and when they last did.
     pub streaming: HashMap<String, Instant>,
+    /// Songs this Wave sent to a device to play, which it may stream
+    /// whether they are shared with it or not.
+    pub cast_grants: HashMap<String, HashSet<String>>,
+}
+
+impl Registry {
+    pub fn cast_to(&self, peer_id: &str, track_id: &str) -> bool {
+        self.cast_grants
+            .get(peer_id)
+            .is_some_and(|ids| ids.contains(track_id))
+    }
 }
 
 static SERVICE: OnceLock<std::sync::Arc<api::PeerService>> = OnceLock::new();
@@ -239,6 +251,22 @@ impl api::Host for AppHost {
 
     fn reachable(&self, peer_id: &str, online: bool) {
         crate::remote::commands::set_wave_reachable(&self.0, peer_id, online);
+    }
+
+    fn cast_play(&self, from: &PeerRecord, play: cast::CastPlay) -> Result<(), String> {
+        cast::receive_play(&self.0, from, play)
+    }
+
+    fn cast_control(
+        &self,
+        from: &PeerRecord,
+        control: cast::CastControlBody,
+    ) -> Result<(), String> {
+        cast::receive_control(&self.0, from, control)
+    }
+
+    fn cast_state(&self, from: &PeerRecord) -> cast::CastState {
+        cast::receive_state(&self.0, from)
     }
 }
 

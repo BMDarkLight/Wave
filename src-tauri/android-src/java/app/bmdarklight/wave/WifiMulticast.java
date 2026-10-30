@@ -6,8 +6,8 @@ import android.net.wifi.WifiManager;
 import androidx.annotation.Keep;
 
 /**
- * Holds a Wi-Fi multicast lock while the library is shared, so the phone
- * hears the searches other devices send to find media servers. Android drops
+ * Holds a Wi-Fi multicast lock while Wave is reachable by other Waves, so
+ * the phone hears the searches they send to find it. Android drops
  * multicast without one to save power. Needs CHANGE_WIFI_MULTICAST_STATE.
  */
 @Keep

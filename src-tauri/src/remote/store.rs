@@ -603,6 +603,76 @@ impl Library {
         Ok(true)
     }
 
+    /// The path to play a song another Wave is playing here. A row the
+    /// source already has is used as it is; otherwise one is added hidden,
+    /// so the song plays and shows while playing without joining the library.
+    /// A later sync that finds the song shared brings the row back.
+    pub fn cast_track_path(
+        &self,
+        source_id: &str,
+        provider: &str,
+        meta: &RemoteTrackMeta,
+    ) -> Result<String, String> {
+        let uri = RemoteUri::new(source_id, &meta.remote_id);
+        let known = self
+            .read_connection()
+            .query_row(
+                "SELECT 1 FROM tracks WHERE remote_source_id = ?1 AND source_id = ?2",
+                params![source_id, meta.remote_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(sql_error("look up a played song"))?
+            .is_some();
+        if !known {
+            let mut walk = self.begin_remote_walk(source_id)?;
+            self.upsert_remote_page(&mut walk, provider, std::slice::from_ref(meta))?;
+            self.tombstone_remote_track(&uri.to_path())?;
+        }
+        Ok(uri.to_path())
+    }
+
+    /// Gives one remote song its cover, when it has none yet. Returns
+    /// whether it was set.
+    pub fn set_remote_track_art(&self, uri: &RemoteUri, image: &[u8]) -> Result<bool, String> {
+        let saved = crate::cover_art::save_album_art_thumb_in(self.cover_root(), image)?;
+        let connection = self.write_connection();
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO album_art (id, thumb_path, mime, byte_size, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    saved.id,
+                    saved.relative_path,
+                    saved.mime,
+                    saved.byte_size,
+                    now_timestamp()
+                ],
+            )
+            .map_err(sql_error("upsert album_art"))?;
+        let changed = connection
+            .execute(
+                "UPDATE tracks SET album_art_id = ?1, cover_art_mime = ?2,
+                        cover_art_source = 'remote', cover_art_data_url = NULL
+                 WHERE remote_source_id = ?3 AND source_id = ?4 AND album_art_id IS NULL",
+                params![saved.id, saved.mime, uri.source_id, uri.remote_id],
+            )
+            .map_err(sql_error("set a remote song's cover"))?;
+        Ok(changed > 0)
+    }
+
+    /// The cover reference and cover of a remote song.
+    pub fn remote_track_art(&self, uri: &RemoteUri) -> Option<(Option<String>, Option<String>)> {
+        self.read_connection()
+            .query_row(
+                "SELECT remote_art_ref, album_art_id FROM tracks
+                 WHERE remote_source_id = ?1 AND source_id = ?2",
+                params![uri.source_id, uri.remote_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok()
+    }
+
     /// Remove a source: its rows become tombstones, except downloads, which
     /// stay as local files. Returns the rows that had cached audio so the
     /// caller can delete those files. Visibility is not recomputed here, so a

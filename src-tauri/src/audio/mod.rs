@@ -7,6 +7,7 @@
 // https://github.com/BMDarkLight/Wave
 
 pub mod buffered_source;
+pub mod cast;
 pub mod dsp;
 pub mod normalization;
 pub mod player;

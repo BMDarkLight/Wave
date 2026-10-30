@@ -73,6 +73,10 @@ pub enum AudioError {
 
     #[error("Audio device not available: {0}")]
     DeviceUnavailable(String),
+
+    /// Playing on another Wave failed; the message says why.
+    #[error("{0}")]
+    Cast(String),
 }
 
 #[derive(Error, Debug)]

@@ -18,6 +18,7 @@ use crate::error::AudioError;
 use crate::remote::stream::{self, reader::ProgressiveReader, PlayTarget};
 
 use super::buffered_source::{BufferedSource, SharedBuffering, SharedStall};
+use super::cast::{CastOutput, CastStatus};
 use super::dsp::{
     load_shared_speed, set_shared_gain, set_shared_speed, shared_gain, shared_level, shared_speed,
     Crossfade, CrossfadeState, EqConfig, Equalizer, LevelMeter, NextTrack, NextTrackSlot,
@@ -950,6 +951,8 @@ pub struct AudioPlayer {
     warmed: Option<String>,
     /// The remote next track auto-advance is waiting on, and since when.
     advance_wait: Option<(String, Instant)>,
+    /// Another device playing in place of this one's output.
+    cast: Option<Box<dyn CastOutput>>,
     #[cfg(test)]
     prefetch_checks: usize,
     #[cfg(test)]
@@ -1002,6 +1005,7 @@ impl AudioPlayer {
             prefetch_checked_at: None,
             warmed: None,
             advance_wait: None,
+            cast: None,
             #[cfg(test)]
             prefetch_checks: 0,
             #[cfg(test)]
@@ -1139,6 +1143,7 @@ impl AudioPlayer {
                 prefetch_checked_at: None,
                 warmed: None,
                 advance_wait: None,
+                cast: None,
                 #[cfg(test)]
                 prefetch_checks: 0,
                 #[cfg(test)]
@@ -1576,6 +1581,11 @@ impl AudioPlayer {
 
     pub fn play(&mut self, path: &str) -> Result<(), AudioError> {
         self.advance_wait = None;
+        if let Some(cast) = self.cast.as_mut() {
+            cast.load(path, 0.0, true).map_err(AudioError::Cast)?;
+            self.current_path = Some(PathBuf::from(path));
+            return Ok(());
+        }
         #[cfg(target_os = "android")]
         {
             return self.play_via_exo(path);
@@ -2029,6 +2039,13 @@ impl AudioPlayer {
 
     /// Load a track at `position_secs` without starting playback (session restore).
     pub fn load_paused_at(&mut self, path: &str, position_secs: f64) -> Result<(), AudioError> {
+        if let Some(cast) = self.cast.as_mut() {
+            #[allow(clippy::manual_clamp)]
+            let position = position_secs.max(0.0).min(1e9);
+            cast.load(path, position, false).map_err(AudioError::Cast)?;
+            self.current_path = Some(PathBuf::from(path));
+            return Ok(());
+        }
         // `position_secs` is deserialized from the persisted settings JSON, so
         // a hand-edited or corrupted file could contain a huge or infinite
         // value, which `Duration::from_secs_f64` below panics on outright.
@@ -2157,6 +2174,13 @@ impl AudioPlayer {
     }
 
     pub fn pause(&mut self) -> Result<(), AudioError> {
+        if let Some(cast) = self.cast.as_mut() {
+            if self.current_path.is_none() {
+                return Err(AudioError::NoTrackLoaded);
+            }
+            cast.pause();
+            return Ok(());
+        }
         #[cfg(target_os = "android")]
         {
             if self.current_path.is_none() {
@@ -2186,6 +2210,13 @@ impl AudioPlayer {
     }
 
     pub fn resume(&mut self) -> Result<(), AudioError> {
+        if let Some(cast) = self.cast.as_mut() {
+            if self.current_path.is_none() {
+                return Err(AudioError::NoTrackLoaded);
+            }
+            cast.resume();
+            return Ok(());
+        }
         #[cfg(target_os = "android")]
         {
             if self.current_path.is_none() {
@@ -2248,6 +2279,11 @@ impl AudioPlayer {
     }
 
     pub fn stop(&mut self) -> Result<(), AudioError> {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.pause();
+            self.current_path = None;
+            return Ok(());
+        }
         #[cfg(target_os = "android")]
         {
             let _ = crate::android::audio::exo_stop();
@@ -2286,6 +2322,13 @@ impl AudioPlayer {
         // Not `clamp`: see `load_paused_at`, `clamp` would propagate NaN.
         #[allow(clippy::manual_clamp)]
         let seconds = seconds.max(0.0).min(MAX_SEEK_SECONDS);
+        if let Some(cast) = self.cast.as_mut() {
+            if self.current_path.is_none() {
+                return Err(AudioError::NoTrackLoaded);
+            }
+            cast.seek(seconds);
+            return Ok(());
+        }
         #[cfg(target_os = "android")]
         {
             if self.current_path.is_none() {
@@ -2366,6 +2409,10 @@ impl AudioPlayer {
             return Err(AudioError::InvalidVolume);
         }
         self.volume = volume;
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_volume(volume);
+            return Ok(());
+        }
         self.push_output_volume();
         Ok(())
     }
@@ -2418,6 +2465,9 @@ impl AudioPlayer {
 
     /// True while playback is waiting on the network.
     pub fn is_buffering(&self) -> bool {
+        if let Some(status) = self.cast_status() {
+            return status.buffering;
+        }
         #[cfg(target_os = "android")]
         {
             crate::android::audio::exo_is_buffering().unwrap_or(false)
@@ -2432,6 +2482,9 @@ impl AudioPlayer {
     /// buffering it near the end, and preload it once it can start. Looks at
     /// most once a second, since readiness can mean a database lookup.
     pub fn tick_remote_prefetch(&mut self) {
+        if self.cast.is_some() {
+            return;
+        }
         let now = Instant::now();
         if self
             .prefetch_checked_at
@@ -2523,6 +2576,9 @@ impl AudioPlayer {
     /// warms it and holds off, for at most [`ADVANCE_WAIT`], after which the
     /// usual error path gets its turn.
     pub fn ready_to_auto_advance(&mut self) -> bool {
+        if self.cast.is_some() {
+            return true;
+        }
         let Some(next) = self.peek_next_path() else {
             self.advance_wait = None;
             return true;
@@ -2554,6 +2610,9 @@ impl AudioPlayer {
     /// Set the playback speed. Returns the speed in effect, which is exactly
     /// 1.0 for anything within 0.01 of it.
     pub fn set_speed(&mut self, speed: f32) -> Result<f32, String> {
+        if self.cast.is_some() {
+            return Err("Speed can't change while another device plays".to_string());
+        }
         if !speed.is_finite() || !(MIN_SPEED..=MAX_SPEED).contains(&speed) {
             return Err(format!(
                 "Speed must be between {MIN_SPEED}x and {MAX_SPEED}x"
@@ -2723,6 +2782,9 @@ impl AudioPlayer {
     }
 
     pub fn is_playing(&self) -> bool {
+        if let Some(status) = self.cast_status() {
+            return self.current_path.is_some() && status.playing;
+        }
         #[cfg(target_os = "android")]
         {
             // Rust transport clock is authoritative. The Exo JNI cache is only
@@ -2737,6 +2799,9 @@ impl AudioPlayer {
     }
 
     pub fn is_paused(&self) -> bool {
+        if let Some(status) = self.cast_status() {
+            return self.current_path.is_some() && status.paused;
+        }
         #[cfg(target_os = "android")]
         {
             return self.current_path.is_some() && !self.is_playing();
@@ -2750,6 +2815,9 @@ impl AudioPlayer {
 
     /// True when the sink has drained (natural end-of-track).
     pub fn sink_exhausted(&self) -> bool {
+        if let Some(status) = self.cast_status() {
+            return self.current_path.is_some() && status.ended;
+        }
         #[cfg(target_os = "android")]
         {
             if self.current_path.is_none() {
@@ -2773,6 +2841,9 @@ impl AudioPlayer {
     pub fn should_auto_advance(&self) -> bool {
         if self.current_path.is_none() {
             return false;
+        }
+        if let Some(status) = self.cast_status() {
+            return status.ended;
         }
 
         #[cfg(target_os = "android")]
@@ -2843,11 +2914,93 @@ impl AudioPlayer {
         }
     }
 
+    fn cast_status(&self) -> Option<CastStatus> {
+        self.cast.as_ref().map(|cast| cast.status())
+    }
+
+    /// Plays on `output` from here on, starting with what is loaded now, at
+    /// the same spot. If that track can't play there, nothing changes.
+    pub fn cast_to(&mut self, mut output: Box<dyn CastOutput>) -> Result<(), AudioError> {
+        let path = self
+            .current_path
+            .as_ref()
+            .and_then(|path| path.to_str())
+            .map(str::to_string);
+        let position = self.position_seconds();
+        let playing = self.is_playing();
+        if let Some(path) = &path {
+            output
+                .load(path, position, playing)
+                .map_err(AudioError::Cast)?;
+        }
+        if let Some(mut previous) = self.cast.take() {
+            previous.stop();
+        }
+        self.silence_local();
+        output.set_volume(self.volume);
+        self.cast = Some(output);
+        Ok(())
+    }
+
+    /// Back to this device's own output, picking up where the other device
+    /// was, and playing on if it was and `resume` is set. Does nothing when
+    /// nothing is cast.
+    pub fn end_cast(&mut self, resume: bool) -> Result<(), AudioError> {
+        let Some(mut cast) = self.cast.take() else {
+            return Ok(());
+        };
+        let status = cast.status();
+        cast.stop();
+        let path = self
+            .current_path
+            .as_ref()
+            .and_then(|path| path.to_str())
+            .map(str::to_string);
+        let Some(path) = path else {
+            return Ok(());
+        };
+        let position = if status.ended { 0.0 } else { status.position };
+        self.load_paused_at(&path, position)?;
+        if resume && status.playing {
+            self.resume()?;
+        }
+        Ok(())
+    }
+
+    /// The device being played to: its id and name.
+    pub fn cast_device(&self) -> Option<(String, String)> {
+        self.cast.as_ref().map(|cast| cast.device())
+    }
+
+    /// Why the device being played to can't be any longer, once it can't.
+    pub fn cast_lost(&self) -> Option<String> {
+        self.cast.as_ref().and_then(|cast| cast.lost())
+    }
+
+    /// Lets go of the local output without forgetting the track.
+    fn silence_local(&mut self) {
+        #[cfg(target_os = "android")]
+        let _ = crate::android::audio::exo_stop();
+        #[cfg(not(target_os = "android"))]
+        if let Some(sink) = self.sink.take() {
+            sink.stop();
+        }
+        self.sink = None;
+        self.prefetched_next = None;
+        self.crossfade = None;
+        self.clock = PlaybackClock::stopped();
+        #[cfg(target_os = "android")]
+        self.android_gapless_playlist.clear();
+    }
+
     pub fn get_current_path(&self) -> Option<&PathBuf> {
         self.current_path.as_ref()
     }
 
     pub fn position_seconds(&self) -> f64 {
+        if let Some(status) = self.cast_status() {
+            return status.position;
+        }
         #[cfg(target_os = "android")]
         {
             if let Some(path) = self.current_path.as_deref().and_then(|p| p.to_str()) {
@@ -2866,6 +3019,9 @@ impl AudioPlayer {
     }
 
     pub fn duration_seconds(&self) -> Option<f64> {
+        if let Some(status) = self.cast_status() {
+            return status.duration;
+        }
         #[cfg(target_os = "android")]
         {
             if let Some(ms) = self.android_exo_duration() {
@@ -2879,6 +3035,9 @@ impl AudioPlayer {
     ///
     /// Returns `true` when the logical current track changed.
     pub fn check_crossfade_track_switch(&mut self) -> bool {
+        if self.cast.is_some() {
+            return false;
+        }
         #[cfg(target_os = "android")]
         {
             let switched =
@@ -3131,7 +3290,7 @@ impl AudioPlayer {
         // previous source keeps playing, so only adopt when that source
         // has actually finished. Manual Next must tear down and restart.
         #[cfg(target_os = "android")]
-        if self.try_android_gapless_skip_forward()? {
+        if self.cast.is_none() && self.try_android_gapless_skip_forward()? {
             return Ok(self
                 .current_path
                 .as_ref()
@@ -4291,6 +4450,148 @@ mod tests {
         player.stall.store(4_000_000, Ordering::Relaxed);
         let position = player.position_seconds();
         assert!((5.95..6.2).contains(&position), "{position}");
+    }
+
+    /// An output that records what it was told and plays whatever it gets.
+    #[derive(Default)]
+    struct Recorded {
+        calls: Vec<String>,
+        status: CastStatus,
+    }
+
+    struct FakeCast(Arc<Mutex<Recorded>>);
+
+    impl CastOutput for FakeCast {
+        fn device(&self) -> (String, String) {
+            ("phone".into(), "Wave on phone".into())
+        }
+        fn load(&mut self, path: &str, position: f64, playing: bool) -> Result<(), String> {
+            if path.ends_with(".bad") {
+                return Err("That song can't play on Wave on phone".into());
+            }
+            let mut recorded = self.0.lock().unwrap();
+            recorded
+                .calls
+                .push(format!("load {path} {position} {playing}"));
+            recorded.status = CastStatus {
+                position,
+                playing,
+                paused: !playing,
+                ..CastStatus::default()
+            };
+            Ok(())
+        }
+        fn pause(&mut self) {
+            let mut recorded = self.0.lock().unwrap();
+            recorded.calls.push("pause".into());
+            recorded.status.playing = false;
+            recorded.status.paused = true;
+        }
+        fn resume(&mut self) {
+            let mut recorded = self.0.lock().unwrap();
+            recorded.calls.push("resume".into());
+            recorded.status.playing = true;
+            recorded.status.paused = false;
+        }
+        fn seek(&mut self, seconds: f64) {
+            let mut recorded = self.0.lock().unwrap();
+            recorded.calls.push(format!("seek {seconds}"));
+            recorded.status.position = seconds;
+        }
+        fn set_volume(&mut self, volume: f32) {
+            self.0
+                .lock()
+                .unwrap()
+                .calls
+                .push(format!("volume {volume}"));
+        }
+        fn stop(&mut self) {
+            self.0.lock().unwrap().calls.push("stop".into());
+        }
+        fn status(&self) -> CastStatus {
+            self.0.lock().unwrap().status.clone()
+        }
+        fn lost(&self) -> Option<String> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_cast_plays_the_queue_on_the_other_device() {
+        let recorded = Arc::new(Mutex::new(Recorded::default()));
+        let mut player = AudioPlayer::new_deferred();
+        player.queue.set_tracks(vec![
+            "/music/a.flac".into(),
+            "/music/b.bad".into(),
+            "/music/c.flac".into(),
+        ]);
+        player.queue.jump(0);
+        player.current_path = Some(PathBuf::from("/music/a.flac"));
+        player.clock = PlaybackClock {
+            started_at: None,
+            elapsed_before_start: Duration::from_secs(30),
+            ..PlaybackClock::stopped()
+        };
+
+        player
+            .cast_to(Box::new(FakeCast(recorded.clone())))
+            .unwrap();
+        assert_eq!(
+            player.cast_device(),
+            Some(("phone".into(), "Wave on phone".into()))
+        );
+        player.resume().unwrap();
+        player.seek(42.0).unwrap();
+        assert!(player.is_playing());
+        assert_eq!(player.position_seconds(), 42.0);
+        assert!(!player.should_auto_advance());
+
+        // The track ends there; the next one that can play goes there too.
+        recorded.lock().unwrap().status.ended = true;
+        assert!(player.should_auto_advance());
+        assert!(player.play_next().is_err());
+        assert_eq!(
+            player.play_next().unwrap().as_deref(),
+            Some("/music/c.flac")
+        );
+        assert_eq!(
+            recorded.lock().unwrap().calls,
+            [
+                "load /music/a.flac 30 false",
+                "volume 0.8",
+                "resume",
+                "seek 42",
+                "load /music/c.flac 0 true",
+            ]
+        );
+        assert!(player.set_speed(1.5).is_err());
+
+        // Back here: the remote position carries over, paused or playing.
+        recorded.lock().unwrap().status.position = 12.0;
+        player.cast = Some(Box::new(FakeCast(recorded.clone())));
+        player.pause().unwrap();
+        let _ = player.end_cast(true);
+        assert!(player.cast_device().is_none());
+        assert_eq!(
+            recorded.lock().unwrap().calls.last().map(String::as_str),
+            Some("stop")
+        );
+        assert_eq!(
+            player.get_current_path(),
+            Some(&PathBuf::from("/music/c.flac"))
+        );
+    }
+
+    #[test]
+    fn a_track_that_cannot_play_there_keeps_playback_here() {
+        let recorded = Arc::new(Mutex::new(Recorded::default()));
+        let mut player = AudioPlayer::new_deferred();
+        player.current_path = Some(PathBuf::from("/music/b.bad"));
+        assert!(player
+            .cast_to(Box::new(FakeCast(recorded.clone())))
+            .is_err());
+        assert!(player.cast_device().is_none());
+        assert!(recorded.lock().unwrap().calls.is_empty());
     }
 
     #[test]

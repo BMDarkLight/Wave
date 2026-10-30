@@ -6,16 +6,14 @@
 // and additional terms (attribution and fork-marking requirements).
 // https://github.com/BMDarkLight/Wave
 
-//! How the media server is found: SSDP, from section 1 of the UPnP Device
-//! Architecture.
+//! How other Waves find this one: SSDP, from section 1 of the UPnP Device
+//! Architecture, with a device type of Wave's own.
 //!
-//! On start the server announces itself (`ssdp:alive`) once for each thing it
-//! is (the root device, its UUID, a MediaServer, each service) on every
-//! network interface, and again well before the announcement expires. It
-//! answers an `M-SEARCH` for any of those with a unicast reply whose LOCATION
-//! uses the address the searcher can reach. On stop it says `ssdp:byebye`.
+//! On start Wave announces itself (`ssdp:alive`) on every network interface,
+//! and again well before the announcement expires. It answers an `M-SEARCH`
+//! for its type with a unicast reply whose LOCATION uses the address the
+//! searcher can reach. On stop it says `ssdp:byebye`.
 
-use super::http::{CONNECTION_MANAGER, CONTENT_DIRECTORY, MEDIA_SERVER};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -32,30 +30,14 @@ const REANNOUNCE: Duration = Duration::from_secs(600);
 /// path its LOCATION points at.
 pub type Target = (String, String, &'static str);
 
-/// The notification types and their USNs, per Device Architecture 1.1.2.
-/// Other Waves look for the Wave type, which is announced either way; the
-/// media server set only while DLNA players are served.
-pub fn targets(uuid: &str, dlna: bool) -> Vec<Target> {
-    let device = format!("uuid:{uuid}");
+/// The Wave type and its USN, per Device Architecture 1.1.2.
+pub fn targets(uuid: &str) -> Vec<Target> {
     let wave = crate::peers::discovery::WAVE_DEVICE;
-    let mut out = vec![(wave.to_string(), format!("{device}::{wave}"), "/wave/hello")];
-    if !dlna {
-        return out;
-    }
-    out.push((
-        "upnp:rootdevice".to_string(),
-        format!("{device}::upnp:rootdevice"),
-        "/rootDesc.xml",
-    ));
-    out.push((device.clone(), device.clone(), "/rootDesc.xml"));
-    for kind in [MEDIA_SERVER, CONTENT_DIRECTORY, CONNECTION_MANAGER] {
-        out.push((
-            kind.to_string(),
-            format!("{device}::{kind}"),
-            "/rootDesc.xml",
-        ));
-    }
-    out
+    vec![(
+        wave.to_string(),
+        format!("uuid:{uuid}::{wave}"),
+        "/wave/hello",
+    )]
 }
 
 fn server_token() -> String {
@@ -194,7 +176,7 @@ fn announce(socket: &socket2::Socket, targets: &[Target], http_port: u16, leavin
     }
 }
 
-/// Opens the shared SSDP port: other services on this machine (another DLNA
+/// Opens the shared SSDP port: other services on this machine (a media
 /// server, the OS) may hold it too, so the address is shared.
 fn bind() -> std::io::Result<socket2::Socket> {
     let socket = socket2::Socket::new(
@@ -223,12 +205,11 @@ fn bind() -> std::io::Result<socket2::Socket> {
 pub fn run(
     uuid: String,
     http_port: u16,
-    dlna: bool,
     stop: Arc<AtomicBool>,
     heard: Option<std::sync::mpsc::Sender<String>>,
 ) -> std::io::Result<()> {
     let socket = bind()?;
-    let targets = targets(&uuid, dlna);
+    let targets = targets(&uuid);
     // UDP may drop one; the spec suggests sending a few.
     for _ in 0..2 {
         announce(&socket, &targets, http_port, false);
@@ -300,37 +281,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn targets_and_usns_follow_the_device_architecture() {
-        let all = targets("abc", true);
-        assert_eq!(all.len(), 6);
-        assert!(all.contains(&(
-            "upnp:rootdevice".into(),
-            "uuid:abc::upnp:rootdevice".into(),
-            "/rootDesc.xml"
-        )));
-        assert!(all.contains(&("uuid:abc".into(), "uuid:abc".into(), "/rootDesc.xml")));
-        assert!(all.contains(&(
-            MEDIA_SERVER.to_string(),
-            format!("uuid:abc::{MEDIA_SERVER}"),
-            "/rootDesc.xml"
-        )));
+    fn only_the_wave_type_is_announced_and_answered() {
         let wave = crate::peers::discovery::WAVE_DEVICE;
-        assert!(all.contains(&(wave.to_string(), format!("uuid:abc::{wave}"), "/wave/hello")));
-        // With DLNA off only other Waves can find it.
-        let quiet = targets("abc", false);
-        assert_eq!(quiet.len(), 1);
-        assert_eq!(quiet[0].0, wave);
-    }
-
-    #[test]
-    fn searches_are_read_and_matched() {
-        let search = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: urn:schemas-upnp-org:device:MediaServer:1\r\n\r\n";
-        let (st, mx) = parse_search(search).unwrap();
-        assert_eq!((st.as_str(), mx), (MEDIA_SERVER, 2));
-        let all = targets("abc", true);
+        let all = targets("abc");
+        assert_eq!(
+            all,
+            [(wave.to_string(), format!("uuid:abc::{wave}"), "/wave/hello")]
+        );
+        let search = format!(
+            "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: {wave}\r\n\r\n"
+        );
+        let (st, mx) = parse_search(&search).unwrap();
+        assert_eq!((st.as_str(), mx), (wave, 2));
         assert_eq!(matching(&st, &all).len(), 1);
-        assert_eq!(matching("ssdp:all", &all).len(), 6);
-        assert!(matching("urn:schemas-upnp-org:device:MediaRenderer:1", &all).is_empty());
+        assert_eq!(matching("ssdp:all", &all).len(), 1);
+        assert!(matching("urn:schemas-upnp-org:device:MediaServer:1", &all).is_empty());
         // No MAN header, or a NOTIFY, is not a search.
         assert!(parse_search("M-SEARCH * HTTP/1.1\r\nST: ssdp:all\r\n\r\n").is_none());
         assert!(parse_search("NOTIFY * HTTP/1.1\r\nNT: x\r\n\r\n").is_none());

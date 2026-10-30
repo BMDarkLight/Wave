@@ -15,6 +15,7 @@ use std::time::Duration;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 
 use super::api::{AnswerBody, AskBody, CatalogPage, Hello, UnpairBody};
+use super::cast::{CastControlBody, CastPlay, CastState};
 use super::PeerRecord;
 
 /// Why a call to another Wave failed.
@@ -110,6 +111,31 @@ pub fn unpair(address: &str, body: &UnpairBody) -> Result<(), CallError> {
 
 pub fn catalog(peer: &PeerRecord, own_id: &str, cursor: usize) -> Result<CatalogPage, CallError> {
     let request = client().get(format!("{}/wave/catalog?cursor={cursor}", peer.address));
+    checked(signed(request, own_id, peer).send())?
+        .json()
+        .map_err(|_| CallError::Unreachable)
+}
+
+pub fn cast_play(peer: &PeerRecord, own_id: &str, play: &CastPlay) -> Result<(), CallError> {
+    let request = client().post(format!("{}/wave/cast/play", peer.address));
+    checked(signed(request, own_id, peer).json(play).send()).map(drop)
+}
+
+pub fn cast_control(
+    peer: &PeerRecord,
+    own_id: &str,
+    control: &CastControlBody,
+) -> Result<(), CallError> {
+    let request = client()
+        .post(format!("{}/wave/cast/control", peer.address))
+        .timeout(Duration::from_secs(5));
+    checked(signed(request, own_id, peer).json(control).send()).map(drop)
+}
+
+pub fn cast_state(peer: &PeerRecord, own_id: &str) -> Result<CastState, CallError> {
+    let request = client()
+        .get(format!("{}/wave/cast/state", peer.address))
+        .timeout(Duration::from_secs(3));
     checked(signed(request, own_id, peer).send())?
         .json()
         .map_err(|_| CallError::Unreachable)

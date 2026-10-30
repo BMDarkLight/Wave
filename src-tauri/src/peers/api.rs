@@ -19,6 +19,7 @@ use std::time::Instant;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use super::cast::{CastControlBody, CastPhase, CastPlay, CastState};
 use super::{find_by_secret, scope_allows, PeerRecord, PendingRequest, Registry, ShareScope};
 use crate::share::catalog::{extension_of, Snapshot};
 
@@ -43,6 +44,23 @@ pub trait Host: Send + Sync {
     fn forgotten(&self, peer_id: &str);
     /// A paired device came into reach or went out of it.
     fn reachable(&self, peer_id: &str, online: bool);
+    /// A paired device wants a song played here.
+    fn cast_play(&self, _from: &PeerRecord, _play: CastPlay) -> Result<(), String> {
+        Err("This Wave can't be played to".to_string())
+    }
+    /// Pause, seek and the like, for what a paired device is playing here.
+    fn cast_control(&self, _from: &PeerRecord, _control: CastControlBody) -> Result<(), String> {
+        Err("This Wave can't be played to".to_string())
+    }
+    /// How what a paired device plays here is going.
+    fn cast_state(&self, _from: &PeerRecord) -> CastState {
+        CastState {
+            session: 0,
+            phase: CastPhase::Idle,
+            position: 0.0,
+            duration: None,
+        }
+    }
 }
 
 /// One request, as much of it as the API looks at.
@@ -60,7 +78,7 @@ pub struct PeerRequest<'a> {
 #[derive(Debug, PartialEq)]
 pub enum PeerReply {
     Json(&'static str, String),
-    /// Serve this track's audio, as the DLNA media endpoint does.
+    /// Serve this track's audio.
     Media(String),
     /// Serve this track's cover.
     Art(String),
@@ -116,6 +134,27 @@ pub struct SharedTrack {
     pub fingerprint: Option<String>,
     /// Whether `/wave/art/<id>.jpg` has a cover for it.
     pub art: bool,
+}
+
+impl SharedTrack {
+    pub fn of(track: &crate::metadata::Track, fingerprint: Option<String>) -> Self {
+        Self {
+            id: track.id.clone(),
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            album_artist: track.album_artist.clone(),
+            album: track.album.clone(),
+            track_number: track.track_number,
+            disc_number: track.disc_number,
+            year: track.year,
+            genre: track.genre.clone(),
+            duration: track.duration_seconds,
+            size: u64::try_from(track.file_size).unwrap_or(0),
+            extension: extension_of(track),
+            fingerprint,
+            art: track.cover_art_data_url.is_some() || track.album_art_id.is_some(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -192,9 +231,10 @@ impl PeerService {
                 let name = path.rsplit('/').next().unwrap_or_default();
                 let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
                 let id = crate::remote::uri::percent_decode(stem).unwrap_or_default();
-                let shared = !id.is_empty()
-                    && scope_allows(&peer.share, &id)
-                    && snapshot.is_some_and(|s| s.track(&id).is_some());
+                let allowed =
+                    scope_allows(&peer.share, &id) || self.registry.lock().cast_to(&peer.id, &id);
+                let shared =
+                    !id.is_empty() && allowed && snapshot.is_some_and(|s| s.track(&id).is_some());
                 if !shared {
                     return Some(json(
                         "404 Not Found",
@@ -211,8 +251,49 @@ impl PeerService {
                     Some(PeerReply::Media(id))
                 }
             }
+            ("POST", "/wave/cast/play") => Some(self.cast(request, |peer, body| {
+                let play: CastPlay = serde_json::from_slice(body).map_err(|_| "unreadable")?;
+                self.host.cast_play(peer, play).map_err(|_| "can't play")
+            })),
+            ("POST", "/wave/cast/control") => Some(self.cast(request, |peer, body| {
+                let control: CastControlBody =
+                    serde_json::from_slice(body).map_err(|_| "unreadable")?;
+                self.host
+                    .cast_control(peer, control)
+                    .map_err(|_| "can't control")
+            })),
+            ("GET", "/wave/cast/state") => Some(match self.authorised(request) {
+                Some(peer) => json("200 OK", self.host.cast_state(&peer)),
+                None => denied(),
+            }),
             _ => None,
         }
+    }
+
+    /// A cast request from a paired device, handed to `run` with its body.
+    fn cast(
+        &self,
+        request: &PeerRequest,
+        run: impl FnOnce(&PeerRecord, &[u8]) -> Result<(), &'static str>,
+    ) -> PeerReply {
+        let Some(peer) = self.authorised(request) else {
+            return denied();
+        };
+        match run(&peer, request.body) {
+            Ok(()) => json("202 Accepted", serde_json::json!({ "status": "playing" })),
+            Err(error) => json("400 Bad Request", serde_json::json!({ "error": error })),
+        }
+    }
+
+    /// Lets `peer_id` stream `track_id` from here while it plays it for
+    /// this Wave, shared or not.
+    pub fn grant_cast(&self, peer_id: &str, track_id: &str) {
+        self.registry
+            .lock()
+            .cast_grants
+            .entry(peer_id.to_string())
+            .or_default()
+            .insert(track_id.to_string());
     }
 
     /// The paired device a request's headers name, if its secret matches.
@@ -330,22 +411,7 @@ impl PeerService {
             .iter()
             .skip(cursor)
             .take(PAGE)
-            .map(|t| SharedTrack {
-                id: t.id.clone(),
-                title: t.title.clone(),
-                artist: t.artist.clone(),
-                album_artist: t.album_artist.clone(),
-                album: t.album.clone(),
-                track_number: t.track_number,
-                disc_number: t.disc_number,
-                year: t.year,
-                genre: t.genre.clone(),
-                duration: t.duration_seconds,
-                size: u64::try_from(t.file_size).unwrap_or(0),
-                extension: extension_of(t),
-                fingerprint: fingerprints.get(&t.id).cloned(),
-                art: t.cover_art_data_url.is_some() || t.album_art_id.is_some(),
-            })
+            .map(|t| SharedTrack::of(t, fingerprints.get(&t.id).cloned()))
             .collect();
         let next = (cursor + PAGE < total).then_some(cursor + PAGE);
         json(
@@ -449,7 +515,11 @@ impl PeerService {
     pub fn forget(&self, id: &str) {
         self.host
             .update_peers(&mut |peers| peers.retain(|p| p.id != id));
-        self.registry.lock().streaming.remove(id);
+        {
+            let mut registry = self.registry.lock();
+            registry.streaming.remove(id);
+            registry.cast_grants.remove(id);
+        }
         self.host.forgotten(id);
         self.host.emit("wave-peers-changed", serde_json::json!({}));
     }
@@ -565,7 +635,7 @@ mod tests {
             file_size: 10,
             ..Track::default()
         };
-        Snapshot::build(1, vec![track("t1"), track("t2"), track("t3")], Vec::new())
+        Snapshot::build(1, vec![track("t1"), track("t2"), track("t3")])
     }
 
     fn call<'a>(
@@ -812,7 +882,7 @@ mod tests {
                 ..Track::default()
             })
             .collect();
-        let snapshot = Snapshot::build(1, tracks, Vec::new());
+        let snapshot = Snapshot::build(1, tracks);
         let page = |cursor: &str| {
             let Some(PeerReply::Json(_, body)) = service.handle(
                 &PeerRequest {

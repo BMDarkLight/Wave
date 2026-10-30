@@ -100,9 +100,15 @@ import { useWavePeers } from "./hooks/useWavePeers";
 import PeerPrompts from "./components/PeerPrompts";
 import {
   answerWaveRequest,
+  castToWave,
+  connectWavePeer,
   getWaveSharePaths,
+  onWaveCastChanged,
+  onWaveCastEnded,
   setWaveShare,
+  stopCasting,
   type PeerEvent,
+  type WavePeer,
 } from "./utils/peers";
 import { useSongCoupling } from "./hooks/useSongCoupling";
 import {
@@ -147,6 +153,7 @@ import EqPanel from "./components/EqPanel";
 import QueuePanel from "./components/QueuePanel";
 import LyricsPanel from "./components/LyricsPanel";
 import DeviceListPanel from "./components/DeviceListPanel";
+import CastDeviceList from "./components/CastDeviceList";
 import PlayerBar from "./components/PlayerBar";
 import Sidebar, { type MainView } from "./components/Sidebar";
 import LibraryTrackList from "./components/LibraryTrackList";
@@ -194,7 +201,6 @@ function App() {
     remote_sources_enabled: false,
     remote_cellular_enabled: false,
     cache_limit_mb: 2048,
-    library_sharing_enabled: false,
     share_name: "",
     share_in_background: false,
   });
@@ -1520,6 +1526,85 @@ function App() {
     }
   };
 
+  // ── Playing on another Wave ─────────────────────────────────────────────
+  const [castBusy, setCastBusy] = useState<string | null>(null);
+  const castDevice = playbackState.cast_device ?? null;
+
+  const onCastChanged = useEffectEvent(() => {
+    updatePlaybackState().catch(() => {});
+    loadQueueTracks().catch(() => {});
+  });
+  const onCastEnded = useEffectEvent((reason: string) => {
+    setError(`${reason}. Playback is back on this device.`);
+    updatePlaybackState().catch(() => {});
+  });
+  useEffect(() => {
+    let cancelled = false;
+    const stops: (() => void)[] = [];
+    for (const subscribe of [
+      onWaveCastChanged(() => onCastChanged()),
+      onWaveCastEnded((reason) => onCastEnded(reason)),
+    ]) {
+      subscribe
+        .then((stop) => {
+          if (cancelled) stop();
+          else stops.push(stop);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+      for (const stop of stops) stop();
+    };
+  }, []);
+
+  /** Plays here: on `name`, or on the output in use when null. */
+  const playOnOutput = async (name: string | null) => {
+    setCastBusy(name ?? "here");
+    try {
+      if (castDevice) await stopCasting();
+      if (name) await setOutputDevice(name);
+      await updatePlaybackState();
+    } catch (err) {
+      setError(formatInvokeError(err, "Couldn't switch where music plays"));
+    } finally {
+      setCastBusy(null);
+    }
+  };
+
+  const playOnWave = async (peer: WavePeer) => {
+    setCastBusy(peer.id);
+    try {
+      await castToWave(peer.id);
+      await updatePlaybackState();
+    } catch (err) {
+      setError(formatInvokeError(err, `Couldn't play on ${peer.name}`));
+    } finally {
+      setCastBusy(null);
+    }
+  };
+
+  const castDeviceList = (
+    <CastDeviceList
+      onPhone={androidHost}
+      outputs={androidHost ? [] : outputDevices}
+      currentOutput={androidHost ? "" : playbackState.output_device_name}
+      castDevice={castDevice}
+      peers={wavePeers.peers}
+      sourcingOn={sourceSettings.remote_sources_enabled}
+      busy={castBusy}
+      onPickOutput={(name) => void playOnOutput(name)}
+      onPickPeer={(peer) => void playOnWave(peer)}
+      onPair={(peer) =>
+        void connectWavePeer(peer.id)
+          .catch((err) =>
+            setError(formatInvokeError(err, `Couldn't reach ${peer.name}`)),
+          )
+          .finally(wavePeers.refresh)
+      }
+    />
+  );
+
   const openFilesFromDialog = async () => {
     try {
       const paths = await selectAudioFile(true);
@@ -2785,27 +2870,9 @@ function App() {
               />
             )}
             {showDeviceList && (
-              <DeviceListPanel
-                devices={outputDevices}
-                currentDeviceName={playbackState.output_device_name}
-                onClose={closeRightPanelDelayed}
-                onSelectDevice={(name) => {
-                  void (async () => {
-                    try {
-                      await setOutputDevice(name);
-                      await updatePlaybackState();
-                      setShowDeviceList(false);
-                    } catch (err) {
-                      setError(
-                        err instanceof Error
-                          ? err.message
-                          : "Failed to change audio device",
-                      );
-                      setShowDeviceList(false);
-                    }
-                  })();
-                }}
-              />
+              <DeviceListPanel onClose={closeRightPanelDelayed}>
+                {castDeviceList}
+              </DeviceListPanel>
             )}
           </aside>
 
@@ -3171,6 +3238,9 @@ function App() {
               onReorderQueue={handleMoveQueueTrack}
               onClearQueue={handleClearQueue}
               waveformEnabled={waveformSeekEnabled}
+              devices={castDeviceList}
+              castName={castDevice?.name ?? null}
+              playingFrom={playbackState.playing_from ?? null}
             />
           )}
 

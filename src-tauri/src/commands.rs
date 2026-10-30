@@ -125,7 +125,7 @@ fn lock_player<'a>(state: &'a tauri::State<'a, PlayerState>) -> Result<PlayerGua
     Ok(PlayerGuard(guard))
 }
 
-fn with_app_player<R>(
+pub(crate) fn with_app_player<R>(
     app: &tauri::AppHandle,
     f: impl FnOnce(&mut AudioPlayer) -> Result<R, String>,
 ) -> Result<R, String> {
@@ -856,6 +856,28 @@ fn resolve_os_cover_url(app: &tauri::AppHandle, track: &Track) -> Option<String>
 /// Call periodically from a background thread so Android/desktop keep playing
 /// the queue when a track ends, without relying on frontend polling alone.
 pub(crate) fn tick_auto_advance(app: &tauri::AppHandle) {
+    // A device being played to that went away hands playback back here,
+    // paused where it was.
+    let lost = {
+        let state = app.state::<PlayerState>();
+        let mut slot = state
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match slot.as_mut() {
+            Some(player) => player.cast_lost().inspect(|_| {
+                if let Err(error) = player.end_cast(false) {
+                    tracing::warn!("Couldn't pick playback back up here: {error}");
+                }
+            }),
+            None => None,
+        }
+    };
+    if let Some(reason) = lost {
+        tracing::info!("Stopped playing on another Wave: {reason}");
+        let _ = app.emit("wave-cast-ended", serde_json::json!({ "reason": reason }));
+    }
+
     // Crossfade handoff can happen while the sink is still playing, so check
     // independently of should_auto_advance to keep UI/queue/media in sync.
     let handoff = {
@@ -1074,6 +1096,42 @@ pub async fn set_playback_speed(
     };
     bridge.0.set_speed(f64::from(speed), position, playing);
     Ok(speed)
+}
+
+/// Pause, resume or seek for something other than the window: another Wave
+/// playing here. The OS media controls follow along.
+pub(crate) fn control_playback(app: &tauri::AppHandle, action: &str) -> Result<(), String> {
+    let bridge = app.state::<MediaBridgeState>();
+    if let Some(seconds) = action.strip_prefix("seek:") {
+        let seconds: f64 = seconds
+            .parse()
+            .map_err(|e| format!("invalid seek payload: {e}"))?;
+        let playing = with_app_player(app, |player| {
+            player.seek(seconds).map_err(|e| e.to_string())?;
+            Ok(player.is_playing())
+        })?;
+        bridge.0.update_position(seconds, playing);
+        return Ok(());
+    }
+    let position = with_app_player(app, |player| {
+        if player.get_current_path().is_none() {
+            return Ok(None);
+        }
+        match action {
+            "pause" if player.is_playing() => player.pause().map_err(|e| e.to_string())?,
+            "play" if !player.is_playing() => player.resume().map_err(|e| e.to_string())?,
+            _ => {}
+        }
+        Ok(Some(player.position_seconds()))
+    })?;
+    if let Some(position) = position {
+        if action == "play" {
+            bridge.0.set_playing(position);
+        } else {
+            bridge.0.set_paused(position);
+        }
+    }
+    Ok(())
 }
 
 /// Apply a media-session action from the Android native JNI bridge.
@@ -1621,7 +1679,7 @@ pub async fn close_mini_player(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-async fn start_queue(
+pub(crate) async fn start_queue(
     paths: Vec<String>,
     index: usize,
     mashup: bool,
@@ -1801,6 +1859,8 @@ fn playback_state_of(player: Option<&AudioPlayer>) -> PlaybackStateDto {
             sleep_timer: SleepTimerStatus::default(),
             speed: 1.0,
             is_buffering: false,
+            cast_device: None,
+            playing_from: None,
         };
     };
     PlaybackStateDto {
@@ -1817,6 +1877,12 @@ fn playback_state_of(player: Option<&AudioPlayer>) -> PlaybackStateDto {
         sleep_timer: player.sleep_timer_status(),
         speed: player.speed(),
         is_buffering: player.is_buffering(),
+        cast_device: player
+            .cast_device()
+            .map(|(id, name)| crate::dto::CastDeviceDto { id, name }),
+        playing_from: crate::peers::cast::playing_from(
+            player.get_current_path().and_then(|path| path.to_str()),
+        ),
     }
 }
 
@@ -2055,11 +2121,7 @@ pub struct SourceSettingsDto {
     /// Android only: let remote music use mobile data.
     pub remote_cellular_enabled: bool,
     pub cache_limit_mb: u64,
-    /// Share the library as a DLNA / UPnP media server while Outside
-    /// Sourcing is on.
-    #[serde(default)]
-    pub library_sharing_enabled: bool,
-    /// The shared library's name; "" uses the default.
+    /// The name other Waves see; "" uses the default.
     #[serde(default)]
     pub share_name: String,
     /// Keep sharing after the window is closed.
@@ -2079,7 +2141,6 @@ pub async fn get_source_settings(
         remote_sources_enabled: settings.remote_sources_enabled,
         remote_cellular_enabled: settings.remote_cellular_enabled,
         cache_limit_mb: settings.source_cache_limit_mb,
-        library_sharing_enabled: settings.library_sharing_enabled,
         share_name: settings.share_name.clone().unwrap_or_default(),
         share_in_background: settings.share_in_background,
     })
@@ -2111,7 +2172,6 @@ pub async fn set_source_settings(
         stored.spotify_client_id = normalise(&settings.spotify_client_id);
         stored.remote_sources_enabled = settings.remote_sources_enabled;
         stored.remote_cellular_enabled = settings.remote_cellular_enabled;
-        stored.library_sharing_enabled = settings.library_sharing_enabled;
         stored.share_name = normalise(&settings.share_name);
         stored.share_in_background = settings.share_in_background;
         stored.source_cache_limit_mb = settings.cache_limit_mb.max(MIN_CACHE_LIMIT_MB);
@@ -5139,6 +5199,8 @@ mod tests {
             sleep_timer: SleepTimerStatus::default(),
             speed,
             is_buffering: false,
+            cast_device: None,
+            playing_from: None,
         }
     }
 
