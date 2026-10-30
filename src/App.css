@@ -9996,12 +9996,13 @@ div.album-hero-cover {
   animation: spin 1s linear infinite;
 }
 
+/* Lined up with the page header above it, as a playlist's songs are. */
 .wdev-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-width: 720px;
-  padding: 0 32px 32px;
+  margin-top: 20px;
+  padding: 0 24px 32px;
 }
 
 .wdev-section {
@@ -10009,6 +10010,10 @@ div.album-hero-cover {
   color: var(--text);
   font-size: 15px;
   font-weight: 700;
+}
+
+.wdev-section:first-child {
+  margin-top: 0;
 }
 
 .wdev-card {
@@ -10118,9 +10123,14 @@ div.album-hero-cover {
   line-height: 1.55;
 }
 
+/* Settings rows bring their own padding; the card only frames them. */
 .wdev-self {
-  gap: 4px;
-  padding: 6px 4px;
+  gap: 0;
+  padding: 2px;
+}
+
+.wdev-self .mset-nested-row {
+  padding-left: 14px;
 }
 
 .wdev-off {
@@ -10149,7 +10159,8 @@ div.album-hero-cover {
 
 @media (max-width: 768px) {
   .wdev-body {
-    padding: 0 16px 24px;
+    margin-top: 16px;
+    padding: 0 14px 24px;
   }
 }
 

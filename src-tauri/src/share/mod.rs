@@ -258,9 +258,11 @@ pub fn status() -> ShareStatus {
             ..ShareStatus::default()
         };
     };
+    // Only addresses the server answers on: a VPN's, say, is refused.
     let addresses = crate::remote::dlna::multicast_interfaces()
         .into_iter()
         .filter(|ip| !ip.is_unspecified() && !ip.is_loopback())
+        .filter(|ip| http::is_local(std::net::IpAddr::V4(*ip)))
         .map(|ip| format!("http://{ip}:{}", running.port))
         .collect();
     let error = running.error.lock().clone();
