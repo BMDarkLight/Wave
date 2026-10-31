@@ -449,6 +449,27 @@ fn phase_of(
     }
 }
 
+/// The repeat mode this Wave had before it was played to. Repeat is off
+/// meanwhile: each track has to end for the sender to send the next one.
+fn held_repeat() -> &'static Mutex<Option<crate::audio::player::RepeatMode>> {
+    static HELD: Mutex<Option<crate::audio::player::RepeatMode>> = Mutex::new(None);
+    &HELD
+}
+
+/// Puts back the repeat mode a cast turned off, unless it was changed since.
+fn release_repeat(app: &AppHandle) {
+    use crate::audio::player::RepeatMode;
+    let Some(before) = held_repeat().lock().take() else {
+        return;
+    };
+    let _ = crate::commands::with_app_player(app, |player| {
+        if player.repeat == RepeatMode::Off {
+            player.set_repeat(before);
+        }
+        Ok(())
+    });
+}
+
 fn changed(app: &AppHandle) {
     let _ = app.emit("wave-cast-changed", ());
 }
@@ -543,6 +564,11 @@ fn start(app: &AppHandle, path: &str, play: &CastPlay) -> Result<(), String> {
     use crate::commands;
     // Playing to a third device stops when this one is played to.
     let _ = commands::with_app_player(app, |player| {
+        let mut held = held_repeat().lock();
+        if held.is_none() {
+            *held = Some(player.repeat.clone());
+        }
+        player.set_repeat(crate::audio::player::RepeatMode::Off);
         player.end_cast(false).map_err(|e| e.to_string())
     });
     tauri::async_runtime::block_on(commands::start_queue(
@@ -618,9 +644,8 @@ pub fn receive_control(
         }
         CastControl::Stop => {
             *receiving().lock() = None;
-            let paused = commands::control_playback(app, "pause");
-            changed(app);
-            paused
+            release_repeat(app);
+            commands::control_playback(app, "pause")
         }
     }?;
     changed(app);
@@ -653,6 +678,7 @@ pub fn receive_state(app: &AppHandle, from: &PeerRecord) -> CastState {
     let phase = phase_of(&current, path.as_deref(), playing, paused);
     if phase == CastPhase::Taken {
         *receiving().lock() = None;
+        release_repeat(app);
     }
     CastState {
         session: current.session,
