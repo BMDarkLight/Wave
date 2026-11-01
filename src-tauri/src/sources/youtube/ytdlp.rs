@@ -21,39 +21,17 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 use super::tools::Tool;
+use super::{expires_from_url, is_video_id, Candidate, Stream};
 
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(20);
 /// Extraction solves YouTube's player challenge in Deno, which is the slow
 /// part of a first play.
 const STREAM_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
 const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
 /// Opus first: it is the better of YouTube's two audio-only streams, and
 /// both decode and seek in Wave. AAC in MP4 is the fallback.
 const AUDIO_FORMAT: &str = "251/140/bestaudio[acodec!=none][vcodec=none]";
-
-/// One YouTube result for a search.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Candidate {
-    pub id: String,
-    pub title: String,
-    pub channel: Option<String>,
-    pub duration_seconds: Option<f64>,
-}
-
-/// A playable audio stream. The URL stops working at `expires_at`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Stream {
-    pub url: String,
-    /// Headers YouTube expects on every request for `url`.
-    pub http_headers: Vec<(String, String)>,
-    /// Container extension, `webm` or `m4a`.
-    pub ext: String,
-    pub codec: Option<String>,
-    pub duration_seconds: Option<f64>,
-    pub filesize: Option<u64>,
-    /// Unix seconds, from the URL's `expire` parameter.
-    pub expires_at: Option<u64>,
-}
 
 pub struct YtDlp {
     program: PathBuf,
@@ -73,6 +51,7 @@ impl YtDlp {
         })
     }
 
+    #[cfg(test)]
     pub fn version(&self) -> Result<String, String> {
         self.run(&["--version"], VERSION_TIMEOUT)
             .map(|out| out.trim().to_string())
@@ -100,14 +79,20 @@ impl YtDlp {
         parse_search(&out)
     }
 
-    /// The audio stream for one video.
-    pub fn stream(&self, video_id: &str) -> Result<Stream, String> {
+    /// The audio stream for one video, in format `itag` when given and
+    /// otherwise the best audio-only format.
+    pub fn stream_format(&self, video_id: &str, itag: Option<&str>) -> Result<Stream, String> {
         if !is_video_id(video_id) {
             return Err(format!("Not a YouTube video id: {video_id}"));
         }
+        let format = match itag {
+            Some(itag) if !itag.is_empty() && itag.bytes().all(|b| b.is_ascii_digit()) => itag,
+            Some(itag) => return Err(format!("Not a YouTube format: {itag}")),
+            None => AUDIO_FORMAT,
+        };
         let url = format!("https://music.youtube.com/watch?v={video_id}");
         let out = self.run(
-            &["-J", "--no-playlist", "-f", AUDIO_FORMAT, "--", &url],
+            &["-J", "--no-playlist", "-f", format, "--", &url],
             STREAM_TIMEOUT,
         )?;
         parse_stream(&out)
@@ -215,15 +200,6 @@ fn error_line(stderr: &str) -> String {
         .to_string()
 }
 
-/// YouTube video ids are 11 characters of URL-safe base64. Checking keeps
-/// anything else, an option-looking `-x` included, out of the command line.
-fn is_video_id(id: &str) -> bool {
-    id.len() == 11
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-}
-
 #[derive(Deserialize)]
 struct SearchJson {
     #[serde(default)]
@@ -264,6 +240,7 @@ struct StreamJson {
     acodec: Option<String>,
     duration: Option<f64>,
     filesize: Option<u64>,
+    format_id: Option<String>,
     #[serde(default)]
     http_headers: std::collections::BTreeMap<String, String>,
 }
@@ -275,12 +252,9 @@ fn parse_stream(json: &str) -> Result<Stream, String> {
         .url
         .filter(|u| u.starts_with("https://"))
         .ok_or("yt-dlp found no audio stream")?;
-    let expires_at = reqwest::Url::parse(&url).ok().and_then(|u| {
-        u.query_pairs()
-            .find(|(k, _)| k == "expire")
-            .and_then(|(_, v)| v.parse().ok())
-    });
+    let expires_at = expires_from_url(&url);
     Ok(Stream {
+        itag: parsed.format_id,
         url,
         http_headers: parsed.http_headers.into_iter().collect(),
         ext: parsed.ext.unwrap_or_else(|| "webm".into()),
@@ -329,11 +303,12 @@ mod tests {
     fn reads_the_stream_and_when_it_expires() {
         let json = r#"{
             "url": "https://rr1---sn-x.googlevideo.com/videoplayback?expire=1793600000&itag=251",
-            "ext": "webm", "acodec": "opus", "duration": 215.4, "filesize": 3500000,
+            "ext": "webm", "acodec": "opus", "duration": 215.4, "filesize": 3500000, "format_id": "251",
             "http_headers": {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
         }"#;
         let stream = parse_stream(json).unwrap();
         assert_eq!(stream.ext, "webm");
+        assert_eq!(stream.itag.as_deref(), Some("251"));
         assert_eq!(stream.codec.as_deref(), Some("opus"));
         assert_eq!(stream.expires_at, Some(1_793_600_000));
         assert_eq!(stream.filesize, Some(3_500_000));
@@ -402,7 +377,7 @@ mod tests {
         }
 
         let t = Instant::now();
-        let stream = ytdlp.stream(&found[0].id).unwrap();
+        let stream = ytdlp.stream_format(&found[0].id, None).unwrap();
         println!(
             "stream ({:?}): {} {:?} {:?}s {:?} bytes, expires {:?}, {} headers",
             t.elapsed(),
@@ -414,7 +389,7 @@ mod tests {
             stream.http_headers.len()
         );
         let t = Instant::now();
-        let again = ytdlp.stream(&found[0].id).unwrap();
+        let again = ytdlp.stream_format(&found[0].id, None).unwrap();
         println!(
             "stream again ({:?}): same format {}",
             t.elapsed(),

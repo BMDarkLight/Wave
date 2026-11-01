@@ -156,6 +156,25 @@ pub fn lookup(peer_id: &str) -> Option<(PeerRecord, String)> {
     Some((peer, own_id))
 }
 
+/// Paired devices discovery sees on the network right now, at the address
+/// it saw them at, each with this Wave's own id for signing calls to it.
+pub fn online_paired() -> Vec<(PeerRecord, String)> {
+    let Some(service) = SERVICE.get() else {
+        return Vec::new();
+    };
+    let (own_id, _) = service.host().identity();
+    let found = service.registry.lock().found.clone();
+    service
+        .host()
+        .peers()
+        .into_iter()
+        .filter_map(|mut peer| {
+            peer.address = found.get(&peer.id)?.address.clone();
+            Some((peer, own_id.clone()))
+        })
+        .collect()
+}
+
 /// Forget a device on this side only, after it turned out to have forgotten
 /// this one.
 pub fn forget_locally(peer_id: &str) {
@@ -177,6 +196,21 @@ impl AppHost {
     fn settings(&self) -> Option<tauri::State<'_, crate::app_settings::AppSettingsState>> {
         use tauri::Manager;
         self.0.try_state::<crate::app_settings::AppSettingsState>()
+    }
+}
+
+impl AppHost {
+    /// Only a Wave whose owner turned Online play on answers for others.
+    fn online_play(&self) -> Result<(), String> {
+        let enabled = self
+            .settings()
+            .and_then(|state| state.0.lock().ok().map(|s| s.online_play_enabled))
+            .unwrap_or(false);
+        if enabled {
+            Ok(())
+        } else {
+            Err("Online play is off on this Wave".into())
+        }
     }
 }
 
@@ -251,6 +285,35 @@ impl api::Host for AppHost {
 
     fn reachable(&self, peer_id: &str, online: bool) {
         crate::remote::commands::set_wave_reachable(&self.0, peer_id, online);
+    }
+
+    fn youtube_search(
+        &self,
+        query: &str,
+    ) -> Result<Vec<crate::sources::youtube::Candidate>, String> {
+        self.online_play()?;
+        #[cfg(not(target_os = "android"))]
+        return crate::sources::youtube::router::direct::search(&self.0, query);
+        #[cfg(target_os = "android")]
+        {
+            let _ = query;
+            Err("Android can't run yt-dlp".into())
+        }
+    }
+
+    fn youtube_stream(
+        &self,
+        video_id: &str,
+        itag: Option<&str>,
+    ) -> Result<crate::sources::youtube::Stream, String> {
+        self.online_play()?;
+        #[cfg(not(target_os = "android"))]
+        return crate::sources::youtube::router::direct::stream(&self.0, video_id, itag);
+        #[cfg(target_os = "android")]
+        {
+            let _ = (video_id, itag);
+            Err("Android can't run yt-dlp".into())
+        }
     }
 
     fn cast_play(&self, from: &PeerRecord, play: cast::CastPlay) -> Result<(), String> {

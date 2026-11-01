@@ -907,9 +907,10 @@ export default function MobileSettings({
                     <span className="mset-gapless-copy">
                       <span className="mset-gapless-label">Online play</span>
                       <span className="mset-gapless-hint">
-                        Play catalog results in full, with the song found on
-                        YouTube by yt-dlp. Without it, Deezer and iTunes play
-                        30-second clips.
+                        Play Deezer results in full, with the song found on
+                        YouTube. When YouTube can&apos;t be reached from here,
+                        your other Waves or public Invidious and Piped servers
+                        fetch it instead.
                       </span>
                     </span>
                   </label>

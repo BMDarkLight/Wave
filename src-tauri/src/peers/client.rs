@@ -14,9 +14,15 @@ use std::time::Duration;
 
 use reqwest::blocking::{Client, RequestBuilder, Response};
 
-use super::api::{AnswerBody, AskBody, CatalogPage, Hello, UnpairBody};
+use super::api::{
+    AnswerBody, AskBody, CatalogPage, Hello, UnpairBody, YoutubeResult, YoutubeStreamInfo,
+};
 use super::cast::{CastControlBody, CastPlay, CastState};
 use super::PeerRecord;
+use crate::sources::youtube::{Candidate, Stream};
+
+/// A paired Wave runs yt-dlp to answer, which takes seconds on a first look.
+const YOUTUBE_TIMEOUT: Duration = Duration::from_secs(40);
 
 /// Why a call to another Wave failed.
 #[derive(Debug, Clone, PartialEq)]
@@ -139,6 +145,66 @@ pub fn cast_state(peer: &PeerRecord, own_id: &str) -> Result<CastState, CallErro
     checked(signed(request, own_id, peer).send())?
         .json()
         .map_err(|_| CallError::Unreachable)
+}
+
+/// Songs on YouTube, found by a paired desktop Wave with Online play.
+pub fn youtube_search(
+    own_id: &str,
+    peer: &PeerRecord,
+    query: &str,
+) -> Result<Vec<Candidate>, CallError> {
+    let url = reqwest::Url::parse_with_params(
+        &format!("{}/wave/youtube/search", peer.address),
+        &[("q", query)],
+    )
+    .map_err(|_| CallError::Unreachable)?;
+    let request = client().get(url).timeout(YOUTUBE_TIMEOUT);
+    let found: Vec<YoutubeResult> = checked(signed(request, own_id, peer).send())?
+        .json()
+        .map_err(|_| CallError::Unreachable)?;
+    Ok(found.into_iter().map(Candidate::from).collect())
+}
+
+/// A YouTube stream relayed by a paired desktop Wave. The URL points at that
+/// Wave, and carries this one's credentials in its headers.
+pub fn youtube_stream(
+    own_id: &str,
+    peer: &PeerRecord,
+    video_id: &str,
+    itag: Option<&str>,
+) -> Result<Stream, CallError> {
+    let with_itag = |path: String| match itag {
+        Some(itag) => reqwest::Url::parse_with_params(&path, &[("itag", itag)]),
+        None => reqwest::Url::parse(&path),
+    };
+    let url = with_itag(format!("{}/wave/youtube/stream/{video_id}", peer.address))
+        .map_err(|_| CallError::Unreachable)?;
+    let request = client().get(url).timeout(YOUTUBE_TIMEOUT);
+    let info: YoutubeStreamInfo = checked(signed(request, own_id, peer).send())?
+        .json()
+        .map_err(|_| CallError::Unreachable)?;
+    // Relay the format the other Wave chose, so every range is the same file.
+    let audio = match &info.itag {
+        Some(itag) => reqwest::Url::parse_with_params(
+            &format!("{}/wave/youtube/audio/{video_id}", peer.address),
+            &[("itag", itag)],
+        ),
+        None => reqwest::Url::parse(&format!("{}/wave/youtube/audio/{video_id}", peer.address)),
+    }
+    .map_err(|_| CallError::Unreachable)?;
+    Ok(Stream {
+        url: audio.to_string(),
+        http_headers: vec![
+            ("X-Wave-Peer".to_string(), own_id.to_string()),
+            ("X-Wave-Secret".to_string(), peer.secret.clone()),
+        ],
+        itag: info.itag,
+        ext: info.ext,
+        codec: info.codec,
+        duration_seconds: info.duration,
+        filesize: info.size,
+        expires_at: info.expires_at,
+    })
 }
 
 pub fn media_url(address: &str, track_id: &str, extension: &str) -> String {

@@ -59,6 +59,15 @@ impl SearchStreamBackend {
     fn get(&self, part_key: &str, range: &str) -> Result<Response, RemoteError> {
         self.gate.check()?;
         let (provider, url) = split_part_key(part_key)?;
+        // Online play: the audio is a YouTube video, fetched by whatever way
+        // in works at this moment rather than from a stored URL.
+        if let Some(video_id) = sources::youtube::video_id_of(url) {
+            let router = sources::youtube::router::global()
+                .ok_or_else(|| RemoteError::Unreachable("Online play isn't ready".into()))?;
+            return router
+                .fetch(video_id, range)
+                .map_err(RemoteError::Unreachable);
+        }
         let referer = sources::provider_by_id(&SourceConfig::default(), provider)
             .and_then(|p| p.fetch_referer());
         // Wikimedia turns away requests that don't say who is asking.

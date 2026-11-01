@@ -12,11 +12,161 @@
 //! Online play on and agrees to the install, [`tools`] fetches yt-dlp and the
 //! Deno runtime it needs from their own GitHub releases, and [`ytdlp`] runs
 //! them. Desktop only: Android can't run programs an app downloads.
+//!
+//! When yt-dlp can't get through, [`router`] tries the other ways in, in
+//! order: a paired desktop Wave on the network, then public [`invidious`] and
+//! [`piped`] servers. [`matching`] picks the video that is the catalog song.
 
 pub mod commands;
+pub mod invidious;
+pub mod matching;
+pub mod piped;
+pub mod router;
 #[cfg(not(target_os = "android"))]
 pub mod tools;
-// Searching and stream lookup are wired into playback in the next step.
 #[cfg(not(target_os = "android"))]
-#[allow(dead_code)]
 pub mod ytdlp;
+
+/// Marks a source track's audio as a YouTube video for [`router`] to find,
+/// written `youtube:<id>.<ext>` so the extension still reads as one.
+const AUDIO_REF_PREFIX: &str = "youtube:";
+
+/// The audio reference stored for `video_id`, whose stream is a `ext` file.
+pub fn audio_ref(video_id: &str, ext: &str) -> String {
+    format!("{AUDIO_REF_PREFIX}{video_id}.{ext}")
+}
+
+/// The video id in an audio reference, or `None` for an ordinary URL.
+pub fn video_id_of(audio_ref: &str) -> Option<&str> {
+    let rest = audio_ref.strip_prefix(AUDIO_REF_PREFIX)?;
+    let id = rest.split_once('.').map_or(rest, |(id, _)| id);
+    is_video_id(id).then_some(id)
+}
+
+/// One YouTube result for a search.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Candidate {
+    pub id: String,
+    pub title: String,
+    pub channel: Option<String>,
+    pub duration_seconds: Option<f64>,
+}
+
+/// A playable audio stream. The URL stops working at `expires_at`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stream {
+    pub url: String,
+    /// Headers to send on every request for `url`.
+    pub http_headers: Vec<(String, String)>,
+    /// YouTube's format number, `251` for Opus or `140` for AAC. The same
+    /// format is the same file whichever way it is fetched.
+    pub itag: Option<String>,
+    /// Container extension, `webm` or `m4a`.
+    pub ext: String,
+    pub codec: Option<String>,
+    pub duration_seconds: Option<f64>,
+    pub filesize: Option<u64>,
+    /// Unix seconds, from the URL's `expire` parameter.
+    pub expires_at: Option<u64>,
+}
+
+/// YouTube's audio-only formats in the order Wave prefers them: Opus, then
+/// AAC in MP4. Both decode and seek in Wave.
+const PREFERRED_ITAGS: [&str; 2] = ["251", "140"];
+
+/// Container for a YouTube audio MIME type such as `audio/webm; codecs="opus"`.
+fn ext_for_mime(mime: &str) -> &'static str {
+    if mime.starts_with("audio/mp4") {
+        "m4a"
+    } else {
+        "webm"
+    }
+}
+
+/// Client for public Invidious and Piped servers. Their health varies by the
+/// hour, so a slow one is given up on quickly and the next one tried.
+fn public_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(4))
+            .timeout(std::time::Duration::from_secs(8))
+            .user_agent(super::USER_AGENT)
+            .build()
+            .unwrap_or_else(|_| reqwest::blocking::Client::new())
+    })
+}
+
+/// A JSON field that servers send as either a number or a string.
+fn loose_string(value: Option<&serde_json::Value>) -> Option<String> {
+    match value? {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+fn loose_u64(value: Option<&serde_json::Value>) -> Option<u64> {
+    loose_string(value)?.parse().ok()
+}
+
+/// The codec named in a MIME type's `codecs` parameter.
+fn codec_of(mime: &str) -> Option<String> {
+    let codecs = mime.split("codecs=").nth(1)?;
+    let codec = codecs.trim_matches(|c| c == '"' || c == ' ' || c == ';');
+    (!codec.is_empty()).then(|| codec.to_string())
+}
+
+/// YouTube video ids are 11 characters of URL-safe base64. Checking keeps
+/// anything else, an option-looking `-x` included, out of command lines and
+/// URLs.
+pub fn is_video_id(id: &str) -> bool {
+    id.len() == 11
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// The `expire` parameter YouTube stream URLs carry, in Unix seconds.
+fn expires_from_url(url: &str) -> Option<u64> {
+    reqwest::Url::parse(url).ok().and_then(|u| {
+        u.query_pairs()
+            .find(|(k, _)| k == "expire")
+            .and_then(|(_, v)| v.parse().ok())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_audio_ref_round_trips_and_keeps_its_extension() {
+        let reference = audio_ref("dQw4w9WgXcQ", "webm");
+        assert_eq!(reference, "youtube:dQw4w9WgXcQ.webm");
+        assert_eq!(video_id_of(&reference), Some("dQw4w9WgXcQ"));
+        assert_eq!(video_id_of("youtube:dQw4w9WgXcQ"), Some("dQw4w9WgXcQ"));
+        assert_eq!(video_id_of("https://example.com/a.mp3"), None);
+        assert_eq!(video_id_of("youtube:../../etc.x"), None);
+    }
+
+    #[test]
+    fn reads_the_container_from_the_mime_type() {
+        assert_eq!(ext_for_mime("audio/mp4; codecs=\"mp4a.40.2\""), "m4a");
+        assert_eq!(ext_for_mime("audio/webm; codecs=\"opus\""), "webm");
+        assert_eq!(
+            codec_of("audio/webm; codecs=\"opus\"").as_deref(),
+            Some("opus")
+        );
+        assert_eq!(codec_of("audio/mp4").as_deref(), None);
+    }
+
+    #[test]
+    fn reads_when_a_stream_url_expires() {
+        assert_eq!(
+            expires_from_url("https://h/videoplayback?expire=1793545710&itag=251"),
+            Some(1_793_545_710)
+        );
+        assert_eq!(expires_from_url("https://h/videoplayback"), None);
+    }
+}

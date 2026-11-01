@@ -227,8 +227,79 @@ fn wave(
         ),
         Some(PeerReply::Media(id)) => media(stream, server, request, &id, head_only),
         Some(PeerReply::Art(id)) => art(stream, server, &id, head_only),
+        Some(PeerReply::Youtube { video_id, itag }) => youtube_audio(
+            stream,
+            server,
+            request,
+            &video_id,
+            itag.as_deref(),
+            head_only,
+        ),
         None => respond(stream, "404 Not Found", &[], b"", head_only),
     }
+}
+
+/// Relays YouTube audio for a paired Wave that can't reach YouTube itself,
+/// range and all. The stream URL only works from this address, so the bytes
+/// come through here rather than the URL going there.
+fn youtube_audio(
+    stream: &mut TcpStream,
+    server: &Server,
+    request: &Request,
+    video_id: &str,
+    itag: Option<&str>,
+    head_only: bool,
+) -> io::Result<()> {
+    let upstream = match server.peers.host().youtube_stream(video_id, itag) {
+        Ok(upstream) => upstream,
+        Err(e) => {
+            tracing::debug!("Could not relay YouTube audio: {e}");
+            return respond(stream, "503 Service Unavailable", &[], b"", head_only);
+        }
+    };
+    let mut fetch = crate::remote::http::stream_client().get(&upstream.url);
+    for (name, value) in &upstream.http_headers {
+        fetch = fetch.header(name.as_str(), value.as_str());
+    }
+    if let Some(range) = request.header("Range") {
+        fetch = fetch.header("Range", range);
+    }
+    let Ok(mut response) = fetch.send() else {
+        return respond(stream, "502 Bad Gateway", &[], b"", head_only);
+    };
+    let status = match response.status().as_u16() {
+        200 => "200 OK",
+        206 => "206 Partial Content",
+        416 => "416 Range Not Satisfiable",
+        _ => return respond(stream, "502 Bad Gateway", &[], b"", head_only),
+    };
+    let passed = |name: reqwest::header::HeaderName| {
+        response
+            .headers()
+            .get(&name)
+            .and_then(|v| v.to_str().ok())
+            .map(String::from)
+    };
+    let content_type = passed(reqwest::header::CONTENT_TYPE)
+        .unwrap_or_else(|| mime_for(&upstream.ext).to_string());
+    let mut out = format!(
+        "HTTP/1.1 {status}\r\nServer: {}\r\nConnection: close\r\nContent-Type: {content_type}\r\nAccept-Ranges: bytes\r\n",
+        server_header()
+    );
+    for name in [
+        reqwest::header::CONTENT_RANGE,
+        reqwest::header::CONTENT_LENGTH,
+    ] {
+        if let Some(value) = passed(name.clone()) {
+            out.push_str(&format!("{name}: {value}\r\n"));
+        }
+    }
+    out.push_str("\r\n");
+    stream.write_all(out.as_bytes())?;
+    if !head_only {
+        io::copy(&mut response, stream)?;
+    }
+    stream.flush()
 }
 
 /// What a `Range` header asks for.

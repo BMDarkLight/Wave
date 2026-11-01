@@ -116,6 +116,11 @@ export default function OnlinePlayInstallDialog({
               80 MB), check each against its published checksum, and keep them
               up to date. You can remove them from Settings at any time.
             </p>
+            <p className="confirm-text">
+              If YouTube can&apos;t be reached from this computer, Wave tries
+              your other paired Waves, then public Invidious and Piped servers.
+              Those servers see which songs you play.
+            </p>
             {error && (
               <p className="confirm-text" role="alert">
                 {error}

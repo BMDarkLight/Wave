@@ -64,6 +64,8 @@ pub enum SourceError {
     Parse(String),
     /// Provider had a result but no playable audio behind it.
     NoAudio,
+    /// Online play reached YouTube, but nothing there was this song.
+    NotFound,
 }
 
 impl std::fmt::Display for SourceError {
@@ -73,6 +75,7 @@ impl std::fmt::Display for SourceError {
             Self::Network(e) => write!(f, "Network error: {e}"),
             Self::Parse(e) => write!(f, "Unexpected response: {e}"),
             Self::NoAudio => write!(f, "No playable audio for this result"),
+            Self::NotFound => write!(f, "Couldn't find this song on YouTube"),
         }
     }
 }
@@ -170,13 +173,18 @@ pub struct SourceConfig {
     /// Free Jamendo API client id. Without it, Jamendo reports itself as
     /// not configured rather than silently disappearing.
     pub jamendo_client_id: Option<String>,
+    /// Online play is on: Deezer results play in full from YouTube instead
+    /// of as 30-second previews.
+    pub online_play: bool,
 }
 
 /// Every provider, configured or not. Unconfigured ones still appear so the UI
 /// can tell the user what to set up instead of hiding the option.
 pub fn providers(config: &SourceConfig) -> Vec<Box<dyn SourceProvider>> {
     vec![
-        Box::new(deezer::Deezer),
+        Box::new(deezer::Deezer {
+            online_play: config.online_play,
+        }),
         Box::new(itunes::ITunes),
         Box::new(jamendo::Jamendo::new(config.jamendo_client_id.clone())),
         Box::new(audius::Audius),
@@ -365,7 +373,7 @@ mod live_tests {
     #[ignore = "hits the network"]
     fn deezer_search_resolve_and_fetch_round_trip() {
         let client = source_client();
-        let provider = deezer::Deezer;
+        let provider = deezer::Deezer { online_play: false };
 
         let tracks = provider
             .search(client, "daft punk", 3)

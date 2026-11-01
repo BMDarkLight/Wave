@@ -25,7 +25,10 @@ use super::{
 /// Every Deezer preview is exactly this long.
 const PREVIEW_SECONDS: f64 = 30.0;
 
-pub struct Deezer;
+pub struct Deezer {
+    /// Play results in full through Online play rather than as previews.
+    pub online_play: bool,
+}
 
 impl SourceProvider for Deezer {
     fn id(&self) -> &'static str {
@@ -60,15 +63,35 @@ impl SourceProvider for Deezer {
             .and_then(|d| d.as_array())
             .ok_or_else(|| SourceError::Parse("missing `data` array".into()))?;
 
-        Ok(items.iter().filter_map(parse_track).collect())
+        Ok(items
+            .iter()
+            .filter_map(|item| parse_track(item, self.online_play))
+            .collect())
     }
 
+    /// A preview plays from its URL. A full-length result is found on YouTube
+    /// now, when it is played, so a search never waits on YouTube.
     fn resolve_audio(&self, _client: &Client, track: &SourceTrack) -> Result<String, SourceError> {
-        track.audio_url.clone().ok_or(SourceError::NoAudio)
+        if let Some(url) = &track.audio_url {
+            return Ok(url.clone());
+        }
+        use super::youtube::matching::Wanted;
+        use super::youtube::router::{self, FindError};
+        let router = router::global()
+            .ok_or_else(|| SourceError::Network("Online play isn't ready".into()))?;
+        let wanted = Wanted {
+            title: &track.title,
+            artist: &track.artist,
+            duration_seconds: track.duration_seconds,
+        };
+        router.find(&wanted).map_err(|e| match e {
+            FindError::Unreachable(message) => SourceError::Network(message),
+            FindError::NoMatch => SourceError::NotFound,
+        })
     }
 }
 
-fn parse_track(item: &serde_json::Value) -> Option<SourceTrack> {
+fn parse_track(item: &serde_json::Value, online_play: bool) -> Option<SourceTrack> {
     let id = id_field(item, "id")?;
     let title = str_field(item, "title")
         .or_else(|| str_field(item, "title_short"))
@@ -86,6 +109,24 @@ fn parse_track(item: &serde_json::Value) -> Option<SourceTrack> {
             .or_else(|| str_field(a, "cover_medium"))
             .or_else(|| str_field(a, "cover"))
     });
+
+    if online_play {
+        return Some(SourceTrack {
+            provider: "deezer".to_string(),
+            id,
+            title,
+            artist,
+            album,
+            duration_seconds: duration_field(item, "duration"),
+            artwork_url,
+            // Found on YouTube when played.
+            audio_url: None,
+            is_full_length: true,
+            downloadable: false,
+            attribution: Some("Deezer, played from YouTube".to_string()),
+            already_in_library: None,
+        });
+    }
 
     // A result with no preview is unplayable for us; drop it rather than
     // offering a row that fails on click.
@@ -148,7 +189,10 @@ mod tests {
     fn parses_results_and_drops_unplayable_ones() {
         let value: serde_json::Value = serde_json::from_str(SAMPLE).unwrap();
         let items = value["data"].as_array().unwrap();
-        let tracks: Vec<_> = items.iter().filter_map(parse_track).collect();
+        let tracks: Vec<_> = items
+            .iter()
+            .filter_map(|item| parse_track(item, false))
+            .collect();
 
         // The entry without a preview is unplayable and must not be offered.
         assert_eq!(tracks.len(), 1);
@@ -163,10 +207,24 @@ mod tests {
     #[test]
     fn preview_length_is_reported_not_full_length() {
         let value: serde_json::Value = serde_json::from_str(SAMPLE).unwrap();
-        let track = parse_track(&value["data"][0]).unwrap();
+        let track = parse_track(&value["data"][0], false).unwrap();
         // The API's 224s is the full track; playing it would desync the seek bar.
         assert_eq!(track.duration_seconds, Some(30.0));
         assert!(!track.is_full_length);
+        assert!(!track.downloadable);
+    }
+
+    #[test]
+    fn online_play_offers_every_result_in_full() {
+        let value: serde_json::Value = serde_json::from_str(SAMPLE).unwrap();
+        let items = value["data"].as_array().unwrap();
+        let tracks: Vec<_> = items.iter().filter_map(|i| parse_track(i, true)).collect();
+        // No preview is needed: the song comes from YouTube.
+        assert_eq!(tracks.len(), 2);
+        let track = &tracks[0];
+        assert_eq!(track.duration_seconds, Some(224.0), "the real length");
+        assert!(track.is_full_length);
+        assert!(track.audio_url.is_none(), "found when played");
         assert!(!track.downloadable);
     }
 
@@ -184,7 +242,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .filter_map(parse_track)
+            .filter_map(|item| parse_track(item, false))
             .collect();
         assert!(tracks.is_empty());
     }

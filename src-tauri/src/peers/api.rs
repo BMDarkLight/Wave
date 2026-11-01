@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use super::cast::{CastControlBody, CastPhase, CastPlay, CastState};
 use super::{find_by_secret, scope_allows, PeerRecord, PendingRequest, Registry, ShareScope};
 use crate::share::catalog::{extension_of, Snapshot};
+use crate::sources::youtube::{Candidate, Stream};
 
 /// Songs per catalog page.
 pub const PAGE: usize = 200;
@@ -52,6 +53,14 @@ pub trait Host: Send + Sync {
     fn cast_control(&self, _from: &PeerRecord, _control: CastControlBody) -> Result<(), String> {
         Err("This Wave can't be played to".to_string())
     }
+    /// Songs on YouTube, for a paired device that can't reach it itself.
+    fn youtube_search(&self, _query: &str) -> Result<Vec<Candidate>, String> {
+        Err(NO_ONLINE_PLAY.to_string())
+    }
+    /// A YouTube stream this Wave can fetch, to relay to a paired device.
+    fn youtube_stream(&self, _video_id: &str, _itag: Option<&str>) -> Result<Stream, String> {
+        Err(NO_ONLINE_PLAY.to_string())
+    }
     /// How what a paired device plays here is going.
     fn cast_state(&self, _from: &PeerRecord) -> CastState {
         CastState {
@@ -61,6 +70,74 @@ pub trait Host: Send + Sync {
             duration: None,
         }
     }
+}
+
+const NO_ONLINE_PLAY: &str = "Online play is off on this Wave";
+
+/// One YouTube result, as a paired device sees it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct YoutubeResult {
+    pub id: String,
+    pub title: String,
+    pub channel: Option<String>,
+    pub duration: Option<f64>,
+}
+
+impl From<Candidate> for YoutubeResult {
+    fn from(c: Candidate) -> Self {
+        Self {
+            id: c.id,
+            title: c.title,
+            channel: c.channel,
+            duration: c.duration_seconds,
+        }
+    }
+}
+
+impl From<YoutubeResult> for Candidate {
+    fn from(r: YoutubeResult) -> Self {
+        Self {
+            id: r.id,
+            title: r.title,
+            channel: r.channel,
+            duration_seconds: r.duration,
+        }
+    }
+}
+
+/// What a paired device needs to play a YouTube stream relayed from here.
+/// The stream's own URL stays on this side: it only works from this address.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct YoutubeStreamInfo {
+    pub itag: Option<String>,
+    pub ext: String,
+    pub codec: Option<String>,
+    pub duration: Option<f64>,
+    pub size: Option<u64>,
+    pub expires_at: Option<u64>,
+}
+
+impl From<&Stream> for YoutubeStreamInfo {
+    fn from(s: &Stream) -> Self {
+        Self {
+            itag: s.itag.clone(),
+            ext: s.ext.clone(),
+            codec: s.codec.clone(),
+            duration: s.duration_seconds,
+            size: s.filesize,
+            expires_at: s.expires_at,
+        }
+    }
+}
+
+/// A query parameter, decoded.
+fn query_param(query: &str, name: &str) -> Option<String> {
+    reqwest::Url::parse(&format!("http://wave/?{query}"))
+        .ok()?
+        .query_pairs()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.into_owned())
+        .filter(|v| !v.is_empty())
 }
 
 /// One request, as much of it as the API looks at.
@@ -82,6 +159,11 @@ pub enum PeerReply {
     Media(String),
     /// Serve this track's cover.
     Art(String),
+    /// Relay this YouTube video's audio, in format `itag` when given.
+    Youtube {
+        video_id: String,
+        itag: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -266,7 +348,69 @@ impl PeerService {
                 Some(peer) => json("200 OK", self.host.cast_state(&peer)),
                 None => denied(),
             }),
+            ("GET", "/wave/youtube/search") => Some(self.youtube_search(request)),
+            ("GET" | "HEAD", path) if path.starts_with("/wave/youtube/") => {
+                Some(self.youtube(request, path))
+            }
             _ => None,
+        }
+    }
+
+    fn youtube_search(&self, request: &PeerRequest) -> PeerReply {
+        if self.authorised(request).is_none() {
+            return denied();
+        }
+        let Some(query) = query_param(request.query, "q") else {
+            return json(
+                "400 Bad Request",
+                serde_json::json!({ "error": "no query" }),
+            );
+        };
+        match self.host.youtube_search(&query) {
+            Ok(found) => json(
+                "200 OK",
+                found
+                    .into_iter()
+                    .map(YoutubeResult::from)
+                    .collect::<Vec<_>>(),
+            ),
+            Err(error) => json(
+                "503 Service Unavailable",
+                serde_json::json!({ "error": error }),
+            ),
+        }
+    }
+
+    /// `/wave/youtube/stream/<id>` describes a stream; `/wave/youtube/audio/<id>`
+    /// relays it.
+    fn youtube(&self, request: &PeerRequest, path: &str) -> PeerReply {
+        if self.authorised(request).is_none() {
+            return denied();
+        }
+        let (what, video_id) = path
+            .trim_start_matches("/wave/youtube/")
+            .split_once('/')
+            .unwrap_or_default();
+        if !crate::sources::youtube::is_video_id(video_id) {
+            return json(
+                "404 Not Found",
+                serde_json::json!({ "error": "no such video" }),
+            );
+        }
+        let itag = query_param(request.query, "itag");
+        match (what, request.method) {
+            ("stream", "GET") => match self.host.youtube_stream(video_id, itag.as_deref()) {
+                Ok(stream) => json("200 OK", YoutubeStreamInfo::from(&stream)),
+                Err(error) => json(
+                    "503 Service Unavailable",
+                    serde_json::json!({ "error": error }),
+                ),
+            },
+            ("audio", _) => PeerReply::Youtube {
+                video_id: video_id.to_string(),
+                itag,
+            },
+            _ => json("404 Not Found", serde_json::json!({ "error": "unknown" })),
         }
     }
 

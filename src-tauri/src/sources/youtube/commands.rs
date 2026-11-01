@@ -110,6 +110,12 @@ mod desktop {
     }
 }
 
+/// Where yt-dlp and Deno live.
+#[cfg(not(target_os = "android"))]
+pub fn tools_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    desktop::tools_dir(app)
+}
+
 /// Whether both programs are on disk, so Online play may be switched on.
 pub fn tools_installed(app: &AppHandle) -> bool {
     #[cfg(not(target_os = "android"))]

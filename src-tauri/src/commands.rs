@@ -4685,11 +4685,20 @@ use crate::sources::{self, cache as source_cache, download as source_download, S
 
 /// Providers currently configured, read from settings.
 fn source_config(app: &tauri::AppHandle) -> sources::SourceConfig {
-    let jamendo_client_id = app
+    let (jamendo_client_id, online_play) = app
         .try_state::<AppSettingsState>()
-        .and_then(|state| state.0.lock().ok().map(|s| s.jamendo_client_id.clone()))
-        .flatten();
-    sources::SourceConfig { jamendo_client_id }
+        .and_then(|state| {
+            state
+                .0
+                .lock()
+                .ok()
+                .map(|s| (s.jamendo_client_id.clone(), s.online_play_enabled))
+        })
+        .unwrap_or_default();
+    sources::SourceConfig {
+        jamendo_client_id,
+        online_play,
+    }
 }
 
 /// Tier 3: search every remote provider concurrently.

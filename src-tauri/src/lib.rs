@@ -95,6 +95,7 @@ pub fn run() {
 
             // YouTube breaks old yt-dlp builds within weeks, so check for a
             // newer one once a day, off the startup path.
+            sources::youtube::router::init(app.handle());
             if settings.online_play_enabled {
                 sources::youtube::commands::refresh_in_background(app.handle());
             }
