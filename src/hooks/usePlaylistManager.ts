@@ -37,15 +37,31 @@ import type { PlaylistDialogState } from "../components/dialogs/CreatePlaylistDi
 
 export type BrowsePage =
   | { kind: "artist"; name: string }
-  | { kind: "album"; name: string; albumArtist: string | null };
+  | { kind: "album"; name: string; albumArtist: string | null }
+  /** An artist or album page fetched from an online catalog. */
+  | { kind: "online-artist"; provider: string; id: string; name: string }
+  | { kind: "online-album"; provider: string; id: string; name: string };
 
 /** Album and artist pages kept for back; older ones fall off the bottom. */
 const MAX_BROWSE_DEPTH = 50;
 
-const samePage = (a: BrowsePage, b: BrowsePage) =>
-  a.kind === b.kind &&
-  a.name === b.name &&
-  (a.kind !== "album" || b.kind !== "album" || a.albumArtist === b.albumArtist);
+const samePage = (a: BrowsePage, b: BrowsePage) => {
+  if (a.kind === "online-artist" || a.kind === "online-album") {
+    return (
+      a.kind === b.kind &&
+      "id" in b &&
+      a.provider === b.provider &&
+      a.id === b.id
+    );
+  }
+  return (
+    a.kind === b.kind &&
+    a.name === b.name &&
+    (a.kind !== "album" ||
+      b.kind !== "album" ||
+      a.albumArtist === b.albumArtist)
+  );
+};
 
 /** Playlist CRUD (create/rename/delete/clear/export/import), the create/rename
  * dialog, and the album/artist browse stack. Navigation-level orchestration
@@ -88,6 +104,10 @@ export function usePlaylistManager({
       ? { name: browseTop.name, albumArtist: browseTop.albumArtist }
       : null;
   const viewingArtist = browseTop?.kind === "artist" ? browseTop.name : null;
+  const viewingOnline =
+    browseTop?.kind === "online-artist" || browseTop?.kind === "online-album"
+      ? browseTop
+      : null;
 
   // Each album or artist opened goes on top of the stack, so back walks
   // through them in reverse however deep they were stacked. The tabs and
@@ -104,6 +124,12 @@ export function usePlaylistManager({
   };
   const openAlbumPage = (name: string, albumArtist: string | null) => {
     pushBrowsePage({ kind: "album", name, albumArtist });
+  };
+  const openOnlineArtist = (provider: string, id: string, name: string) => {
+    pushBrowsePage({ kind: "online-artist", provider, id, name });
+  };
+  const openOnlineAlbum = (provider: string, id: string, name: string) => {
+    pushBrowsePage({ kind: "online-album", provider, id, name });
   };
   /** Swap the page on top, for when it was renamed while open. */
   const replaceBrowsePage = (page: BrowsePage) => {
@@ -343,8 +369,11 @@ export function usePlaylistManager({
     browseStack,
     viewingAlbum,
     viewingArtist,
+    viewingOnline,
     openArtistPage,
     openAlbumPage,
+    openOnlineArtist,
+    openOnlineAlbum,
     replaceBrowsePage,
     browseBack,
     clearBrowse,

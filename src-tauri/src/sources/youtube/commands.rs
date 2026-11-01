@@ -18,6 +18,9 @@ pub struct OnlinePlayStatusDto {
     /// False on Android and on machines yt-dlp or Deno have no build for.
     pub supported: bool,
     pub installed: bool,
+    /// Whether turning Online play on downloads programs first. Android
+    /// needs none.
+    pub needs_install: bool,
     /// Release tags of the installed programs.
     pub ytdlp_version: Option<String>,
     pub deno_version: Option<String>,
@@ -58,6 +61,7 @@ mod desktop {
         Ok(OnlinePlayStatusDto {
             supported: tools::supported(),
             installed: tools::all_installed(&dir),
+            needs_install: true,
             ytdlp_version: version(Tool::YtDlp),
             deno_version: version(Tool::Deno),
         })
@@ -116,6 +120,13 @@ pub fn tools_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     desktop::tools_dir(app)
 }
 
+/// Whether Online play may be switched on: on desktop once its programs are
+/// installed. Android can't run them, and plays through paired Waves and
+/// public servers instead, so it needs nothing installed.
+pub fn ready(app: &AppHandle) -> bool {
+    cfg!(target_os = "android") || tools_installed(app)
+}
+
 /// Whether both programs are on disk, so Online play may be switched on.
 pub fn tools_installed(app: &AppHandle) -> bool {
     #[cfg(not(target_os = "android"))]
@@ -142,10 +153,11 @@ pub fn refresh_in_background(app: &AppHandle) {
 }
 
 #[cfg(target_os = "android")]
-fn unsupported() -> OnlinePlayStatusDto {
+fn android_status() -> OnlinePlayStatusDto {
     OnlinePlayStatusDto {
-        supported: false,
-        installed: false,
+        supported: true,
+        installed: true,
+        needs_install: false,
         ytdlp_version: None,
         deno_version: None,
     }
@@ -158,7 +170,7 @@ pub async fn online_play_status(app: AppHandle) -> Result<OnlinePlayStatusDto, S
     #[cfg(target_os = "android")]
     {
         let _ = app;
-        Ok(unsupported())
+        Ok(android_status())
     }
 }
 
@@ -183,6 +195,6 @@ pub async fn online_play_remove(app: AppHandle) -> Result<OnlinePlayStatusDto, S
     #[cfg(target_os = "android")]
     {
         let _ = app;
-        Ok(unsupported())
+        Ok(android_status())
     }
 }

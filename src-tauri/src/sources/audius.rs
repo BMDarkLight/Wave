@@ -112,6 +112,8 @@ fn parse_track(item: &serde_json::Value) -> Option<SourceTrack> {
             && flag("is_download_gated") != Some(true),
         attribution,
         already_in_library: None,
+        artist_ref: None,
+        album_ref: None,
     })
 }
 

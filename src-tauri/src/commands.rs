@@ -2117,8 +2117,9 @@ pub struct SourceSettingsDto {
     /// Full-length catalog playback through yt-dlp. Desktop only.
     #[serde(default)]
     pub online_play_enabled: bool,
-    pub jamendo_client_id: String,
-    pub spotify_client_id: String,
+    /// What Online play keeps in the library once a song has played.
+    #[serde(default)]
+    pub online_play_save: crate::dto::OnlinePlaySave,
     /// "Outside Sourcing": music from the user's own servers, such as Plex.
     pub remote_sources_enabled: bool,
     /// Android only: let remote music use mobile data.
@@ -2143,8 +2144,7 @@ pub async fn get_source_settings(
     Ok(SourceSettingsDto {
         outside_sourcing_enabled: settings.outside_sourcing_enabled,
         online_play_enabled: settings.online_play_enabled,
-        jamendo_client_id: settings.jamendo_client_id.clone().unwrap_or_default(),
-        spotify_client_id: settings.spotify_client_id.clone().unwrap_or_default(),
+        online_play_save: settings.online_play_save,
         remote_sources_enabled: settings.remote_sources_enabled,
         remote_cellular_enabled: settings.remote_cellular_enabled,
         cache_limit_mb: settings.source_cache_limit_mb,
@@ -2177,10 +2177,9 @@ pub async fn set_source_settings(
         let cap_shrank = settings.cache_limit_mb < stored.source_cache_limit_mb;
         stored.outside_sourcing_enabled = settings.outside_sourcing_enabled;
         // Never on without the programs it runs, whatever the UI sent.
-        stored.online_play_enabled = settings.online_play_enabled
-            && crate::sources::youtube::commands::tools_installed(&app);
-        stored.jamendo_client_id = normalise(&settings.jamendo_client_id);
-        stored.spotify_client_id = normalise(&settings.spotify_client_id);
+        stored.online_play_enabled =
+            settings.online_play_enabled && crate::sources::youtube::commands::ready(&app);
+        stored.online_play_save = settings.online_play_save;
         stored.remote_sources_enabled = settings.remote_sources_enabled;
         stored.remote_cellular_enabled = settings.remote_cellular_enabled;
         stored.share_name = normalise(&settings.share_name);
@@ -4685,20 +4684,11 @@ use crate::sources::{self, cache as source_cache, download as source_download, S
 
 /// Providers currently configured, read from settings.
 fn source_config(app: &tauri::AppHandle) -> sources::SourceConfig {
-    let (jamendo_client_id, online_play) = app
+    let online_play = app
         .try_state::<AppSettingsState>()
-        .and_then(|state| {
-            state
-                .0
-                .lock()
-                .ok()
-                .map(|s| (s.jamendo_client_id.clone(), s.online_play_enabled))
-        })
+        .and_then(|state| state.0.lock().ok().map(|s| s.online_play_enabled))
         .unwrap_or_default();
-    sources::SourceConfig {
-        jamendo_client_id,
-        online_play,
-    }
+    sources::SourceConfig { online_play }
 }
 
 /// Tier 3: search every remote provider concurrently.
@@ -4728,6 +4718,7 @@ pub async fn search_sources(
     }
     let capped = limit.unwrap_or(20).min(50) as usize;
     let config = source_config(&app);
+    let online_play = config.online_play;
 
     let mut results =
         tokio::task::spawn_blocking(move || sources::search_all(&config, &query, capped))
@@ -4745,7 +4736,219 @@ pub async fn search_sources(
             }
         }
     }
+    if online_play {
+        prefetch_online(results.iter().flat_map(|section| &section.tracks));
+    }
     Ok(results)
+}
+
+/// Online play: start finding the first few full-length results on YouTube
+/// now, so the one the user picks plays without a wait.
+fn prefetch_online<'a>(tracks: impl Iterator<Item = &'a sources::SourceTrack>) {
+    let Some(router) = sources::youtube::router::global() else {
+        return;
+    };
+    let songs = tracks
+        .filter(|t| t.is_full_length && t.audio_url.is_none())
+        .filter(|t| t.already_in_library.is_none())
+        .take(sources::youtube::router::PREFETCH)
+        .map(|t| sources::youtube::matching::Song {
+            title: t.title.clone(),
+            artist: t.artist.clone(),
+            duration_seconds: t.duration_seconds,
+        })
+        .collect();
+    router.prefetch(songs);
+}
+
+/// What has been queued to save this run, so playing a song twice, or two
+/// songs of one album, doesn't queue its downloads twice.
+fn save_queued() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static QUEUED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    QUEUED.get_or_init(Default::default)
+}
+
+/// Saves run one at a time, so an artist's whole catalog downloads song by
+/// song rather than all at once.
+fn save_turn() -> &'static tokio::sync::Mutex<()> {
+    static TURN: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    TURN.get_or_init(Default::default)
+}
+
+/// The songs Online play keeps for `played` under `mode`, the played one
+/// first.
+fn songs_to_save(played: &SourceTrack, mode: crate::dto::OnlinePlaySave) -> Vec<SourceTrack> {
+    use crate::dto::OnlinePlaySave;
+    let deezer = sources::deezer::Deezer { online_play: true };
+    let client = sources::source_client();
+    let mut songs = vec![played.clone()];
+    let album = |id: &str| {
+        deezer
+            .album_page(client, id)
+            .map(|page| page.tracks)
+            .unwrap_or_default()
+    };
+    match mode {
+        OnlinePlaySave::Off | OnlinePlaySave::Song => {}
+        OnlinePlaySave::Album => {
+            if let Some(id) = &played.album_ref {
+                songs.extend(album(id));
+            }
+        }
+        OnlinePlaySave::Artist => {
+            if let Some(id) = &played.artist_ref {
+                if let Ok(page) = deezer.artist_page(client, id) {
+                    for release in &page.albums {
+                        songs.extend(album(&release.id));
+                    }
+                }
+            }
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    songs.retain(|t| seen.insert(t.id.clone()));
+    songs
+}
+
+/// Online play: keep the song that just started, or its album, or its
+/// artist's catalog, as the setting says. Runs in the background; songs
+/// already in the library are skipped.
+fn save_after_play(app: &tauri::AppHandle, played: &SourceTrack) {
+    use crate::dto::OnlinePlaySave;
+    let mode = app
+        .try_state::<AppSettingsState>()
+        .and_then(|state| {
+            state
+                .0
+                .lock()
+                .ok()
+                .map(|s| (s.online_play_enabled, s.online_play_save))
+        })
+        .filter(|(on, _)| *on)
+        .map_or(OnlinePlaySave::Off, |(_, mode)| mode);
+    let online_song =
+        played.provider == "deezer" && played.is_full_length && played.already_in_library.is_none();
+    if mode == OnlinePlaySave::Off || !online_song {
+        return;
+    }
+    let app = app.clone();
+    let played = played.clone();
+    tauri::async_runtime::spawn(async move {
+        let _turn = save_turn().lock().await;
+        let songs = match tokio::task::spawn_blocking(move || songs_to_save(&played, mode)).await {
+            Ok(songs) => songs,
+            Err(_) => return,
+        };
+        for song in songs {
+            let key = format!("{}:{}", song.provider, song.id);
+            let fresh = save_queued()
+                .lock()
+                .map(|mut queued| queued.insert(key))
+                .unwrap_or(false);
+            let owned = {
+                let library = app.state::<LibraryState>();
+                let library = match library.0.lock() {
+                    Ok(library) => library,
+                    Err(_) => return,
+                };
+                library
+                    .find_local_match(&song.title, &song.artist)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            };
+            if !fresh || owned {
+                continue;
+            }
+            match save_source_track(song.clone(), app.clone()).await {
+                Ok(_) => {
+                    let _ = app.emit("library-changed", ());
+                }
+                Err(e) => tracing::warn!("Online play couldn't save {}: {e}", song.title),
+            }
+        }
+    });
+}
+
+/// Online artist and album pages read the network like a search, so they
+/// follow the same switch.
+fn online_pages_allowed(app: &tauri::AppHandle) -> Result<(), String> {
+    let allowed = app
+        .try_state::<AppSettingsState>()
+        .and_then(|state| state.0.lock().ok().map(|s| s.searching_outside()))
+        .unwrap_or(false);
+    if !allowed {
+        return Err("Searching outside sources is off".into());
+    }
+    crate::remote::gate::NetworkGate::search()
+        .check()
+        .map_err(|e| e.to_string())
+}
+
+fn mark_owned(
+    library: &tauri::State<'_, LibraryState>,
+    tracks: &mut [sources::SourceTrack],
+) -> Result<(), String> {
+    let library = lock_library(library)?;
+    for track in tracks {
+        track.already_in_library = library
+            .find_local_match(&track.title, &track.artist)
+            .unwrap_or(None);
+    }
+    Ok(())
+}
+
+/// An artist's page from an online catalog: their top songs and albums.
+#[tauri::command]
+pub async fn online_artist(
+    provider: String,
+    id: String,
+    app: tauri::AppHandle,
+    library: tauri::State<'_, LibraryState>,
+) -> Result<sources::deezer::ArtistPage, String> {
+    online_pages_allowed(&app)?;
+    if provider != "deezer" {
+        return Err(format!("{provider} has no artist pages"));
+    }
+    let online_play = source_config(&app).online_play;
+    let mut page = blocking(move || {
+        sources::deezer::Deezer { online_play }
+            .artist_page(sources::source_client(), &id)
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    mark_owned(&library, &mut page.top_tracks)?;
+    if online_play {
+        prefetch_online(page.top_tracks.iter());
+    }
+    Ok(page)
+}
+
+/// An album's page from an online catalog, with all its songs.
+#[tauri::command]
+pub async fn online_album(
+    provider: String,
+    id: String,
+    app: tauri::AppHandle,
+    library: tauri::State<'_, LibraryState>,
+) -> Result<sources::deezer::AlbumPage, String> {
+    online_pages_allowed(&app)?;
+    if provider != "deezer" {
+        return Err(format!("{provider} has no album pages"));
+    }
+    let online_play = source_config(&app).online_play;
+    let mut page = blocking(move || {
+        sources::deezer::Deezer { online_play }
+            .album_page(sources::source_client(), &id)
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    mark_owned(&library, &mut page.tracks)?;
+    if online_play {
+        prefetch_online(page.tracks.iter());
+    }
+    Ok(page)
 }
 
 /// Build the library row for a freshly fetched remote file.
@@ -4955,9 +5158,20 @@ async fn register_streamed_source_track(
     tokio::task::spawn_blocking(move || {
         let provider = sources::provider_by_id(&config, &track.provider)
             .ok_or_else(|| format!("Unknown source: {}", track.provider))?;
-        let audio_url = provider
-            .resolve_audio(sources::source_client(), &track)
-            .map_err(|e| e.to_string())?;
+        // Finding an Online play song takes seconds: its row shows how far
+        // along it is.
+        let key = format!("{}:{}", track.provider, track.id);
+        let progress_app = app.clone();
+        let audio_url = sources::youtube::router::reporting(
+            move |stage| {
+                let _ = progress_app.emit(
+                    "source-stream-progress",
+                    serde_json::json!({ "key": key, "stage": stage }),
+                );
+            },
+            || provider.resolve_audio(sources::source_client(), &track),
+        )
+        .map_err(|e| e.to_string())?;
         let mut resolved = track.clone();
         resolved.audio_url = Some(audio_url.clone());
 
@@ -4988,8 +5202,17 @@ async fn register_streamed_source_track(
 pub async fn stream_source_track(
     track: SourceTrack,
     app: tauri::AppHandle,
-    library: tauri::State<'_, LibraryState>,
 ) -> Result<Track, String> {
+    let played = stream_source_track_inner(track.clone(), app.clone()).await?;
+    save_after_play(&app, &track);
+    Ok(played)
+}
+
+async fn stream_source_track_inner(
+    track: SourceTrack,
+    app: tauri::AppHandle,
+) -> Result<Track, String> {
+    let library = app.state::<LibraryState>();
     if track.is_full_length {
         let existing = {
             let library = lock_library(&library)?;
@@ -5005,7 +5228,7 @@ pub async fn stream_source_track(
         };
         return match existing {
             Some(existing) => Ok(existing),
-            None => register_streamed_source_track(track, app).await,
+            None => register_streamed_source_track(track, app.clone()).await,
         };
     }
 
@@ -5070,8 +5293,6 @@ pub async fn stream_source_track(
 pub async fn download_source_track(
     track: SourceTrack,
     app: tauri::AppHandle,
-    library: tauri::State<'_, LibraryState>,
-    settings_state: tauri::State<'_, AppSettingsState>,
 ) -> Result<Track, String> {
     if !track.downloadable {
         return Err(format!(
@@ -5079,13 +5300,19 @@ pub async fn download_source_track(
             track.provider
         ));
     }
+    save_source_track(track, app).await
+}
 
+/// Keep a remote result in the library folder and index it.
+async fn save_source_track(track: SourceTrack, app: tauri::AppHandle) -> Result<Track, String> {
+    let library = app.state::<LibraryState>();
+    let settings_state = app.state::<AppSettingsState>();
     // Make sure the bytes exist locally, reusing the cached copy when present.
-    let cached = stream_source_track(track.clone(), app.clone(), library.clone()).await?;
+    let cached = stream_source_track_inner(track.clone(), app.clone()).await?;
     // A streamed row waits for its cache to finish, then is kept the way a
     // remote library track is.
     if crate::remote::uri::is_remote(&cached.path) {
-        return crate::remote::commands::download_remote_track(cached.path, app).await;
+        return crate::remote::commands::download_remote_track(cached.path, app.clone()).await;
     }
 
     let media_folders = lock_settings(&settings_state)?.media_folders.clone();
@@ -5156,6 +5383,8 @@ mod tests {
             downloadable: false,
             attribution: None,
             already_in_library: None,
+            artist_ref: None,
+            album_ref: None,
         };
         let a = source_track_to_track(&source, "wave-remote://search/audius%3Aa", None, 0);
         let b = source_track_to_track(&source, "wave-remote://search/audius%3Ab", None, 0);

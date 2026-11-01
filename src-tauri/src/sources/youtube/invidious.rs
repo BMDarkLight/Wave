@@ -201,14 +201,21 @@ mod tests {
     }
 
     #[test]
-    fn prefers_opus_and_makes_relayed_urls_absolute() {
+    fn prefers_aac_and_makes_relayed_urls_absolute() {
         let stream = parse_stream(&video(), "https://inv.example", None).unwrap();
-        assert_eq!(stream.itag.as_deref(), Some("251"));
-        assert_eq!(stream.ext, "webm");
-        assert_eq!(stream.codec.as_deref(), Some("opus"));
-        assert_eq!(stream.filesize, Some(4_155_462));
+        assert_eq!(stream.itag.as_deref(), Some("140"));
+        assert_eq!(stream.ext, "m4a");
+        assert_eq!(stream.codec.as_deref(), Some("mp4a.40.2"));
+        assert_eq!(stream.filesize, Some(4_025_466));
         assert_eq!(stream.expires_at, Some(1_793_545_710));
-        assert!(stream.url.starts_with("https://inv.example/videoplayback"));
+
+        let opus = parse_stream(&video(), "https://inv.example", Some("251")).unwrap();
+        assert_eq!(opus.ext, "webm");
+        assert!(
+            opus.url.starts_with("https://inv.example/videoplayback"),
+            "a relative URL is made absolute: {}",
+            opus.url
+        );
     }
 
     #[test]

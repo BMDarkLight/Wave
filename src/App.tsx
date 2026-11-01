@@ -134,6 +134,9 @@ import HomePage from "./components/HomePage";
 import PlayedTracksPage from "./components/PlayedTracksPage";
 import Artwork from "./components/Artwork";
 import ClearPlaylistDialog from "./components/dialogs/ClearPlaylistDialog";
+import SourceTrackMenu from "./components/SourceTrackMenu";
+import type { ContextMenuAnchor } from "./components/ContextMenu";
+import { OnlineAlbumView, OnlineArtistView } from "./components/OnlinePages";
 import DeletePlaylistDialog from "./components/dialogs/DeletePlaylistDialog";
 import RemoveFromLibraryDialog from "./components/dialogs/RemoveFromLibraryDialog";
 import AddToPlaylistDialog from "./components/dialogs/AddToPlaylistDialog";
@@ -200,8 +203,7 @@ function App() {
     // Matches the backend default, so the tier stays hidden until settings load.
     outside_sourcing_enabled: false,
     online_play_enabled: false,
-    jamendo_client_id: "",
-    spotify_client_id: "",
+    online_play_save: "off",
     remote_sources_enabled: false,
     remote_cellular_enabled: false,
     cache_limit_mb: 2048,
@@ -251,8 +253,11 @@ function App() {
     browseStack,
     viewingAlbum,
     viewingArtist,
+    viewingOnline,
     openArtistPage,
     openAlbumPage,
+    openOnlineArtist,
+    openOnlineAlbum,
     replaceBrowsePage,
     browseBack,
     clearBrowse,
@@ -326,6 +331,7 @@ function App() {
     sourceSearched,
     sourceError,
     sourceBusy,
+    sourceStages,
     searchSourcesNow,
     streamSourceHit,
     downloadSourceHit,
@@ -1852,7 +1858,7 @@ function App() {
   // Every list lives under the Library tab, so it stays lit on them too.
   const mobileTab: MobileTab | null = mainSearchOpen
     ? "search"
-    : viewingAlbum || viewingArtist
+    : viewingAlbum || viewingArtist || viewingOnline
       ? null
       : mainView === "home" || mainView === "stats"
         ? "home"
@@ -1865,6 +1871,7 @@ function App() {
     selectedPlaylistId,
     viewingAlbum,
     viewingArtist,
+    viewingOnline,
     mainSearchOpen,
   ]);
 
@@ -2061,7 +2068,7 @@ function App() {
     browseStackLength: browseStack.length,
     browseBack,
     libraryDepth:
-      !isMobileLayout() || viewingAlbum || viewingArtist
+      !isMobileLayout() || viewingAlbum || viewingArtist || viewingOnline
         ? 0
         : mainView === "library" || mainView === "stats"
           ? 1
@@ -2098,6 +2105,23 @@ function App() {
   const searchingOutside =
     sourceSettings.remote_sources_enabled &&
     sourceSettings.outside_sourcing_enabled;
+
+  // Nothing in the whole library matched: look online without being asked,
+  // once the typing settles. Once per query, since the online search resets
+  // with the query and stays searched after it ran, failed or not.
+  const searchOnlineByItself =
+    searchingOutside &&
+    mainSearchQuery.trim() !== "" &&
+    !mainSearchLoading &&
+    mainSearchResultCount === 0 &&
+    !showSearchFullLibraryBtn &&
+    !sourceSearched &&
+    !sourceLoading;
+  useEffect(() => {
+    if (!searchOnlineByItself) return;
+    const id = window.setTimeout(() => void searchSourcesNow(), 700);
+    return () => window.clearTimeout(id);
+  }, [searchOnlineByItself, searchSourcesNow]);
 
   // First run, and after a reset: the onboarding screen, which stays up
   // until its fade-out is over even though the answer is saved before.
@@ -2248,6 +2272,23 @@ function App() {
     openAlbumPage(name, albumArtist);
   };
 
+  // The menu of an online result, wherever it is listed.
+  const [sourceMenu, setSourceMenu] = useState<{
+    track: SourceTrack;
+    anchor: ContextMenuAnchor;
+  } | null>(null);
+  const openSourceMenu = (track: SourceTrack, anchor: ContextMenuAnchor) =>
+    setSourceMenu({ track, anchor });
+  // Like a library page opened from search, an online one leaves search.
+  const goToOnlineArtist = (provider: string, id: string, name: string) => {
+    closeMainSearch();
+    openOnlineArtist(provider, id, name);
+  };
+  const goToOnlineAlbum = (provider: string, id: string, title: string) => {
+    closeMainSearch();
+    openOnlineAlbum(provider, id, title);
+  };
+
   const playSearchHit = (path: string) => {
     const paths = displayedMainSearchHits.map((h) => h.track.path);
     const index = Math.max(
@@ -2307,9 +2348,11 @@ function App() {
             searched={sourceSearched}
             error={sourceError}
             busy={sourceBusy}
+            stages={sourceStages}
             query={mainSearchQuery}
             onPlay={(track) => void handleSourcePlay(track)}
             onDownload={(track) => void handleSourceDownload(track)}
+            onOpenMenu={openSourceMenu}
           />
         </div>
       ) : (
@@ -2505,9 +2548,11 @@ function App() {
             searched={sourceSearched}
             error={sourceError}
             busy={sourceBusy}
+            stages={sourceStages}
             query={mainSearchQuery}
             onPlay={(track) => void handleSourcePlay(track)}
             onDownload={(track) => void handleSourceDownload(track)}
+            onOpenMenu={openSourceMenu}
           />
         </>
       )}
@@ -2553,7 +2598,7 @@ function App() {
           <Sidebar
             isScanningFolder={isScanningFolder}
             folderScanIsSync={folderScanIsSync}
-            isBrowsing={!!viewingAlbum || !!viewingArtist}
+            isBrowsing={!!viewingAlbum || !!viewingArtist || !!viewingOnline}
             mainView={mainView}
             selectedPlaylistId={selectedPlaylistId}
             libraryPlaylist={libraryPlaylist}
@@ -2591,7 +2636,8 @@ function App() {
               onQueryChange={setMainSearchQuery}
               results={mainSearchResultsPanel}
             />
-          ) : mainSearchQuery.trim() && (viewingAlbum || viewingArtist) ? (
+          ) : mainSearchQuery.trim() &&
+            (viewingAlbum || viewingArtist || viewingOnline) ? (
             <main className="main-content">
               <div className="hero-copy">
                 <h1>Search</h1>
@@ -2601,6 +2647,32 @@ function App() {
                 {mainSearchResultsPanel}
               </section>
             </main>
+          ) : viewingOnline?.kind === "online-artist" ? (
+            <OnlineArtistView
+              key={`${viewingOnline.provider}:${viewingOnline.id}`}
+              provider={viewingOnline.provider}
+              id={viewingOnline.id}
+              name={viewingOnline.name}
+              onBack={browseBack}
+              busy={sourceBusy}
+              stages={sourceStages}
+              onPlay={(track) => void handleSourcePlay(track)}
+              onOpenTrackMenu={openSourceMenu}
+              onOpenAlbum={openOnlineAlbum}
+            />
+          ) : viewingOnline?.kind === "online-album" ? (
+            <OnlineAlbumView
+              key={`${viewingOnline.provider}:${viewingOnline.id}`}
+              provider={viewingOnline.provider}
+              id={viewingOnline.id}
+              name={viewingOnline.name}
+              onBack={browseBack}
+              busy={sourceBusy}
+              stages={sourceStages}
+              onPlay={(track) => void handleSourcePlay(track)}
+              onOpenTrackMenu={openSourceMenu}
+              onOpenArtist={openOnlineArtist}
+            />
           ) : viewingAlbum ? (
             <AlbumPage
               album={viewingAlbum.name}
@@ -2693,6 +2765,7 @@ function App() {
                 if (libraryPlaylist) handleSelectPlaylist(libraryPlaylist.id);
               }}
               onOpenStats={goStats}
+              onOpenSearch={openMainSearch}
               refreshKey={homeRefreshKey}
               onRefresh={() => void libraryRefresh.refresh()}
               refreshing={libraryRefresh.refreshing}
@@ -3020,6 +3093,17 @@ function App() {
             />
           )}
 
+          {sourceMenu && (
+            <SourceTrackMenu
+              track={sourceMenu.track}
+              anchor={sourceMenu.anchor}
+              onClose={() => setSourceMenu(null)}
+              onPlay={(track) => void handleSourcePlay(track)}
+              onDownload={(track) => void handleSourceDownload(track)}
+              onGoToArtist={goToOnlineArtist}
+              onGoToAlbum={goToOnlineAlbum}
+            />
+          )}
           {menuTrack &&
             menuAnchor &&
             (() => {

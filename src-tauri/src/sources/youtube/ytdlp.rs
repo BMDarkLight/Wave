@@ -27,11 +27,9 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(20);
 /// Extraction solves YouTube's player challenge in Deno, which is the slow
 /// part of a first play.
 const STREAM_TIMEOUT: Duration = Duration::from_secs(30);
-#[cfg(test)]
-const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
-/// Opus first: it is the better of YouTube's two audio-only streams, and
-/// both decode and seek in Wave. AAC in MP4 is the fallback.
-const AUDIO_FORMAT: &str = "251/140/bestaudio[acodec!=none][vcodec=none]";
+/// AAC in MP4 first: Wave seeks in YouTube's MP4 files to the sample, and
+/// can't seek in its WebM ones. Opus in WebM is the fallback.
+const AUDIO_FORMAT: &str = "140/bestaudio[ext=m4a]/251/bestaudio[acodec!=none][vcodec=none]";
 
 pub struct YtDlp {
     program: PathBuf,
@@ -51,31 +49,12 @@ impl YtDlp {
         })
     }
 
-    #[cfg(test)]
-    pub fn version(&self) -> Result<String, String> {
-        self.run(&["--version"], VERSION_TIMEOUT)
-            .map(|out| out.trim().to_string())
-    }
-
-    /// Songs on YouTube Music for `query`, best match first.
+    /// Videos on YouTube for `query`, best match first. YouTube's own search
+    /// rather than YouTube Music's: only it reports each result's length and
+    /// channel, which is what tells the album cut from the radio edit.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<Candidate>, String> {
-        let mut url =
-            reqwest::Url::parse_with_params("https://music.youtube.com/search", &[("q", query)])
-                .map_err(|e| e.to_string())?;
-        // Only the songs shelf: no videos, albums or podcasts.
-        url.set_fragment(Some("songs"));
-        let items = format!("1:{}", limit.max(1));
-        let out = self.run(
-            &[
-                "--flat-playlist",
-                "-J",
-                "--playlist-items",
-                &items,
-                "--",
-                url.as_str(),
-            ],
-            SEARCH_TIMEOUT,
-        )?;
+        let search = format!("ytsearch{}:{query}", limit.clamp(1, 20));
+        let out = self.run(&["--flat-playlist", "-J", "--", &search], SEARCH_TIMEOUT)?;
         parse_search(&out)
     }
 
@@ -346,54 +325,5 @@ mod tests {
             .unwrap();
         assert!(err.contains("longer than"));
         assert!(started.elapsed() < Duration::from_secs(2));
-    }
-
-    /// Installs the real tools into a temporary folder and plays the part of
-    /// Online play end to end. Downloads about 80 MB from GitHub and talks to
-    /// YouTube, so it only runs when asked:
-    /// `cargo test --lib online_play_live -- --ignored --nocapture`.
-    #[test]
-    #[ignore]
-    fn online_play_live() {
-        let dir = std::env::var("WAVE_TOOLS_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir().join("wave-online-play-live"));
-        let started = Instant::now();
-        super::super::tools::install_all(&dir, &mut |_| {}).unwrap();
-        println!("install: {:?}", started.elapsed());
-
-        let ytdlp = YtDlp::in_dir(&dir).unwrap();
-        let t = Instant::now();
-        println!("yt-dlp {} ({:?})", ytdlp.version().unwrap(), t.elapsed());
-
-        let t = Instant::now();
-        let found = ytdlp.search("Daft Punk Get Lucky", 5).unwrap();
-        println!("search ({:?}):", t.elapsed());
-        for c in &found {
-            println!(
-                "  {} | {} | {:?} | {:?}",
-                c.id, c.title, c.channel, c.duration_seconds
-            );
-        }
-
-        let t = Instant::now();
-        let stream = ytdlp.stream_format(&found[0].id, None).unwrap();
-        println!(
-            "stream ({:?}): {} {:?} {:?}s {:?} bytes, expires {:?}, {} headers",
-            t.elapsed(),
-            stream.ext,
-            stream.codec,
-            stream.duration_seconds,
-            stream.filesize,
-            stream.expires_at,
-            stream.http_headers.len()
-        );
-        let t = Instant::now();
-        let again = ytdlp.stream_format(&found[0].id, None).unwrap();
-        println!(
-            "stream again ({:?}): same format {}",
-            t.elapsed(),
-            again.ext == stream.ext
-        );
     }
 }

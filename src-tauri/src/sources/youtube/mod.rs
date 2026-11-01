@@ -19,6 +19,8 @@
 
 pub mod commands;
 pub mod invidious;
+#[cfg(all(test, not(target_os = "android")))]
+mod live;
 pub mod matching;
 pub mod piped;
 pub mod router;
@@ -70,9 +72,10 @@ pub struct Stream {
     pub expires_at: Option<u64>,
 }
 
-/// YouTube's audio-only formats in the order Wave prefers them: Opus, then
-/// AAC in MP4. Both decode and seek in Wave.
-const PREFERRED_ITAGS: [&str; 2] = ["251", "140"];
+/// YouTube's audio-only formats in the order Wave prefers them: AAC in MP4,
+/// then Opus. Opus is the better codec, but Wave can't seek in YouTube's WebM
+/// files, while its MP4 files seek to the sample.
+const PREFERRED_ITAGS: [&str; 2] = ["140", "251"];
 
 /// Container for a YouTube audio MIME type such as `audio/webm; codecs="opus"`.
 fn ext_for_mime(mime: &str) -> &'static str {
@@ -80,6 +83,135 @@ fn ext_for_mime(mime: &str) -> &'static str {
         "m4a"
     } else {
         "webm"
+    }
+}
+
+/// YouTube serves at most this much per request without slowing down, the
+/// chunk yt-dlp uses. A longer read ends early and the reader asks again from
+/// where it stopped.
+const CHUNK_BYTES: u64 = 10 * 1024 * 1024;
+
+/// How long a new YouTube stream URL is refused before it serves, measured
+/// at one to two seconds, and how many times to ask through it.
+const FRESH_URL_WAIT: std::time::Duration = std::time::Duration::from_millis(800);
+const FRESH_URL_RETRIES: usize = 4;
+
+/// Part of a stream, opened for an HTTP `Range`.
+pub struct Opened {
+    pub response: reqwest::blocking::Response,
+    pub start: u64,
+    /// The last byte, inclusive.
+    pub end: u64,
+    pub total: u64,
+}
+
+/// The first and, if given, last byte of a `bytes=a-` or `bytes=a-b` range.
+fn parse_range(range: &str) -> (u64, Option<u64>) {
+    let Some(spec) = range.trim().strip_prefix("bytes=") else {
+        return (0, None);
+    };
+    let (start, end) = spec.split_once('-').unwrap_or((spec, ""));
+    (start.trim().parse().unwrap_or(0), end.trim().parse().ok())
+}
+
+/// YouTube's own servers turn away a `Range` header that doesn't start at
+/// byte 0. They take the range as a `range` query parameter instead, which
+/// is how yt-dlp reads them.
+fn is_googlevideo(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.ends_with(".googlevideo.com")))
+        .unwrap_or(false)
+}
+
+/// `range` of `stream`, asked for the way its host understands.
+pub fn open_range(stream: &Stream, range: &str) -> Result<Opened, String> {
+    let (start, wanted_end) = parse_range(range);
+    let total = stream.filesize.or_else(|| {
+        reqwest::Url::parse(&stream.url).ok().and_then(|u| {
+            u.query_pairs()
+                .find(|(k, _)| k == "clen")
+                .and_then(|(_, v)| v.parse().ok())
+        })
+    });
+    let client = crate::remote::http::stream_client();
+    let with_headers = |mut request: reqwest::blocking::RequestBuilder| {
+        for (name, value) in &stream.http_headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+        request
+    };
+
+    if let (true, Some(total)) = (is_googlevideo(&stream.url), total) {
+        if start >= total {
+            return Err("past the end of the song".into());
+        }
+        let end = wanted_end
+            .unwrap_or(u64::MAX)
+            .min(total - 1)
+            .min(start + CHUNK_BYTES - 1);
+        // Appended as text: re-encoding the query would break its signature.
+        let separator = if stream.url.contains('?') { '&' } else { '?' };
+        let url = format!("{}{separator}range={start}-{end}", stream.url);
+        for attempt in 0..=FRESH_URL_RETRIES {
+            let response = with_headers(client.get(&url))
+                .send()
+                .map_err(|e| e.to_string())?;
+            match response.status().as_u16() {
+                200 | 206 => {
+                    return Ok(Opened {
+                        response,
+                        start,
+                        end,
+                        total,
+                    })
+                }
+                // A URL YouTube has only just handed out is refused for a
+                // second or two, then served.
+                403 if attempt < FRESH_URL_RETRIES => std::thread::sleep(FRESH_URL_WAIT),
+                code => return Err(format!("answered {code}")),
+            }
+        }
+        return Err("answered 403".into());
+    }
+
+    let header = match wanted_end {
+        Some(end) => format!("bytes={start}-{end}"),
+        None => format!("bytes={start}-"),
+    };
+    let response = with_headers(client.get(&stream.url).header("Range", header))
+        .send()
+        .map_err(|e| e.to_string())?;
+    match response.status().as_u16() {
+        206 => {
+            let content_range = response
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("bytes "))
+                .map(String::from);
+            let (span, size) = content_range
+                .as_deref()
+                .and_then(|v| v.split_once('/'))
+                .ok_or("no Content-Range")?;
+            let (from, to) = span.split_once('-').ok_or("bad Content-Range")?;
+            Ok(Opened {
+                response,
+                start: from.parse().map_err(|_| "bad Content-Range")?,
+                end: to.parse().map_err(|_| "bad Content-Range")?,
+                total: size.parse().ok().or(total).ok_or("no length")?,
+            })
+        }
+        200 if start == 0 => {
+            let total = response.content_length().or(total).ok_or("no length")?;
+            Ok(Opened {
+                response,
+                start: 0,
+                end: total.saturating_sub(1),
+                total,
+            })
+        }
+        code => Err(format!("answered {code}")),
     }
 }
 
@@ -148,6 +280,62 @@ mod tests {
         assert_eq!(video_id_of("youtube:dQw4w9WgXcQ"), Some("dQw4w9WgXcQ"));
         assert_eq!(video_id_of("https://example.com/a.mp3"), None);
         assert_eq!(video_id_of("youtube:../../etc.x"), None);
+    }
+
+    #[test]
+    fn reads_byte_ranges() {
+        assert_eq!(parse_range("bytes=0-"), (0, None));
+        assert_eq!(parse_range("bytes=1000-1999"), (1000, Some(1999)));
+        assert_eq!(parse_range("nonsense"), (0, None));
+        assert!(is_googlevideo(
+            "https://rr1---sn-x.googlevideo.com/videoplayback?x=1"
+        ));
+        assert!(!is_googlevideo("https://inv.example/videoplayback?x=1"));
+        assert!(!is_googlevideo("https://googlevideo.com.evil.example/v"));
+    }
+
+    fn stream_at(url: String) -> Stream {
+        Stream {
+            url,
+            http_headers: vec![("X-Up".into(), "1".into())],
+            itag: Some("251".into()),
+            ext: "webm".into(),
+            codec: None,
+            duration_seconds: None,
+            filesize: Some(1000),
+            expires_at: None,
+        }
+    }
+
+    #[test]
+    fn a_relay_reports_the_range_it_served() {
+        let (port, seen) = crate::remote::testkit::fake_server(vec![
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 10-19/1000\r\n\
+             Content-Length: 10\r\n\r\n0123456789"
+                .to_string(),
+        ]);
+        let opened = open_range(
+            &stream_at(format!("http://127.0.0.1:{port}/a")),
+            "bytes=10-19",
+        )
+        .unwrap();
+        assert_eq!((opened.start, opened.end, opened.total), (10, 19, 1000));
+        assert_eq!(opened.response.text().unwrap(), "0123456789");
+        let asked = seen.lock().unwrap()[0].to_lowercase();
+        assert!(
+            asked.contains("range: bytes=10-19") && asked.contains("x-up: 1"),
+            "{asked}"
+        );
+    }
+
+    #[test]
+    fn a_whole_file_answer_only_counts_from_the_start() {
+        let whole = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabcd".to_string();
+        let (port, _) = crate::remote::testkit::fake_server(vec![whole.clone(), whole]);
+        let url = format!("http://127.0.0.1:{port}/a");
+        let opened = open_range(&stream_at(url.clone()), "bytes=0-").unwrap();
+        assert_eq!((opened.start, opened.end, opened.total), (0, 3, 4));
+        assert!(open_range(&stream_at(url), "bytes=2-").is_err());
     }
 
     #[test]

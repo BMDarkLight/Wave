@@ -122,6 +122,8 @@ fn parse_item(item: &serde_json::Value) -> Option<SourceTrack> {
         downloadable: true,
         attribution: Some("Internet Archive".to_string()),
         already_in_library: None,
+        artist_ref: None,
+        album_ref: None,
     })
 }
 

@@ -23,6 +23,8 @@ export type SelectOption = {
   disabled?: boolean;
   /** Shown on the button when selected, but not offered in the list. */
   hidden?: boolean;
+  /** Drawn in red: a choice with consequences the user should weigh. */
+  danger?: boolean;
 };
 
 /**
@@ -160,7 +162,11 @@ export default function Select({
                   role="menuitemradio"
                   aria-checked={selected}
                   disabled={option.disabled}
-                  className={selected ? "selected" : undefined}
+                  className={
+                    [selected && "selected", option.danger && "danger"]
+                      .filter(Boolean)
+                      .join(" ") || undefined
+                  }
                   onClick={() => choose(option.value)}
                 >
                   <BiCheck className="wave-select-check" aria-hidden />

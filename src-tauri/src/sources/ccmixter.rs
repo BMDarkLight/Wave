@@ -100,6 +100,8 @@ fn parse_track(item: &serde_json::Value) -> Option<SourceTrack> {
         downloadable: true,
         attribution,
         already_in_library: None,
+        artist_ref: None,
+        album_ref: None,
     })
 }
 

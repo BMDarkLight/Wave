@@ -257,47 +257,43 @@ fn youtube_audio(
             return respond(stream, "503 Service Unavailable", &[], b"", head_only);
         }
     };
-    let mut fetch = crate::remote::http::stream_client().get(&upstream.url);
-    for (name, value) in &upstream.http_headers {
-        fetch = fetch.header(name.as_str(), value.as_str());
-    }
-    if let Some(range) = request.header("Range") {
-        fetch = fetch.header("Range", range);
-    }
-    let Ok(mut response) = fetch.send() else {
-        return respond(stream, "502 Bad Gateway", &[], b"", head_only);
-    };
-    let status = match response.status().as_u16() {
-        200 => "200 OK",
-        206 => "206 Partial Content",
-        416 => "416 Range Not Satisfiable",
-        _ => return respond(stream, "502 Bad Gateway", &[], b"", head_only),
-    };
-    let passed = |name: reqwest::header::HeaderName| {
-        response
-            .headers()
-            .get(&name)
-            .and_then(|v| v.to_str().ok())
-            .map(String::from)
-    };
-    let content_type = passed(reqwest::header::CONTENT_TYPE)
-        .unwrap_or_else(|| mime_for(&upstream.ext).to_string());
-    let mut out = format!(
-        "HTTP/1.1 {status}\r\nServer: {}\r\nConnection: close\r\nContent-Type: {content_type}\r\nAccept-Ranges: bytes\r\n",
-        server_header()
-    );
-    for name in [
-        reqwest::header::CONTENT_RANGE,
-        reqwest::header::CONTENT_LENGTH,
-    ] {
-        if let Some(value) = passed(name.clone()) {
-            out.push_str(&format!("{name}: {value}\r\n"));
+    let ranged = request.header("Range");
+    let opened = match crate::sources::youtube::open_range(&upstream, ranged.unwrap_or("bytes=0-"))
+    {
+        Ok(opened) => opened,
+        Err(e) => {
+            tracing::debug!("Could not relay YouTube audio: {e}");
+            return respond(stream, "502 Bad Gateway", &[], b"", head_only);
         }
+    };
+    let crate::sources::youtube::Opened {
+        mut response,
+        start,
+        end,
+        total,
+    } = opened;
+    // A ranged ask is answered as one, whatever the way in did upstream; an
+    // answer may stop short of the end the other side asked for, and it
+    // asks again from there.
+    let status = if ranged.is_some() {
+        "206 Partial Content"
+    } else {
+        "200 OK"
+    };
+    let mut out = format!(
+        "HTTP/1.1 {status}\r\nServer: {}\r\nConnection: close\r\nContent-Type: {}\r\n\
+         Accept-Ranges: bytes\r\nContent-Length: {}\r\n",
+        server_header(),
+        mime_for(&upstream.ext),
+        end - start + 1
+    );
+    if ranged.is_some() {
+        out.push_str(&format!("Content-Range: bytes {start}-{end}/{total}\r\n"));
     }
     out.push_str("\r\n");
     stream.write_all(out.as_bytes())?;
     if !head_only {
-        io::copy(&mut response, stream)?;
+        io::copy(&mut (&mut response).take(end - start + 1), stream)?;
     }
     stream.flush()
 }
@@ -999,5 +995,213 @@ mod pairing_tests {
     /// Where the pc answers, from the phone's record of it.
     fn pc_host_address(phone_host: &MemHost) -> String {
         phone_host.peers()[0].address.clone()
+    }
+
+    const DESK_SECRET: &str = "fedcba9876543210fedcba98";
+
+    /// A desktop Wave with Online play, paired with "phone": it answers
+    /// YouTube requests with `found` and relays `stream`.
+    struct Desk {
+        found: Vec<crate::sources::youtube::Candidate>,
+        stream: crate::sources::youtube::Stream,
+    }
+
+    impl crate::peers::api::Host for Desk {
+        fn identity(&self) -> (String, String) {
+            ("desk".into(), "Wave on desk".into())
+        }
+        fn peers(&self) -> Vec<crate::peers::PeerRecord> {
+            vec![crate::peers::PeerRecord {
+                id: "phone".into(),
+                name: "Wave on phone".into(),
+                address: "http://127.0.0.1:1".into(),
+                secret: DESK_SECRET.into(),
+                share: crate::peers::ShareScope::Nothing,
+                source_id: None,
+                paired_at: 0,
+            }]
+        }
+        fn update_peers(&self, _change: &mut dyn FnMut(&mut Vec<crate::peers::PeerRecord>)) {}
+        fn fingerprints(&self) -> std::collections::HashMap<String, String> {
+            Default::default()
+        }
+        fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+        fn paired(&self, _peer: &crate::peers::PeerRecord) {}
+        fn forgotten(&self, _peer_id: &str) {}
+        fn reachable(&self, _peer_id: &str, _online: bool) {}
+        fn youtube_search(
+            &self,
+            _query: &str,
+        ) -> Result<Vec<crate::sources::youtube::Candidate>, String> {
+            Ok(self.found.clone())
+        }
+        fn youtube_stream(
+            &self,
+            _video_id: &str,
+            _itag: Option<&str>,
+        ) -> Result<crate::sources::youtube::Stream, String> {
+            Ok(self.stream.clone())
+        }
+    }
+
+    /// The desk's address, and the record "phone" keeps for it.
+    fn desk(
+        found: Vec<crate::sources::youtube::Candidate>,
+        stream: crate::sources::youtube::Stream,
+    ) -> crate::peers::PeerRecord {
+        let server = Arc::new(Server {
+            catalog: Arc::new(Fixed(Arc::new(Snapshot::build(1, Vec::new())))),
+            opener: Arc::new(|path: &str| std::fs::File::open(path)),
+            peers: Arc::new(crate::peers::api::PeerService::new(Arc::new(Desk {
+                found,
+                stream,
+            }))),
+        });
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || serve(listener, server, Arc::new(AtomicBool::new(false))));
+        crate::peers::PeerRecord {
+            id: "desk".into(),
+            name: "Wave on desk".into(),
+            address: format!("http://127.0.0.1:{port}"),
+            secret: DESK_SECRET.into(),
+            share: crate::peers::ShareScope::Nothing,
+            source_id: None,
+            paired_at: 0,
+        }
+    }
+
+    #[test]
+    fn a_paired_wave_relays_youtube_audio_with_ranges() {
+        use crate::peers::client;
+        use crate::sources::youtube::{Candidate, Stream};
+
+        let (upstream, seen) = crate::remote::testkit::fake_server(vec![
+            "HTTP/1.1 206 Partial Content\r\nContent-Type: audio/webm\r\n\
+             Content-Range: bytes 10-19/1000\r\nContent-Length: 10\r\n\r\n0123456789"
+                .to_string(),
+        ]);
+        let found = vec![Candidate {
+            id: "5NV6Rdv1a3I".into(),
+            title: "Get Lucky".into(),
+            channel: Some("Daft Punk".into()),
+            duration_seconds: Some(249.0),
+        }];
+        let desk = desk(
+            found.clone(),
+            Stream {
+                url: format!("http://127.0.0.1:{upstream}/videoplayback?itag=251"),
+                http_headers: vec![("X-Upstream".into(), "yes".into())],
+                itag: Some("251".into()),
+                ext: "webm".into(),
+                codec: Some("opus".into()),
+                duration_seconds: Some(249.0),
+                filesize: Some(1000),
+                expires_at: Some(1_793_545_710),
+            },
+        );
+
+        assert_eq!(
+            client::youtube_search("phone", &desk, "get lucky").unwrap(),
+            found
+        );
+        let stream = client::youtube_stream("phone", &desk, "5NV6Rdv1a3I", None).unwrap();
+        assert_eq!(stream.itag.as_deref(), Some("251"));
+        assert_eq!(stream.filesize, Some(1000));
+        assert!(
+            stream
+                .url
+                .starts_with(&format!("{}/wave/youtube/audio/5NV6Rdv1a3I", desk.address)),
+            "the phone gets the desk's address, never YouTube's URL: {}",
+            stream.url
+        );
+
+        let mut request = crate::remote::http::stream_client()
+            .get(&stream.url)
+            .header("Range", "bytes=10-19");
+        for (name, value) in &stream.http_headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+        let response = request.send().unwrap();
+        assert_eq!(response.status().as_u16(), 206);
+        assert_eq!(
+            response.headers()["content-range"].to_str().unwrap(),
+            "bytes 10-19/1000"
+        );
+        assert_eq!(response.text().unwrap(), "0123456789");
+        let asked = seen.lock().unwrap().join("\n").to_lowercase();
+        assert!(asked.contains("range: bytes=10-19"), "{asked}");
+        assert!(asked.contains("x-upstream: yes"), "{asked}");
+
+        // Without the pair's secret there is nothing to relay.
+        let stranger = crate::remote::http::stream_client()
+            .get(&stream.url)
+            .send()
+            .unwrap();
+        assert_eq!(stranger.status().as_u16(), 403);
+        let mut wrong = desk.clone();
+        wrong.secret = "not the secret at all".into();
+        assert!(client::youtube_search("phone", &wrong, "x").is_err());
+    }
+
+    /// A desktop Wave relays a real YouTube song to its paired phone, which
+    /// reads it in ranges and decodes it. Needs Online play's programs and
+    /// YouTube, so only runs when asked:
+    /// `WAVE_TOOLS_DIR=<dir> cargo test --lib relays_real -- --ignored --nocapture`
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    #[ignore]
+    fn a_paired_wave_relays_real_youtube_audio() {
+        use crate::sources::youtube::{open_range, tools, ytdlp::YtDlp};
+        use std::io::Read;
+
+        let dir = std::path::PathBuf::from(std::env::var("WAVE_TOOLS_DIR").unwrap());
+        tools::install_all(&dir, &mut |_| {}).unwrap();
+        let upstream = YtDlp::in_dir(&dir)
+            .unwrap()
+            .stream_format("5NV6Rdv1a3I", Some("140"))
+            .unwrap();
+        let desk = desk(Vec::new(), upstream.clone());
+
+        let stream =
+            crate::peers::client::youtube_stream("phone", &desk, "5NV6Rdv1a3I", Some("140"))
+                .unwrap();
+        assert_eq!(stream.filesize, upstream.filesize);
+
+        let middle = open_range(&stream, "bytes=1000-1999").unwrap();
+        assert_eq!((middle.start, middle.end), (1000, 1999));
+        let mut part = Vec::new();
+        { middle.response }.read_to_end(&mut part).unwrap();
+        assert_eq!(part.len(), 1000);
+
+        let started = std::time::Instant::now();
+        let mut bytes = Vec::new();
+        loop {
+            let opened = open_range(&stream, &format!("bytes={}-", bytes.len())).unwrap();
+            let total = opened.total as usize;
+            { opened.response }.read_to_end(&mut bytes).unwrap();
+            if bytes.len() >= total {
+                break;
+            }
+        }
+        assert_eq!(&bytes[1000..2000], &part[..], "ranges agree with the whole");
+        let path = std::env::temp_dir().join("wave-relayed.m4a");
+        std::fs::write(&path, &bytes).unwrap();
+        let source = crate::audio::symphonia_source::SymphoniaSource::from_media_source(
+            Box::new(std::fs::File::open(&path).unwrap()),
+            Some("m4a"),
+            "relayed",
+        )
+        .unwrap();
+        use rodio::Source;
+        let (rate, channels) = (source.sample_rate() as f64, source.channels() as f64);
+        let seconds = source.count() as f64 / rate / channels;
+        println!(
+            "relayed {} KB in {:?}, decodes to {seconds:.1}s",
+            bytes.len() / 1024,
+            started.elapsed()
+        );
+        assert!((seconds - 249.0).abs() < 2.0);
+        let _ = std::fs::remove_file(&path);
     }
 }

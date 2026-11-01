@@ -15,7 +15,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { BiPlay, BiMusic, BiRefresh } from "react-icons/bi";
+import { BiPlay, BiMusic, BiRefresh, BiSearch } from "react-icons/bi";
 import PullToRefresh from "./PullToRefresh";
 import HomeListening from "./HomeListening";
 import { isMobileLayout } from "../utils/platform";
@@ -254,6 +254,8 @@ type HomePageProps = {
   onOpenLibrary: () => void;
   /** Opens the full listening stats. */
   onOpenStats: () => void;
+  /** Opens search; the desktop Home has a button for it. */
+  onOpenSearch: () => void;
   /** Bumped after a library refresh; reloads the suggestions. */
   refreshKey: number;
   onRefresh: () => void;
@@ -296,6 +298,7 @@ export default function HomePage({
   onOpenArtist,
   onOpenLibrary,
   onOpenStats,
+  onOpenSearch,
   refreshKey,
   onRefresh,
   refreshing,
@@ -377,12 +380,24 @@ export default function HomePage({
   }, [refreshKey]);
 
   const mobile = isMobileLayout();
+  // The phone has a Search tab and pull to refresh instead.
   const refreshButton = mobile ? null : (
-    <RefreshButton
-      onRefresh={onRefresh}
-      refreshing={refreshing}
-      cooldownSeconds={refreshCooldownSeconds}
-    />
+    <div className="home-header-actions">
+      <button
+        className="home-refresh-btn"
+        type="button"
+        aria-label="Search"
+        title="Search"
+        onClick={onOpenSearch}
+      >
+        <BiSearch />
+      </button>
+      <RefreshButton
+        onRefresh={onRefresh}
+        refreshing={refreshing}
+        cooldownSeconds={refreshCooldownSeconds}
+      />
+    </div>
   );
   const pullable = (content: ReactNode) =>
     mobile ? (

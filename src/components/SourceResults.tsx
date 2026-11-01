@@ -8,8 +8,18 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { BiCloudDownload, BiCheck, BiErrorCircle } from "react-icons/bi";
-import type { ProviderResults, SourceTrack } from "../utils/player";
+import {
+  BiCloudDownload,
+  BiCheck,
+  BiDotsHorizontalRounded,
+  BiErrorCircle,
+} from "react-icons/bi";
+import type { ContextMenuAnchor } from "./ContextMenu";
+import type {
+  ProviderResults,
+  SourceTrack,
+  StreamStage,
+} from "../utils/player";
 import { sourceTrackKey } from "../hooks/useSourceSearch";
 import { highlightMatch } from "../utils/search";
 import { formatTime } from "../utils/format";
@@ -21,12 +31,36 @@ type Props = {
   error: string | null;
   /** Keys of results with a stream or download in flight. */
   busy: Record<string, "stream" | "download">;
+  /** How far finding each Online play song being streamed has got. */
+  stages: Record<string, StreamStage>;
   query: string;
   /** Play a result — streaming it first if it isn't already owned. */
   onPlay: (track: SourceTrack) => void;
   /** Keep a result in the library. */
   onDownload: (track: SourceTrack) => void;
+  /** Open a result's menu, with Go to Artist and Go to Album. */
+  onOpenMenu: (track: SourceTrack, anchor: ContextMenuAnchor) => void;
 };
+
+const STAGES: Record<StreamStage | "starting", [string, number]> = {
+  starting: ["Loading", 0.1],
+  searching: ["Searching YouTube", 0.35],
+  checking: ["Checking the match", 0.65],
+  found: ["Starting", 0.9],
+};
+
+/** Where a song being loaded has got: a label over a filling bar. */
+export function StreamProgress({ stage }: { stage?: StreamStage }) {
+  const [label, fraction] = STAGES[stage ?? "starting"];
+  return (
+    <span className="stream-progress" role="status" aria-label={label}>
+      <span className="stream-progress-label">{label}…</span>
+      <span className="stream-progress-bar">
+        <span style={{ width: `${fraction * 100}%` }} />
+      </span>
+    </span>
+  );
+}
 
 /**
  * Tier 3 results, grouped by provider.
@@ -40,9 +74,11 @@ export function SourceResults({
   searched,
   error,
   busy,
+  stages,
   query,
   onPlay,
   onDownload,
+  onOpenMenu,
 }: Props) {
   if (loading) {
     return (
@@ -103,6 +139,14 @@ export function SourceResults({
                   <div
                     key={key}
                     className={`source-hit ${state ? "busy" : ""}`}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      onOpenMenu(track, {
+                        top: event.clientY,
+                        left: event.clientX,
+                        flipAbove: event.clientY,
+                      });
+                    }}
                   >
                     <button
                       type="button"
@@ -163,9 +207,11 @@ export function SourceResults({
                       </div>
 
                       <div className="source-hit-duration">
-                        {state === "stream"
-                          ? "…"
-                          : formatTime(track.duration_seconds)}
+                        {state === "stream" ? (
+                          <StreamProgress stage={stages[key]} />
+                        ) : (
+                          formatTime(track.duration_seconds)
+                        )}
                       </div>
                     </button>
 
@@ -185,6 +231,23 @@ export function SourceResults({
                         )}
                       </button>
                     )}
+                    <button
+                      type="button"
+                      className="source-hit-menu"
+                      title="More"
+                      aria-label={`More for ${track.title}`}
+                      onClick={(event) => {
+                        const rect =
+                          event.currentTarget.getBoundingClientRect();
+                        onOpenMenu(track, {
+                          top: rect.bottom + 4,
+                          flipAbove: rect.top - 4,
+                          right: window.innerWidth - rect.right,
+                        });
+                      }}
+                    >
+                      <BiDotsHorizontalRounded />
+                    </button>
                   </div>
                 );
               })}

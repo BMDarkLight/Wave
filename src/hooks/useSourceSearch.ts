@@ -11,8 +11,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   downloadSourceTrack,
+  listenSourceStreamProgress,
   searchSources,
   streamSourceTrack,
+  type StreamStage,
   type ProviderResults,
   type SourceTrack,
   type Track,
@@ -37,6 +39,23 @@ export function useSourceSearch(query: string) {
   const [error, setError] = useState<string | null>(null);
   /** Keys of tracks with a stream or download in flight. */
   const [busy, setBusy] = useState<Record<string, "stream" | "download">>({});
+  /** How far finding each Online play song being streamed has got. */
+  const [stages, setStages] = useState<Record<string, StreamStage>>({});
+
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let gone = false;
+    void listenSourceStreamProgress((key, stage) =>
+      setStages((prev) => ({ ...prev, [key]: stage })),
+    ).then((unlisten) => {
+      if (gone) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  }, []);
 
   const reqId = useRef(0);
 
@@ -78,6 +97,7 @@ export function useSourceSearch(query: string) {
   const markBusy = (key: string, kind: "stream" | "download" | null) => {
     setBusy((prev) => {
       if (!kind) {
+        setStages(({ [key]: _done, ...left }) => left);
         const { [key]: _removed, ...rest } = prev;
         return rest;
       }
@@ -127,6 +147,7 @@ export function useSourceSearch(query: string) {
     sourceSearched: searched,
     sourceError: error,
     sourceBusy: busy,
+    sourceStages: stages,
     sourceTotalHits: totalHits,
     searchSourcesNow: search,
     resetSourceSearch: reset,

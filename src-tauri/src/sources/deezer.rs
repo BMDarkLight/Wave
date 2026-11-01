@@ -35,8 +35,14 @@ impl SourceProvider for Deezer {
         "deezer"
     }
 
+    /// Under Online play its results are songs to play, wherever the audio
+    /// comes from, so the section says so rather than naming the catalog.
     fn display_name(&self) -> &'static str {
-        "Deezer"
+        if self.online_play {
+            "Online"
+        } else {
+            "Deezer"
+        }
     }
 
     fn search(
@@ -91,6 +97,175 @@ impl SourceProvider for Deezer {
     }
 }
 
+/// Deezer's error object, which it sends with HTTP 200.
+fn check(value: serde_json::Value) -> Result<serde_json::Value, SourceError> {
+    match value.get("error").filter(|e| !e.is_null()) {
+        Some(error) => Err(SourceError::Network(
+            str_field(error, "message").unwrap_or_else(|| "Deezer error".into()),
+        )),
+        None => Ok(value),
+    }
+}
+
+/// Deezer ids are numbers; anything else never reaches a URL.
+fn checked_id(id: &str) -> Result<&str, SourceError> {
+    if !id.is_empty() && id.len() <= 20 && id.bytes().all(|b| b.is_ascii_digit()) {
+        Ok(id)
+    } else {
+        Err(SourceError::Parse(format!("not a Deezer id: {id}")))
+    }
+}
+
+fn cover(value: &serde_json::Value) -> Option<String> {
+    str_field(value, "cover_big")
+        .or_else(|| str_field(value, "cover_xl"))
+        .or_else(|| str_field(value, "cover_medium"))
+}
+
+fn year(value: &serde_json::Value) -> Option<String> {
+    str_field(value, "release_date").map(|d| d.chars().take(4).collect())
+}
+
+/// One of an artist's albums, as listed on their page.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct AlbumSummary {
+    pub id: String,
+    pub title: String,
+    pub cover_url: Option<String>,
+    pub year: Option<String>,
+    /// `album`, `single`, `ep` or `compile`.
+    pub record_type: Option<String>,
+}
+
+/// An artist's page, fetched from Deezer.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ArtistPage {
+    pub id: String,
+    pub name: String,
+    pub picture_url: Option<String>,
+    pub fans: Option<u64>,
+    pub top_tracks: Vec<SourceTrack>,
+    pub albums: Vec<AlbumSummary>,
+}
+
+/// An album's page, fetched from Deezer.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AlbumPage {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub artist_ref: Option<String>,
+    pub cover_url: Option<String>,
+    pub year: Option<String>,
+    pub tracks: Vec<SourceTrack>,
+}
+
+impl Deezer {
+    pub fn artist_page(&self, client: &Client, id: &str) -> Result<ArtistPage, SourceError> {
+        let id = checked_id(id)?;
+        let artist = check(get_json(
+            client,
+            &format!("https://api.deezer.com/artist/{id}"),
+        )?)?;
+        let top = check(get_json(
+            client,
+            &format!("https://api.deezer.com/artist/{id}/top?limit=10"),
+        )?)?;
+        let albums = check(get_json(
+            client,
+            &format!("https://api.deezer.com/artist/{id}/albums?limit=100"),
+        )?)?;
+        Ok(parse_artist_page(
+            id,
+            &artist,
+            &top,
+            &albums,
+            self.online_play,
+        ))
+    }
+
+    pub fn album_page(&self, client: &Client, id: &str) -> Result<AlbumPage, SourceError> {
+        let id = checked_id(id)?;
+        let album = check(get_json(
+            client,
+            &format!("https://api.deezer.com/album/{id}"),
+        )?)?;
+        Ok(parse_album_page(id, &album, self.online_play))
+    }
+}
+
+fn parse_artist_page(
+    id: &str,
+    artist: &serde_json::Value,
+    top: &serde_json::Value,
+    albums: &serde_json::Value,
+    online_play: bool,
+) -> ArtistPage {
+    let list = |value: &serde_json::Value| -> Vec<serde_json::Value> {
+        value
+            .get("data")
+            .and_then(|d| d.as_array())
+            .cloned()
+            .unwrap_or_default()
+    };
+    ArtistPage {
+        id: id.to_string(),
+        name: str_field(artist, "name").unwrap_or_else(|| "Unknown artist".into()),
+        picture_url: str_field(artist, "picture_big").or_else(|| str_field(artist, "picture_xl")),
+        fans: artist.get("nb_fan").and_then(|n| n.as_u64()),
+        top_tracks: list(top)
+            .iter()
+            .filter_map(|t| parse_track(t, online_play))
+            .collect(),
+        albums: list(albums)
+            .iter()
+            .filter_map(|a| {
+                Some(AlbumSummary {
+                    id: id_field(a, "id")?,
+                    title: str_field(a, "title")?,
+                    cover_url: cover(a),
+                    year: year(a),
+                    record_type: str_field(a, "record_type"),
+                })
+            })
+            .collect(),
+    }
+}
+
+fn parse_album_page(id: &str, album: &serde_json::Value, online_play: bool) -> AlbumPage {
+    let title = str_field(album, "title").unwrap_or_else(|| "Unknown album".into());
+    let cover_url = cover(album);
+    let artist = album.get("artist");
+    // An album's own track list leaves the album out of each track.
+    let tracks = album
+        .get("tracks")
+        .and_then(|t| t.get("data"))
+        .and_then(|d| d.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|t| parse_track(t, online_play))
+        .map(|mut track| {
+            track.album = Some(title.clone());
+            track.album_ref = Some(id.to_string());
+            if track.artwork_url.is_none() {
+                track.artwork_url = cover_url.clone();
+            }
+            track
+        })
+        .collect();
+    AlbumPage {
+        id: id.to_string(),
+        artist: artist
+            .and_then(|a| str_field(a, "name"))
+            .unwrap_or_else(|| "Unknown artist".into()),
+        artist_ref: artist.and_then(|a| id_field(a, "id")),
+        cover_url,
+        year: year(album),
+        title,
+        tracks,
+    }
+}
+
 fn parse_track(item: &serde_json::Value, online_play: bool) -> Option<SourceTrack> {
     let id = id_field(item, "id")?;
     let title = str_field(item, "title")
@@ -101,6 +276,8 @@ fn parse_track(item: &serde_json::Value, online_play: bool) -> Option<SourceTrac
         .and_then(|a| str_field(a, "name"))
         .unwrap_or_else(|| "Unknown artist".to_string());
     let album = item.get("album").and_then(|a| str_field(a, "title"));
+    let artist_ref = item.get("artist").and_then(|a| id_field(a, "id"));
+    let album_ref = item.get("album").and_then(|a| id_field(a, "id"));
     let artwork_url = item.get("album").and_then(|a| {
         // 500px: the kept cover is shown full size in Now Playing, and the
         // 250px "medium" one went soft there.
@@ -122,9 +299,12 @@ fn parse_track(item: &serde_json::Value, online_play: bool) -> Option<SourceTrac
             // Found on YouTube when played.
             audio_url: None,
             is_full_length: true,
-            downloadable: false,
-            attribution: Some("Deezer, played from YouTube".to_string()),
+            // Kept by its stream, the way Online play saves played songs.
+            downloadable: true,
+            attribution: None,
             already_in_library: None,
+            artist_ref,
+            album_ref,
         });
     }
 
@@ -148,6 +328,8 @@ fn parse_track(item: &serde_json::Value, online_play: bool) -> Option<SourceTrac
         downloadable: false,
         attribution: Some("30-second preview — Deezer".to_string()),
         already_in_library: None,
+        artist_ref,
+        album_ref,
     })
 }
 
@@ -225,7 +407,58 @@ mod tests {
         assert_eq!(track.duration_seconds, Some(224.0), "the real length");
         assert!(track.is_full_length);
         assert!(track.audio_url.is_none(), "found when played");
-        assert!(!track.downloadable);
+        assert!(track.downloadable, "saved from its stream");
+    }
+
+    #[test]
+    fn reads_an_artist_page() {
+        let artist = serde_json::json!({"id": 27, "name": "Daft Punk", "picture_big": "https://e/p.jpg", "nb_fan": 4500000});
+        let top = serde_json::json!({"data": [{
+            "id": 67238735, "title": "Get Lucky", "duration": 248,
+            "preview": "https://cdns-preview.dzcdn.net/p.mp3",
+            "artist": {"id": 27, "name": "Daft Punk"},
+            "album": {"id": 6575789, "title": "Random Access Memories", "cover_big": "https://e/c.jpg"}
+        }]});
+        let albums = serde_json::json!({"data": [
+            {"id": 6575789, "title": "Random Access Memories", "cover_big": "https://e/c.jpg", "release_date": "2013-05-17", "record_type": "album"},
+            {"title": "no id"}
+        ]});
+        let page = parse_artist_page("27", &artist, &top, &albums, true);
+        assert_eq!(page.name, "Daft Punk");
+        assert_eq!(page.fans, Some(4_500_000));
+        assert_eq!(page.top_tracks.len(), 1);
+        assert_eq!(page.top_tracks[0].artist_ref.as_deref(), Some("27"));
+        assert_eq!(page.top_tracks[0].album_ref.as_deref(), Some("6575789"));
+        assert!(page.top_tracks[0].is_full_length);
+        assert_eq!(page.albums.len(), 1);
+        assert_eq!(page.albums[0].year.as_deref(), Some("2013"));
+    }
+
+    #[test]
+    fn an_album_page_fills_its_tracks_in() {
+        let album = serde_json::json!({
+            "id": 6575789, "title": "Random Access Memories", "cover_big": "https://e/c.jpg",
+            "release_date": "2013-05-17", "artist": {"id": 27, "name": "Daft Punk"},
+            "tracks": {"data": [{
+                "id": 67238735, "title": "Get Lucky", "duration": 369,
+                "preview": "https://cdns-preview.dzcdn.net/p.mp3",
+                "artist": {"id": 27, "name": "Daft Punk"}
+            }]}
+        });
+        let page = parse_album_page("6575789", &album, false);
+        assert_eq!(page.artist_ref.as_deref(), Some("27"));
+        let track = &page.tracks[0];
+        assert_eq!(track.album.as_deref(), Some("Random Access Memories"));
+        assert_eq!(track.album_ref.as_deref(), Some("6575789"));
+        assert_eq!(track.artwork_url.as_deref(), Some("https://e/c.jpg"));
+        assert!(!track.is_full_length, "previews without Online play");
+    }
+
+    #[test]
+    fn only_numeric_ids_reach_a_url() {
+        assert!(checked_id("27").is_ok());
+        assert!(checked_id("../27").is_err());
+        assert!(checked_id("").is_err());
     }
 
     #[test]

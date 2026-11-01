@@ -35,6 +35,18 @@ pub enum ThemeMode {
     Dark,
 }
 
+/// What Online play keeps in the library after a song plays: nothing, the
+/// song, its whole album, or everything by its artist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OnlinePlaySave {
+    #[default]
+    Off,
+    Song,
+    Album,
+    Artist,
+}
+
 /// The result of looking for a newer Wave release.
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateCheckDto {

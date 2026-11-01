@@ -60,18 +60,21 @@ fn parse_instances(list: &Value) -> Vec<String> {
         .collect()
 }
 
-/// API addresses from the documentation's Markdown table: the HTTPS links in
-/// table rows whose host names an API.
+/// API addresses from the documentation's Markdown table: the cells of its
+/// rows that are an HTTPS address and nothing else. Badge images, which wrap
+/// an address in Markdown, are left out.
 fn parse_instance_docs(markdown: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
-    for line in markdown.lines().filter(|l| l.trim_start().starts_with('|')) {
-        for cell in line.split(['|', ' ', '(', ')', '<', '>']) {
+    for line in markdown.lines().filter(|l| l.contains('|')) {
+        for cell in line.split('|').map(str::trim) {
             let Some(rest) = cell.strip_prefix("https://") else {
                 continue;
             };
-            let host = rest.split('/').next().unwrap_or_default();
-            let url = format!("https://{host}");
-            if host.contains("api") && !found.contains(&url) {
+            if rest.contains(char::is_whitespace) {
+                continue;
+            }
+            let url = format!("https://{}", rest.trim_end_matches('/'));
+            if !found.contains(&url) {
                 found.push(url);
             }
         }
@@ -194,19 +197,20 @@ mod tests {
 
     #[test]
     fn reads_api_hosts_from_the_documentation_table() {
+        // The page as it reads, rows without outer pipes.
         let docs = "\
-| Instance API | Frontend | Locations |
-| --- | --- | --- |
-| https://pipedapi.kavin.rocks | https://piped.video | Canada |
-| [x](https://api.piped.private.coffee/) | https://piped.private.coffee | Austria |
-| https://pipedapi.kavin.rocks | dup | |
+Instance Name | Instance API URL | Instance Location(s) | CDN | Registered Users
+--- | --- | --- | --- | ---
+kavin.rocks (Official) | https://pipedapi.kavin.rocks | US | Yes | ![](https://pipedapi.kavin.rocks/registered/badge)
+| leptons.xyz | https://pipedapi.leptons.xyz/ | AT | Yes | |
+kavin.rocks again | https://pipedapi.kavin.rocks | | |
 Not a table line https://pipedapi.ignored.example
 ";
         assert_eq!(
             parse_instance_docs(docs),
             vec![
                 "https://pipedapi.kavin.rocks".to_string(),
-                "https://api.piped.private.coffee".to_string()
+                "https://pipedapi.leptons.xyz".to_string()
             ]
         );
     }
@@ -230,7 +234,7 @@ Not a table line https://pipedapi.ignored.example
     }
 
     #[test]
-    fn picks_opus_unless_a_format_is_pinned() {
+    fn picks_aac_unless_a_format_is_pinned() {
         let streams = json!({
             "duration": 249,
             "audioStreams": [
@@ -241,11 +245,11 @@ Not a table line https://pipedapi.ignored.example
             ]
         });
         let stream = parse_stream(&streams, None).unwrap();
-        assert_eq!(stream.itag.as_deref(), Some("251"));
-        assert_eq!(stream.ext, "webm");
-        assert_eq!(stream.filesize, Some(4_155_462));
-        let aac = parse_stream(&streams, Some("140")).unwrap();
-        assert_eq!(aac.ext, "m4a");
+        assert_eq!(stream.itag.as_deref(), Some("140"));
+        assert_eq!(stream.ext, "m4a");
+        assert_eq!(stream.filesize, Some(4_025_466));
+        let opus = parse_stream(&streams, Some("251")).unwrap();
+        assert_eq!(opus.ext, "webm");
         assert!(parse_stream(&streams, Some("249")).is_none());
     }
 }

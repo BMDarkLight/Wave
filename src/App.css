@@ -1682,7 +1682,7 @@ input[type="search"]::-webkit-search-decoration {
 
 .source-hit {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   border-radius: 12px;
   transition: background 0.12s ease;
@@ -1831,6 +1831,67 @@ input[type="search"]::-webkit-search-decoration {
 .source-hit-download:disabled {
   cursor: default;
   opacity: 0.6;
+}
+
+/* Opens a result's menu: play, save, and its artist's and album's pages. */
+.source-hit-menu {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-right: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: rgba(var(--ink), 0.6);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.source-hit-menu:hover {
+  background: rgba(var(--ink), 0.08);
+  color: rgba(var(--ink), 0.9);
+}
+
+/* Online artist and album pages: marked as fetched, not owned. */
+.online-page-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 8px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(var(--ink), 0.08);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.online-artist-hero {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.online-artist-picture {
+  width: clamp(96px, 14vw, 168px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.online-owned {
+  color: var(--tint-green);
+}
+
+.online-preview {
+  color: var(--muted);
+}
+
+.track-item.busy {
+  opacity: 0.65;
 }
 
 .search-hit-mark {
@@ -9177,6 +9238,56 @@ div.album-hero-cover {
 .home-refresh-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.wave-select-menu button.danger {
+  color: var(--danger);
+}
+
+.mset-select-danger {
+  color: var(--danger);
+}
+
+.mset-danger-note {
+  margin-top: 4px;
+  color: var(--danger-soft);
+}
+
+/* A song being found and started: what it's doing, over a filling bar. */
+.stream-progress {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 96px;
+}
+
+.stream-progress-label {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.stream-progress-bar {
+  width: 96px;
+  height: 3px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(var(--ink), 0.12);
+}
+
+.stream-progress-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+  transition: width 0.4s ease;
+}
+
+.home-header-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .spinning {

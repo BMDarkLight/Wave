@@ -907,16 +907,63 @@ export default function MobileSettings({
                     <span className="mset-gapless-copy">
                       <span className="mset-gapless-label">Online play</span>
                       <span className="mset-gapless-hint">
-                        Play Deezer results in full, with the song found on
-                        YouTube. When YouTube can&apos;t be reached from here,
-                        your other Waves or public Invidious and Piped servers
-                        fetch it instead.
+                        {onlinePlay.needs_install
+                          ? "Play Deezer results in full, with the song found on YouTube. When YouTube can't be reached from here, your other Waves or public Invidious and Piped servers fetch it instead."
+                          : "Play Deezer results in full, with the song found on YouTube by your paired desktop Waves, or by public Invidious and Piped servers."}
                       </span>
                     </span>
                   </label>
                 )}
 
+                {onlinePlay?.supported &&
+                  sourceSettings.online_play_enabled && (
+                    <div className="mset-row mset-nested-row mset-online-save">
+                      <span className="mset-row-text">
+                        <label
+                          className="mset-row-label"
+                          htmlFor={`${keyIdPrefix}online-save`}
+                        >
+                          Save played songs to library
+                        </label>
+                        <span className="mset-row-value">
+                          Keep what you play in your music folder instead of
+                          only the cache.
+                        </span>
+                        {sourceSettings.online_play_save === "artist" && (
+                          <span className="mset-row-value mset-danger-note">
+                            Playing one song saves everything that artist has
+                            released, often hundreds of songs at a time. It can
+                            take hours and a lot of storage.
+                          </span>
+                        )}
+                      </span>
+                      <Select
+                        id={`${keyIdPrefix}online-save`}
+                        className={
+                          sourceSettings.online_play_save === "artist"
+                            ? "mset-select-danger"
+                            : ""
+                        }
+                        value={sourceSettings.online_play_save}
+                        options={[
+                          { value: "off", label: "Don't save" },
+                          { value: "song", label: "Song" },
+                          { value: "album", label: "Album" },
+                          { value: "artist", label: "Artist", danger: true },
+                        ]}
+                        onChange={(value) =>
+                          onSourceSettingsChange({
+                            ...sourceSettings,
+                            online_play_save:
+                              value as SourceSettings["online_play_save"],
+                          })
+                        }
+                      />
+                    </div>
+                  )}
+
                 {onlinePlay?.installed &&
+                  onlinePlay.needs_install &&
                   !sourceSettings.online_play_enabled && (
                     <div className="mset-row mset-nested-row">
                       <span className="mset-row-text">
@@ -946,63 +993,6 @@ export default function MobileSettings({
                       </button>
                     </div>
                   )}
-
-                {sourceSettings.outside_sourcing_enabled && (
-                  <>
-                    <div className="mset-key mset-nested-row">
-                      <label
-                        className="mset-key-label"
-                        htmlFor={`${keyIdPrefix}src-jamendo`}
-                      >
-                        Jamendo
-                      </label>
-                      <input
-                        id={`${keyIdPrefix}src-jamendo`}
-                        type="text"
-                        className="mset-key-input"
-                        value={sourceSettings.jamendo_client_id}
-                        placeholder="Client ID"
-                        spellCheck={false}
-                        autoCapitalize="none"
-                        autoCorrect="off"
-                        onChange={(event) =>
-                          onSourceSettingsChange({
-                            ...sourceSettings,
-                            jamendo_client_id: event.target.value,
-                          })
-                        }
-                      />
-                    </div>
-                    <div className="mset-key mset-nested-row">
-                      <label
-                        className="mset-key-label"
-                        htmlFor={`${keyIdPrefix}src-spotify`}
-                      >
-                        Spotify
-                      </label>
-                      <input
-                        id={`${keyIdPrefix}src-spotify`}
-                        type="text"
-                        className="mset-key-input"
-                        value={sourceSettings.spotify_client_id}
-                        placeholder="Client ID"
-                        spellCheck={false}
-                        autoCapitalize="none"
-                        autoCorrect="off"
-                        onChange={(event) =>
-                          onSourceSettingsChange({
-                            ...sourceSettings,
-                            spotify_client_id: event.target.value,
-                          })
-                        }
-                      />
-                    </div>
-                    <p className="mset-hint mset-key-note mset-nested-row">
-                      Every other catalog needs no key. Deezer and iTunes return
-                      30-second clips; Spotify serves no audio at all.
-                    </p>
-                  </>
-                )}
               </>
             )}
 

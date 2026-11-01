@@ -86,7 +86,7 @@ live.
 | 🔍 **Three-tier search** | Filters the current view, then the whole library (lyrics included), then — only if you ask — the internet. |
 | 🎚️ **Real DSP** | 10-band biquad equalizer, crossfade, gapless playback, and loudness normalization. |
 | 📝 **Synced lyrics** | Auto-fetched from LRCLIB, highlighted line by line, importable and exportable. |
-| 🌐 **Free catalogs** | Stream or download full-length tracks from Internet Archive, Jamendo, Audius, ccMixter, and Wikimedia Commons. Off by default. |
+| 🌐 **Free catalogs** | Stream or download full-length tracks from Internet Archive, Audius, ccMixter, and Wikimedia Commons, and with Online play any song on Deezer. No keys or accounts. Off by default. |
 | 🗄️ **Your own server** | Add a Plex, Jellyfin, Emby, Navidrome or other Subsonic server, a WebDAV folder, a DLNA server, Kodi, or an Audius account, and its music joins your library, streaming as it plays and cached for offline. Off by default. |
 | 📱 **One codebase** | Windows, macOS, Linux, and Android — desktop and touch layouts from the same UI. |
 | 🪶 **Portable** | A single native binary; no Electron, no heavy runtime. |
@@ -167,7 +167,7 @@ Search widens only as far as it has to, and never touches the network on its own
 
 <img src="docs/screenshots/desktop-search.png" alt="Library search with matched-field badges and lyric snippets" width="100%">
 
-Tier 3 queries Deezer, iTunes, Jamendo, Audius, Internet Archive, ccMixter, and
+Tier 3 queries Deezer, iTunes, Audius, Internet Archive, ccMixter, and
 Wikimedia Commons concurrently and groups the results by provider with their
 licence line. Full-length audio starts playing as soon as the first bytes
 arrive and can be saved to your library; Deezer and iTunes only expose
@@ -693,7 +693,8 @@ in [`docs/cli.md`](docs/cli.md).
 ### External services (all optional)
 - **LRCLIB** — lyrics
 - **MusicBrainz** + **Cover Art Archive** — metadata and cover art enrichment
-- **Deezer**, **iTunes**, **Jamendo**, **Audius**, **Internet Archive**, **ccMixter**, **Wikimedia Commons**: remote search tier
+- **Deezer**, **iTunes**, **Audius**, **Internet Archive**, **ccMixter**, **Wikimedia Commons**: remote search tier
+- **yt-dlp** and **Deno**, downloaded on request, plus paired Waves and public **Invidious** and **Piped** servers: Online play
 - **GitHub Releases** — the update check at launch (Settings, Auto update)
 
 ---
@@ -855,14 +856,24 @@ Sourcing**; it stays off unless you pick it, and can be changed in Settings
 any time. Searching the internet for music is a second switch under it,
 **Search outside sources**, and does nothing while Outside Sourcing is off.
 
-Jamendo needs a free client ID from
-[developer.jamendo.com](https://developer.jamendo.com), entered in Settings.
-Every other catalog needs no setup.
+No catalog needs a key or an account. When nothing in your library matches a
+search, Wave looks online by itself.
 
 Deezer and iTunes only serve 30-second previews; previews play but are never
-saved to your library. Full-length audio comes from Jamendo, Audius, Internet
-Archive, ccMixter, and Wikimedia Commons. Audius tracks can be saved only when
-the artist allows downloads.
+saved to your library. Full-length audio comes from Audius, Internet Archive,
+ccMixter, and Wikimedia Commons. Audius tracks can be saved only when the
+artist allows downloads.
+
+**Online play** plays Deezer results in full, with the song found on YouTube.
+Turning it on downloads yt-dlp and the Deno runtime from their own GitHub
+releases, after you agree, checks each against its published checksum, and
+keeps them up to date. When YouTube can't be reached from this computer, Wave
+asks your paired desktop Waves, then public Invidious and Piped servers, and
+says so only if none of them can. Android plays through paired desktop Waves
+and public servers, so it installs nothing. Right-click a result, or use its
+⋯ button, to open its artist's or album's page from Deezer. Played songs can
+be saved to your library as you go: just the song, its album, or everything by
+its artist.
 
 Streaming from your own server, a WebDAV or DLNA share, Kodi, an Audius
 account or your other Waves is **Outside Sourcing** itself. Nothing contacts

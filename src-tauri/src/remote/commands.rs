@@ -1302,6 +1302,8 @@ pub async fn download_remote_track(path: String, app: AppHandle) -> Result<Track
             downloadable: true,
             attribution: None,
             already_in_library: None,
+            artist_ref: None,
+            album_ref: None,
         };
         let settings_state = task_app.state::<AppSettingsState>();
         let media_folders = settings_state

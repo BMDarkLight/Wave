@@ -679,7 +679,72 @@ export interface SourceTrack {
   attribution: string | null;
   /** Local path when the user already owns this track. */
   already_in_library: string | null;
+  /** The provider's artist id, for providers with artist pages (Deezer). */
+  artist_ref?: string | null;
+  /** The provider's album id, for providers with album pages (Deezer). */
+  album_ref?: string | null;
 }
+
+/** How far finding an Online play song has got. */
+export type StreamStage = "searching" | "checking" | "found";
+
+/** Follow how finding Online play songs goes, keyed like `sourceTrackKey`. */
+export const listenSourceStreamProgress = async (
+  onStage: (key: string, stage: StreamStage) => void,
+): Promise<() => void> => {
+  await tauriInitialized;
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await listen<{ key: string; stage: StreamStage }>(
+    "source-stream-progress",
+    (e) => onStage(e.payload.key, e.payload.stage),
+  );
+  return () => {
+    unlisten();
+  };
+};
+
+/** One of an artist's albums on an online catalog. */
+export interface OnlineAlbumSummary {
+  id: string;
+  title: string;
+  cover_url: string | null;
+  year: string | null;
+  /** "album", "single", "ep" or "compile". */
+  record_type: string | null;
+}
+
+/** An artist's page fetched from an online catalog. */
+export interface OnlineArtistPage {
+  id: string;
+  name: string;
+  picture_url: string | null;
+  fans: number | null;
+  top_tracks: SourceTrack[];
+  albums: OnlineAlbumSummary[];
+}
+
+/** An album's page fetched from an online catalog. */
+export interface OnlineAlbumPage {
+  id: string;
+  title: string;
+  artist: string;
+  artist_ref: string | null;
+  cover_url: string | null;
+  year: string | null;
+  tracks: SourceTrack[];
+}
+
+export const getOnlineArtist = (
+  provider: string,
+  id: string,
+): Promise<OnlineArtistPage> =>
+  safeInvoke<OnlineArtistPage>("online_artist", { provider, id });
+
+export const getOnlineAlbum = (
+  provider: string,
+  id: string,
+): Promise<OnlineAlbumPage> =>
+  safeInvoke<OnlineAlbumPage>("online_album", { provider, id });
 
 /**
  * One provider's slice of a source search. `error` set with an empty `tracks`
@@ -742,13 +807,8 @@ export interface SourceSettings {
    * Desktop only; the backend keeps it off until yt-dlp and Deno are installed.
    */
   online_play_enabled: boolean;
-  /** Free Jamendo API client ID; "" when unset. */
-  jamendo_client_id: string;
-  /**
-   * Spotify application client ID; "" when unset. Spotify's API serves no
-   * audio, so this powers catalogue search and playlist import only.
-   */
-  spotify_client_id: string;
+  /** What Online play keeps in the library once a song has played. */
+  online_play_save: "off" | "song" | "album" | "artist";
   /** "Outside Sourcing": music from the user's own servers, such as Plex. */
   remote_sources_enabled: boolean;
   /** Android only: let remote music use mobile data. */
@@ -774,6 +834,8 @@ export interface OnlinePlayStatus {
   /** False on Android and on machines the programs have no build for. */
   supported: boolean;
   installed: boolean;
+  /** Turning Online play on downloads programs first. False on Android. */
+  needs_install: boolean;
   ytdlp_version: string | null;
   deno_version: string | null;
 }

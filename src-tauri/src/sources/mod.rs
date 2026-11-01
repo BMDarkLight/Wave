@@ -24,7 +24,6 @@ pub mod ccmixter;
 pub mod deezer;
 pub mod download;
 pub mod itunes;
-pub mod jamendo;
 pub mod wikimedia;
 pub mod youtube;
 
@@ -57,9 +56,6 @@ pub fn source_client() -> &'static Client {
 
 #[derive(Debug, Clone)]
 pub enum SourceError {
-    /// Provider needs credentials the user hasn't supplied (Jamendo client id).
-    /// Surfaced to the UI as a setup hint, not as a failure.
-    NotConfigured(String),
     Network(String),
     Parse(String),
     /// Provider had a result but no playable audio behind it.
@@ -71,7 +67,6 @@ pub enum SourceError {
 impl std::fmt::Display for SourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotConfigured(what) => write!(f, "{what}"),
             Self::Network(e) => write!(f, "Network error: {e}"),
             Self::Parse(e) => write!(f, "Unexpected response: {e}"),
             Self::NoAudio => write!(f, "No playable audio for this result"),
@@ -108,6 +103,12 @@ pub struct SourceTrack {
     /// already owned and play the local copy instead of re-fetching.
     #[serde(default)]
     pub already_in_library: Option<String>,
+    /// The provider's id for the artist, when it has artist pages (Deezer).
+    #[serde(default)]
+    pub artist_ref: Option<String>,
+    /// The provider's id for the album, when it has album pages (Deezer).
+    #[serde(default)]
+    pub album_ref: Option<String>,
 }
 
 impl SourceTrack {
@@ -170,23 +171,18 @@ pub trait SourceProvider: Send + Sync {
 /// What the registry needs to decide which providers are usable.
 #[derive(Debug, Clone, Default)]
 pub struct SourceConfig {
-    /// Free Jamendo API client id. Without it, Jamendo reports itself as
-    /// not configured rather than silently disappearing.
-    pub jamendo_client_id: Option<String>,
     /// Online play is on: Deezer results play in full from YouTube instead
     /// of as 30-second previews.
     pub online_play: bool,
 }
 
-/// Every provider, configured or not. Unconfigured ones still appear so the UI
-/// can tell the user what to set up instead of hiding the option.
+/// Every provider. None needs a key or an account.
 pub fn providers(config: &SourceConfig) -> Vec<Box<dyn SourceProvider>> {
     vec![
         Box::new(deezer::Deezer {
             online_play: config.online_play,
         }),
         Box::new(itunes::ITunes),
-        Box::new(jamendo::Jamendo::new(config.jamendo_client_id.clone())),
         Box::new(audius::Audius),
         Box::new(archive::InternetArchive),
         Box::new(ccmixter::CcMixter),
@@ -328,6 +324,8 @@ mod tests {
             downloadable: false,
             attribution: None,
             already_in_library: None,
+            artist_ref: None,
+            album_ref: None,
         };
         assert_eq!(track.extension(), "mp3");
 

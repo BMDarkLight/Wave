@@ -24,8 +24,6 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use reqwest::blocking::Response;
-
 use super::matching::{self, Wanted};
 use super::{Candidate, Stream};
 
@@ -43,6 +41,10 @@ const EXPIRY_MARGIN_SECONDS: u64 = 120;
 const FETCH_ATTEMPTS: usize = 4;
 /// Results asked for when searching for a song.
 const SEARCH_RESULTS: usize = 8;
+/// Likely matches whose streams are checked before giving up on a song.
+const MATCH_TRIES: usize = 3;
+/// Search results found ahead, in the order they are listed.
+pub const PREFETCH: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -84,6 +86,20 @@ struct State {
     pins: HashMap<String, Pin>,
     /// The stream each song is playing from, and the way it came by.
     current: HashMap<String, (Stream, String)>,
+    /// Audio references of songs already found, by [`song_key`].
+    found: HashMap<String, String>,
+    /// One lock per song being found, so a prefetch and a click on the same
+    /// song do the work once.
+    finding: HashMap<String, std::sync::Arc<Mutex<()>>>,
+}
+
+fn song_key(wanted: &Wanted) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}",
+        wanted.artist.to_lowercase(),
+        wanted.title.to_lowercase(),
+        wanted.duration_seconds.map_or(0, |d| d.round() as i64)
+    )
 }
 
 pub struct Router {
@@ -143,6 +159,8 @@ impl Router {
 
     fn rest(&self, key: &str, why: &str) {
         tracing::debug!("Online play: resting {key}: {why}");
+        #[cfg(test)]
+        eprintln!("Online play: resting {key}: {why}");
         self.state()
             .resting
             .insert(key.to_string(), Instant::now() + REST);
@@ -186,13 +204,49 @@ impl Router {
     /// The video that is `wanted`, as an audio reference ready to play: its
     /// stream is already found, so playback starts at once.
     pub fn find(&self, wanted: &Wanted) -> Result<String, FindError> {
+        let key = song_key(wanted);
+        let lock = self.state().finding.entry(key.clone()).or_default().clone();
+        let _one_at_a_time = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(found) = self.state().found.get(&key) {
+            report(Stage::Found);
+            return Ok(found.clone());
+        }
+        report(Stage::Searching);
         let candidates = self
             .search(&matching::query(wanted))
             .map_err(FindError::Unreachable)?;
         let top: Vec<Candidate> = candidates.into_iter().take(SEARCH_RESULTS).collect();
-        let video = matching::best(wanted, &top).ok_or(FindError::NoMatch)?;
-        let stream = self.stream(&video.id).map_err(FindError::Unreachable)?;
-        Ok(super::audio_ref(&video.id, &stream.ext))
+        for video in matching::ranked(wanted, &top).into_iter().take(MATCH_TRIES) {
+            report(Stage::Checking);
+            let stream = self.stream(&video.id).map_err(FindError::Unreachable)?;
+            // Search may not have said how long it was; the stream does.
+            if !matching::length_fits(wanted, stream.duration_seconds) {
+                continue;
+            }
+            let found = super::audio_ref(&video.id, &stream.ext);
+            self.state().found.insert(key, found.clone());
+            report(Stage::Found);
+            return Ok(found);
+        }
+        Err(FindError::NoMatch)
+    }
+
+    /// Find `songs` on a background thread, one after another, so playing
+    /// any of them starts at once.
+    pub fn prefetch(&'static self, songs: Vec<matching::Song>) {
+        if songs.is_empty() {
+            return;
+        }
+        let _ = std::thread::Builder::new()
+            .name("online-play-prefetch".into())
+            .spawn(move || {
+                for song in songs {
+                    if let Err(FindError::Unreachable(_)) = self.find(&song.wanted()) {
+                        // Nothing else will get through either.
+                        break;
+                    }
+                }
+            });
     }
 
     /// The stream to play `video_id` from now.
@@ -240,7 +294,7 @@ impl Router {
 
     /// Bytes of `video_id` for an HTTP `range`, moving to the next way in
     /// whenever the current one stops answering.
-    pub fn fetch(&self, video_id: &str, range: &str) -> Result<Response, String> {
+    pub fn fetch(&self, video_id: &str, range: &str) -> Result<super::Opened, String> {
         let mut failed: Vec<String> = Vec::new();
         for _ in 0..FETCH_ATTEMPTS {
             let current = self.state().current.get(video_id).cloned();
@@ -248,26 +302,48 @@ impl Router {
                 Some((stream, key)) if fresh(&stream) && !failed.contains(&key) => (stream, key),
                 _ => self.resolve(video_id, &failed)?,
             };
-            let mut request = crate::remote::http::stream_client()
-                .get(&stream.url)
-                .header("Range", range);
-            for (name, value) in &stream.http_headers {
-                request = request.header(name.as_str(), value.as_str());
+            match super::open_range(&stream, range) {
+                Ok(opened) => return Ok(opened),
+                Err(why) => self.rest(&key, &why),
             }
-            let why = match request.send() {
-                Ok(resp) if resp.status().as_u16() == 206 => return Ok(resp),
-                Ok(resp) if resp.status().as_u16() == 200 && range.starts_with("bytes=0-") => {
-                    return Ok(resp)
-                }
-                Ok(resp) => format!("answered {}", resp.status().as_u16()),
-                Err(e) => e.to_string(),
-            };
-            self.rest(&key, &why);
             self.state().current.remove(video_id);
             failed.push(key);
         }
         Err(UNREACHABLE.to_string())
     }
+}
+
+/// How far finding a song has got, for the row waiting on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    Searching,
+    Checking,
+    Found,
+}
+
+/// Where this thread reports finding stages to, if anywhere.
+type Reporter = Option<Box<dyn Fn(Stage)>>;
+
+thread_local! {
+    static PROGRESS: std::cell::RefCell<Reporter> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `run`, telling `report` how finding a song on this thread goes.
+pub fn reporting<T>(report: impl Fn(Stage) + 'static, run: impl FnOnce() -> T) -> T {
+    PROGRESS.with(|p| *p.borrow_mut() = Some(Box::new(report)));
+    let result = run();
+    PROGRESS.with(|p| *p.borrow_mut() = None);
+    result
+}
+
+fn report(stage: Stage) {
+    PROGRESS.with(|p| {
+        if let Some(report) = p.borrow().as_ref() {
+            report(stage);
+        }
+    });
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -288,6 +364,15 @@ pub fn init(app: &tauri::AppHandle) {
 /// The app's router, once [`init`] has run.
 pub fn global() -> Option<&'static Router> {
     ROUTER.get()
+}
+
+/// A public Invidious or Piped server as a way in, for live tests.
+#[cfg(test)]
+pub(crate) fn public_way(kind: Kind, base: &str) -> Box<dyn Way> {
+    Box::new(app_ways::Public {
+        kind,
+        base: base.to_string(),
+    })
 }
 
 /// Answers a paired Wave from this computer's own yt-dlp. Never passes the
@@ -458,9 +543,9 @@ mod app_ways {
         }
     }
 
-    struct Public {
-        kind: Kind,
-        base: String,
+    pub(super) struct Public {
+        pub(super) kind: Kind,
+        pub(super) base: String,
     }
 
     impl Way for Public {
@@ -508,6 +593,8 @@ mod tests {
         works: bool,
         itags: Vec<(&'static str, u64)>,
         calls: Arc<Mutex<Vec<String>>>,
+        /// Where its stream lives, when a test serves one.
+        url: Option<String>,
     }
 
     impl Way for Fake {
@@ -546,7 +633,10 @@ mod tests {
                 .find(|(i, _)| itag.is_none_or(|want| want == *i))
                 .ok_or("no such format")?;
             Ok(Stream {
-                url: format!("https://{}/{found}", self.key),
+                url: self
+                    .url
+                    .clone()
+                    .unwrap_or_else(|| format!("https://{}/{found}", self.key)),
                 http_headers: Vec::new(),
                 itag: Some(found.to_string()),
                 ext: "webm".into(),
@@ -577,7 +667,53 @@ mod tests {
             works,
             itags: vec![("251", 1000), ("140", 900)],
             calls: calls.clone(),
+            url: None,
         }
+    }
+
+    #[test]
+    fn a_fetch_moves_to_the_next_way_when_one_stops_serving() {
+        use crate::remote::testkit::fake_server;
+        let (refusing, _) = fake_server(vec![
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".to_string(),
+        ]);
+        let (serving, seen) = fake_server(vec![
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 4-7/1000\r\n\
+             Content-Length: 4\r\n\r\nabcd"
+                .to_string(),
+        ]);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut first = fake("direct", Kind::Direct, true, &calls);
+        first.url = Some(format!("http://127.0.0.1:{refusing}/a"));
+        let mut second = fake("inv", Kind::Invidious, true, &calls);
+        second.url = Some(format!("http://127.0.0.1:{serving}/b"));
+        let router = Router::new(Box::new(FakeWays(vec![first, second])));
+
+        let opened = router.fetch("aaaaaaaaaaa", "bytes=4-7").unwrap();
+        assert_eq!((opened.start, opened.end, opened.total), (4, 7, 1000));
+        assert_eq!(opened.response.text().unwrap(), "abcd");
+        assert!(seen.lock().unwrap()[0]
+            .to_lowercase()
+            .contains("range: bytes=4-7"));
+        // The refusing way rests, so the next range goes straight to the other.
+        assert!(router.state().resting.contains_key("direct"));
+        assert_eq!(router.state().current["aaaaaaaaaaa"].1, "inv");
+    }
+
+    #[test]
+    fn a_fetch_with_no_way_left_says_youtube_was_unreachable() {
+        use crate::remote::testkit::fake_server;
+        let (refusing, _) = fake_server(vec![
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".to_string(),
+        ]);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut only = fake("direct", Kind::Direct, true, &calls);
+        only.url = Some(format!("http://127.0.0.1:{refusing}/a"));
+        let router = Router::new(Box::new(FakeWays(vec![only])));
+        assert_eq!(
+            router.fetch("aaaaaaaaaaa", "bytes=0-").err().unwrap(),
+            UNREACHABLE
+        );
     }
 
     #[test]

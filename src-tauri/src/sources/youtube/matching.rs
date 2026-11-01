@@ -46,23 +46,54 @@ pub struct Wanted<'a> {
     pub duration_seconds: Option<f64>,
 }
 
+/// A song to find later, on another thread.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Song {
+    pub title: String,
+    pub artist: String,
+    pub duration_seconds: Option<f64>,
+}
+
+impl Song {
+    pub fn wanted(&self) -> Wanted<'_> {
+        Wanted {
+            title: &self.title,
+            artist: &self.artist,
+            duration_seconds: self.duration_seconds,
+        }
+    }
+}
+
 /// The search query that finds `wanted` best.
 pub fn query(wanted: &Wanted) -> String {
     format!("{} {}", wanted.artist, wanted.title)
 }
 
 /// The candidate that is the song, if any is.
-pub fn best<'a>(wanted: &Wanted, candidates: &'a [Candidate]) -> Option<&'a Candidate> {
-    candidates
+#[cfg(test)]
+fn best<'a>(wanted: &Wanted, candidates: &'a [Candidate]) -> Option<&'a Candidate> {
+    ranked(wanted, candidates).into_iter().next()
+}
+
+/// Every candidate that could be the song, most likely first.
+pub fn ranked<'a>(wanted: &Wanted, candidates: &'a [Candidate]) -> Vec<&'a Candidate> {
+    let mut scored: Vec<(&Candidate, f64)> = candidates
         .iter()
         .filter_map(|c| score(wanted, c).map(|s| (c, s)))
         .filter(|&(_, s)| s >= MIN_SCORE)
-        // Ties go to the earlier result: search already ranks by relevance.
-        .fold(None, |best: Option<(&Candidate, f64)>, (c, s)| match best {
-            Some((_, top)) if top >= s => best,
-            _ => Some((c, s)),
-        })
-        .map(|(c, _)| c)
+        .collect();
+    // Stable, so ties keep search's own order of relevance.
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+    scored.into_iter().map(|(c, _)| c).collect()
+}
+
+/// Whether a stream of `seconds` can be the song: the last check, for
+/// results whose length search didn't report.
+pub fn length_fits(wanted: &Wanted, seconds: Option<f64>) -> bool {
+    match (wanted.duration_seconds, seconds) {
+        (Some(want), Some(have)) => (want - have).abs() <= MAX_LENGTH_GAP_SECONDS,
+        _ => true,
+    }
 }
 
 fn words(text: &str) -> Vec<String> {

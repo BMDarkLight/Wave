@@ -100,6 +100,8 @@ fn parse_track(item: &serde_json::Value) -> Option<SourceTrack> {
         downloadable: false,
         attribution: Some("30-second preview from iTunes".to_string()),
         already_in_library: None,
+        artist_ref: None,
+        album_ref: None,
     })
 }
 

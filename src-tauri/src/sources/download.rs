@@ -227,6 +227,8 @@ mod tests {
             downloadable: true,
             attribution: None,
             already_in_library: None,
+            artist_ref: None,
+            album_ref: None,
         }
     }
 

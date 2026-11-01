@@ -58,36 +58,44 @@ impl Tool {
         }
     }
 
-    /// The program's name on disk once installed.
-    pub fn file_name(self) -> &'static str {
-        match (self, cfg!(windows)) {
-            (Tool::YtDlp, false) => "yt-dlp",
-            (Tool::YtDlp, true) => "yt-dlp.exe",
-            (Tool::Deno, false) => "deno",
-            (Tool::Deno, true) => "deno.exe",
-        }
-    }
-
+    /// Where the program sits once installed: alone in `dir`, or inside its
+    /// own folder there.
     pub fn path(self, dir: &Path) -> PathBuf {
-        dir.join(self.file_name())
+        match asset_for_this_machine(self).map(|(_, layout)| layout) {
+            Some(Layout::Member(member)) => dir.join(member),
+            Some(Layout::Folder { exe }) => dir.join(self.key()).join(exe),
+            None => dir.join(self.key()),
+        }
     }
 }
 
+/// How a downloaded release asset becomes the installed program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    /// A zip holding the program alone, as `member`.
+    Member(&'static str),
+    /// A zip of the program's whole folder, unpacked as it is, with `exe` the
+    /// program in it. yt-dlp ships this way too, and unlike its one-file
+    /// build it doesn't unpack itself on every run: a call takes a fraction
+    /// of a second instead of ten.
+    Folder { exe: &'static str },
+}
+
 /// The release asset to fetch for `tool` on `os`/`arch` (as in
-/// [`std::env::consts`]), and the member to take out of it when it is a zip.
-fn asset_for(tool: Tool, os: &str, arch: &str) -> Option<(String, Option<&'static str>)> {
+/// [`std::env::consts`]), and how it unpacks.
+fn asset_for(tool: Tool, os: &str, arch: &str) -> Option<(String, Layout)> {
     match tool {
         Tool::YtDlp => {
-            let name = match (os, arch) {
-                // A universal binary.
-                ("macos", _) => "yt-dlp_macos",
-                ("linux", "x86_64") => "yt-dlp_linux",
-                ("linux", "aarch64") => "yt-dlp_linux_aarch64",
-                ("windows", "x86_64") => "yt-dlp.exe",
-                ("windows", "aarch64") => "yt-dlp_arm64.exe",
+            let (name, exe) = match (os, arch) {
+                // A universal build.
+                ("macos", _) => ("yt-dlp_macos.zip", "yt-dlp_macos"),
+                ("linux", "x86_64") => ("yt-dlp_linux.zip", "yt-dlp_linux"),
+                ("linux", "aarch64") => ("yt-dlp_linux_aarch64.zip", "yt-dlp_linux_aarch64"),
+                ("windows", "x86_64") => ("yt-dlp_win.zip", "yt-dlp.exe"),
+                ("windows", "aarch64") => ("yt-dlp_win_arm64.zip", "yt-dlp_arm64.exe"),
                 _ => return None,
             };
-            Some((name.to_string(), None))
+            Some((name.to_string(), Layout::Folder { exe }))
         }
         Tool::Deno => {
             let (triple, member) = match os {
@@ -99,12 +107,12 @@ fn asset_for(tool: Tool, os: &str, arch: &str) -> Option<(String, Option<&'stati
             if !matches!(arch, "x86_64" | "aarch64") {
                 return None;
             }
-            Some((format!("deno-{arch}-{triple}.zip"), Some(member)))
+            Some((format!("deno-{arch}-{triple}.zip"), Layout::Member(member)))
         }
     }
 }
 
-fn asset_for_this_machine(tool: Tool) -> Option<(String, Option<&'static str>)> {
+fn asset_for_this_machine(tool: Tool) -> Option<(String, Layout)> {
     asset_for(tool, std::env::consts::OS, std::env::consts::ARCH)
 }
 
@@ -246,7 +254,7 @@ pub fn ensure(
     tool: Tool,
     progress: &mut dyn FnMut(Progress),
 ) -> Result<PathBuf, String> {
-    let (asset_name, member) = asset_for_this_machine(tool)
+    let (asset_name, layout) = asset_for_this_machine(tool)
         .ok_or_else(|| format!("{} has no build for this computer", tool.key()))?;
     fs::create_dir_all(dir).map_err(|e| format!("Could not create the tools folder: {e}"))?;
 
@@ -278,7 +286,7 @@ pub fn ensure(
                 total: asset.size,
             })
         })
-        .and_then(|()| place(&part, member, &target));
+        .and_then(|()| place(&part, layout, dir, tool));
         let _ = fs::remove_file(&part);
         result?;
     }
@@ -390,32 +398,58 @@ fn copy_hashing(
     Ok((received, hex))
 }
 
-/// Move a checked download to `target`, taking `member` out first when the
-/// download is a zip, and mark it executable.
-fn place(download: &Path, member: Option<&str>, target: &Path) -> Result<(), String> {
-    let staged = target.with_file_name(format!(
-        ".{}.new",
-        target
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("tool")
-    ));
-    match member {
-        Some(member) => extract_member(download, member, &staged)?,
-        None => fs::copy(download, &staged)
-            .map(drop)
-            .map_err(|e| format!("Could not install {}: {e}", target.display()))?,
-    }
+/// Install a checked download into `dir` in place of what was there.
+/// Everything is unpacked beside its final name first, so a failure halfway
+/// leaves the old install working.
+fn place(download: &Path, layout: Layout, dir: &Path, tool: Tool) -> Result<(), String> {
+    let fail = |e: &dyn std::fmt::Display| format!("Could not install {}: {e}", tool.key());
+    let (staged, target, program) = match layout {
+        Layout::Member(member) => {
+            let staged = dir.join(format!(".{member}.new"));
+            extract_member(download, member, &staged)?;
+            (staged.clone(), dir.join(member), staged)
+        }
+        Layout::Folder { exe } => {
+            let staged = dir.join(format!(".{}.new", tool.key()));
+            remove_any(&staged).map_err(|e| fail(&e))?;
+            let file = File::open(download).map_err(|e| fail(&e))?;
+            zip::ZipArchive::new(file)
+                .and_then(|mut archive| archive.extract(&staged))
+                .map_err(|e| fail(&e))?;
+            let program = staged.join(exe);
+            if !program.is_file() {
+                let _ = remove_any(&staged);
+                return Err(format!("The {} archive has no {exe}", tool.key()));
+            }
+            (staged, dir.join(tool.key()), program)
+        }
+    };
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&staged, fs::Permissions::from_mode(0o755))
-            .map_err(|e| format!("Could not install {}: {e}", target.display()))?;
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).map_err(|e| fail(&e))?;
     }
-    fs::rename(&staged, target).map_err(|e| {
-        let _ = fs::remove_file(&staged);
-        format!("Could not install {}: {e}", target.display())
+    #[cfg(not(unix))]
+    let _ = program;
+    // The old install, or a single file an earlier build left at that name.
+    remove_any(&target).map_err(|e| fail(&e))?;
+    fs::rename(&staged, &target).map_err(|e| {
+        let _ = remove_any(&staged);
+        fail(&e)
     })
+}
+
+/// Delete a file or a folder, and nothing if neither is there.
+fn remove_any(path: &Path) -> io::Result<()> {
+    let removed = if path.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    };
+    match removed {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
 }
 
 fn extract_member(zip_path: &Path, member: &str, dest: &Path) -> Result<(), String> {
@@ -444,32 +478,54 @@ mod tests {
 
     #[test]
     fn picks_the_asset_for_each_platform() {
-        let yt = |os, arch| asset_for(Tool::YtDlp, os, arch).map(|(name, _)| name);
-        assert_eq!(yt("macos", "aarch64").as_deref(), Some("yt-dlp_macos"));
-        assert_eq!(yt("macos", "x86_64").as_deref(), Some("yt-dlp_macos"));
-        assert_eq!(yt("linux", "x86_64").as_deref(), Some("yt-dlp_linux"));
+        let yt = |os, arch| asset_for(Tool::YtDlp, os, arch);
+        let folder = |name: &str, exe| Some((name.to_string(), Layout::Folder { exe }));
         assert_eq!(
-            yt("linux", "aarch64").as_deref(),
-            Some("yt-dlp_linux_aarch64")
+            yt("macos", "aarch64"),
+            folder("yt-dlp_macos.zip", "yt-dlp_macos")
         );
-        assert_eq!(yt("windows", "x86_64").as_deref(), Some("yt-dlp.exe"));
         assert_eq!(
-            yt("windows", "aarch64").as_deref(),
-            Some("yt-dlp_arm64.exe")
+            yt("macos", "x86_64"),
+            folder("yt-dlp_macos.zip", "yt-dlp_macos")
+        );
+        assert_eq!(
+            yt("linux", "x86_64"),
+            folder("yt-dlp_linux.zip", "yt-dlp_linux")
+        );
+        assert_eq!(
+            yt("linux", "aarch64"),
+            folder("yt-dlp_linux_aarch64.zip", "yt-dlp_linux_aarch64")
+        );
+        assert_eq!(
+            yt("windows", "x86_64"),
+            folder("yt-dlp_win.zip", "yt-dlp.exe")
+        );
+        assert_eq!(
+            yt("windows", "aarch64"),
+            folder("yt-dlp_win_arm64.zip", "yt-dlp_arm64.exe")
         );
         assert_eq!(yt("linux", "arm"), None);
 
         assert_eq!(
             asset_for(Tool::Deno, "macos", "aarch64"),
-            Some(("deno-aarch64-apple-darwin.zip".into(), Some("deno")))
+            Some((
+                "deno-aarch64-apple-darwin.zip".into(),
+                Layout::Member("deno")
+            ))
         );
         assert_eq!(
             asset_for(Tool::Deno, "windows", "x86_64"),
-            Some(("deno-x86_64-pc-windows-msvc.zip".into(), Some("deno.exe")))
+            Some((
+                "deno-x86_64-pc-windows-msvc.zip".into(),
+                Layout::Member("deno.exe")
+            ))
         );
         assert_eq!(
             asset_for(Tool::Deno, "linux", "aarch64"),
-            Some(("deno-aarch64-unknown-linux-gnu.zip".into(), Some("deno")))
+            Some((
+                "deno-aarch64-unknown-linux-gnu.zip".into(),
+                Layout::Member("deno")
+            ))
         );
         assert_eq!(asset_for(Tool::Deno, "android", "aarch64"), None);
     }
@@ -521,30 +577,63 @@ mod tests {
         assert!(!is_stale(&entry(now + 60), now));
     }
 
+    fn zip_of(path: &Path, files: &[(&str, &[u8])]) {
+        let mut writer = zip::ZipWriter::new(File::create(path).unwrap());
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, body) in files {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(body).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
     #[test]
     fn unpacks_the_program_from_a_zip_and_marks_it_runnable() {
         let dir = temp_dir("zip");
         let zip_path = dir.join("deno.zip");
-        {
-            let mut writer = zip::ZipWriter::new(File::create(&zip_path).unwrap());
-            let options = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
-            writer.start_file("deno", options).unwrap();
-            writer.write_all(b"#!/bin/sh\necho deno\n").unwrap();
-            writer.finish().unwrap();
-        }
-        let target = dir.join("deno");
-        place(&zip_path, Some("deno"), &target).unwrap();
-        assert_eq!(fs::read(&target).unwrap(), b"#!/bin/sh\necho deno\n");
+        zip_of(&zip_path, &[("deno", b"#!/bin/sh\necho deno\n")]);
+        place(&zip_path, Layout::Member("deno"), &dir, Tool::Deno).unwrap();
+        assert_eq!(
+            fs::read(dir.join("deno")).unwrap(),
+            b"#!/bin/sh\necho deno\n"
+        );
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(&target).unwrap().permissions().mode() & 0o777,
-                0o755
-            );
-        }
-        assert!(place(&zip_path, Some("missing"), &dir.join("x")).is_err());
+        assert_eq!(mode(&dir.join("deno")), 0o755);
+        assert!(place(&zip_path, Layout::Member("missing"), &dir, Tool::Deno).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unpacks_a_whole_folder_over_the_old_install() {
+        let dir = temp_dir("folder");
+        // What an earlier one-file build left at the folder's name.
+        fs::write(dir.join("yt-dlp"), b"old single file").unwrap();
+        let zip_path = dir.join("yt-dlp.zip");
+        zip_of(
+            &zip_path,
+            &[("prog", b"#!/bin/sh\n"), ("_internal/lib.so", b"library")],
+        );
+        place(&zip_path, Layout::Folder { exe: "prog" }, &dir, Tool::YtDlp).unwrap();
+        assert_eq!(
+            fs::read(dir.join("yt-dlp/_internal/lib.so")).unwrap(),
+            b"library"
+        );
+        #[cfg(unix)]
+        assert_eq!(mode(&dir.join("yt-dlp/prog")), 0o755);
+
+        // An archive without the program leaves the working install alone.
+        let broken = dir.join("broken.zip");
+        zip_of(&broken, &[("other", b"x")]);
+        assert!(place(&broken, Layout::Folder { exe: "prog" }, &dir, Tool::YtDlp).is_err());
+        assert!(dir.join("yt-dlp/prog").is_file());
+        assert!(!dir.join(".yt-dlp.new").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -563,7 +652,9 @@ mod tests {
         write_manifest(&dir, &manifest).unwrap();
         assert_eq!(installed(&dir, Tool::YtDlp), None);
 
-        fs::write(Tool::YtDlp.path(&dir), b"bin").unwrap();
+        let program = Tool::YtDlp.path(&dir);
+        fs::create_dir_all(program.parent().unwrap()).unwrap();
+        fs::write(&program, b"bin").unwrap();
         assert_eq!(
             installed(&dir, Tool::YtDlp).map(|i| i.tag).as_deref(),
             Some("2026.10.26")

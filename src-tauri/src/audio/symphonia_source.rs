@@ -379,7 +379,10 @@ impl Source for SymphoniaSource {
             )
             .map_err(|e| rodio::source::SeekError::Other(Box::new(e)))?;
 
-        let mut samples_to_pass = seek_res.required_ts - seek_res.actual_ts;
+        // WebM can land just past the time asked for (YouTube's Opus does):
+        // then there is nothing to skip, not a wrapped-around count that
+        // throws the rest of the song away.
+        let mut samples_to_pass = seek_res.required_ts.saturating_sub(seek_res.actual_ts);
         let packet = loop {
             match self.format.next_packet() {
                 Ok(candidate) => {

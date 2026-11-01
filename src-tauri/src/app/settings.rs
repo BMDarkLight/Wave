@@ -80,16 +80,9 @@ pub struct AppSettings {
     /// install yt-dlp and Deno.
     #[serde(default)]
     pub online_play_enabled: bool,
-    /// Spotify application client id, used for OAuth PKCE.
-    ///
-    /// Spotify serves no audio through its API, so this powers catalogue search
-    /// and playlist import only, never streaming or caching.
+    /// What to keep in the library once an Online play song has played.
     #[serde(default)]
-    pub spotify_client_id: Option<String>,
-    /// Free Jamendo API client id. Empty means the Jamendo source reports
-    /// itself as needing setup instead of silently returning nothing.
-    #[serde(default)]
-    pub jamendo_client_id: Option<String>,
+    pub online_play_save: crate::dto::OnlinePlaySave,
     /// Size cap for streamed-audio cache. Exceeded only when every cached file
     /// is protected (playing or queued).
     #[serde(default = "default_source_cache_limit_mb")]
@@ -225,8 +218,7 @@ impl Default for AppSettings {
             theme_mode: ThemeMode::System,
             outside_sourcing_enabled: default_outside_sourcing_enabled(),
             online_play_enabled: false,
-            spotify_client_id: None,
-            jamendo_client_id: None,
+            online_play_save: crate::dto::OnlinePlaySave::Off,
             source_cache_limit_mb: default_source_cache_limit_mb(),
             remote_sources_enabled: false,
             remote_cellular_enabled: false,

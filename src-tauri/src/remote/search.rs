@@ -59,15 +59,6 @@ impl SearchStreamBackend {
     fn get(&self, part_key: &str, range: &str) -> Result<Response, RemoteError> {
         self.gate.check()?;
         let (provider, url) = split_part_key(part_key)?;
-        // Online play: the audio is a YouTube video, fetched by whatever way
-        // in works at this moment rather than from a stored URL.
-        if let Some(video_id) = sources::youtube::video_id_of(url) {
-            let router = sources::youtube::router::global()
-                .ok_or_else(|| RemoteError::Unreachable("Online play isn't ready".into()))?;
-            return router
-                .fetch(video_id, range)
-                .map_err(RemoteError::Unreachable);
-        }
         let referer = sources::provider_by_id(&SourceConfig::default(), provider)
             .and_then(|p| p.fetch_referer());
         // Wikimedia turns away requests that don't say who is asking.
@@ -95,6 +86,30 @@ impl SearchStreamBackend {
     }
 }
 
+/// The video an Online play key names, for a part key holding a YouTube
+/// audio reference rather than a URL.
+fn youtube_video(part_key: &str) -> Result<Option<&str>, RemoteError> {
+    let (_, url) = split_part_key(part_key)?;
+    Ok(sources::youtube::video_id_of(url))
+}
+
+impl SearchStreamBackend {
+    /// Online play: the audio is a YouTube video, fetched by whatever way in
+    /// works at this moment rather than from a stored URL.
+    fn youtube(
+        &self,
+        video_id: &str,
+        range: &str,
+    ) -> Result<sources::youtube::Opened, RemoteError> {
+        self.gate.check()?;
+        let router = sources::youtube::router::global()
+            .ok_or_else(|| RemoteError::Unreachable("Online play isn't ready".into()))?;
+        router
+            .fetch(video_id, range)
+            .map_err(RemoteError::Unreachable)
+    }
+}
+
 impl Default for SearchStreamBackend {
     fn default() -> Self {
         Self::new()
@@ -116,7 +131,11 @@ impl RemoteBackend for SearchStreamBackend {
     }
 
     fn open_bytes(&self, part_key: &str, offset: u64) -> Result<Box<dyn ByteStream>, RemoteError> {
-        Ok(Box::new(self.get(part_key, &format!("bytes={offset}-"))?))
+        let range = format!("bytes={offset}-");
+        if let Some(video_id) = youtube_video(part_key)? {
+            return Ok(Box::new(self.youtube(video_id, &range)?.response));
+        }
+        Ok(Box::new(self.get(part_key, &range)?))
     }
 
     fn check_reachable(&self) -> Result<(), RemoteError> {
@@ -129,6 +148,9 @@ impl RemoteBackend for SearchStreamBackend {
     }
 
     fn content_length(&self, part_key: &str) -> Result<u64, RemoteError> {
+        if let Some(video_id) = youtube_video(part_key)? {
+            return Ok(self.youtube(video_id, "bytes=0-0")?.total);
+        }
         let resp = self.get(part_key, "bytes=0-0")?;
         total_size(&resp).ok_or_else(|| RemoteError::Parse("no size".into()))
     }

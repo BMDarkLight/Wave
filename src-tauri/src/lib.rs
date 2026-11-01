@@ -454,6 +454,8 @@ pub fn run() {
             commands::parse_lyrics_sheet,
             commands::get_source_settings,
             sources::youtube::commands::online_play_status,
+            commands::online_artist,
+            commands::online_album,
             sources::youtube::commands::online_play_install,
             sources::youtube::commands::online_play_remove,
             commands::set_source_settings,
