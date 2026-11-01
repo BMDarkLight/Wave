@@ -74,8 +74,10 @@ nix = { version = "0.30", default-features = false, features = ["net", "hostname
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 tauri = { version = "2.11", features = ["tray-icon"] }
-tray-icon = "0.24"
-muda = "0.19"
+# Without libxdo, which they only need to fake keypresses for Copy and
+# Paste menu items Wave doesn't have; it would be one more package to install.
+tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }
+muda = { version = "0.19", default-features = false, features = ["gtk"] }
 souvlaki = "0.8"
 tauri-plugin-updater = "2"
 

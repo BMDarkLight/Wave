@@ -76,26 +76,9 @@ jobs:
           libasound2-dev \
           patchelf \
           xdg-utils \
-          libxdo-dev \
-          libxdo3 \
-          xdotool \
           rpm \
           desktop-file-utils \
           appstream
-
-    - name: Configure Linux native library path
-      if: matrix.os == 'ubuntu-latest'
-      shell: bash
-      run: |
-        XDO_LIBRARY="$(ldconfig -p | awk '/libxdo\.so\.3/{print $NF; exit}')"
-        if [ -z "$XDO_LIBRARY" ] || [ ! -f "$XDO_LIBRARY" ]; then
-          echo "::error::libxdo.so.3 was not installed"
-          exit 1
-        fi
-        mkdir -p "$GITHUB_WORKSPACE/.ci-native-libs"
-        ln -sf "$XDO_LIBRARY" "$GITHUB_WORKSPACE/.ci-native-libs/libxdo.so"
-        echo "LIBRARY_PATH=$GITHUB_WORKSPACE/.ci-native-libs:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-        echo "RUSTFLAGS=-Lnative=$GITHUB_WORKSPACE/.ci-native-libs ${RUSTFLAGS:-}" >> "$GITHUB_ENV"
 
     - name: Validate AppStream metainfo
       if: matrix.os == 'ubuntu-latest'

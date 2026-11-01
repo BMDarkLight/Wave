@@ -39,24 +39,12 @@ jobs:
           curl \
           wget \
           file \
-          libxdo-dev \
           libasound2-dev \
           libssl-dev \
           libayatana-appindicator3-dev \
           librsvg2-dev \
           libglib2.0-dev \
           pkg-config
-    - name: Configure Linux native library path
-      run: |
-        XDO_LIBRARY="$(ldconfig -p | awk '/libxdo\.so\.3/{print $NF; exit}')"
-        if [ -z "$XDO_LIBRARY" ] || [ ! -f "$XDO_LIBRARY" ]; then
-          echo "::error::libxdo.so.3 was not installed"
-          exit 1
-        fi
-        mkdir -p "$GITHUB_WORKSPACE/.ci-native-libs"
-        ln -sf "$XDO_LIBRARY" "$GITHUB_WORKSPACE/.ci-native-libs/libxdo.so"
-        echo "LIBRARY_PATH=$GITHUB_WORKSPACE/.ci-native-libs:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-        echo "RUSTFLAGS=-Lnative=$GITHUB_WORKSPACE/.ci-native-libs ${RUSTFLAGS:-}" >> "$GITHUB_ENV"
     - name: Format check
       run: cargo fmt --check
     - name: Clippy

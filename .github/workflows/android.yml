@@ -139,10 +139,7 @@ jobs:
             librsvg2-dev \
             libasound2-dev \
             patchelf \
-            xdg-utils \
-            libxdo-dev \
-            libxdo3 \
-            xdotool
+            xdg-utils
 
       - name: Install npm dependencies
         run: npm ci
