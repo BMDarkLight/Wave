@@ -61,8 +61,8 @@ Wave installs as a normal desktop app and puts a `wave` command on your `PATH`.
 
 | Platform    | Install                                                         |
 | ----------- | --------------------------------------------------------------- |
-| Debian/Ubuntu | `sudo apt install ./Wave_1.2.6_amd64.deb`                      |
-| Fedora/RHEL | `sudo dnf install ./Wave-1.2.6-1.x86_64.rpm`                     |
+| Debian/Ubuntu | `sudo apt install ./Wave_1.2.7_amd64.deb`                      |
+| Fedora/RHEL | `sudo dnf install ./Wave-1.2.7-1.x86_64.rpm`                     |
 | Arch        | `yay -S wave-music-player-bin`                                   |
 | Flatpak     | `flatpak install app.bmdarklight.wave`                           |
 | AppImage    | download, `chmod +x`, run                                        |
@@ -219,7 +219,9 @@ Waves find each other with the LAN beacon from
 on UDP port 7101 and answers the ones it hears, so it works even where
 devices hear each other only one way, such as on a phone's hotspot. If two
 devices still don't see each other, choose **Enter address** on the Devices
-page and type the address the other one shows under **This device**.
+page and type the address the other one shows under **This device**. What
+this opens on your network, and its known limits, are in
+[SECURITY.md](SECURITY.md).
 
 - Each device gets its own playlist, named after it, listing everything it
   shares. While the device is off or away, the playlist stays and its songs are
