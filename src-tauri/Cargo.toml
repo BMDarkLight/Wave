@@ -84,6 +84,9 @@ tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }
 muda = { version = "0.19", default-features = false, features = ["gtk"] }
 souvlaki = "0.8"
 tauri-plugin-updater = "2"
+# Unpacks Deno's release zip for Online play. Already in the tree through the
+# updater plugin; only the deflate backend is added.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"

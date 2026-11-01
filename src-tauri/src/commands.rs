@@ -540,7 +540,7 @@ fn sync_bridge_playing(bridge: &tauri::State<MediaBridgeState>, position_secs: f
 
 /// Run a blocking operation on a background thread pool so the UI stays
 /// responsive.  Returns the inner `Result` directly.
-async fn blocking<F, T>(f: F) -> Result<T, String>
+pub(crate) async fn blocking<F, T>(f: F) -> Result<T, String>
 where
     F: FnOnce() -> Result<T, String> + Send + 'static,
     T: Send + 'static,
@@ -2114,6 +2114,9 @@ pub async fn parse_lyrics_sheet(text: String) -> Result<crate::lyrics::LyricsShe
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SourceSettingsDto {
     pub outside_sourcing_enabled: bool,
+    /// Full-length catalog playback through yt-dlp. Desktop only.
+    #[serde(default)]
+    pub online_play_enabled: bool,
     pub jamendo_client_id: String,
     pub spotify_client_id: String,
     /// "Outside Sourcing": music from the user's own servers, such as Plex.
@@ -2139,6 +2142,7 @@ pub async fn get_source_settings(
     let settings = lock_settings(&settings_state)?;
     Ok(SourceSettingsDto {
         outside_sourcing_enabled: settings.outside_sourcing_enabled,
+        online_play_enabled: settings.online_play_enabled,
         jamendo_client_id: settings.jamendo_client_id.clone().unwrap_or_default(),
         spotify_client_id: settings.spotify_client_id.clone().unwrap_or_default(),
         remote_sources_enabled: settings.remote_sources_enabled,
@@ -2172,6 +2176,9 @@ pub async fn set_source_settings(
         let was_enabled = stored.remote_sources_enabled;
         let cap_shrank = settings.cache_limit_mb < stored.source_cache_limit_mb;
         stored.outside_sourcing_enabled = settings.outside_sourcing_enabled;
+        // Never on without the programs it runs, whatever the UI sent.
+        stored.online_play_enabled = settings.online_play_enabled
+            && crate::sources::youtube::commands::tools_installed(&app);
         stored.jamendo_client_id = normalise(&settings.jamendo_client_id);
         stored.spotify_client_id = normalise(&settings.spotify_client_id);
         stored.remote_sources_enabled = settings.remote_sources_enabled;

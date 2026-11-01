@@ -93,6 +93,12 @@ pub fn run() {
             // never chose to keep.
             sources::cache::clear_previews();
 
+            // YouTube breaks old yt-dlp builds within weeks, so check for a
+            // newer one once a day, off the startup path.
+            if settings.online_play_enabled {
+                sources::youtube::commands::refresh_in_background(app.handle());
+            }
+
             // Defer audio device creation until first playback command. Opening
             // cpal/oboe during setup can panic on Android before JNI is ready.
             // The in-memory player itself is safe to initialize now, allowing
@@ -446,6 +452,9 @@ pub fn run() {
             remote::commands::download_remote_track,
             commands::parse_lyrics_sheet,
             commands::get_source_settings,
+            sources::youtube::commands::online_play_status,
+            sources::youtube::commands::online_play_install,
+            sources::youtube::commands::online_play_remove,
             commands::set_source_settings,
             commands::add_track_to_playlist_by_id,
             commands::add_tracks_to_playlist_by_id,

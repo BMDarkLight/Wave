@@ -61,9 +61,16 @@ import {
   EQ_PRESETS,
   openRepository,
   getCloseAction,
+  getOnlinePlayStatus,
+  removeOnlinePlay,
   setCloseAction,
 } from "../utils/player";
-import type { EqSettings, PlaylistInfo, ThemeMode } from "../utils/player";
+import type {
+  EqSettings,
+  OnlinePlayStatus,
+  PlaylistInfo,
+  ThemeMode,
+} from "../utils/player";
 import { isAndroid } from "../utils/platform";
 import { formatBytes } from "../utils/format";
 import { clearSourceCache, getSourceCacheUsage } from "../utils/remote";
@@ -72,6 +79,7 @@ import AddSourceChooser from "./AddSourceChooser";
 import RemoteSourceList from "./RemoteSourceList";
 import Select from "./Select";
 import RemoteSourceSetupDialog from "./dialogs/RemoteSourceSetupDialog";
+import OnlinePlayInstallDialog from "./dialogs/OnlinePlayInstallDialog";
 
 const CLOSE_ACTIONS: { value: CloseAction; label: string }[] = [
   { value: "quit", label: "Close" },
@@ -448,6 +456,10 @@ export default function MobileSettings({
   const [lyricsBusy, setLyricsBusy] = useState(false);
   const [lyricsStatus, setLyricsStatus] = useState<string | null>(null);
   const [onAndroid, setOnAndroid] = useState(false);
+  // Desktop only; stays null on Android, where Online play can't run.
+  const [onlinePlay, setOnlinePlay] = useState<OnlinePlayStatus | null>(null);
+  const [askingOnlinePlay, setAskingOnlinePlay] = useState(false);
+  const [onlinePlayError, setOnlinePlayError] = useState<string | null>(null);
   // Desktop only; stays null on Android, which has no close button.
   const [closeAction, setCloseActionState] = useState<CloseAction | null>(null);
 
@@ -471,6 +483,9 @@ export default function MobileSettings({
         .catch(() => {});
       listOutputDevices()
         .then(setOutputDevices)
+        .catch(() => {});
+      getOnlinePlayStatus()
+        .then(setOnlinePlay)
         .catch(() => {});
     })();
   }, []);
@@ -865,6 +880,72 @@ export default function MobileSettings({
                   </span>
                 </label>
 
+                {onlinePlay?.supported && (
+                  <label className="mset-gapless-row mset-nested-row">
+                    <input
+                      type="checkbox"
+                      checked={sourceSettings.online_play_enabled}
+                      onChange={(event) => {
+                        setOnlinePlayError(null);
+                        if (!event.target.checked) {
+                          onSourceSettingsChange({
+                            ...sourceSettings,
+                            online_play_enabled: false,
+                          });
+                        } else if (onlinePlay.installed) {
+                          onSourceSettingsChange({
+                            ...sourceSettings,
+                            online_play_enabled: true,
+                          });
+                        } else {
+                          // Stays off unless the install is agreed to and
+                          // finishes.
+                          setAskingOnlinePlay(true);
+                        }
+                      }}
+                    />
+                    <span className="mset-gapless-copy">
+                      <span className="mset-gapless-label">Online play</span>
+                      <span className="mset-gapless-hint">
+                        Play catalog results in full, with the song found on
+                        YouTube by yt-dlp. Without it, Deezer and iTunes play
+                        30-second clips.
+                      </span>
+                    </span>
+                  </label>
+                )}
+
+                {onlinePlay?.installed &&
+                  !sourceSettings.online_play_enabled && (
+                    <div className="mset-row mset-nested-row">
+                      <span className="mset-row-text">
+                        <span className="mset-row-label">
+                          Online play tools
+                        </span>
+                        <span className="mset-row-value">
+                          {onlinePlayError ??
+                            `yt-dlp ${onlinePlay.ytdlp_version ?? ""}, Deno ${onlinePlay.deno_version ?? ""}`}
+                        </span>
+                      </span>
+                      <button
+                        className="btn-secondary mset-row-btn"
+                        type="button"
+                        onClick={() => {
+                          setOnlinePlayError(null);
+                          removeOnlinePlay()
+                            .then(setOnlinePlay)
+                            .catch((e) =>
+                              setOnlinePlayError(
+                                e instanceof Error ? e.message : String(e),
+                              ),
+                            );
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  )}
+
                 {sourceSettings.outside_sourcing_enabled && (
                   <>
                     <div className="mset-key mset-nested-row">
@@ -1068,6 +1149,20 @@ export default function MobileSettings({
             onRemoteSource={() => {
               setChoosingSource(false);
               setSettingUpRemote(true);
+            }}
+          />
+        )}
+
+        {askingOnlinePlay && (
+          <OnlinePlayInstallDialog
+            onCancel={() => setAskingOnlinePlay(false)}
+            onInstalled={(status) => {
+              setOnlinePlay(status);
+              setAskingOnlinePlay(false);
+              onSourceSettingsChange({
+                ...sourceSettings,
+                online_play_enabled: true,
+              });
             }}
           />
         )}

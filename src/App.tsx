@@ -199,6 +199,7 @@ function App() {
   const [sourceSettings, setSourceSettingsState] = useState<SourceSettings>({
     // Matches the backend default, so the tier stays hidden until settings load.
     outside_sourcing_enabled: false,
+    online_play_enabled: false,
     jamendo_client_id: "",
     spotify_client_id: "",
     remote_sources_enabled: false,

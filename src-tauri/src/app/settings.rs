@@ -75,6 +75,11 @@ pub struct AppSettings {
     /// whatever they had; serde only applies this when the field is absent.
     #[serde(default = "default_outside_sourcing_enabled")]
     pub outside_sourcing_enabled: bool,
+    /// Play catalog results in full, with audio found on YouTube through
+    /// yt-dlp. Desktop only, and only turned on once the user agreed to
+    /// install yt-dlp and Deno.
+    #[serde(default)]
+    pub online_play_enabled: bool,
     /// Spotify application client id, used for OAuth PKCE.
     ///
     /// Spotify serves no audio through its API, so this powers catalogue search
@@ -219,6 +224,7 @@ impl Default for AppSettings {
             reduce_motion_enabled: false,
             theme_mode: ThemeMode::System,
             outside_sourcing_enabled: default_outside_sourcing_enabled(),
+            online_play_enabled: false,
             spotify_client_id: None,
             jamendo_client_id: None,
             source_cache_limit_mb: default_source_cache_limit_mb(),

@@ -26,6 +26,7 @@ pub mod download;
 pub mod itunes;
 pub mod jamendo;
 pub mod wikimedia;
+pub mod youtube;
 
 use reqwest::blocking::Client;
 use std::sync::{Mutex, OnceLock};

@@ -737,6 +737,11 @@ export const listenToDownloadFallback = async (
 export interface SourceSettings {
   /** Master switch. When off, no provider is contacted and tier 3 is hidden. */
   outside_sourcing_enabled: boolean;
+  /**
+   * Play catalog results in full with audio found on YouTube through yt-dlp.
+   * Desktop only; the backend keeps it off until yt-dlp and Deno are installed.
+   */
+  online_play_enabled: boolean;
   /** Free Jamendo API client ID; "" when unset. */
   jamendo_client_id: string;
   /**
@@ -763,6 +768,46 @@ export const getSourceSettings = (): Promise<SourceSettings> =>
 
 export const setSourceSettings = (settings: SourceSettings): Promise<void> =>
   safeInvoke("set_source_settings", { settings });
+
+/** Whether Online play's programs, yt-dlp and Deno, are installed. */
+export interface OnlinePlayStatus {
+  /** False on Android and on machines the programs have no build for. */
+  supported: boolean;
+  installed: boolean;
+  ytdlp_version: string | null;
+  deno_version: string | null;
+}
+
+/** Download progress for one of the two programs. */
+export interface OnlinePlayInstallProgress {
+  tool: "yt-dlp" | "deno";
+  received: number;
+  total: number;
+}
+
+export const getOnlinePlayStatus = (): Promise<OnlinePlayStatus> =>
+  safeInvoke<OnlinePlayStatus>("online_play_status");
+
+/** Download yt-dlp and Deno. Only call this once the user agreed. */
+export const installOnlinePlay = (): Promise<OnlinePlayStatus> =>
+  safeInvoke<OnlinePlayStatus>("online_play_install");
+
+export const removeOnlinePlay = (): Promise<OnlinePlayStatus> =>
+  safeInvoke<OnlinePlayStatus>("online_play_remove");
+
+export const listenOnlinePlayInstallProgress = async (
+  onProgress: (progress: OnlinePlayInstallProgress) => void,
+): Promise<() => void> => {
+  await tauriInitialized;
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await listen<OnlinePlayInstallProgress>(
+    "online-play-install-progress",
+    (e) => onProgress(e.payload),
+  );
+  return () => {
+    unlisten();
+  };
+};
 
 /** Keep a streamed track: copy it to the download folder and index it. */
 export const downloadSourceTrack = (track: SourceTrack): Promise<Track> => {
