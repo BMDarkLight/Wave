@@ -470,6 +470,7 @@ impl PeerService {
             (new, announce)
         };
         if new {
+            tracing::info!("Found the Wave \"{name}\" at {address}");
             if paired.is_some() {
                 self.host.reachable(id, true);
             }

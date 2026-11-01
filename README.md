@@ -214,6 +214,13 @@ picks what the other may see: everything, nothing, or songs chosen in the same
 picker used to add songs to a playlist. Paired devices find each other again
 on their own, even after one gets a new address.
 
+Waves find each other with the LAN beacon from
+[Radii](https://github.com/BMDarkLight/Radii): each broadcasts a short hello
+on UDP port 7101 and answers the ones it hears, so it works even where
+devices hear each other only one way, such as on a phone's hotspot. If two
+devices still don't see each other, choose **Enter address** on the Devices
+page and type the address the other one shows under **This device**.
+
 - Each device gets its own playlist, named after it, listing everything it
   shares. While the device is off or away, the playlist stays and its songs are
   marked offline; they leave your library until it is back.

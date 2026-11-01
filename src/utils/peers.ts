@@ -62,6 +62,11 @@ export const dismissWavePeer = (id: string): Promise<void> =>
 export const forgetWavePeer = (id: string): Promise<void> =>
   safeInvoke("forget_wave_peer", { id });
 
+/** Find the Wave at a typed address, for networks where Waves don't hear
+ *  each other. Resolves to its id. */
+export const connectWaveAddress = (address: string): Promise<string> =>
+  safeInvoke<string>("connect_wave_address", { address });
+
 /** Look for other Waves now rather than at the next round. */
 export const searchWavePeers = (): Promise<void> =>
   safeInvoke("search_wave_peers");

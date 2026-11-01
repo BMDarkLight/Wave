@@ -7,8 +7,8 @@
 // https://github.com/BMDarkLight/Wave
 
 //! The Wi-Fi multicast lock library sharing holds, through the Java
-//! `WifiMulticast` class. Without it Android drops the searches other devices
-//! send, and the shared library could only be added by its address.
+//! `WifiMulticast` class. Without it Android drops the broadcast hellos other
+//! Waves send, and they could only be found by typing in their address.
 
 use jni::objects::{JObject, JValue};
 use jni::JavaVM;

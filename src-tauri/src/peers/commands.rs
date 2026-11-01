@@ -282,6 +282,26 @@ pub async fn dismiss_wave_peer(id: String, app: AppHandle) -> Result<(), String>
     Ok(())
 }
 
+/// Find the Wave at an address typed in by hand, for networks where Waves
+/// don't hear each other. Sends this Wave's hello there too, so the other
+/// side finds this one. Returns the Wave's id.
+#[tauri::command]
+pub async fn connect_wave_address(address: String, app: AppHandle) -> Result<String, String> {
+    blocking(move || {
+        let (base, host) = super::discovery::base_for_typed(&address)?;
+        let hello = client::hello(&base)
+            .map_err(|_| format!("No Wave answered at {host}. Is Outside Sourcing on there?"))?;
+        let service = service(&app);
+        if hello.id == service.host().identity().0 {
+            return Err("That's this Wave's own address".into());
+        }
+        service.sighted(&hello.id, &hello.name, &base);
+        super::discovery::knock(host);
+        Ok(hello.id)
+    })
+    .await
+}
+
 /// Look for other Waves now, instead of at the next round.
 #[tauri::command]
 pub async fn search_wave_peers() -> Result<(), String> {

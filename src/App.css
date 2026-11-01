@@ -9933,6 +9933,57 @@ div.album-hero-cover {
   margin-top: 0;
 }
 
+.wdev-section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.wdev-section-row .wdev-section {
+  margin: 0;
+}
+
+.wdev-address-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wdev-address {
+  gap: 8px;
+}
+
+.wdev-address-label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wdev-address-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.wdev-address-row .mset-key-input {
+  flex: 1 1 180px;
+}
+
+/* Wraps as one piece, so Cancel never sits on a line of its own. */
+.wdev-address-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.wdev-address-problem {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .wdev-card {
   display: flex;
   flex-direction: column;

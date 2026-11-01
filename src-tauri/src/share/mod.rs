@@ -14,11 +14,10 @@
 //! other addresses are dropped.
 //!
 //! [`catalog`] reads the shared songs from the library, [`http`] serves
-//! them, [`ssdp`] makes this Wave findable.
+//! them, and [`crate::peers::discovery`] makes this Wave findable.
 
 pub mod catalog;
 pub mod http;
-pub mod ssdp;
 
 use crate::library::Library;
 use catalog::Snapshot;
@@ -33,7 +32,7 @@ use std::time::{Duration, Instant};
 
 /// The port asked for first, so a client that remembered the address finds
 /// the server again after a restart. Any free port is used when it's taken.
-const PREFERRED_PORT: u16 = 50800;
+pub(crate) const PREFERRED_PORT: u16 = 50800;
 
 /// What the server is started with.
 #[derive(Clone)]
@@ -146,29 +145,15 @@ fn start(config: ShareConfig) -> Result<Running, String> {
             .spawn(move || http::serve(listener, server, http_stop))
             .map_err(|e| e.to_string())?,
     );
-    let ssdp_stop = stop.clone();
-    let ssdp_error = error.clone();
-    let uuid = config.uuid.clone();
-    let (heard_tx, heard_rx) = std::sync::mpsc::channel();
-    threads.push(
-        std::thread::Builder::new()
-            .name("wave-share-ssdp".into())
-            .spawn(move || {
-                if let Err(e) = ssdp::run(uuid, port, ssdp_stop, Some(heard_tx)) {
-                    tracing::warn!("Wave can't announce itself on the network: {e}");
-                    *ssdp_error.lock() = Some(format!(
-                        "Other Waves can't find this one on their own ({e})"
-                    ));
-                }
-            })
-            .map_err(|e| e.to_string())?,
-    );
     let peers = config.peers.clone();
     let discovery_stop = stop.clone();
+    let discovery_error = error.clone();
     threads.push(
         std::thread::Builder::new()
             .name("wave-peer-discovery".into())
-            .spawn(move || crate::peers::discovery::run(peers, discovery_stop, heard_rx))
+            .spawn(move || {
+                crate::peers::discovery::run(peers, port, discovery_stop, discovery_error)
+            })
             .map_err(|e| e.to_string())?,
     );
     #[cfg(target_os = "android")]

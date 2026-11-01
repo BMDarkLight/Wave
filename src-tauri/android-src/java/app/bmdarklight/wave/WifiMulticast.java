@@ -7,8 +7,9 @@ import androidx.annotation.Keep;
 
 /**
  * Holds a Wi-Fi multicast lock while Wave is reachable by other Waves, so
- * the phone hears the searches they send to find it. Android drops
- * multicast without one to save power. Needs CHANGE_WIFI_MULTICAST_STATE.
+ * the phone hears the hellos they broadcast to find it. Android drops
+ * broadcast and multicast without one to save power. Needs
+ * CHANGE_WIFI_MULTICAST_STATE.
  */
 @Keep
 public final class WifiMulticast {

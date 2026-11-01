@@ -12,6 +12,7 @@ import { useState } from "react";
 import {
   BiChevronLeft,
   BiDevices,
+  BiLink,
   BiPlayCircle,
   BiRefresh,
   BiWifi,
@@ -19,6 +20,7 @@ import {
 import type { SourceSettings } from "../utils/player";
 import {
   answerWaveRequest,
+  connectWaveAddress,
   connectWavePeer,
   forgetWavePeer,
   setWaveShare,
@@ -75,6 +77,7 @@ export default function WaveDevicesPage({
   onBack: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
+  const [typing, setTyping] = useState(false);
   const on = sourceSettings.remote_sources_enabled;
 
   const run = async (
@@ -301,7 +304,27 @@ export default function WaveDevicesPage({
               </>
             )}
 
-            <h2 className="wdev-section">On this network</h2>
+            <div className="wdev-section-row">
+              <h2 className="wdev-section">On this network</h2>
+              {!typing && (
+                <button
+                  className="btn-ghost btn-sm wdev-address-open"
+                  type="button"
+                  onClick={() => setTyping(true)}
+                >
+                  <BiLink aria-hidden /> Enter address
+                </button>
+              )}
+            </div>
+            {typing && (
+              <AddressForm
+                onConnected={() => {
+                  setTyping(false);
+                  onChanged();
+                }}
+                onCancel={() => setTyping(false)}
+              />
+            )}
             {nearby.map((peer) => (
               <div key={peer.id} className="wdev-card">
                 <DeviceHead
@@ -355,6 +378,10 @@ export default function WaveDevicesPage({
                         A VPN or a guest network can keep devices from seeing
                         each other.
                       </li>
+                      <li>
+                        Or use Enter address with the address shown under This
+                        device on the other Wave.
+                      </li>
                     </ul>
                   </div>
                 </div>
@@ -373,6 +400,84 @@ export default function WaveDevicesPage({
         )}
       </section>
     </main>
+  );
+}
+
+/** Reaches a Wave by the address it shows under This device. */
+function AddressForm({
+  onConnected,
+  onCancel,
+}: {
+  onConnected: () => void;
+  onCancel: () => void;
+}) {
+  const [address, setAddress] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const connect = async () => {
+    setConnecting(true);
+    setProblem(null);
+    try {
+      await connectWaveAddress(address);
+      onConnected();
+    } catch (err) {
+      setProblem(formatInvokeError(err, "Couldn't reach that address"));
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  return (
+    <form
+      className="wdev-card wdev-address"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (address.trim() && !connecting) void connect();
+      }}
+    >
+      <label className="wdev-address-label" htmlFor="wdev-address">
+        Address of the other Wave
+      </label>
+      <div className="wdev-address-row">
+        <input
+          id="wdev-address"
+          className="mset-key-input"
+          type="text"
+          inputMode="decimal"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="192.168.1.20"
+          value={address}
+          autoFocus
+          onChange={(event) => setAddress(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") onCancel();
+          }}
+        />
+        <div className="wdev-address-buttons">
+          <button
+            className="btn-primary btn-sm"
+            type="submit"
+            disabled={!address.trim() || connecting}
+          >
+            {connecting ? "Connecting…" : "Connect"}
+          </button>
+          <button className="btn-ghost btn-sm" type="button" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+      {problem ? (
+        <p className="wdev-address-problem" role="alert">
+          {problem}
+        </p>
+      ) : (
+        <p className="wdev-hint">
+          The other Wave shows it under This device on its Devices page.
+        </p>
+      )}
+    </form>
   );
 }
 
