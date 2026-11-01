@@ -456,6 +456,7 @@ pub fn run() {
             sources::youtube::commands::online_play_status,
             commands::online_artist,
             commands::online_album,
+            commands::online_track_refs,
             sources::youtube::commands::online_play_install,
             sources::youtube::commands::online_play_remove,
             commands::set_source_settings,

@@ -456,7 +456,7 @@ export default function MobileSettings({
   const [lyricsBusy, setLyricsBusy] = useState(false);
   const [lyricsStatus, setLyricsStatus] = useState<string | null>(null);
   const [onAndroid, setOnAndroid] = useState(false);
-  // Desktop only; stays null on Android, where Online play can't run.
+  // What Online play needs before it can be turned on, once known.
   const [onlinePlay, setOnlinePlay] = useState<OnlinePlayStatus | null>(null);
   const [askingOnlinePlay, setAskingOnlinePlay] = useState(false);
   const [onlinePlayError, setOnlinePlayError] = useState<string | null>(null);
@@ -472,6 +472,10 @@ export default function MobileSettings({
   useEffect(() => {
     refreshMediaFolders();
     void (async () => {
+      // Online play runs on both: Android without installing anything.
+      getOnlinePlayStatus()
+        .then(setOnlinePlay)
+        .catch(() => {});
       // Android only exposes ExoPlayer (system default) — hide the section.
       if (await isAndroid()) {
         setOnAndroid(true);
@@ -483,9 +487,6 @@ export default function MobileSettings({
         .catch(() => {});
       listOutputDevices()
         .then(setOutputDevices)
-        .catch(() => {});
-      getOnlinePlayStatus()
-        .then(setOnlinePlay)
         .catch(() => {});
     })();
   }, []);

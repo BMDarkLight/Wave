@@ -23,6 +23,7 @@ import MobileFilterField from "./MobileFilterField";
 import TrackMenuButton from "./TrackMenuButton";
 import VirtualizedList from "./VirtualizedList";
 import CoupleMarker from "./CoupleMarker";
+import RemoteBadge from "./RemoteBadge";
 
 const formatTime = (seconds?: number | null) => {
   if (!seconds || !Number.isFinite(seconds)) return "0:00";
@@ -303,6 +304,7 @@ export default function PlayedTracksPage({
                           {track.artist || "Unknown"}
                           {track.album ? ` · ${track.album}` : ""}
                           <span className="track-meta-icons">
+                            <RemoteBadge track={track} />
                             <CoupleMarker path={track.path} />
                           </span>
                         </div>

@@ -32,7 +32,8 @@ import Artwork from "./Artwork";
 import WaveformSeek from "./WaveformSeek";
 import { formatTime } from "../utils/format";
 import { getTrackTitle } from "../utils/track";
-import { isRemote } from "../utils/remote";
+import { isOnlineSong, isRemote } from "../utils/remote";
+import { OnlineLabel } from "./RemoteBadge";
 import { formatSpeed } from "../utils/player";
 import { beginSeekGesture, endSeekGesture } from "../utils/seekGesture";
 import type {
@@ -239,12 +240,17 @@ export default function PlayerBar({
             title={currentTrack ? "Open now playing" : undefined}
           >
             {getTrackTitle(currentTrack, playbackState.current_path)}
-            {currentTrack && isRemote(currentTrack) && (
-              <BiCloud
-                className="now-playing-remote"
-                title="Playing from another device"
-                aria-label="Playing from another device"
-              />
+            {currentTrack && isOnlineSong(currentTrack) ? (
+              <OnlineLabel />
+            ) : (
+              currentTrack &&
+              isRemote(currentTrack) && (
+                <BiCloud
+                  className="now-playing-remote"
+                  title="Playing from another device"
+                  aria-label="Playing from another device"
+                />
+              )
             )}
           </button>
           <button

@@ -740,6 +740,18 @@ export const getOnlineArtist = (
 ): Promise<OnlineArtistPage> =>
   safeInvoke<OnlineArtistPage>("online_artist", { provider, id });
 
+/** Where an Online play song's artist and album pages are. */
+export interface OnlineRefs {
+  provider: string;
+  artist_ref: string | null;
+  album_ref: string | null;
+}
+
+/** The online artist and album of a song streamed from a catalog, or null
+ * for anything else. */
+export const getOnlineTrackRefs = (path: string): Promise<OnlineRefs | null> =>
+  safeInvoke<OnlineRefs | null>("online_track_refs", { path });
+
 export const getOnlineAlbum = (
   provider: string,
   id: string,

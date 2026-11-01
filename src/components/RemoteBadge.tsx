@@ -8,12 +8,14 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { BiCloud, BiSolidCloud } from "react-icons/bi";
+import { BiCloud, BiGlobe, BiSolidCloud } from "react-icons/bi";
 import type { Track } from "../utils/player";
-import { isRemote } from "../utils/remote";
+import { isOnlineSong, isRemote } from "../utils/remote";
 
-/** Marks a track that lives on a server. Filled once it is fully cached. */
+/** Marks a track that lives on a server, filled once it is fully cached, and
+ * a song streamed from an online catalog with an "Online" label. */
 export default function RemoteBadge({ track }: { track: Track }) {
+  if (isOnlineSong(track)) return <OnlineLabel />;
   if (!isRemote(track)) return null;
   const cached = track.cache_state === "complete";
   return (
@@ -23,6 +25,18 @@ export default function RemoteBadge({ track }: { track: Track }) {
       aria-label={cached ? "Remote, cached" : "Remote"}
     >
       {cached ? <BiSolidCloud /> : <BiCloud />}
+    </span>
+  );
+}
+
+/** Says a song is streamed online, not kept in the library. */
+export function OnlineLabel() {
+  return (
+    <span
+      className="track-online-label"
+      title="Streamed online, not in your library"
+    >
+      <BiGlobe aria-hidden /> Online
     </span>
   );
 }

@@ -20,6 +20,7 @@ import {
 } from "react";
 import { BiFolderOpen, BiSearch, BiChevronRight } from "react-icons/bi";
 import type { SourceSettings, SourceTrack } from "./utils/player";
+import { getOnlineTrackRefs } from "./utils/player";
 import {
   addTrackToPlaylistById,
   addTracksToPlaylistById,
@@ -180,6 +181,7 @@ import RemoteSourceSetupDialog from "./components/dialogs/RemoteSourceSetupDialo
 import {
   RemoteStatusContext,
   downloadRemoteTrack,
+  isOnlineSong,
   listenToLibraryChanged,
   listenToRemoteStreamFailed,
   listenToRemoteTrackCached,
@@ -2289,6 +2291,40 @@ function App() {
     openOnlineAlbum(provider, id, title);
   };
 
+  // A song streamed from an online catalog has no library artist or album
+  // to open: its links go to the catalog's pages, and anything else's to the
+  // library's.
+  const openArtistOf = (track: Track | null, name: string) => {
+    if (!track || !isOnlineSong(track)) {
+      openArtistPage(name);
+      return;
+    }
+    void getOnlineTrackRefs(track.path)
+      .then((refs) =>
+        refs?.artist_ref
+          ? goToOnlineArtist(refs.provider, refs.artist_ref, name)
+          : setError("This song's artist has no page online"),
+      )
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
+  const openAlbumOf = (
+    track: Track | null,
+    name: string,
+    albumArtist: string | null,
+  ) => {
+    if (!track || !isOnlineSong(track)) {
+      openAlbumPage(name, albumArtist);
+      return;
+    }
+    void getOnlineTrackRefs(track.path)
+      .then((refs) =>
+        refs?.album_ref
+          ? goToOnlineAlbum(refs.provider, refs.album_ref, name)
+          : setError("This song's album has no page online"),
+      )
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
+
   const playSearchHit = (path: string) => {
     const paths = displayedMainSearchHits.map((h) => h.track.path);
     const index = Math.max(
@@ -2739,7 +2775,11 @@ function App() {
               refreshKey={browseRefresh}
               playbackState={playbackState}
             />
-          ) : mainView === "home" && !mainSearchQuery.trim() ? (
+          ) : mainView === "home" &&
+            !mainSearchQuery.trim() &&
+            // On desktop the search field sits in the Library view's header,
+            // so opening search from Home shows that view, field focused.
+            !(mainSearchOpen && !isMobileLayout()) ? (
             <HomePage
               libraryPlaylistId={libraryPlaylist?.id ?? null}
               onPlayTrack={(path, tracks) => {
@@ -3039,8 +3079,10 @@ function App() {
                 track={lyricsPanelTrack}
                 fullCover={lyricsFullCover}
                 onClose={closeRightPanelDelayed}
-                onOpenArtist={openArtistPage}
-                onOpenAlbum={openAlbumPage}
+                onOpenArtist={(name) => openArtistOf(lyricsPanelTrack, name)}
+                onOpenAlbum={(name, albumArtist) =>
+                  openAlbumOf(lyricsPanelTrack, name, albumArtist)
+                }
                 timedLyrics={timedLyrics}
                 activeLyricIndex={activeLyricIndex}
                 activeLyricLineRef={activeLyricLineRef}
@@ -3134,8 +3176,10 @@ function App() {
                       ),
                     );
                   }}
-                  onGoToAlbum={openAlbumPage}
-                  onGoToArtist={openArtistPage}
+                  onGoToAlbum={(name, albumArtist) =>
+                    openAlbumOf(menuTrack, name, albumArtist)
+                  }
+                  onGoToArtist={(name) => openArtistOf(menuTrack, name)}
                   onRemoveFromPlaylist={(path) =>
                     void handleRemoveFromPlaylist(path)
                   }
@@ -3325,8 +3369,10 @@ function App() {
             volumeIconRef={volumeIconRef}
             onOpenMobilePlayer={handleOpenMobilePlayer}
             onOpenNowPlaying={handleOpenNowPlaying}
-            onOpenArtist={openArtistPage}
-            onOpenAlbum={openAlbumPage}
+            onOpenArtist={(name) => openArtistOf(currentTrack ?? null, name)}
+            onOpenAlbum={(name, albumArtist) =>
+              openAlbumOf(currentTrack ?? null, name, albumArtist)
+            }
             onToggleShuffle={handleToggleShuffle}
             onReshuffleMashup={reshuffleMashup}
             onPrevious={handlePrevious}
@@ -3404,12 +3450,12 @@ function App() {
               onOpenArtist={(name) => {
                 armDragDismissGhostClickGuard();
                 forceCloseMobilePlayer();
-                openArtistPage(name);
+                openArtistOf(currentTrack ?? null, name);
               }}
               onOpenAlbum={(name, albumArtist) => {
                 armDragDismissGhostClickGuard();
                 forceCloseMobilePlayer();
-                openAlbumPage(name, albumArtist);
+                openAlbumOf(currentTrack ?? null, name, albumArtist);
               }}
               volumeValue={volumeValue}
               onVolumeChange={handleVolume}

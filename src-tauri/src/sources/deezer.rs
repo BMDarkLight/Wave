@@ -184,6 +184,24 @@ impl Deezer {
         ))
     }
 
+    /// The artist and album ids of one track, for links from a song that is
+    /// playing.
+    pub fn track_refs(
+        &self,
+        client: &Client,
+        id: &str,
+    ) -> Result<(Option<String>, Option<String>), SourceError> {
+        let id = checked_id(id)?;
+        let track = check(get_json(
+            client,
+            &format!("https://api.deezer.com/track/{id}"),
+        )?)?;
+        Ok((
+            track.get("artist").and_then(|a| id_field(a, "id")),
+            track.get("album").and_then(|a| id_field(a, "id")),
+        ))
+    }
+
     pub fn album_page(&self, client: &Client, id: &str) -> Result<AlbumPage, SourceError> {
         let id = checked_id(id)?;
         let album = check(get_json(

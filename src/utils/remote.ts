@@ -281,6 +281,12 @@ export function isRemote(track: Pick<Track, "source_state">): boolean {
   return track.source_state === "remote";
 }
 
+/** A song streamed from an online catalog (Online play among them), rather
+ * than one from the library or from a server of the user's own. */
+export function isOnlineSong(track: Pick<Track, "path">): boolean {
+  return track.path.startsWith("wave-remote://search/");
+}
+
 /**
  * Why a track can't start right now, or null when it can. Local tracks,
  * downloads and fully cached remote tracks always can.

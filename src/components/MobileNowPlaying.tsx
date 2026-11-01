@@ -36,7 +36,8 @@ import {
   BiVolumeLow,
   BiVolumeFull,
 } from "react-icons/bi";
-import { isRemote } from "../utils/remote";
+import { isOnlineSong, isRemote } from "../utils/remote";
+import { OnlineLabel } from "./RemoteBadge";
 import MashupButton from "./MashupButton";
 import {
   getTrackFullCover,
@@ -1002,12 +1003,16 @@ export default function MobileNowPlaying({
           <BiChevronDown />
         </button>
         <span className="mnp-header-label">
-          {isRemote(track) && (
-            <BiCloud
-              className="mnp-remote"
-              title="Playing from another device"
-              aria-label="Playing from another device"
-            />
+          {isOnlineSong(track) ? (
+            <OnlineLabel />
+          ) : (
+            isRemote(track) && (
+              <BiCloud
+                className="mnp-remote"
+                title="Playing from another device"
+                aria-label="Playing from another device"
+              />
+            )
           )}
           {castName ? (
             <span className="mnp-cast">

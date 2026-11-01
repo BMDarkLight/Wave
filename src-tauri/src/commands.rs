@@ -4899,6 +4899,47 @@ fn mark_owned(
     Ok(())
 }
 
+/// Where an Online play song's artist and album pages are.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OnlineRefs {
+    pub provider: String,
+    pub artist_ref: Option<String>,
+    pub album_ref: Option<String>,
+}
+
+/// The online artist and album of a streamed catalog song, for its links in
+/// Now Playing. `None` for anything else, whose links stay in the library.
+#[tauri::command]
+pub async fn online_track_refs(
+    path: String,
+    app: tauri::AppHandle,
+) -> Result<Option<OnlineRefs>, String> {
+    let Some(uri) = RemoteUri::parse(&path) else {
+        return Ok(None);
+    };
+    if uri.source_id != search_stream::SEARCH_SOURCE {
+        return Ok(None);
+    }
+    let Some(("deezer", id)) = uri.remote_id.split_once(':') else {
+        return Ok(None);
+    };
+    if online_pages_allowed(&app).is_err() {
+        return Ok(None);
+    }
+    let id = id.to_string();
+    let (artist_ref, album_ref) = blocking(move || {
+        sources::deezer::Deezer { online_play: true }
+            .track_refs(sources::source_client(), &id)
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    Ok(Some(OnlineRefs {
+        provider: "deezer".into(),
+        artist_ref,
+        album_ref,
+    }))
+}
+
 /// An artist's page from an online catalog: their top songs and albums.
 #[tauri::command]
 pub async fn online_artist(
