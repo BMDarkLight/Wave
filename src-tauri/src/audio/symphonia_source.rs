@@ -194,14 +194,17 @@ impl SymphoniaSource {
             .make(&codec_params, &decoder_opts)
             .map_err(|error| AudioError::Decode(format!("Failed to create decoder: {error}")))?;
 
-        let total_duration =
-            codec_params
-                .time_base
-                .zip(codec_params.n_frames)
-                .map(|(base, frames)| {
-                    let time = base.calc_time(frames);
-                    Duration::from_secs(time.seconds) + Duration::from_secs_f64(time.frac)
-                });
+        let total_duration = codec_params
+            .time_base
+            .zip(codec_params.n_frames)
+            .map(|(base, frames)| {
+                let time = base.calc_time(frames);
+                Duration::from_secs(time.seconds) + Duration::from_secs_f64(time.frac)
+            })
+            // Fragmented MP4 (YouTube's format 140) declares zero frames in
+            // its empty moov. That means unknown, and treating it as a real
+            // length would clamp every seek to the start.
+            .filter(|duration| !duration.is_zero());
 
         let (buffer, spec) = Self::decode_first_packet(&mut probed.format, &mut decoder, track_id)?;
 
@@ -511,5 +514,110 @@ mod id3_tests {
         assert_eq!(&buf, b"efgh");
 
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// Can we decode and seek the two audio formats YouTube serves? Format 140 is
+/// AAC in fragmented MP4 (ftyp, empty moov, sidx, then moof/mdat pairs) and
+/// 251 is Opus in WebM. Point `WAVE_SPIKE_DIR` at sample files and run with
+/// `cargo test stream_spike -- --ignored --nocapture`.
+#[cfg(test)]
+mod stream_spike {
+    use super::*;
+    use std::time::Instant;
+
+    fn open(path: &Path) -> SymphoniaSource {
+        let ext = path.extension().and_then(|e| e.to_str());
+        let label = path.to_string_lossy();
+        SymphoniaSource::from_media_source(Box::new(File::open(path).unwrap()), ext, &label)
+            .unwrap_or_else(|e| panic!("open {label}: {e}"))
+    }
+
+    /// Frame offset into `reference` (channel 0) that best matches `probe`,
+    /// searched within `radius` frames of `expected`, plus its correlation.
+    fn locate(
+        reference: &[i16],
+        channels: usize,
+        probe: &[i16],
+        expected: usize,
+        radius: usize,
+    ) -> (usize, f64) {
+        let ref_frames = reference.len() / channels;
+        let probe: Vec<f64> = probe.iter().step_by(channels).map(|&s| s as f64).collect();
+        let probe_energy: f64 = probe.iter().map(|s| s * s).sum();
+        let mut best = (expected, f64::MIN);
+        for start in expected.saturating_sub(radius)..=(expected + radius) {
+            if start + probe.len() > ref_frames {
+                break;
+            }
+            let (mut dot, mut energy) = (0.0, 0.0);
+            for (i, p) in probe.iter().enumerate() {
+                let r = reference[(start + i) * channels] as f64;
+                dot += p * r;
+                energy += r * r;
+            }
+            let corr = dot / (probe_energy * energy).sqrt().max(1.0);
+            if corr > best.1 {
+                best = (start, corr);
+            }
+        }
+        best
+    }
+
+    #[test]
+    #[ignore]
+    fn stream_spike() {
+        let dir = std::env::var("WAVE_SPIKE_DIR").expect("set WAVE_SPIKE_DIR");
+        let mut paths: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("m4a" | "webm")))
+            .collect();
+        paths.sort();
+
+        for path in paths {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let started = Instant::now();
+            let src = open(&path);
+            let (rate, channels) = (src.sample_rate() as usize, src.channels() as usize);
+            let reported = src.total_duration();
+            let opened = started.elapsed();
+
+            let mut src = src;
+            let full: Vec<i16> = src.by_ref().collect();
+            let decoded_secs = full.len() as f64 / (rate * channels) as f64;
+            println!(
+                "\n{name}: {rate} Hz x{channels}, open {opened:?}, total_duration {reported:?}, \
+                 decoded {decoded_secs:.2}s, stopped early: {:?}",
+                src.failure()
+            );
+
+            let mut src = open(&path);
+            for target in [90.0, 20.0, 151.7, 5.0, 37.3, 178.0] {
+                let t = Instant::now();
+                let result = src.try_seek(Duration::from_secs_f64(target));
+                let took = t.elapsed();
+                if let Err(e) = result {
+                    println!("  seek {target:>6.1}s  FAILED in {took:?}: {e}");
+                    continue;
+                }
+                // Skip the first 50 ms so codec priming after the jump can't
+                // blur the match, then compare 50 ms of audio.
+                let skip = rate / 20 * channels;
+                let window = rate / 20 * channels;
+                let got: Vec<i16> = src.by_ref().take(skip + window).collect();
+                if got.len() < skip + window {
+                    println!(
+                        "  seek {target:>6.1}s  ok in {took:?}, only {} samples after",
+                        got.len()
+                    );
+                    continue;
+                }
+                let expected = (target * rate as f64) as usize + rate / 20;
+                let (found, corr) = locate(&full, channels, &got[skip..], expected, rate / 4);
+                let err_ms = (found as f64 - expected as f64) * 1000.0 / rate as f64;
+                println!("  seek {target:>6.1}s  in {took:?}  landed {err_ms:+.1} ms off  corr {corr:.3}");
+            }
+        }
     }
 }
