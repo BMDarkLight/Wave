@@ -11,7 +11,7 @@
 import { useEffect, useRef, type DependencyList } from "react";
 
 /** Scroll distance (px) over which the fade comes all the way in. */
-const FADE_IN_DISTANCE = 48;
+const FADE_IN_DISTANCE = 64;
 
 /** Full-screen layers that sit above the fade; their scrolling is theirs. */
 const OVERLAYS = ".mobile-now-playing, .mobile-settings-page, .mnp-sheet";

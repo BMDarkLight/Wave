@@ -7849,7 +7849,9 @@ div.album-hero-cover {
   }
 }
 
-.main-content {
+/* Fade the page's contents in over the (already painted) panel background, so
+   the transition never flashes the window colour through a transparent card. */
+.main-content > * {
   animation: page-fade-in 0.22s ease;
 }
 
@@ -7925,7 +7927,7 @@ div.album-hero-cover {
 
 /* Pages, sheets and menus land in place at once. Spinners and the scan bar
    keep moving because they say something is still working. */
-.no-motion .main-content {
+.no-motion .main-content > * {
   animation: none;
 }
 
@@ -8609,16 +8611,17 @@ div.album-hero-cover {
     z-index: 55;
     /* Covers the status bar and softens just below it, short of a search
        bar or header pinned under the status bar. */
-    height: calc(env(safe-area-inset-top, 0px) + 10px);
+    height: calc(env(safe-area-inset-top, 0px) + 24px);
     background: linear-gradient(
       to bottom,
-      rgba(var(--glass-card), 0.92) 0,
-      rgba(var(--glass-card), 0.8) env(safe-area-inset-top, 0px),
+      rgba(var(--glass-card), 0.9) 0,
+      rgba(var(--glass-card), 0.7) env(safe-area-inset-top, 0px),
+      rgba(var(--glass-card), 0.35) calc(env(safe-area-inset-top, 0px) + 12px),
       rgba(var(--glass-card), 0) 100%
     );
     /* Clear at the top of a page; useStatusFade brings it in on scroll. */
     opacity: 0;
-    transition: opacity 0.15s linear;
+    transition: opacity 0.3s ease;
     pointer-events: none;
   }
 
