@@ -8723,12 +8723,12 @@ div.album-hero-cover {
 
 /* Sort menu: active option and its arrow stand out in the accent colour. */
 .sort-active {
-  color: var(--tint-blue);
+  color: #4ade80;
   font-weight: 600;
 }
 .sort-indicator {
   margin-left: 6px;
-  color: var(--tint-blue);
+  color: #4ade80;
   font-weight: 700;
 }
 

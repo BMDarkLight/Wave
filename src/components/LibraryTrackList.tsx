@@ -468,10 +468,10 @@ export default function LibraryTrackList({
                       >
                         {label}
                         {active && direction === "asc" && (
-                          <span className="sort-indicator">↑</span>
+                          <span className="sort-indicator">▲</span>
                         )}
                         {active && direction === "desc" && (
-                          <span className="sort-indicator">↓</span>
+                          <span className="sort-indicator">▼</span>
                         )}
                       </button>
                     );
