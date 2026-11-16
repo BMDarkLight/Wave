@@ -448,11 +448,17 @@ export default function LibraryTrackList({
                             : "Album";
                     const active = sortColumn === column;
                     const direction = active ? sortDirection : "none";
+                    const firstDirection =
+                      column === "recent" || column === "duration"
+                        ? "desc"
+                        : "asc";
                     const nextDirection =
                       direction === "none"
-                        ? "asc"
-                        : direction === "asc"
-                          ? "desc"
+                        ? firstDirection
+                        : direction === firstDirection
+                          ? firstDirection === "asc"
+                            ? "desc"
+                            : "asc"
                           : "none";
                     const nextColumn = nextDirection === "none" ? "index" : column;
                     return (
