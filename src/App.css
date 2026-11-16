@@ -8321,7 +8321,8 @@ div.album-hero-cover {
   }
 
   :root[data-theme="light"] .mlib-row-icon-devices {
-    background: hsl(var(--device-hue, 142), 52%, 62%);
+    background: hsl(var(--device-hue, 142), 48%, 72%);
+    color: #15803d;
   }
 
   .mlib-row-icon-favorites,
