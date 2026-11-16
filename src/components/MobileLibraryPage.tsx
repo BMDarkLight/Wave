@@ -61,6 +61,7 @@ function Row({
   tone,
   iconBg,
   iconColor,
+  deviceHue,
   label,
   count,
   synced = false,
@@ -75,6 +76,8 @@ function Row({
   iconBg?: string;
   /** Custom colour for the icon glyph. */
   iconColor?: string;
+  /** Hue used for a device playlist's background. */
+  deviceHue?: number;
   label: string;
   count?: number;
   /** Kept in step with a music folder. */
@@ -94,6 +97,9 @@ function Row({
         style={{
           ...(iconBg ? { background: iconBg } : {}),
           ...(iconColor ? { color: iconColor } : {}),
+          ...(deviceHue !== undefined
+            ? ({ "--device-hue": deviceHue } as React.CSSProperties)
+            : {}),
         }}
       >
         {icon}
@@ -133,15 +139,17 @@ function Row({
   );
 }
 
-/** Stable pseudo-random colour for a device playlist's icon. */
-function deviceColor(seed: string): string {
+/** Stable pseudo-random hue for a device playlist's icon, avoiding the
+ *  green range used by the Devices glyph itself. */
+function deviceHue(seed: string): number {
   let hash = 0;
   for (let i = 0; i < seed.length; i++) {
     hash = (hash << 5) - hash + seed.charCodeAt(i);
     hash |= 0;
   }
   const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 60%, 45%)`;
+  // Skip hues too close to the green device glyph so the icon stays legible.
+  return hue >= 100 && hue <= 175 ? (hue + 120) % 360 : hue;
 }
 
 export default function MobileLibraryPage({
@@ -283,7 +291,10 @@ export default function MobileLibraryPage({
               <Row
                 key={playlist.id}
                 icon={playlist.peer_source_id ? <BiDevices /> : <BiListUl />}
-                iconBg={playlist.peer_source_id ? deviceColor(playlist.id) : undefined}
+                tone={playlist.peer_source_id ? "devices" : undefined}
+                deviceHue={
+                  playlist.peer_source_id ? deviceHue(playlist.id) : undefined
+                }
                 iconColor={playlist.peer_source_id ? "#4ade80" : undefined}
                 label={playlist.name}
                 count={playlist.track_count}

@@ -8316,20 +8316,25 @@ div.album-hero-cover {
   }
 
   .mlib-row-icon-devices {
-    background: linear-gradient(135deg, #166534, #22c55e);
+    background: hsl(var(--device-hue, 142), 46%, 38%);
+    color: #4ade80;
+  }
+
+  :root[data-theme="light"] .mlib-row-icon-devices {
+    background: hsl(var(--device-hue, 142), 52%, 62%);
   }
 
   .mlib-row-icon-favorites,
   .mlib-row-icon-recent,
   .mlib-row-icon-mostplayed,
   .mlib-row-icon-albums,
-  .mlib-row-icon-artists,
-  .mlib-row-icon-devices {
+  .mlib-row-icon-artists {
     color: #fff;
   }
 
-  .mlib-row-icon-devices {
-    color: #4ade80;
+  .mlib-row-icon-albums,
+  .mlib-row-icon-artists {
+    color: #1f2937;
   }
 
   .mlib-row-label {
