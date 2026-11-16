@@ -258,7 +258,6 @@ export default function MobileLibraryPage({
             <Row
               icon={<BiDevices />}
               tone="devices"
-              iconColor="#4ade80"
               label="Devices"
               note={
                 devicesAsking > 0
@@ -295,7 +294,6 @@ export default function MobileLibraryPage({
                 deviceHue={
                   playlist.peer_source_id ? deviceHue(playlist.id) : undefined
                 }
-                iconColor={playlist.peer_source_id ? "#4ade80" : undefined}
                 label={playlist.name}
                 count={playlist.track_count}
                 synced={!!playlist.sync_folder}
