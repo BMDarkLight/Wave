@@ -548,6 +548,10 @@ export default function MobileNowPlaying({
   const [lyricsText, setLyricsText] = useState<string | null>(
     track.lyrics ?? null,
   );
+  const lyricsTextRef = useRef(lyricsText);
+  useEffect(() => {
+    lyricsTextRef.current = lyricsText;
+  }, [lyricsText]);
   const [lyricsSource, setLyricsSource] = useState<string | null>(
     track.lyrics_source ?? null,
   );
@@ -683,7 +687,10 @@ export default function MobileNowPlaying({
     ]).then(([cover, details]) => {
       if (cancelled) return;
       if (cover) setFullCover(cover);
-      if (details?.lyrics) {
+      // Only adopt stored lyrics when the track doesn't already carry them,
+      // so a fetch that landed in the meantime isn't clobbered by a stale
+      // details read.
+      if (details?.lyrics && lyricsTextRef.current == null) {
         setLyricsText(details.lyrics);
         setLyricsSource(details.lyrics_source ?? null);
       }
@@ -696,10 +703,8 @@ export default function MobileNowPlaying({
   // When lrclib/file sync finishes in the parent, currentTrack.lyrics updates
   // without a path change — keep the open lyrics view in sync.
   useEffect(() => {
-    if (track.lyrics) {
-      setLyricsText(track.lyrics);
-      setLyricsSource(track.lyrics_source ?? null);
-    }
+    setLyricsText(track.lyrics ?? null);
+    setLyricsSource(track.lyrics_source ?? null);
   }, [track.lyrics, track.lyrics_source]);
 
   // Same Rust parser the desktop panel uses, so LRC, Enhanced LRC, and TTML

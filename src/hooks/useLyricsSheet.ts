@@ -8,7 +8,7 @@
  * https://github.com/BMDarkLight/Wave
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { parseLyricsSheet, type LyricsSheet } from "../utils/player";
 
 /**
@@ -18,25 +18,39 @@ import { parseLyricsSheet, type LyricsSheet } from "../utils/player";
  * through one tested implementation, shared by the desktop panel and the
  * mobile now-playing view. A parse failure yields `null`, which callers render
  * as the raw text — lyrics that cannot be timed are still lyrics.
+ *
+ * A request id guards against out-of-order resolves: if the text changes
+ * while a parse is in flight, the stale result is ignored instead of
+ * overwriting the newer sheet.
  */
 export function useLyricsSheet(text?: string | null): LyricsSheet | null {
   const [sheet, setSheet] = useState<LyricsSheet | null>(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
     if (!text) {
       setSheet(null);
       return;
     }
-    let cancelled = false;
+    // Drop the previous sheet immediately so a track change never keeps
+    // showing the previous song's parsed lyrics while the new one parses.
+    setSheet(null);
+    const requestId = ++requestIdRef.current;
     parseLyricsSheet(text)
       .then((parsed) => {
-        if (!cancelled) setSheet(parsed);
+        if (requestIdRef.current !== requestId) return;
+        setSheet(parsed);
       })
       .catch(() => {
-        if (!cancelled) setSheet(null);
+        if (requestIdRef.current !== requestId) return;
+        setSheet(null);
       });
     return () => {
-      cancelled = true;
+      // Invalidate any in-flight parse for this text so a late resolve
+      // cannot overwrite a newer sheet.
+      if (requestIdRef.current === requestId) {
+        requestIdRef.current += 1;
+      }
     };
   }, [text]);
 

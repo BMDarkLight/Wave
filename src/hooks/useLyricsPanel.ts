@@ -46,10 +46,15 @@ export function useLyricsPanel({
   setQueueData: Dispatch<SetStateAction<QueueTrackState>>;
 }) {
   const [lyricsPanelTrack, setLyricsPanelTrack] = useState<Track | null>(null);
+  const lyricsPanelTrackRef = useRef<Track | null>(null);
+  useEffect(() => {
+    lyricsPanelTrackRef.current = lyricsPanelTrack;
+  }, [lyricsPanelTrack]);
   const [lyricsFullCover, setLyricsFullCover] = useState<string | null>(null);
   const activeLyricLineRef = useRef<HTMLButtonElement>(null);
   const [lyricsFetchPath, setLyricsFetchPath] = useState<string | null>(null);
   const lyricsFetchIdRef = useRef(0);
+  const lyricsLoadIdRef = useRef(0);
 
   const applyLyricsToTrack = (
     path: string,
@@ -72,13 +77,23 @@ export function useLyricsPanel({
       ...prev,
       tracks: prev.tracks.map((t) =>
         t.path === path
-          ? { ...t, lyrics, lyrics_source: lyricsSource ?? t.lyrics_source }
+          ? {
+              ...t,
+              lyrics,
+              lyrics_source: lyricsSource ?? t.lyrics_source,
+              has_synced_lyrics: hasTimestamps(lyrics),
+            }
           : t,
       ),
     }));
     setLyricsPanelTrack((prev) =>
       prev && prev.path === path
-        ? { ...prev, lyrics, lyrics_source: lyricsSource ?? prev.lyrics_source }
+        ? {
+            ...prev,
+            lyrics,
+            lyrics_source: lyricsSource ?? prev.lyrics_source,
+            has_synced_lyrics: hasTimestamps(lyrics),
+          }
         : prev,
     );
   };
@@ -91,20 +106,31 @@ export function useLyricsPanel({
     }
     let cancelled = false;
     const path = lyricsPanelTrack.path;
+    const loadId = ++lyricsLoadIdRef.current;
+    setLyricsFullCover(null);
     void (async () => {
       const [fullCover, details] = await Promise.all([
         getTrackFullCover(path),
         getTrackDetails(path),
       ]);
-      if (cancelled) return;
+      if (cancelled || lyricsLoadIdRef.current !== loadId) return;
       if (fullCover) setLyricsFullCover(fullCover);
       else setLyricsFullCover(null);
-      if (details?.lyrics) {
+      // Only adopt the stored lyrics when the panel track doesn't already
+      // have them, so an auto-fetch that landed in the meantime isn't
+      // clobbered by a stale details read.
+      if (
+        details?.lyrics &&
+        !lyricsPanelTrackRef.current?.lyrics
+      ) {
         applyLyricsToTrack(path, details.lyrics, details.lyrics_source);
       }
     })();
     return () => {
       cancelled = true;
+      if (lyricsLoadIdRef.current === loadId) {
+        lyricsLoadIdRef.current += 1;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lyricsPanelTrack?.path]);
