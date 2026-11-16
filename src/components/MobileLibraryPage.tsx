@@ -59,6 +59,8 @@ interface MobileLibraryPageProps {
 function Row({
   icon,
   tone,
+  iconBg,
+  iconColor,
   label,
   count,
   synced = false,
@@ -68,7 +70,11 @@ function Row({
   onClick,
 }: {
   icon: ReactNode;
-  tone?: "favorites";
+  tone?: "favorites" | "recent" | "mostplayed" | "albums" | "artists" | "devices";
+  /** Custom background for the icon (e.g. a per-device colour). */
+  iconBg?: string;
+  /** Custom colour for the icon glyph. */
+  iconColor?: string;
   label: string;
   count?: number;
   /** Kept in step with a music folder. */
@@ -85,6 +91,10 @@ function Row({
       <span
         className={`mlib-row-icon${tone ? ` mlib-row-icon-${tone}` : ""}`}
         aria-hidden
+        style={{
+          ...(iconBg ? { background: iconBg } : {}),
+          ...(iconColor ? { color: iconColor } : {}),
+        }}
       >
         {icon}
       </span>
@@ -121,6 +131,17 @@ function Row({
       <BiChevronRight className="mlib-row-chevron" aria-hidden />
     </button>
   );
+}
+
+/** Stable pseudo-random colour for a device playlist's icon. */
+function deviceColor(seed: string): string {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash << 5) - hash + seed.charCodeAt(i);
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 60%, 45%)`;
 }
 
 export default function MobileLibraryPage({
@@ -201,21 +222,35 @@ export default function MobileLibraryPage({
               onClick={() => onSelectPlaylist(favoritesPlaylist.id)}
             />
           )}
-          <Row icon={<BiAlbum />} label="Albums" onClick={onGoAlbums} />
-          <Row icon={<BiUser />} label="Artists" onClick={onGoArtists} />
+          <Row
+            icon={<BiAlbum />}
+            tone="albums"
+            label="Albums"
+            onClick={onGoAlbums}
+          />
+          <Row
+            icon={<BiUser />}
+            tone="artists"
+            label="Artists"
+            onClick={onGoArtists}
+          />
           <Row
             icon={<BiHistory />}
+            tone="recent"
             label="Recently Played"
             onClick={onGoRecentlyPlayed}
           />
           <Row
             icon={<BiBarChartAlt2 />}
+            tone="mostplayed"
             label="Most Played"
             onClick={onGoMostPlayed}
           />
           {onGoDevices && (
             <Row
               icon={<BiDevices />}
+              tone="devices"
+              iconColor="#4ade80"
               label="Devices"
               note={
                 devicesAsking > 0
@@ -248,6 +283,8 @@ export default function MobileLibraryPage({
               <Row
                 key={playlist.id}
                 icon={playlist.peer_source_id ? <BiDevices /> : <BiListUl />}
+                iconBg={playlist.peer_source_id ? deviceColor(playlist.id) : undefined}
+                iconColor={playlist.peer_source_id ? "#4ade80" : undefined}
                 label={playlist.name}
                 count={playlist.track_count}
                 synced={!!playlist.sync_folder}

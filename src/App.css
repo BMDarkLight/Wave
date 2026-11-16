@@ -8304,6 +8304,34 @@ div.album-hero-cover {
     background: linear-gradient(135deg, #4b2a6b, #1f2f5c);
   }
 
+  .mlib-row-icon-recent,
+  .mlib-row-icon-mostplayed {
+    background: linear-gradient(135deg, #7c4a1e, #d97706);
+  }
+
+  .mlib-row-icon-albums,
+  .mlib-row-icon-artists {
+    background: linear-gradient(135deg, #a16207, #facc15);
+    color: #1f2937;
+  }
+
+  .mlib-row-icon-devices {
+    background: linear-gradient(135deg, #166534, #22c55e);
+  }
+
+  .mlib-row-icon-favorites,
+  .mlib-row-icon-recent,
+  .mlib-row-icon-mostplayed,
+  .mlib-row-icon-albums,
+  .mlib-row-icon-artists,
+  .mlib-row-icon-devices {
+    color: #fff;
+  }
+
+  .mlib-row-icon-devices {
+    color: #4ade80;
+  }
+
   .mlib-row-label {
     flex: 1;
     min-width: 0;
