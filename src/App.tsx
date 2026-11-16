@@ -472,9 +472,9 @@ function App() {
   } | null>(null);
 
   // Sort state — cycles asc → desc → off on repeated header clicks
-  const [sortColumn, setSortColumn] = useState<"index" | "title" | "album">(
-    "index",
-  );
+  const [sortColumn, setSortColumn] = useState<
+    "index" | "title" | "album" | "recent" | "duration"
+  >("index");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc" | "none">(
     "asc",
   );
@@ -517,6 +517,12 @@ function App() {
       );
     } else if (sortColumn === "album") {
       sorted.sort((a, b) => (a.album ?? "").localeCompare(b.album ?? ""));
+    } else if (sortColumn === "recent") {
+      sorted.sort((a, b) => (a.modified_at ?? 0) - (b.modified_at ?? 0));
+    } else if (sortColumn === "duration") {
+      sorted.sort(
+        (a, b) => (a.duration_seconds ?? 0) - (b.duration_seconds ?? 0),
+      );
     }
     if (sortDirection === "desc") sorted.reverse();
     return sorted;
@@ -3020,6 +3026,10 @@ function App() {
               onDeletePlaylist={handleDeletePlaylist}
               onBack={goLibrary}
               onSort={handleSort}
+              onSetSort={(column, direction) => {
+                setSortColumn(column as "index" | "title" | "album");
+                setSortDirection(direction);
+              }}
               onResizeAlbumColumn={handleAlbumColResizeStart}
               onSyncPlaylist={(id) => void handleSyncPlaylistFolder(id)}
               isCurrentTrack={isCurrentTrack}

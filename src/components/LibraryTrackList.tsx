@@ -32,6 +32,7 @@ import {
   BiPlay,
   BiPlus,
   BiSearch,
+  BiSortAlt2,
   BiSolidHeart,
   BiSync,
   BiTrash,
@@ -77,7 +78,12 @@ function writeLocalOnly(value: boolean) {
   }
 }
 
-export type SortColumn = "index" | "title" | "album";
+export type SortColumn =
+  | "index"
+  | "title"
+  | "album"
+  | "recent"
+  | "duration";
 export type SortDirection = "asc" | "desc" | "none";
 
 export default function LibraryTrackList({
@@ -118,6 +124,7 @@ export default function LibraryTrackList({
   onDeletePlaylist,
   onBack,
   onSort,
+  onSetSort,
   onResizeAlbumColumn,
   onSyncPlaylist,
   isCurrentTrack,
@@ -171,6 +178,7 @@ export default function LibraryTrackList({
   /** Back to the Library tab. Only shown on the phone layout. */
   onBack: () => void;
   onSort: (column: SortColumn) => void;
+  onSetSort: (column: SortColumn, direction: SortDirection) => void;
   onResizeAlbumColumn: (event: React.MouseEvent) => void;
   onSyncPlaylist: (playlistId: string) => void;
   isCurrentTrack: (track: Track) => boolean;
@@ -191,7 +199,9 @@ export default function LibraryTrackList({
   const [playlistMenu, setPlaylistMenu] = useState<ContextMenuAnchor | null>(
     null,
   );
+  const [sortMenu, setSortMenu] = useState<ContextMenuAnchor | null>(null);
   useBackLayer(playlistMenu !== null, () => setPlaylistMenu(null));
+  useBackLayer(sortMenu !== null, () => setSortMenu(null));
   // Library and Favorites are built in; only playlists the user made can be
   // renamed, exported or deleted from here.
   const ownPlaylist =
@@ -373,6 +383,26 @@ export default function LibraryTrackList({
                   <BiLinkAlt />
                 </button>
               )}
+            {!mainSearchQuery.trim() && playlist.length > 0 && (
+              <button
+                className="btn-secondary mobile-sort-btn"
+                onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  setSortMenu({
+                    top: rect.bottom + 6,
+                    left: rect.left,
+                    flipAbove: rect.top - 6,
+                  });
+                }}
+                type="button"
+                title="Sort"
+                aria-label="Sort tracks"
+                aria-haspopup="menu"
+                aria-expanded={sortMenu !== null}
+              >
+                <BiSortAlt2 />
+              </button>
+            )}
             {!mainSearchQuery.trim() && ownPlaylist && (
               <button
                 className="btn-secondary"
@@ -392,6 +422,62 @@ export default function LibraryTrackList({
               >
                 <BiDotsHorizontalRounded />
               </button>
+            )}
+            {sortMenu && (
+              <ContextMenu anchor={sortMenu} onClose={() => setSortMenu(null)}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={sortColumn === "index" ? "sort-active" : ""}
+                  onClick={() => {
+                    onSetSort("index", "none");
+                    setSortMenu(null);
+                  }}
+                >
+                  Default
+                </button>
+                {(["recent", "duration", "title", "album"] as const).map(
+                  (column) => {
+                    const label =
+                      column === "recent"
+                        ? "Recent"
+                        : column === "duration"
+                          ? "Duration"
+                          : column === "title"
+                            ? "Title"
+                            : "Album";
+                    const active = sortColumn === column;
+                    const direction = active ? sortDirection : "none";
+                    const nextDirection =
+                      direction === "none"
+                        ? "asc"
+                        : direction === "asc"
+                          ? "desc"
+                          : "none";
+                    const nextColumn = nextDirection === "none" ? "index" : column;
+                    return (
+                      <button
+                        key={column}
+                        type="button"
+                        role="menuitem"
+                        className={active ? "sort-active" : ""}
+                        onClick={() => {
+                          onSetSort(nextColumn, nextDirection);
+                          setSortMenu(null);
+                        }}
+                      >
+                        {label}
+                        {active && direction === "asc" && (
+                          <span className="sort-indicator">↑</span>
+                        )}
+                        {active && direction === "desc" && (
+                          <span className="sort-indicator">↓</span>
+                        )}
+                      </button>
+                    );
+                  },
+                )}
+              </ContextMenu>
             )}
             {playlistMenu && ownPlaylist && (
               <ContextMenu

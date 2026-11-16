@@ -8713,6 +8713,25 @@ div.album-hero-cover {
   }
 }
 
+/* The sort menu button is a phone-only affordance; desktop sorts by
+   clicking the column headers. */
+@media (min-width: 901px) {
+  .mobile-sort-btn {
+    display: none !important;
+  }
+}
+
+/* Sort menu: active option and its arrow stand out in the accent colour. */
+.sort-active {
+  color: var(--tint-blue);
+  font-weight: 600;
+}
+.sort-indicator {
+  margin-left: 6px;
+  color: var(--tint-blue);
+  font-weight: 700;
+}
+
 /* Wide layout: undo the mini player's phone-only states outright, so
    widening the window from the phone layout never leaves the playback bar
    clipped, faded or mid-transition. */
