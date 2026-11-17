@@ -66,6 +66,13 @@ pub(crate) const TRACK_FROM: &str = "tracks t LEFT JOIN album_art aa ON aa.id = 
 pub(crate) const LIBRARY_TRACK_FROM: &str =
     "library_tracks t LEFT JOIN album_art aa ON aa.id = t.album_art_id";
 
+/// Browse/aggregate FROM clause for on-disk music only. Paired Waves' songs
+/// remain in `library_tracks` (and in their device playlists) so they can be
+/// played and searched, but must not create artist/album pages for music that
+/// isn't on this machine. Kept downloads have a local path and do count.
+pub(crate) const LOCAL_LIBRARY_TRACK_FROM: &str =
+    "local_library_tracks t LEFT JOIN album_art aa ON aa.id = t.album_art_id";
+
 /// Cached artist enrichment (genre tags / similar artists) is reused for this
 /// long before a background refresh is queued again.
 const ARTIST_ENRICHMENT_TTL_SECS: i64 = 30 * 24 * 60 * 60;
@@ -488,6 +495,8 @@ impl Library {
             )
             .map_err(|error| format!("Failed to initialize source schema: {error}"))?;
         ensure_library_tracks_view(&connection)
+            .map_err(|error| format!("Failed to initialize source schema: {error}"))?;
+        ensure_local_library_tracks_view(&connection)
             .map_err(|error| format!("Failed to initialize source schema: {error}"))?;
         ensure_playlist_column(&connection, "sync_folder", "TEXT")?;
         ensure_playlist_column(&connection, "peer_source_id", "TEXT")?;
@@ -1947,7 +1956,7 @@ impl Library {
     ) -> Result<Vec<Track>, String> {
         let sql = format!(
             "SELECT {TRACK_SELECT_COLUMNS}
-             FROM {LIBRARY_TRACK_FROM}
+             FROM {LOCAL_LIBRARY_TRACK_FROM}
              WHERE t.{column} = ?1
              ORDER BY t.album, COALESCE(t.disc_number, 1), COALESCE(t.track_number, 0)"
         );
@@ -1981,7 +1990,7 @@ impl Library {
                     MIN(aa.thumb_path) AS cover_art_data_url,
                     MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
                     MIN(t.path) AS cover_track_path
-                 FROM {LIBRARY_TRACK_FROM}
+                 FROM {LOCAL_LIBRARY_TRACK_FROM}
                  GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
                  ORDER BY album_artist, t.album"
             ))
@@ -2004,7 +2013,7 @@ impl Library {
                     t.artist,
                     COUNT(*) AS track_count,
                     COUNT(DISTINCT t.album) AS album_count
-                 FROM library_tracks t
+                 FROM local_library_tracks t
                  GROUP BY t.artist
                  ORDER BY t.artist",
             )
@@ -2065,7 +2074,7 @@ impl Library {
                     MIN(aa.thumb_path) AS cover_art_data_url,
                     MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
                     MIN(t.path) AS cover_track_path
-                 FROM {LIBRARY_TRACK_FROM}
+                 FROM {LOCAL_LIBRARY_TRACK_FROM}
                  WHERE TRIM(IFNULL(t.album, '')) <> '' AND {}
                  GROUP BY t.album, {RESOLVED_ARTIST}
                  ORDER BY
@@ -2124,7 +2133,7 @@ impl Library {
                     t.artist,
                     COUNT(*) AS track_count,
                     COUNT(DISTINCT t.album) AS album_count
-                 FROM library_tracks t
+                 FROM local_library_tracks t
                  WHERE TRIM(IFNULL(t.artist, '')) <> '' AND {}
                  GROUP BY t.artist
                  ORDER BY
@@ -2177,7 +2186,7 @@ impl Library {
         let sql = if album_artist.is_some() {
             format!(
                 "SELECT {TRACK_SELECT_COLUMNS}
-                 FROM {LIBRARY_TRACK_FROM}
+                 FROM {LOCAL_LIBRARY_TRACK_FROM}
                  WHERE t.album = ?1
                    AND COALESCE(NULLIF(t.album_artist, ''), t.artist) = ?2
                  ORDER BY COALESCE(t.disc_number, 1), COALESCE(t.track_number, 0)"
@@ -2185,7 +2194,7 @@ impl Library {
         } else {
             format!(
                 "SELECT {TRACK_SELECT_COLUMNS}
-                 FROM {LIBRARY_TRACK_FROM}
+                 FROM {LOCAL_LIBRARY_TRACK_FROM}
                  WHERE t.album = ?1
                  ORDER BY COALESCE(t.disc_number, 1), COALESCE(t.track_number, 0)"
             )
@@ -2244,7 +2253,7 @@ impl Library {
                     MIN(aa.thumb_path) AS cover_art_data_url,
                     MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
                     MIN(t.path) AS cover_track_path
-                 FROM {LIBRARY_TRACK_FROM}
+                 FROM {LOCAL_LIBRARY_TRACK_FROM}
                  WHERE t.artist = ?1
                  GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
                  ORDER BY MIN(COALESCE(t.year, 9999)), t.album"
@@ -3160,7 +3169,7 @@ impl Library {
                         MIN(aa.thumb_path) AS cover_art_data_url,
                         MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
                         MIN(t.path) AS cover_track_path
-                     FROM {LIBRARY_TRACK_FROM}
+                     FROM {LOCAL_LIBRARY_TRACK_FROM}
                      INNER JOIN listen_stats ls ON ls.track_id = t.id
                      WHERE t.album IS NOT NULL AND TRIM(t.album) != ''
                        AND LOWER(TRIM(t.album)) NOT IN ('unknown album', 'unknown', 'untitled')
@@ -3419,7 +3428,7 @@ impl Library {
                 let mut stmt = connection
                     .prepare(&format!(
                         "SELECT {TRACK_SELECT_COLUMNS}
-                         FROM {LIBRARY_TRACK_FROM}
+                         FROM {LOCAL_LIBRARY_TRACK_FROM}
                          WHERE LOWER(TRIM(t.genre)) = LOWER(TRIM(?1))
                            AND LOWER(TRIM(t.artist)) != LOWER(TRIM(?2))
                          LIMIT 16"
@@ -3464,7 +3473,7 @@ impl Library {
             let mut owned_stmt = connection
                 .prepare(&format!(
                     "SELECT {TRACK_SELECT_COLUMNS}
-                     FROM {LIBRARY_TRACK_FROM}
+                     FROM {LOCAL_LIBRARY_TRACK_FROM}
                      WHERE LOWER(TRIM(t.artist)) = LOWER(TRIM(?1))
                      LIMIT 3"
                 ))
@@ -3532,7 +3541,7 @@ impl Library {
             let mut stmt = connection
                 .prepare(&format!(
                     "SELECT {TRACK_SELECT_COLUMNS}
-                     FROM {LIBRARY_TRACK_FROM}
+                     FROM {LOCAL_LIBRARY_TRACK_FROM}
                      ORDER BY t.indexed_at DESC
                      LIMIT 200"
                 ))
@@ -3712,7 +3721,7 @@ impl Library {
                     MIN(COALESCE(aa.mime, t.cover_art_mime)) AS cover_art_mime,
                     MIN(t.path) AS cover_track_path,
                     COALESCE(SUM(ls.listen_seconds), 0) AS listen_score
-                 FROM {LIBRARY_TRACK_FROM}
+                 FROM {LOCAL_LIBRARY_TRACK_FROM}
                  LEFT JOIN listen_stats ls ON ls.track_id = t.id
                  WHERE t.album IS NOT NULL AND TRIM(t.album) != ''
                  GROUP BY t.album, COALESCE(NULLIF(t.album_artist, ''), t.artist)
@@ -4193,6 +4202,43 @@ fn ensure_library_tracks_view(connection: &Connection) -> rusqlite::Result<()> {
         if current()?.as_deref() != Some(LIBRARY_TRACKS_VIEW_SQL) {
             connection.execute_batch("DROP VIEW IF EXISTS library_tracks")?;
             connection.execute_batch(LIBRARY_TRACKS_VIEW_SQL)?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => connection.execute_batch("COMMIT"),
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// Definition of the `local_library_tracks` view, exactly as SQLite stores it.
+/// Only files Wave owns; a row that still lives on a paired Wave stays out of
+/// local artist/album browsing even while it is visible in the library list.
+const LOCAL_LIBRARY_TRACKS_VIEW_SQL: &str = "CREATE VIEW local_library_tracks AS \
+     SELECT * FROM tracks WHERE source_state IS NULL OR source_state = 'downloaded'";
+
+/// Same guarded create/recreate as [`ensure_library_tracks_view`].
+fn ensure_local_library_tracks_view(connection: &Connection) -> rusqlite::Result<()> {
+    let current = || {
+        connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'local_library_tracks'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+    };
+    if current()?.as_deref() == Some(LOCAL_LIBRARY_TRACKS_VIEW_SQL) {
+        return Ok(());
+    }
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| {
+        if current()?.as_deref() != Some(LOCAL_LIBRARY_TRACKS_VIEW_SQL) {
+            connection.execute_batch("DROP VIEW IF EXISTS local_library_tracks")?;
+            connection.execute_batch(LOCAL_LIBRARY_TRACKS_VIEW_SQL)?;
         }
         Ok(())
     })();
@@ -6791,6 +6837,59 @@ mod tests {
     }
 
     #[test]
+    fn paired_wave_songs_stay_out_of_local_album_and_artist_pages() {
+        let library = open_test_library().expect("library");
+        seed_library_for_browse_tests(&library);
+        // Visible in the Library playlist, as a paired device's songs should be.
+        insert_remote_row(&library, "wave-peer", "9", true).unwrap();
+
+        let (all, local): (i64, i64) = {
+            let connection = library.read_connection();
+            connection
+                .query_row(
+                    "SELECT
+                        (SELECT COUNT(*) FROM library_tracks),
+                        (SELECT COUNT(*) FROM local_library_tracks)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+        assert_eq!(local, all - 1, "the remote row is only in library_tracks");
+
+        // No phantom album/artist, and the remote song isn't in a local page
+        // that happens to share the name (none do here, but check both ways).
+        for album in library.list_albums().unwrap() {
+            assert_ne!(album.name, "Remote Album");
+        }
+        for artist in library.list_artists().unwrap() {
+            assert_ne!(artist.name, "Remote Artist");
+        }
+        assert!(library
+            .get_tracks_by_album("Remote Album", None)
+            .unwrap()
+            .is_empty());
+        assert!(library
+            .get_tracks_by_artist("Remote Artist")
+            .unwrap()
+            .is_empty());
+
+        // The neighbouring local pages are unaffected.
+        assert_eq!(
+            library
+                .get_tracks_by_album("Abbey Road", Some("The Beatles"))
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            library.get_tracks_by_artist("The Beatles").unwrap().len(),
+            4
+        );
+        assert_eq!(library.get_artist_albums("The Beatles").unwrap().len(), 2);
+    }
+
+    #[test]
     fn search_albums_matches_name_and_artist_and_ranks_prefix_first() {
         let library = open_test_library().expect("library");
         seed_library_for_browse_tests(&library);
@@ -8258,6 +8357,30 @@ mod tests {
         ensure_library_tracks_view(&connection).unwrap();
     }
 
+    #[test]
+    fn the_local_library_view_is_left_alone_once_it_is_current() {
+        let library = open_test_library().unwrap();
+        let connection = library.lock_connection().unwrap();
+        let stored = |c: &Connection| -> String {
+            c.query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'local_library_tracks'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(stored(&connection), LOCAL_LIBRARY_TRACKS_VIEW_SQL);
+        connection
+            .execute_batch(
+                "DROP VIEW local_library_tracks;
+                 CREATE VIEW local_library_tracks AS SELECT * FROM tracks;",
+            )
+            .unwrap();
+        ensure_local_library_tracks_view(&connection).unwrap();
+        assert_eq!(stored(&connection), LOCAL_LIBRARY_TRACKS_VIEW_SQL);
+        ensure_local_library_tracks_view(&connection).unwrap();
+    }
+
     fn insert_remote_row(
         library: &Library,
         remote_source_id: &str,
@@ -8362,7 +8485,9 @@ mod tests {
             .unwrap()
             .execute("UPDATE tracks SET remote_visible = 1", [])
             .unwrap();
-        assert_eq!(listed(&library), (1, 1));
+        // It now shows in the Library playlist, but a paired Wave's song must
+        // not create an album page for music that isn't on this machine.
+        assert_eq!(listed(&library), (1, 0));
     }
 
     #[test]

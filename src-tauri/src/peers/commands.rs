@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use super::api::{AnswerBody, AskBody};
 use super::{client, service, ShareScope};
 use crate::commands::LibraryState;
+use crate::remote::uri::is_remote;
 
 /// A Wave as the window lists it.
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +56,11 @@ fn scope_from(app: &AppHandle, choice: ShareChoice) -> Result<ShareScope, String
         ShareChoice::Everything => ShareScope::Everything,
         ShareChoice::Nothing => ShareScope::Nothing,
         ShareChoice::Songs { paths } => {
+            // A paired Wave's rows are in our library, but we can't serve
+            // another device's files. Mirror the UI picker and the served
+            // catalog: keep only paths Wave owns. Kept downloads have local
+            // paths and remain shareable.
+            let owned: Vec<String> = paths.into_iter().filter(|path| !is_remote(path)).collect();
             let library = app
                 .try_state::<LibraryState>()
                 .ok_or("The library isn't open")?;
@@ -62,7 +68,7 @@ fn scope_from(app: &AppHandle, choice: ShareChoice) -> Result<ShareScope, String
                 .0
                 .lock()
                 .map_err(|_| "The library is busy")?
-                .get_tracks_by_paths(&paths)?;
+                .get_tracks_by_paths(&owned)?;
             ShareScope::Tracks(tracks.into_iter().flatten().map(|t| t.id).collect())
         }
     })
@@ -270,6 +276,7 @@ pub async fn get_wave_share_paths(id: String, app: AppHandle) -> Result<Vec<Stri
             .iter()
             .filter_map(|id| library.get_track_by_id(id).ok().flatten())
             .map(|t| t.path)
+            .filter(|path| !is_remote(path))
             .collect())
     })
     .await

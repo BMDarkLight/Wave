@@ -9048,12 +9048,6 @@ div.album-hero-cover {
   height: 1em;
 }
 
-.library-filter-chips {
-  display: flex;
-  gap: 8px;
-  padding: 0 24px 8px;
-}
-
 .filter-chip {
   border: 1px solid rgba(var(--ink), 0.18);
   background: transparent;
@@ -9068,7 +9062,16 @@ div.album-hero-cover {
 .filter-chip.active {
   background: var(--green);
   border-color: var(--green);
-  color: #fff;
+  /* --green is white in dark mode and near-black in light mode, so the
+     contrasting text has to follow --on-green rather than a fixed white. */
+  color: var(--on-green);
+}
+
+/* Sits with the playlist's track count instead of floating in a row of its
+   own between the header and the list. */
+.hero-copy > p .filter-chip {
+  margin-left: 10px;
+  vertical-align: middle;
 }
 
 /* Adding a media source, and setting up a remote one. */

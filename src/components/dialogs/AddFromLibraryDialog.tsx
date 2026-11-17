@@ -38,6 +38,7 @@ import {
 } from "../../utils/player";
 import { formatTime } from "../../utils/format";
 import { isMobileLayout } from "../../utils/platform";
+import { isRemote } from "../../utils/remote";
 import {
   getTrackTitle,
   isLibraryPlaylistName,
@@ -101,6 +102,15 @@ const COMPARE: Record<SortKey, (a: Track, b: Track) => number> = {
 };
 
 const albumArtistOf = (track: Track) => track.album_artist || track.artist;
+
+/**
+ * A paired Wave's songs live in our library but belong to its owner, so we
+ * can't hand them back. The served catalog already leaves `wave-remote://`
+ * rows out; hide them here too so a share never offers a song the other
+ * device would only get a 404 for. Kept downloads have a local path and stay.
+ */
+const isShareable = (track: Track) =>
+  !isRemote(track) && !track.path.startsWith("wave-remote://");
 
 const plural = (count: number, word: string) =>
   `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -181,15 +191,18 @@ export default function AddFromLibraryDialog({
     const wanted = new Set(initialPaths);
     const next = new Map<string, Pick>();
     for (const track of library) {
-      if (wanted.has(track.path)) {
+      if (wanted.has(track.path) && (!sharing || isShareable(track))) {
         next.set(track.path, { track, rank: next.size });
       }
     }
     setPicks(next);
-  }, [library, initialPaths]);
+  }, [library, initialPaths, sharing]);
 
   const trimmed = query.trim();
-  const allTracks = useMemo(() => library ?? [], [library]);
+  const allTracks = useMemo(
+    () => (library ?? []).filter((track) => !sharing || isShareable(track)),
+    [library, sharing],
+  );
 
   const songs = useMemo(() => {
     const matching = trimmed
@@ -303,7 +316,8 @@ export default function AddFromLibraryDialog({
     [pickedTracks],
   );
 
-  const canPick = (track: Track) => !existingPaths.has(track.path);
+  const canPick = (track: Track) =>
+    (!sharing || isShareable(track)) && !existingPaths.has(track.path);
 
   const setPicked = (tracks: Track[], on: boolean) => {
     setPicks((prev) => {
@@ -395,9 +409,9 @@ export default function AddFromLibraryDialog({
 
   const loadPlaylist = async (collection: Collection) => {
     if (collection.tracks) return collection.tracks;
-    const tracks = await getPlaylistTracksById(collection.key).catch(
-      () => [] as Track[],
-    );
+    const tracks = (
+      await getPlaylistTracksById(collection.key).catch(() => [] as Track[])
+    ).filter((track) => !sharing || isShareable(track));
     setPlaylistTracks((prev) => ({ ...prev, [collection.key]: tracks }));
     return tracks;
   };

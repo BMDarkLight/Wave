@@ -572,6 +572,16 @@ export default function LibraryTrackList({
               </span>
             </span>
           ) : null}
+          {isLibrary && hasRemote && !mainSearchQuery.trim() && (
+            <button
+              type="button"
+              className={`filter-chip ${localOnly ? "active" : ""}`}
+              aria-pressed={localOnly}
+              onClick={toggleLocalOnly}
+            >
+              Local only
+            </button>
+          )}
         </p>
       </div>
 
@@ -583,19 +593,6 @@ export default function LibraryTrackList({
         onQueryChange={setFilter}
         onClose={closeFilter}
       />
-
-      {isLibrary && hasRemote && !mainSearchQuery.trim() && (
-        <div className="library-filter-chips">
-          <button
-            type="button"
-            className={`filter-chip ${localOnly ? "active" : ""}`}
-            aria-pressed={localOnly}
-            onClick={toggleLocalOnly}
-          >
-            Local only
-          </button>
-        </div>
-      )}
 
       <section className="playlist-container">
         {mainSearchQuery.trim() ? (
