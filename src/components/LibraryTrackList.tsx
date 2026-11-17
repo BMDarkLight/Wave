@@ -78,12 +78,7 @@ function writeLocalOnly(value: boolean) {
   }
 }
 
-export type SortColumn =
-  | "index"
-  | "title"
-  | "album"
-  | "recent"
-  | "duration";
+export type SortColumn = "index" | "title" | "album" | "recent" | "duration";
 export type SortDirection = "asc" | "desc" | "none";
 
 export default function LibraryTrackList({
@@ -460,7 +455,8 @@ export default function LibraryTrackList({
                             ? "desc"
                             : "asc"
                           : "none";
-                    const nextColumn = nextDirection === "none" ? "index" : column;
+                    const nextColumn =
+                      nextDirection === "none" ? "index" : column;
                     return (
                       <button
                         key={column}

@@ -119,10 +119,7 @@ export function useLyricsPanel({
       // Only adopt the stored lyrics when the panel track doesn't already
       // have them, so an auto-fetch that landed in the meantime isn't
       // clobbered by a stale details read.
-      if (
-        details?.lyrics &&
-        !lyricsPanelTrackRef.current?.lyrics
-      ) {
+      if (details?.lyrics && !lyricsPanelTrackRef.current?.lyrics) {
         applyLyricsToTrack(path, details.lyrics, details.lyrics_source);
       }
     })();

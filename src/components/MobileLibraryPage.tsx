@@ -71,7 +71,8 @@ function Row({
   onClick,
 }: {
   icon: ReactNode;
-  tone?: "favorites" | "recent" | "mostplayed" | "albums" | "artists" | "devices";
+  tone?:
+    "favorites" | "recent" | "mostplayed" | "albums" | "artists" | "devices";
   /** Custom background for the icon (e.g. a per-device colour). */
   iconBg?: string;
   /** Custom colour for the icon glyph. */

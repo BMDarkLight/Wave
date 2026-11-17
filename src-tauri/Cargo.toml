@@ -77,7 +77,7 @@ radii-proto = { git = "https://github.com/BMDarkLight/Radii", tag = "v0.1.0" }
 nix = { version = "0.30", default-features = false, features = ["net", "hostname"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-tauri = { version = "2.11", features = ["tray-icon"] }
+tauri = { version = "2.11", features = ["protocol-asset", "tray-icon"] }
 # Without libxdo, which they only need to fake keypresses for Copy and
 # Paste menu items Wave doesn't have; it would be one more package to install.
 tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }
