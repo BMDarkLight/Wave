@@ -3408,11 +3408,8 @@ pub async fn fetch_lyrics_for_track(path: String, app: tauri::AppHandle) -> Resu
         .lyrics
         .as_deref()
         .is_some_and(|lyrics| !lyrics.trim().is_empty());
-    let stored_synced = track.has_synced_lyrics
-        || track
-            .lyrics
-            .as_deref()
-            .is_some_and(has_lrc_timestamps);
+    let stored_synced =
+        track.has_synced_lyrics || track.lyrics.as_deref().is_some_and(has_lrc_timestamps);
     let stored_from_lrclib = track.lyrics_source.as_deref() == Some("lrclib");
 
     // The queue and list views carry no lyrics text, so this runs on nearly
