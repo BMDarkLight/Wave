@@ -3404,10 +3404,46 @@ pub async fn fetch_lyrics_for_track(path: String, app: tauri::AppHandle) -> Resu
     })
     .await?;
 
-    if track.lyrics.is_some()
-        && (track.lyrics_source.as_deref() == Some("lrclib")
-            || has_lrc_timestamps(track.lyrics.as_deref().unwrap_or("")))
-    {
+    let stored_has_text = track
+        .lyrics
+        .as_deref()
+        .is_some_and(|lyrics| !lyrics.trim().is_empty());
+    let stored_synced = track.has_synced_lyrics
+        || track
+            .lyrics
+            .as_deref()
+            .is_some_and(|lyrics| has_lrc_timestamps(lyrics));
+    let stored_from_lrclib = track.lyrics_source.as_deref() == Some("lrclib");
+
+    // The queue and list views carry no lyrics text, so this runs on nearly
+    // every track change. Re-probe the file when what we have is missing or
+    // only plain text: a sidecar added after import, or embedded word timings,
+    // beat a plain line-level answer from the network. Already-synced lyrics
+    // are left alone — no file read, no request, nothing to gain.
+    if !stored_synced {
+        if let Some((lyrics, synced)) = crate::metadata::read_local_lyrics(&path) {
+            if synced || !stored_has_text {
+                track.lyrics = Some(lyrics);
+                track.lyrics_source = Some("embedded-or-sidecar".to_string());
+                track.has_synced_lyrics = synced;
+                let track_id = track.id.clone();
+                let source = track.lyrics_source.clone().unwrap_or_default();
+                let lyrics = track.lyrics.clone().unwrap_or_default();
+                let app_clone = app.clone();
+                let _ = blocking(move || {
+                    let library = app_clone.state::<LibraryState>();
+                    let lib = library.0.lock().map_err(|e| e.to_string())?;
+                    lib.set_track_lyrics(&track_id, &lyrics, &source)
+                })
+                .await;
+                return Ok(track);
+            }
+        }
+    }
+
+    // Synced lyrics from any source are as good as it gets, and an existing
+    // LRCLIB answer would only be re-asked for with the same result.
+    if stored_synced || (stored_has_text && stored_from_lrclib) {
         return Ok(track);
     }
 

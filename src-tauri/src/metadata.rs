@@ -681,6 +681,34 @@ fn read_sidecar_lyrics(path: &Path) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
+/// Re-read a track's own lyrics straight from its file, without needing an
+/// `AppHandle` or paying for a full fingerprint. Import only reads tags and
+/// sidecars once, so a `.lrc` dropped next to a file later (or embedded tags
+/// added by another tool) would otherwise never be seen again. Returns the
+/// text and whether it carries timings.
+///
+/// Local files only: content URIs and remote tracks have no sidecar path, and
+/// their metadata is read by their own providers.
+pub fn read_local_lyrics(path: &str) -> Option<(String, bool)> {
+    if path.starts_with("content://") || path.starts_with("wave-remote://") {
+        return None;
+    }
+    let path_buf = PathBuf::from(path);
+    if !path_buf.is_file() || !is_supported_audio_file(&path_buf) {
+        return None;
+    }
+    // A full extraction keeps import's precedence (embedded tags, then
+    // sidecar). If the audio stream can't be probed, still honour a sidecar
+    // sitting next to the file — the parser needs the text, not the stream.
+    let lyrics = extract_track_with_options(None, path, false, false)
+        .ok()
+        .and_then(|track| track.lyrics)
+        .or_else(|| read_sidecar_lyrics(&path_buf))?;
+    let lyrics = lyrics.trim().to_string();
+    let synced = crate::lyrics::is_synced(&lyrics);
+    (!lyrics.is_empty()).then_some((lyrics, synced))
+}
+
 fn hash_file_sha256(path: &Path) -> Result<String, String> {
     let metadata = std::fs::metadata(path)
         .map_err(|error| format!("Failed to read file metadata: {error}"))?;
@@ -988,6 +1016,31 @@ mod tests {
             Some("syllable"),
             "TTML is the richest and must win"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_lyrics_probe_reads_sidecar_added_after_import() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join(format!("wave-local-lyrics-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let audio = dir.join("song.mp3");
+        std::fs::File::create(&audio).unwrap();
+
+        // A file whose audio stream can't be probed still gets its sidecar.
+        assert_eq!(super::read_local_lyrics(audio.to_str().unwrap()), None);
+
+        let mut lrc = std::fs::File::create(dir.join("song.lrc")).unwrap();
+        lrc.write_all(b"[00:01.00]hello\n[00:02.00]world\n")
+            .unwrap();
+        let (lyrics, synced) = super::read_local_lyrics(audio.to_str().unwrap()).unwrap();
+        assert_eq!(lyrics, "[00:01.00]hello\n[00:02.00]world");
+        assert!(synced, "an LRC sidecar is synced");
+
+        // Remote and content URIs have no sidecar to read.
+        assert_eq!(super::read_local_lyrics("wave-remote://s1/1"), None);
+        assert_eq!(super::read_local_lyrics("content://media/1"), None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

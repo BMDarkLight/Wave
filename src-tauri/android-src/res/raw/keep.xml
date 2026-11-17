@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- These icons are resolved at runtime with Resources.getIdentifier() from
+     the media-session plugin, so the resource shrinker cannot see a static
+     reference and would otherwise drop them from release builds. Without the
+     notification mark, the playback notification falls back to the stock
+     Android play triangle. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_notification,@mipmap/ic_notification,@mipmap/ic_launcher_monochrome,@mipmap/ic_launcher_foreground" />

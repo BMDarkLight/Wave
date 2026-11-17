@@ -631,13 +631,28 @@ internal object MediaSessionState {
     }
 
     /**
-     * The host app's monochrome notification icon. Never the launcher
-     * foreground: in a fresh Tauri project that drawable is the stock Android
-     * robot, which is what the shade used to show.
+     * Wave's mark for the status bar / notification, resolved dynamically so
+     * this vendor plugin never needs the host's generated `R` class. Prefer the
+     * dedicated monochrome `ic_notification`, then the launcher's monochrome
+     * and foreground marks, so a package that only ships those still shows the
+     * app's logo instead of Android's stock play triangle. The play triangle is
+     * a last resort — it is what the shade showed when the lookup failed.
      */
     internal fun smallIcon(ctx: Context): Int {
-        val id = ctx.resources.getIdentifier("ic_notification", "drawable", ctx.packageName)
-        return if (id != 0) id else android.R.drawable.ic_media_play
+        val res = ctx.resources
+        val pkg = ctx.packageName
+        val candidates = arrayOf(
+            "drawable" to "ic_notification",
+            "mipmap" to "ic_notification",
+            "mipmap" to "ic_launcher_monochrome",
+            "mipmap" to "ic_launcher_foreground",
+            "drawable" to "ic_launcher_foreground",
+        )
+        for ((type, name) in candidates) {
+            val id = res.getIdentifier(name, type, pkg)
+            if (id != 0) return id
+        }
+        return android.R.drawable.ic_media_play
     }
 
     private fun appLabel(ctx: Context): String =

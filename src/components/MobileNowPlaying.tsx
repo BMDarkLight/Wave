@@ -700,11 +700,16 @@ export default function MobileNowPlaying({
     };
   }, [track.path]);
 
-  // When lrclib/file sync finishes in the parent, currentTrack.lyrics updates
-  // without a path change — keep the open lyrics view in sync.
+  // When the parent finishes fetching, currentTrack gets the lyrics without a
+  // path change. Adopt them, but never clear for the same song: the queue is
+  // polled with lean rows that carry no lyrics text, so `track.lyrics` often
+  // flips back to null mid-song. Clearing here made loaded lyrics vanish until
+  // the user switched away and back (which re-ran the path effect above).
   useEffect(() => {
-    setLyricsText(track.lyrics ?? null);
-    setLyricsSource(track.lyrics_source ?? null);
+    if (track.lyrics) {
+      setLyricsText(track.lyrics);
+      setLyricsSource(track.lyrics_source ?? null);
+    }
   }, [track.lyrics, track.lyrics_source]);
 
   // Same Rust parser the desktop panel uses, so LRC, Enhanced LRC, and TTML

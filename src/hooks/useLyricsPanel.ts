@@ -139,7 +139,20 @@ export function useLyricsPanel({
       setLyricsFetchPath(null);
       return;
     }
-    setLyricsPanelTrack((open) => (open ? currentTrack : null));
+    setLyricsPanelTrack((open) => {
+      if (!open) return null;
+      // The queue carries lean rows without lyrics text. Keep lyrics already
+      // loaded for this path instead of replacing them with a no-lyrics copy
+      // of the same track when this effect re-runs (e.g. a setting toggle).
+      if (
+        open.path === currentTrack.path &&
+        open.lyrics &&
+        !currentTrack.lyrics
+      ) {
+        return open;
+      }
+      return currentTrack;
+    });
     if (
       currentTrack.lyrics &&
       (hasTimestamps(currentTrack.lyrics) ||
