@@ -231,8 +231,12 @@ export function useAndroidBackTrap({
   };
 
   const targetTrapDepth = () => {
-    const layers = countHistoryLayers();
-    return androidHostRef.current ? layers + 1 : layers;
+    // The root guard is pushed from the very first layout effect, before the
+    // async host-OS lookup resolves. Android's WebView finishes the Activity
+    // as soon as it has no history to go back to, so waiting for `isAndroid()`
+    // left a window where an early back press quit the app instead of showing
+    // the exit gate. The extra entry is harmless on other platforms.
+    return countHistoryLayers() + 1;
   };
 
   // Closes whichever overlay is "on top" — context menus first, then sheets /
@@ -372,11 +376,20 @@ export function useAndroidBackTrap({
   const backLayersVersion = useBackLayersVersion();
   const trapDepthRef = useRef(0);
   const ignorePopCountRef = useRef(0);
+  const ignorePopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exitPressAtRef = useRef(0);
   const exitToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showExitToast, setShowExitToast] = useState(false);
   const closeTopOverlayRef = useRef(closeTopOverlay);
   closeTopOverlayRef.current = closeTopOverlay;
+  // The host-OS command is the primary signal, but the WebView's user agent
+  // is available synchronously. Use it as a fallback so a failed IPC lookup
+  // cannot take the exit gate down with it.
+  const isAndroidUi = () =>
+    androidHostRef.current ||
+    (typeof navigator !== "undefined" && /android/i.test(navigator.userAgent));
+  const isAndroidUiRef = useRef(isAndroidUi);
+  isAndroidUiRef.current = isAndroidUi;
   const targetTrapDepthRef = useRef(targetTrapDepth);
   targetTrapDepthRef.current = targetTrapDepth;
 
@@ -424,11 +437,23 @@ export function useAndroidBackTrap({
       // history.go(-n) emits a single popstate, not n.
       ignorePopCountRef.current += 1;
       trapDepthRef.current = target;
+      scheduleIgnorePopFallback();
       window.history.go(-excess);
     }
   };
   const reconcileHistoryRef = useRef(reconcileHistory);
   reconcileHistoryRef.current = reconcileHistory;
+
+  /** A traversal the WebView never reports must not swallow a real back. */
+  function scheduleIgnorePopFallback() {
+    if (ignorePopTimerRef.current) clearTimeout(ignorePopTimerRef.current);
+    ignorePopTimerRef.current = setTimeout(() => {
+      ignorePopTimerRef.current = null;
+      if (ignorePopCountRef.current <= 0) return;
+      ignorePopCountRef.current = 0;
+      reconcileHistoryRef.current();
+    }, 600);
+  }
 
   useLayoutEffect(() => {
     reconcileHistoryRef.current();
@@ -466,6 +491,10 @@ export function useAndroidBackTrap({
     const onPopState = () => {
       if (ignorePopCountRef.current > 0) {
         ignorePopCountRef.current -= 1;
+        if (ignorePopCountRef.current === 0 && ignorePopTimerRef.current) {
+          clearTimeout(ignorePopTimerRef.current);
+          ignorePopTimerRef.current = null;
+        }
         // Catch up on any layers that opened while the traversal was pending.
         reconcileHistoryRef.current();
         return;
@@ -478,7 +507,12 @@ export function useAndroidBackTrap({
         return;
       }
 
-      if (!androidHostRef.current) {
+      if (!isAndroidUiRef.current()) {
+        // Keep the stack from running empty even when host detection has not
+        // resolved (or failed): once WebView has no entry to pop, the next
+        // hardware back leaves the app with no JS popstate to intercept.
+        window.history.pushState({ waveExitGuard: true }, "");
+        trapDepthRef.current += 1;
         return;
       }
 
@@ -504,6 +538,9 @@ export function useAndroidBackTrap({
       window.removeEventListener("popstate", onPopState);
       if (exitToastTimerRef.current) {
         clearTimeout(exitToastTimerRef.current);
+      }
+      if (ignorePopTimerRef.current) {
+        clearTimeout(ignorePopTimerRef.current);
       }
     };
   }, []);
