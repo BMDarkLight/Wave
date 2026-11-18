@@ -8747,10 +8747,17 @@ div.album-hero-cover {
   }
 }
 
-/* The sort menu button is a phone-only affordance; desktop sorts by
-   clicking the column headers. */
+/* Sort and Mash move into the playlist overflow menu on phones. Library and
+   Favorites have no overflow menu, so they keep their header shortcuts. */
+@media (max-width: 900px) {
+  .moved-to-playlist-menu {
+    display: none !important;
+  }
+}
+
 @media (min-width: 901px) {
-  .mobile-sort-btn {
+  .mobile-sort-btn,
+  .mobile-only-menu-item {
     display: none !important;
   }
 }

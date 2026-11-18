@@ -197,6 +197,7 @@ export default function LibraryTrackList({
   const [sortMenu, setSortMenu] = useState<ContextMenuAnchor | null>(null);
   useBackLayer(playlistMenu !== null, () => setPlaylistMenu(null));
   useBackLayer(sortMenu !== null, () => setSortMenu(null));
+  const isLibrary = isLibraryPlaylistName(selectedPlaylist?.name);
   // Library and Favorites are built in; only playlists the user made can be
   // renamed, exported or deleted from here.
   const ownPlaylist =
@@ -210,13 +211,33 @@ export default function LibraryTrackList({
     setPlaylistMenu(null);
     action();
   };
+  // Ordinary playlists keep only the primary actions in the header; Sort and
+  // Mash live in the overflow menu. Library and Favorites have no playlist
+  // menu of their own, so their shortcuts stay where they are.
+  const hasPlaylistMenuItems = !!ownPlaylist;
+  const canSort = !mainSearchQuery.trim() && playlist.length > 0;
+  const canMash = canSort && !!onMash && !isLibrary;
+  const chooseSort = (column: SortColumn) => {
+    const active = sortColumn === column;
+    const direction = active ? sortDirection : "none";
+    const firstDirection =
+      column === "recent" || column === "duration" ? "desc" : "asc";
+    const nextDirection =
+      direction === "none"
+        ? firstDirection
+        : direction === firstDirection
+          ? firstDirection === "asc"
+            ? "desc"
+            : "asc"
+          : "none";
+    onSetSort(nextDirection === "none" ? "index" : column, nextDirection);
+  };
 
   // The phone layout's search narrows the list in place. Each shown row
   // keeps its position in the full list so playing it starts from there.
   const [filtering, setFiltering] = useState(false);
   const [filter, setFilter] = useState("");
   const remoteStatus = useContext(RemoteStatusContext);
-  const isLibrary = isLibraryPlaylistName(selectedPlaylist?.name);
   const hasRemote = useMemo(() => playlist.some(isRemote), [playlist]);
   const [localOnlyChoice, setLocalOnlyChoice] = useState(readLocalOnly);
   const localOnly = isLibrary && hasRemote && localOnlyChoice;
@@ -364,23 +385,24 @@ export default function LibraryTrackList({
                 <BiSearch />
               </button>
             )}
-            {!mainSearchQuery.trim() &&
-              onMash &&
-              !isLibrary &&
-              playlist.length > 0 && (
-                <button
-                  className="btn-secondary playlist-mashup-btn"
-                  onClick={onMash}
-                  type="button"
-                  title="Mash up with other playlists or albums"
-                  aria-label="Mash up with other playlists or albums"
-                >
-                  <BiLinkAlt />
-                </button>
-              )}
-            {!mainSearchQuery.trim() && playlist.length > 0 && (
+            {canMash && (
               <button
-                className="btn-secondary mobile-sort-btn"
+                className={`btn-secondary playlist-mashup-btn${
+                  hasPlaylistMenuItems ? " moved-to-playlist-menu" : ""
+                }`}
+                onClick={onMash}
+                type="button"
+                title="Mash up with other playlists or albums"
+                aria-label="Mash up with other playlists or albums"
+              >
+                <BiLinkAlt />
+              </button>
+            )}
+            {canSort && (
+              <button
+                className={`btn-secondary mobile-sort-btn${
+                  hasPlaylistMenuItems ? " moved-to-playlist-menu" : ""
+                }`}
                 onClick={(event) => {
                   const rect = event.currentTarget.getBoundingClientRect();
                   setSortMenu({
@@ -443,20 +465,6 @@ export default function LibraryTrackList({
                             : "Album";
                     const active = sortColumn === column;
                     const direction = active ? sortDirection : "none";
-                    const firstDirection =
-                      column === "recent" || column === "duration"
-                        ? "desc"
-                        : "asc";
-                    const nextDirection =
-                      direction === "none"
-                        ? firstDirection
-                        : direction === firstDirection
-                          ? firstDirection === "asc"
-                            ? "desc"
-                            : "asc"
-                          : "none";
-                    const nextColumn =
-                      nextDirection === "none" ? "index" : column;
                     return (
                       <button
                         key={column}
@@ -464,7 +472,7 @@ export default function LibraryTrackList({
                         role="menuitem"
                         className={active ? "sort-active" : ""}
                         onClick={() => {
-                          onSetSort(nextColumn, nextDirection);
+                          chooseSort(column);
                           setSortMenu(null);
                         }}
                       >
@@ -486,6 +494,30 @@ export default function LibraryTrackList({
                 anchor={playlistMenu}
                 onClose={() => setPlaylistMenu(null)}
               >
+                {canSort && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="mobile-only-menu-item"
+                    onClick={() => {
+                      const anchor = playlistMenu;
+                      setPlaylistMenu(null);
+                      setSortMenu(anchor);
+                    }}
+                  >
+                    <BiSortAlt2 /> Sort tracks
+                  </button>
+                )}
+                {canMash && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="mobile-only-menu-item"
+                    onClick={fromMenu(onMash)}
+                  >
+                    <BiLinkAlt /> Mash up
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"
