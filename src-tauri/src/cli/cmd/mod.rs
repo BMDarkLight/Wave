@@ -19,5 +19,6 @@ pub mod metadata;
 pub mod playback;
 pub mod playlists;
 pub mod queue;
+pub mod serve;
 pub mod stats;
 pub mod tracks;

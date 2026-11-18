@@ -29,6 +29,13 @@ fn main() {
         return;
     }
 
+    // Detached process started by `wave serve start`. It keeps its own state
+    // file instead of the primary-instance lock, so it can run alongside the
+    // desktop app; instance mode starts the playback daemon separately.
+    if args.iter().any(|a| a == wave_lib::server::SERVER_FLAG) {
+        wave_lib::server::run_server();
+    }
+
     // Audio files from the file manager ("Open With", a double click) open in
     // the app rather than the CLI. A Wave that is already running takes them,
     // and this launch ends there.

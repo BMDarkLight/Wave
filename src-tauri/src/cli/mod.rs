@@ -132,6 +132,9 @@ pub enum Commands {
     /// Listening stats (play time, top tracks / artists / albums / genres)
     #[command(subcommand, visible_alias = "listen")]
     Stats(StatsCmd),
+    /// Host a Wave server on this machine for Wave peers and Subsonic clients
+    #[command(subcommand)]
+    Serve(cmd::serve::ServeCmd),
 }
 
 // ── Subcommand structs ───────────────────────────────────────────────────────
@@ -862,6 +865,7 @@ pub fn run() {
         Some(Commands::Dsp(cmd)) => cmd::dsp::run(cmd),
         Some(Commands::Lyrics(cmd)) => cmd::lyrics::run(cmd),
         Some(Commands::Stats(cmd)) => cmd::stats::run(cmd),
+        Some(Commands::Serve(cmd)) => cmd::serve::run(cmd),
         Some(Commands::Now {
             watch: true,
             interval,

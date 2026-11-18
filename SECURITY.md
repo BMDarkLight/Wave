@@ -1,6 +1,6 @@
 # Security Policy
 
-Wave is an offline-first music player. Out of the box it opens no ports and looks for no other devices. It only makes two kinds of outgoing requests, both of which you can turn off in Settings: it fetches synced lyrics from [LRCLIB](https://lrclib.net) and checks this repository for updates.
+Wave is an offline-first music player. Out of the box it opens no ports and looks for no other devices. It only makes two kinds of outgoing requests, both of which you can turn off in Settings: it fetches synced lyrics from [LRCLIB](https://lrclib.net) and checks this repository for updates. The one exception is the optional `wave serve` command: starting a hosted server intentionally opens a LAN port.
 
 Everything else applies only once **Outside Sourcing** is turned on, which is when Wave starts talking to your own media servers and to other copies of Wave on your local network.
 
@@ -10,7 +10,7 @@ For network communication between Waves, Wave uses [Radii](https://github.com/BM
 
 | Version                | Supported                    |
 | ---------------------- | ---------------------------- |
-| Latest release (1.2.x) | Security fixes               |
+| Latest release (1.3.x) | Security fixes               |
 | Older releases         | Update to the latest release |
 
 Desktop copies of Wave offer updates on their own. Android updates come from the APKs on the releases page.
@@ -35,12 +35,24 @@ With Outside Sourcing on, Wave opens two things on your machine:
 | The Radii LAN beacon, which announces this Wave and hears others | UDP 7101                    | Devices on your local network |
 | Wave's own API, for pairing, browsing and playing shared songs   | TCP 50800, or any free port | Devices on your local network |
 
-**Nothing is reachable from the internet.** Both refuse anything that doesn't come from a loopback, private (RFC 1918) or link-local address, before reading it:
+Starting `wave serve` runs that API listener in a background process on the
+chosen port (50800 by default): the same `/wave/` peer API plus a
+Subsonic-compatible `/rest/` API for third-party players. It uses the same
+local-network address check. Subsonic clients authenticate with a user name and
+password saved owner-only in `wave-server.json`; a generated password is shown
+once on the first start. Set your own with `--password` if you prefer. It also
+adds a management listener used by `wave serve stop`: a socket bound only to
+`127.0.0.1` that requires a random token stored owner-only in
+`wave-server-state.json`.
+
+**Nothing is reachable from the internet.** The LAN listeners refuse anything
+that doesn't come from a loopback, private (RFC 1918) or link-local address,
+before reading it. The control socket is bound to loopback only:
 
 - The beacon is Radii's. It drops datagrams from outside the local network, answers each host at most once a second and no more than 64 hosts a second in all, so it can't be turned into a traffic reflector. See the [LAN beacon section](https://github.com/BMDarkLight/Radii/blob/v0.1.0/SECURITY.md#lan-beacon) of Radii's policy.
 - Wave's API refuses connections from any other address as soon as they are accepted.
 
-Neither is a reason to forward these ports on your router, and Wave never asks you to.
+None of these is a reason to forward these ports on your router, and Wave never asks you to.
 
 ## How Waves trust each other
 
@@ -54,7 +66,7 @@ Neither is a reason to forward these ports on your router, and Wave never asks y
 
 These are open, and worth knowing before you use Devices on a network you don't trust:
 
-- **Traffic between Waves is not encrypted.** Wave's API is plain HTTP. Anyone who can watch your local network can see the music that moves between your devices, and can read a pairing's secret and use it to act as that device. Use Devices on networks you trust, such as your home Wi-Fi or your phone's hotspot, not on public or shared Wi-Fi.
+- **Traffic between Waves is not encrypted.** Wave's API is plain HTTP. Anyone who can watch your local network can see the music that moves between your devices, and can read a pairing's secret and use it to act as that device. The Subsonic API used by a hosted server is also plain HTTP: its salted MD5 token protects the password in a request, but not the music or the requests themselves. Use these features on networks you trust, such as your home Wi-Fi or your phone's hotspot, not on public or shared Wi-Fi.
 - **A device's name is whatever it says.** Another device on your network can announce itself under any name, including one of yours. Check before you accept a pairing request you didn't expect.
 - **Anyone on your network can see that Wave is running**, under this device's name. You can rename it on the Devices page.
 

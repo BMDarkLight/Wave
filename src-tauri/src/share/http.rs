@@ -15,7 +15,7 @@
 use super::catalog::{mime_for, Snapshot};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,6 +23,9 @@ const CHUNK: usize = 64 * 1024;
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 64 * 1024;
 const IDLE: Duration = Duration::from_secs(15);
+/// A LAN host can open connections faster than we can finish them. Keep a hard
+/// ceiling on worker threads so a slow client cannot exhaust the process.
+const MAX_CONNECTIONS: usize = 64;
 
 /// Opens a shared file for reading. Android `content://` documents need the
 /// app's ContentResolver; everything else is a plain path.
@@ -37,6 +40,8 @@ pub struct Server {
     pub catalog: Arc<dyn Catalog>,
     pub opener: Opener,
     pub peers: Arc<crate::peers::api::PeerService>,
+    pub library: Option<Arc<parking_lot::Mutex<crate::library::Library>>>,
+    pub subsonic: Option<Arc<super::subsonic::Auth>>,
 }
 
 /// Whether `ip` can only be on this machine or its local network.
@@ -53,9 +58,28 @@ pub fn is_local(ip: IpAddr) -> bool {
     }
 }
 
+fn reserve_connection(active: &AtomicUsize) -> bool {
+    let mut current = active.load(Ordering::Relaxed);
+    loop {
+        if current >= MAX_CONNECTIONS {
+            return false;
+        }
+        match active.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
 /// Accepts connections until `stop` is set.
 pub fn serve(listener: TcpListener, server: Arc<Server>, stop: Arc<AtomicBool>) {
     let _ = listener.set_nonblocking(true);
+    let active = Arc::new(AtomicUsize::new(0));
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, peer)) => {
@@ -63,7 +87,12 @@ pub fn serve(listener: TcpListener, server: Arc<Server>, stop: Arc<AtomicBool>) 
                     tracing::debug!("Refused a request from {peer}");
                     continue;
                 }
+                if !reserve_connection(&active) {
+                    tracing::debug!("Too many local HTTP clients; dropping a connection");
+                    continue;
+                }
                 let server = server.clone();
+                let connection_count = Arc::clone(&active);
                 let spawned = std::thread::Builder::new()
                     .name("wave-share-http".into())
                     .spawn(move || {
@@ -71,8 +100,10 @@ pub fn serve(listener: TcpListener, server: Arc<Server>, stop: Arc<AtomicBool>) 
                         if let Err(e) = handle(stream, &server) {
                             tracing::debug!("A request from another Wave ended: {e}");
                         }
+                        connection_count.fetch_sub(1, Ordering::Release);
                     });
                 if let Err(e) = spawned {
+                    active.fetch_sub(1, Ordering::Release);
                     tracing::warn!("Could not answer another Wave: {e}");
                 }
             }
@@ -88,11 +119,11 @@ pub fn serve(listener: TcpListener, server: Arc<Server>, stop: Arc<AtomicBool>) 
 }
 
 #[derive(Debug, Default)]
-struct Request {
-    method: String,
-    path: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
+pub(crate) struct Request {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Vec<u8>,
 }
 
 impl Request {
@@ -146,7 +177,7 @@ fn read_request(stream: &TcpStream) -> io::Result<Request> {
     Ok(request)
 }
 
-fn server_header() -> String {
+pub(crate) fn server_header() -> String {
     format!(
         "{}/1 Wave/{}",
         std::env::consts::OS,
@@ -154,7 +185,7 @@ fn server_header() -> String {
     )
 }
 
-fn respond(
+pub(crate) fn respond(
     stream: &mut TcpStream,
     status: &str,
     headers: &[(&str, String)],
@@ -188,6 +219,19 @@ fn handle(mut stream: TcpStream, server: &Server) -> io::Result<()> {
     let path = path.to_string();
     if path.starts_with("/wave/") {
         return wave(&mut stream, server, &request, &path, query, head_only);
+    }
+    if path.starts_with("/rest/") {
+        if let Some(auth) = &server.subsonic {
+            return super::subsonic::handle(
+                &mut stream,
+                auth,
+                server,
+                &request,
+                &path,
+                query,
+                head_only,
+            );
+        }
     }
     respond(&mut stream, "404 Not Found", &[], b"", head_only)
 }
@@ -342,7 +386,7 @@ fn wanted_range(value: &str, len: u64) -> Wanted {
     Wanted::Part(start, end.map_or(len - 1, |end| end.min(len - 1)))
 }
 
-fn media(
+pub(crate) fn media(
     stream: &mut TcpStream,
     server: &Server,
     request: &Request,
@@ -439,7 +483,12 @@ fn best_cover(server: &Server, track: &crate::metadata::Track) -> Option<(Vec<u8
         .map(|bytes| (bytes, "image/jpeg".to_string()))
 }
 
-fn art(stream: &mut TcpStream, server: &Server, id: &str, head_only: bool) -> io::Result<()> {
+pub(crate) fn art(
+    stream: &mut TcpStream,
+    server: &Server,
+    id: &str,
+    head_only: bool,
+) -> io::Result<()> {
     let cover = server
         .catalog
         .snapshot()
@@ -530,6 +579,8 @@ mod tests {
             peers: Arc::new(crate::peers::api::PeerService::new(Arc::new(OnePeer(
                 share,
             )))),
+            library: None,
+            subsonic: None,
         });
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -791,6 +842,8 @@ mod pairing_tests {
             catalog: Arc::new(Fixed(Arc::new(Snapshot::build(1, tracks)))),
             opener: Arc::new(|path: &str| std::fs::File::open(path)),
             peers: peers.clone(),
+            library: None,
+            subsonic: None,
         });
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1056,6 +1109,8 @@ mod pairing_tests {
                 found,
                 stream,
             }))),
+            library: None,
+            subsonic: None,
         });
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();

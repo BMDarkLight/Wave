@@ -355,7 +355,7 @@ pub fn daemon_request_if_running(request: DaemonRequest) -> Result<Option<Daemon
 
 /// Send a request to the running playback daemon, starting it if needed.
 pub fn daemon_request(request: DaemonRequest) -> Result<DaemonResponse, String> {
-    let conn = ensure_daemon_connection()?;
+    let (conn, _) = ensure_daemon_connection()?;
     send_daemon_request(&conn, request)
 }
 
@@ -388,10 +388,12 @@ fn send_daemon_request(
     serde_json::from_str(response_line.trim()).map_err(|e| e.to_string())
 }
 
-/// Ensure the background daemon is running; returns connection details.
-fn ensure_daemon_connection() -> Result<DaemonConnection, String> {
+/// Ensure the background daemon is running. The flag is true only when this
+/// call actually spawned the daemon that answered; a caller must use it, not
+/// a pre-check, when deciding whether it owns that daemon.
+fn ensure_daemon_connection() -> Result<(DaemonConnection, bool), String> {
     if let Some(conn) = read_daemon_connection() {
-        return Ok(conn);
+        return Ok((conn, false));
     }
     if crate::single_instance::gui_is_running() {
         return Err(crate::single_instance::already_running_message());
@@ -399,14 +401,19 @@ fn ensure_daemon_connection() -> Result<DaemonConnection, String> {
     // Another command is starting the daemon right now, which happens
     // whenever several are run at once. Wait for it rather than fail.
     if crate::single_instance::daemon_is_running() {
-        return wait_for_daemon().ok_or_else(|| {
+        let conn = wait_for_daemon().ok_or_else(|| {
             "Playback daemon is running but did not accept connections within 10 seconds."
                 .to_string()
-        });
+        })?;
+        return Ok((conn, false));
     }
-    spawn_daemon()?;
-    read_daemon_connection()
-        .ok_or_else(|| "Playback daemon failed to publish connection details.".to_string())
+    let spawned_pid = spawn_daemon()?;
+    let conn = read_daemon_connection()
+        .ok_or_else(|| "Playback daemon failed to publish connection details.".to_string())?;
+    // A competing spawn can win the instance lock; the state file then names
+    // the other process's daemon, which we must not claim as ours.
+    let spawned = spawned_pid == Some(conn.pid);
+    Ok((conn, spawned))
 }
 
 /// Poll for a starting daemon's connection details for up to ten seconds.
@@ -420,9 +427,11 @@ fn wait_for_daemon() -> Option<DaemonConnection> {
     None
 }
 
-/// Ensure the background daemon is running; returns its TCP port.
-pub fn ensure_daemon_running() -> Result<u16, String> {
-    Ok(ensure_daemon_connection()?.port)
+/// Ensure the background daemon is running; returns its TCP port and whether
+/// this call spawned it.
+pub fn ensure_daemon_running() -> Result<(u16, bool), String> {
+    let (conn, spawned) = ensure_daemon_connection()?;
+    Ok((conn.port, spawned))
 }
 
 /// Whether the CLI playback daemon is running and accepting IPC.
@@ -1818,6 +1827,7 @@ fn current_tooltip(player: &AudioPlayer, library: &Library) -> String {
 
 #[derive(Clone)]
 struct DaemonConnection {
+    pid: u32,
     port: u16,
     token: String,
 }
@@ -1874,17 +1884,20 @@ fn read_daemon_connection() -> Option<DaemonConnection> {
     let addr = format!("127.0.0.1:{}", state.port);
     TcpStream::connect_timeout(&addr.parse().ok()?, Duration::from_millis(300)).ok()?;
     Some(DaemonConnection {
+        pid: state.pid,
         port: state.port,
         token: state.token,
     })
 }
 
-fn spawn_daemon() -> Result<(), String> {
+/// Spawn a daemon if none is answering. Returns the child pid this call
+/// spawned, or `None` when an existing daemon was already there.
+fn spawn_daemon() -> Result<Option<u32>, String> {
     if crate::single_instance::gui_is_running() {
         return Err(crate::single_instance::already_running_message());
     }
     if read_daemon_connection().is_some() {
-        return Ok(());
+        return Ok(None);
     }
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -1907,11 +1920,25 @@ fn spawn_daemon() -> Result<(), String> {
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     }
 
-    cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to spawn playback daemon: {e}"))?;
+    let child_pid = child.id();
+
+    // A server lives for hours: without this wait the daemon would sit as a
+    // zombie until the server itself exited. A short-lived CLI just takes the
+    // reaper thread with it when it exits.
+    let reaped = std::thread::Builder::new()
+        .name("wave-daemon-reaper".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
+    if reaped.is_err() {
+        tracing::warn!("Could not start the playback daemon reaper");
+    }
 
     wait_for_daemon()
-        .map(|_| ())
+        .map(|_| Some(child_pid))
         .ok_or_else(|| "Playback daemon failed to start within 10 seconds.".to_string())
 }
 

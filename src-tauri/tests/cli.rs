@@ -18,9 +18,12 @@
 //! an audio output too, which CI runners lack, so they are ignored by default:
 //! run them with `cargo test --test cli -- --ignored`.
 
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -231,7 +234,8 @@ impl Wave {
 
 impl Drop for Wave {
     fn drop(&mut self) {
-        // A daemon started by a test must not outlive it.
+        // Neither a hosted server nor a daemon started by a test may outlive it.
+        let _ = self.run(&["serve", "stop"]);
         let _ = self.run(&["playback", "shutdown"]);
         let _ = std::fs::remove_dir_all(&self.root);
     }
@@ -814,4 +818,520 @@ fn playing_the_second_song_of_a_couple_starts_with_the_first() {
     assert_eq!(started["status"]["file"], "first.wav");
     let (order, _) = wave.play_order(std::time::Duration::from_secs(5));
     assert_eq!(order, ["first.wav", "second.wav"]);
+}
+
+// ── Hosted server: the documented `wave serve` contract ─────────────────────
+
+fn free_port() -> u16 {
+    TcpListener::bind(("0.0.0.0", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+fn read_json_file(path: &Path) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap())
+        .unwrap_or_else(|e| panic!("invalid JSON in {}: {e}", path.display()))
+}
+
+fn write_png(path: &Path) -> String {
+    let file = std::fs::File::create(path).unwrap();
+    let mut encoder = png::Encoder::new(file, 1, 1);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&[200, 50, 75, 255])
+        .unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+#[cfg(unix)]
+fn assert_owner_only(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "{} has mode {mode:o}", path.display());
+}
+
+/// One raw request, because Subsonic responses and media bytes share a port.
+fn http_get(port: u16, path: &str) -> (String, Vec<u8>) {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    let split = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("HTTP headers");
+    let status = String::from_utf8_lossy(&response[..split])
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+    (status, response[split + 4..].to_vec())
+}
+
+fn rest(port: u16, endpoint: &str, user: &str, password: &str, extra: &[(&str, &str)]) -> Value {
+    let mut query = format!("u={user}&p={password}&v=1.16.1&c=wave-cli-test");
+    for (key, value) in extra {
+        query.push_str(&format!("&{key}={value}"));
+    }
+    let (_, body) = http_get(port, &format!("/rest/{endpoint}.view?{query}"));
+    serde_json::from_slice(&body).unwrap_or_else(|e| panic!("{endpoint}: {e}: {body:?}"))
+}
+
+fn subsonic_ok(value: &Value) -> Value {
+    let response = &value["subsonic-response"];
+    assert_eq!(response["status"], "ok", "{response}");
+    assert_eq!(response["version"], "1.16.1");
+    assert_eq!(response["type"], "Wave");
+    assert_eq!(response["openSubsonic"], true);
+    response.clone()
+}
+
+fn subsonic_error(value: &Value, code: i64) {
+    let response = &value["subsonic-response"];
+    assert_eq!(response["status"], "failed", "{response}");
+    assert_eq!(response["error"]["code"], code, "{response}");
+    assert!(response["error"]["message"].is_string());
+}
+
+/// One request to the loopback control socket, which is not an HTTP listener.
+fn control_request(port: u16, token: &str, request: &str) -> Value {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    writeln!(
+        stream,
+        "{}",
+        serde_json::json!({ "token": token, "request": request })
+    )
+    .unwrap();
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).unwrap();
+    serde_json::from_str(reply.trim()).unwrap_or_else(|e| panic!("control reply: {e}: {reply:?}"))
+}
+
+#[test]
+fn serve_status_start_and_stop_follow_the_json_contract() {
+    let wave = Wave::new();
+    let port = free_port();
+
+    let before = wave.ok(&["serve", "status"]);
+    assert_eq!(before["running"], false);
+    for field in ["mode", "name", "user", "port", "pid", "addresses"] {
+        assert!(before.get(field).is_some(), "status before start: {before}");
+    }
+
+    let started = wave.ok(&[
+        "serve",
+        "start",
+        "--port",
+        &port.to_string(),
+        "--name",
+        "Doc Test Wave",
+    ]);
+    assert_eq!(started["running"], true);
+    assert_eq!(started["mode"], "server");
+    assert_eq!(started["name"], "Doc Test Wave");
+    assert_eq!(started["user"], "wave");
+    // The port can fall back if another process took the requested one.
+    let port = started["port"].as_u64().unwrap() as u16;
+    assert_eq!(started["port"], port);
+    assert!(started["pid"].as_u64().unwrap() > 0);
+    assert!(!started["addresses"].as_array().unwrap().is_empty());
+    let password = started["password"].as_str().expect("generated password");
+    assert_eq!(password.len(), 36, "a generated UUIDv4: {password}");
+    assert!(started["message"]
+        .as_str()
+        .unwrap()
+        .contains("save this password now"));
+
+    let config_path = wave.data_dir().join("wave-server.json");
+    let state_path = wave.data_dir().join("wave-server-state.json");
+    let config = read_json_file(&config_path);
+    assert_eq!(config["password"], password);
+    assert_eq!(config["name"], "Doc Test Wave");
+    #[cfg(unix)]
+    {
+        assert_owner_only(&config_path);
+        assert_owner_only(&state_path);
+    }
+    let state = read_json_file(&state_path);
+    assert_eq!(state["pid"], started["pid"]);
+    assert!(state["control_port"].as_u64().unwrap() > 0);
+    assert!(state["token"].as_str().unwrap().len() > 20);
+    assert!(state.get("password").is_none());
+    assert!(wave.data_dir().join("wave-server.lock").exists());
+
+    let control_port = state["control_port"].as_u64().unwrap() as u16;
+    let denied = control_request(control_port, "not-the-token", "ping");
+    assert_eq!(denied["ok"], false, "a wrong token is refused: {denied}");
+    let accepted = control_request(control_port, state["token"].as_str().unwrap(), "ping");
+    assert_eq!(
+        accepted["ok"], true,
+        "the saved token is accepted: {accepted}"
+    );
+
+    let still_running = wave.ok(&[
+        "serve",
+        "start",
+        "--name",
+        "Ignored Name",
+        "--user",
+        "ignored",
+        "--password",
+        "ignored",
+    ]);
+    assert_eq!(still_running["running"], true);
+    assert_eq!(still_running["name"], "Doc Test Wave");
+    assert_eq!(still_running["user"], "wave");
+    assert_eq!(still_running["port"], port);
+    assert_eq!(read_json_file(&config_path)["name"], "Doc Test Wave");
+
+    let status = wave.ok(&["serve", "status"]);
+    assert_eq!(status["running"], true);
+    assert_eq!(status["mode"], "server");
+    assert_eq!(status["name"], "Doc Test Wave");
+    assert_eq!(status["user"], "wave");
+    assert_eq!(status["port"], port);
+    assert_eq!(status["pid"], started["pid"]);
+    assert!(status.get("password").is_none(), "status never prints it");
+
+    let stopped = wave.ok(&["serve", "stop"]);
+    assert_eq!(stopped["stopped"], true);
+    assert!(!state_path.exists(), "stop clears runtime state");
+
+    let after = wave.ok(&["serve", "status"]);
+    assert_eq!(after["running"], false);
+    assert!(after["pid"].is_null());
+    assert_eq!(after["name"], "Doc Test Wave");
+    assert!(after.get("password").is_none());
+    let again = wave.ok(&["serve", "stop"]);
+    assert_eq!(again["stopped"], false);
+}
+
+#[test]
+fn serve_exposes_the_documented_subsonic_apis_and_auth_forms() {
+    let wave = Wave::new();
+    let music = wave.write_wav("serve song.wav");
+    wave.ok(&["tracks", "import", &music]);
+    wave.ok(&[
+        "metadata",
+        "set",
+        &music,
+        "--title",
+        "Serve Song",
+        "--artist",
+        "Serve Artist",
+        "--album",
+        "Serve Album",
+    ]);
+    let cover_path = Path::new(&music).with_file_name("cover.png");
+    let cover = write_png(&cover_path);
+    wave.ok(&["metadata", "cover-set", &music, &cover]);
+    wave.ok(&["playlists", "create", "Serve List"]);
+    wave.ok(&["playlists", "add-track", "Serve List", &music]);
+    let playlists = wave.ok(&["playlists", "list"]);
+    let playlist_id = playlists
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "Serve List")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let port = free_port();
+    let started = wave.ok(&[
+        "serve",
+        "start",
+        "--port",
+        &port.to_string(),
+        "--user",
+        "music",
+        "--password",
+        "secret",
+    ]);
+    let port = started["port"].as_u64().unwrap() as u16;
+
+    subsonic_ok(&rest(port, "ping", "music", "secret", &[]));
+    assert_eq!(
+        subsonic_ok(&rest(port, "getLicense", "music", "secret", &[]))["license"]["valid"],
+        true
+    );
+    for unsupported in ["scrobble", "setRating"] {
+        subsonic_error(&rest(port, unsupported, "music", "secret", &[]), 0);
+    }
+    let artists = subsonic_ok(&rest(port, "getArtists", "music", "secret", &[]));
+    subsonic_ok(&rest(port, "getIndexes", "music", "secret", &[]));
+    let artist_id = artists["artists"]["index"][0]["artist"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    subsonic_ok(&rest(
+        port,
+        "getArtist",
+        "music",
+        "secret",
+        &[("id", &artist_id)],
+    ));
+    subsonic_ok(&rest(port, "getMusicDirectory", "music", "secret", &[]));
+    subsonic_ok(&rest(port, "getAlbumList", "music", "secret", &[]));
+    subsonic_ok(&rest(port, "getAlbumList2", "music", "secret", &[]));
+    subsonic_ok(&rest(
+        port,
+        "search",
+        "music",
+        "secret",
+        &[("query", "Serve")],
+    ));
+    subsonic_ok(&rest(
+        port,
+        "search2",
+        "music",
+        "secret",
+        &[("query", "Serve")],
+    ));
+    let found = subsonic_ok(&rest(
+        port,
+        "search3",
+        "music",
+        "secret",
+        &[("query", "Serve")],
+    ));
+    let song_id = found["searchResult3"]["song"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let album_id = found["searchResult3"]["song"][0]["albumId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    subsonic_ok(&rest(
+        port,
+        "getSong",
+        "music",
+        "secret",
+        &[("id", &song_id)],
+    ));
+    subsonic_ok(&rest(
+        port,
+        "getAlbum",
+        "music",
+        "secret",
+        &[("id", &album_id)],
+    ));
+    subsonic_ok(&rest(
+        port,
+        "getMusicDirectory",
+        "music",
+        "secret",
+        &[("id", &album_id)],
+    ));
+    let playlists = subsonic_ok(&rest(port, "getPlaylists", "music", "secret", &[]));
+    assert!(playlists["playlists"]["playlist"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["name"] == "Serve List"));
+    let playlist = subsonic_ok(&rest(
+        port,
+        "getPlaylist",
+        "music",
+        "secret",
+        &[("id", &playlist_id)],
+    ));
+    assert_eq!(playlist["playlist"]["songCount"], 1);
+    let (status, body) = http_get(
+        port,
+        &format!("/rest/getCoverArt.view?u=music&p=secret&id={song_id}"),
+    );
+    assert!(status.contains("200 OK"), "getCoverArt: {status}");
+    assert!(body.starts_with(&[0xff, 0xd8]), "a JPEG: {body:?}");
+
+    for endpoint in ["stream", "download"] {
+        let (status, body) = http_get(
+            port,
+            &format!("/rest/{endpoint}.view?u=music&p=secret&id={song_id}"),
+        );
+        assert!(status.contains("200 OK"), "{endpoint}: {status}");
+        assert!(body.starts_with(b"RIFF"), "{endpoint}: {body:?}");
+    }
+
+    subsonic_error(&rest(port, "ping", "music", "wrong", &[]), 40);
+    subsonic_error(&rest(port, "ping", "wave", "secret", &[]), 40);
+    subsonic_error(&rest(port, "notAnEndpoint", "music", "secret", &[]), 0);
+    // Subsonic's optional password encodings: uppercase hex and salted MD5.
+    subsonic_ok(&rest(
+        port,
+        "ping",
+        "music",
+        "ignored",
+        &[("p", "enc:736563726574")],
+    ));
+    subsonic_ok(&rest(
+        port,
+        "ping",
+        "music",
+        "ignored",
+        &[("s", "abc123"), ("t", "f22ae4f5eacb35c993e910606a413410")],
+    ));
+
+    let hello = http_get(port, "/wave/hello");
+    assert!(hello.0.contains("200 OK"));
+    let hello: Value = serde_json::from_slice(&hello.1).unwrap();
+    assert!(hello["name"].as_str().unwrap().contains("Wave"));
+    assert!(!hello["version"].as_str().unwrap().is_empty());
+    assert!(!hello["id"].as_str().unwrap().is_empty());
+
+    wave.ok(&["serve", "stop"]);
+}
+
+#[test]
+fn serve_keeps_saved_settings_and_reports_the_bound_port() {
+    let wave = Wave::new();
+    let port = free_port();
+    let first = wave.ok(&[
+        "serve",
+        "start",
+        "--port",
+        &port.to_string(),
+        "--name",
+        "Living Room",
+        "--user",
+        "music",
+        "--password",
+        "secret",
+    ]);
+    let port = first["port"].as_u64().unwrap() as u16;
+    wave.ok(&["serve", "stop"]);
+
+    let restarted = wave.ok(&["serve", "start"]);
+    assert_eq!(restarted["name"], "Living Room");
+    assert_eq!(restarted["user"], "music");
+    assert_eq!(restarted["port"], port);
+    assert!(restarted.get("password").is_none());
+    subsonic_ok(&rest(port, "ping", "music", "secret", &[]));
+    wave.ok(&["serve", "stop"]);
+
+    let requested = free_port();
+    let blocker = TcpListener::bind(("0.0.0.0", requested)).unwrap();
+    let started = wave.ok(&["serve", "start", "--port", &requested.to_string()]);
+    let actual = started["port"].as_u64().unwrap() as u16;
+    assert_ne!(actual, requested, "a taken port falls back to a free one");
+    subsonic_ok(&rest(actual, "ping", "music", "secret", &[]));
+    wave.ok(&["serve", "stop"]);
+    drop(blocker);
+}
+
+#[test]
+#[ignore = "needs an audio output device"]
+fn serve_instance_mode_starts_and_stops_the_playback_daemon() {
+    let wave = Wave::new();
+    let music = wave.write_wav("instance.wav");
+    wave.ok(&["tracks", "import", &music]);
+    let daemon_state = wave.data_dir().join("playback-daemon.json");
+    assert!(!daemon_state.exists(), "the test starts with no daemon");
+
+    let port = free_port();
+    let started = wave.ok(&[
+        "serve",
+        "start",
+        "--mode",
+        "instance",
+        "--port",
+        &port.to_string(),
+        "--user",
+        "music",
+        "--password",
+        "secret",
+    ]);
+    let port = started["port"].as_u64().unwrap() as u16;
+    assert_eq!(started["mode"], "instance");
+    assert_eq!(wave.ok(&["serve", "status"])["mode"], "instance");
+    subsonic_ok(&rest(port, "ping", "music", "secret", &[]));
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !daemon_state.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(daemon_state.exists(), "instance start spawns the daemon");
+    let daemon_pid = read_json_file(&daemon_state)["pid"].as_u64().unwrap();
+    assert!(is_alive(daemon_pid), "the spawned daemon is running");
+
+    assert_eq!(wave.ok(&["serve", "stop"])["stopped"], true);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while is_alive(daemon_pid) && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(!is_alive(daemon_pid), "instance stop shuts the daemon down");
+}
+
+#[test]
+#[ignore = "needs an audio output device"]
+fn serve_instance_mode_leaves_an_existing_daemon_running() {
+    let wave = Wave::new();
+    let music = wave.write_wav("existing-daemon.wav");
+    wave.ok(&["tracks", "import", &music]);
+    let daemon_state = wave.data_dir().join("playback-daemon.json");
+    wave.ok(&["playback", "start", &music]);
+    let daemon_pid = read_json_file(&daemon_state)["pid"].as_u64().unwrap();
+    assert!(is_alive(daemon_pid), "the daemon exists before the server");
+
+    let port = free_port();
+    let started = wave.ok(&[
+        "serve",
+        "start",
+        "--mode",
+        "instance",
+        "--port",
+        &port.to_string(),
+        "--user",
+        "music",
+        "--password",
+        "secret",
+    ]);
+    assert_eq!(started["mode"], "instance");
+    let state = read_json_file(&wave.data_dir().join("wave-server-state.json"));
+    assert_eq!(state["owns_daemon"], false, "the server did not spawn it");
+
+    assert_eq!(wave.ok(&["serve", "stop"])["stopped"], true);
+    assert!(
+        is_alive(daemon_pid),
+        "instance stop leaves another owner's daemon running"
+    );
+    wave.ok(&["playback", "shutdown"]);
+}
+
+fn is_alive(pid: u64) -> bool {
+    #[cfg(unix)]
+    {
+        let result = Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        result.success()
+    }
+    #[cfg(not(unix))]
+    {
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .expect("tasklist is available on Windows");
+        String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
+    }
 }

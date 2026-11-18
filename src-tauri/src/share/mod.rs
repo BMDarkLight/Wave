@@ -18,6 +18,7 @@
 
 pub mod catalog;
 pub mod http;
+pub mod subsonic;
 
 use crate::library::Library;
 use catalog::Snapshot;
@@ -34,6 +35,11 @@ use std::time::{Duration, Instant};
 /// the server again after a restart. Any free port is used when it's taken.
 pub(crate) const PREFERRED_PORT: u16 = 50800;
 
+/// Listener loops get a moment to release their sockets on shutdown. A worker
+/// still serving a slow client is detached after that: it cannot outlive the
+/// server process, and making `stop` wait forever would make it unreliable.
+const STOP_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// What the server is started with.
 #[derive(Clone)]
 pub struct ShareConfig {
@@ -42,6 +48,13 @@ pub struct ShareConfig {
     pub db_path: PathBuf,
     pub opener: Opener,
     pub peers: Arc<crate::peers::api::PeerService>,
+    /// Port for a CLI-hosted server. The desktop app leaves this unset and
+    /// keeps using the preferred sharing port.
+    pub port: Option<u16>,
+    /// Library connection used by the Subsonic playlists API.
+    pub library: Option<Arc<parking_lot::Mutex<Library>>>,
+    /// Credentials for Subsonic clients; absent on a desktop Wave.
+    pub subsonic: Option<Arc<subsonic::Auth>>,
 }
 
 /// The settings screen's view of the server.
@@ -58,7 +71,7 @@ pub struct ShareStatus {
 /// The library, read through a connection of the server's own, and the last
 /// snapshot built from it.
 struct LibraryCatalog {
-    library: Mutex<Library>,
+    library: Arc<Mutex<Library>>,
     /// The last snapshot and when its version was last confirmed.
     cached: Mutex<Option<(Arc<Snapshot>, Instant)>>,
 }
@@ -97,7 +110,7 @@ impl Catalog for LibraryCatalog {
 }
 
 struct Running {
-    config_key: (String, String, PathBuf),
+    config_key: (String, String, PathBuf, Option<u16>, Option<String>),
     port: u16,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
@@ -116,18 +129,25 @@ fn last_error() -> &'static Mutex<Option<String>> {
     ERROR.get_or_init(|| Mutex::new(None))
 }
 
-fn bind_http() -> std::io::Result<TcpListener> {
-    TcpListener::bind((Ipv4Addr::UNSPECIFIED, PREFERRED_PORT))
+fn bind_http(port: Option<u16>) -> std::io::Result<TcpListener> {
+    let preferred = port.unwrap_or(PREFERRED_PORT);
+    TcpListener::bind((Ipv4Addr::UNSPECIFIED, preferred))
         .or_else(|_| TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)))
 }
 
 fn start(config: ShareConfig) -> Result<Running, String> {
-    let library = Library::new_with_path(&config.db_path)?;
+    // A hosted server passes the connection it already opened for its peer
+    // host; the desktop app lets sharing open its own read-only connection.
+    let library = match config.library.clone() {
+        Some(library) => library,
+        None => Arc::new(Mutex::new(Library::new_with_path(&config.db_path)?)),
+    };
     let catalog = Arc::new(LibraryCatalog {
-        library: Mutex::new(library),
+        library: Arc::clone(&library),
         cached: Mutex::new(None),
     });
-    let listener = bind_http().map_err(|e| format!("Couldn't open a port to share on: {e}"))?;
+    let listener =
+        bind_http(config.port).map_err(|e| format!("Couldn't open a port to share on: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let stop = Arc::new(AtomicBool::new(false));
     let error = Arc::new(Mutex::new(None));
@@ -135,6 +155,8 @@ fn start(config: ShareConfig) -> Result<Running, String> {
         catalog: catalog.clone(),
         opener: config.opener.clone(),
         peers: config.peers.clone(),
+        library: Some(library),
+        subsonic: config.subsonic.clone(),
     });
 
     let mut threads = Vec::new();
@@ -160,7 +182,13 @@ fn start(config: ShareConfig) -> Result<Running, String> {
     crate::android::multicast::acquire();
     tracing::info!("Sharing the library as \"{}\" on port {port}", config.name);
     Ok(Running {
-        config_key: (config.name.clone(), config.uuid, config.db_path),
+        config_key: (
+            config.name.clone(),
+            config.uuid,
+            config.db_path,
+            config.port,
+            config.subsonic.as_ref().map(|a| a.user().to_string()),
+        ),
         port,
         stop,
         threads,
@@ -172,8 +200,19 @@ fn start(config: ShareConfig) -> Result<Running, String> {
 
 fn stop(running: Running) {
     running.stop.store(true, Ordering::Relaxed);
+    let deadline = Instant::now() + STOP_JOIN_TIMEOUT;
     for thread in running.threads {
-        let _ = thread.join();
+        while !thread.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if thread.is_finished() {
+            let _ = thread.join();
+        } else {
+            // Dropping the handle detaches the loop. This is a last resort for
+            // a stuck listener; the hosted server exits immediately after this
+            // call, which tears down the remaining threads with the process.
+            tracing::warn!("A sharing thread didn't stop within three seconds");
+        }
     }
     #[cfg(target_os = "android")]
     crate::android::multicast::release();
@@ -183,9 +222,15 @@ fn stop(running: Running) {
 /// Starts, restarts or stops the server to match `config`; `None` stops it.
 pub fn apply(config: Option<ShareConfig>) {
     let mut slot = state().lock();
-    let wanted = config
-        .as_ref()
-        .map(|c| (c.name.clone(), c.uuid.clone(), c.db_path.clone()));
+    let wanted = config.as_ref().map(|c| {
+        (
+            c.name.clone(),
+            c.uuid.clone(),
+            c.db_path.clone(),
+            c.port,
+            c.subsonic.as_ref().map(|a| a.user().to_string()),
+        )
+    });
     if slot.as_ref().map(|r| r.config_key.clone()) == wanted {
         return;
     }

@@ -19,6 +19,7 @@ For the human-facing tour of the commands, see the
 - [Watching playback](#watching-playback)
 - [Batch requests](#batch-requests)
 - [Lists from stdin](#lists-from-stdin)
+- [Hosting a Wave server](#hosting-a-wave-server)
 - [Command reference](#command-reference)
 
 ## The JSON contract
@@ -331,6 +332,46 @@ order given.
 together in one run, so its output is the usual single import summary, and
 `-` can sit beside other paths (`wave tracks import ~/Music -`).
 
+## Hosting a Wave server
+
+`wave serve` hosts the library on this machine. Other Wave apps find it over
+the LAN and pair through the existing `/wave/` API; Subsonic-compatible players
+browse and stream it through `/rest/`. The server runs in the background and
+can coexist with the desktop app and the playback daemon.
+
+```bash
+wave serve start --mode server                # library server only (default)
+wave serve start --mode instance --port 50800 # also start local playback
+wave serve status
+wave serve stop
+```
+
+`start` accepts `--port`, `--name`, `--user`, and `--password`. On the first
+start it generates a random Subsonic password and prints it **once**; save it
+from the output or supply your own with `--password`. If the server is already
+running, `start` reports it without changing the saved settings.
+
+Settings live in `wave-server.json` next to the library database, with
+owner-only permissions; runtime details (pid, loopback control port, token) live
+in `wave-server-state.json`. Both are in the application data directory.
+`--mode instance` also starts the playback daemon when one isn't already
+running, and `stop` shuts down a daemon this server started. A daemon already
+owned by the desktop app or another node is left running.
+
+`serve status` prints `running`, `mode`, `name`, `user`, `port`, `pid`, and
+`addresses`; a freshly generated `password` appears only on the first `start`.
+`serve stop` prints `stopped`.
+
+The Subsonic API accepts `u`/`p` (plain or `enc:`-prefixed hex) and the salted
+`u`/`s`/`t` MD5 token form. It implements `ping`, `getLicense`, `getArtists`,
+`getIndexes`, `getArtist`, `getAlbum`, `getMusicDirectory`, `getAlbumList`,
+`getAlbumList2`, `getSong`, `getCoverArt`, `search`, `search2`, `search3`,
+`getPlaylists`, `getPlaylist`, and `stream`/`download`. Write-intent Subsonic
+calls such as `scrobble` and `setRating` are not implemented and return an
+unsupported-endpoint error. Management stays on a token-authenticated loopback
+socket; the LAN listener serves only the `/wave/` peer API and the `/rest/`
+Subsonic API, never control commands.
+
 ## Command reference
 
 Reads print the data directly; changes print the envelope described in
@@ -400,6 +441,17 @@ or an id prefix.
 | `devices volume` (no level) | `volume`, 0.0 to 1.0. |
 | `now --json` | The playback status, once. |
 | `now --json --watch` | A stream of events, see [Watching playback](#watching-playback). |
+
+### Hosting
+
+| Command | Output |
+|---|---|
+| `serve start [--mode ...] [--port N] [--name NAME] [--user USER] [--password PASSWORD]` | `running`, `mode`, `name`, `user`, `port`, `pid`, `addresses`, and `password` when one was generated. |
+| `serve status` | The same fields, without `password`; `running` is false when no server is up. |
+| `serve stop` | `stopped`, whether a server was stopped. |
+
+See [Hosting a Wave server](#hosting-a-wave-server) for modes, files, and the
+Subsonic endpoints.
 
 ### Equalizer and playback settings
 

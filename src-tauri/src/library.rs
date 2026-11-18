@@ -929,7 +929,7 @@ impl Library {
     }
 
     pub fn get_playlist_tracks(&self, playlist_id: &str) -> Result<Vec<Track>, String> {
-        let connection = self.lock_connection()?;
+        let connection = self.read_connection();
 
         // Library returns every track in the library
         if self
@@ -1217,7 +1217,7 @@ impl Library {
     }
 
     pub fn list_playlists(&self, profile_id: Option<String>) -> Result<Vec<PlaylistInfo>, String> {
-        let connection = self.lock_connection()?;
+        let connection = self.read_connection();
 
         // For the default Library playlist, count what it lists, since it's
         // virtual and doesn't rely on playlist_tracks. Stream-only cache rows

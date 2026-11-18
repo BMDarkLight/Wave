@@ -30,6 +30,30 @@ pub fn daemon_state_path() -> PathBuf {
     data_dir().join("playback-daemon.json")
 }
 
+/// Persistent settings for a CLI-hosted Wave server (credentials, name, port,
+/// paired devices). Owner-only on disk: it holds the Subsonic password.
+pub fn server_config_path() -> PathBuf {
+    data_dir().join("wave-server.json")
+}
+
+/// Runtime state of a running CLI-hosted server (pid, control socket, token).
+pub fn server_state_path() -> PathBuf {
+    data_dir().join("wave-server-state.json")
+}
+
+/// Exclusive lock held by the running server, separate from the GUI/daemon
+/// primary lock so a server can coexist with either.
+pub fn server_lock_path() -> PathBuf {
+    data_dir().join("wave-server.lock")
+}
+
+/// Short-lived lock serializing `serve start` and `serve stop`. Without it two
+/// simultaneous starts can rewrite the config after the winning server has
+/// already read it, leaving the saved settings out of sync with the listener.
+pub fn server_start_lock_path() -> PathBuf {
+    data_dir().join("wave-server-start.lock")
+}
+
 /// Where the desktop app publishes the loopback port (and token) that a second
 /// launch uses to hand it files to open.
 pub fn gui_handoff_path() -> PathBuf {

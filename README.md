@@ -41,6 +41,7 @@ catalogs — in a single portable app built on Rust + Tauri + React.
   - [Library](#library)
   - [Playlists and favorites](#playlists-and-favorites)
   - [Playback](#playback)
+  - [Hosting a server](#hosting-a-server)
   - [Tags and cover art](#tags-and-cover-art)
   - [Equalizer and playback settings](#equalizer-and-playback-settings)
   - [Stats](#stats)
@@ -222,6 +223,13 @@ devices still don't see each other, choose **Enter address** on the Devices
 page and type the address the other one shows under **This device**. What
 this opens on your network, and its known limits, are in
 [SECURITY.md](SECURITY.md).
+
+A machine doesn't have to keep the app open to share. `wave serve start` runs a
+background server from the same binary: other Waves pair with it over the LAN,
+and Subsonic players can browse and stream the library. Choose `--mode instance`
+to also start the playback daemon, so the machine is an always-on Wave node.
+See [Hosting a server](#hosting-a-server) and
+[`docs/cli.md`](docs/cli.md#hosting-a-wave-server).
 
 - Each device gets its own playlist, named after it, listing everything it
   shares. While the device is off or away, the playlist stays and its songs are
@@ -558,6 +566,32 @@ synced lyrics yet.
 <img src="docs/screenshots/cli-now.png" alt="wave now: the playing track with a progress bar, volume, device, repeat mode and the next two tracks" width="100%">
 
 <img src="docs/screenshots/cli-queue.png" alt="wave queue list: the queue in order with the current track marked" width="100%">
+
+### Hosting a server
+
+The same `wave` binary can host the library in the background, without a window:
+
+```bash
+wave serve start                          # music server on port 50800
+wave serve start --mode instance          # also start the playback daemon
+wave serve start --port 60000 --name "Living Room" --user music --password secret
+wave serve status
+wave serve stop
+```
+
+Other Wave apps find the server on the LAN and pair with it as usual.
+Subsonic-compatible players connect to `http://<address>:50800/rest/` with the
+user name and password printed on the first start (or set with `--user` and
+`--password`). The generated password is shown once, then stored owner-only in
+`wave-server.json`; `wave serve status` deliberately never prints it.
+
+`--mode server` is the default and only shares the library. `--mode instance`
+also starts the playback daemon, and `wave serve stop` shuts it down again.
+The server can run alongside the desktop app. Management stays on a
+token-authenticated loopback socket; only the Wave peer and Subsonic APIs are
+served on the LAN, and only to local-network addresses. See
+[`docs/cli.md`](docs/cli.md#hosting-a-wave-server) for the full command contract
+and supported Subsonic endpoints.
 
 ### Tags and cover art
 

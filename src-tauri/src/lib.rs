@@ -26,6 +26,7 @@ mod path_validation;
 mod peers;
 pub mod playback_daemon;
 mod remote;
+pub mod server;
 mod share;
 mod sources;
 mod tag_edit;

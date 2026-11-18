@@ -1493,6 +1493,9 @@ fn sharing_config(app: &AppHandle) -> Option<crate::share::ShareConfig> {
         db_path,
         opener: crate::share::file_opener(Some(app.clone())),
         peers: crate::peers::service(app),
+        port: None,
+        library: None,
+        subsonic: None,
     })
 }
 
