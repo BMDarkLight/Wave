@@ -265,7 +265,7 @@ fn groups(tracks: &[Track]) -> (Vec<Artist>, Vec<Album>) {
     }
     let mut artists: Vec<_> = artists.into_values().collect();
     let mut albums: Vec<_> = albums.into_values().collect();
-    artists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    artists.sort_by_key(|a| a.name.to_lowercase());
     albums.sort_by(|a, b| {
         a.artist
             .to_lowercase()
@@ -533,7 +533,7 @@ pub(crate) fn handle(
             let mut sorted = albums.clone();
             match params.get("type").map(String::as_str).unwrap_or("") {
                 "alphabetical_by_album" | "alphabetical" => {
-                    sorted.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                    sorted.sort_by_key(|a| a.name.to_lowercase())
                 }
                 "recent" => sorted.sort_by(|a, b| {
                     b.added
