@@ -25,6 +25,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use serde::Deserialize;
 use serde_json::Value;
 
 const EXIT_GENERAL: i32 = 1;
@@ -1020,8 +1021,18 @@ fn subsonic_error(value: &Value, code: i64) {
     assert!(response["error"]["message"].is_string());
 }
 
+/// The only reply this helper sends is to `ping`. A strict, bounded type keeps
+/// the test from deserializing arbitrary bytes off the socket.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PingReply {
+    ok: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
 /// One request to the loopback control socket, which is not an HTTP listener.
-fn control_request(port: u16, token: &str, request: &str) -> Value {
+fn control_request(port: u16, token: &str, request: &str) -> PingReply {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -1033,7 +1044,11 @@ fn control_request(port: u16, token: &str, request: &str) -> Value {
     )
     .unwrap();
     let mut reply = String::new();
-    stream.read_to_string(&mut reply).unwrap();
+    let read = (&mut stream)
+        .take(8 * 1024)
+        .read_to_string(&mut reply)
+        .unwrap();
+    assert!(read < 8 * 1024, "the control reply is bounded");
     serde_json::from_str(reply.trim()).unwrap_or_else(|e| panic!("control reply: {e}: {reply:?}"))
 }
 
@@ -1079,7 +1094,7 @@ fn serve_status_start_and_stop_follow_the_json_contract() {
     assert!(started["pid"].as_u64().unwrap() > 0);
     assert!(!started["addresses"].as_array().unwrap().is_empty());
     let password = started["password"].as_str().expect("generated password");
-    assert_eq!(password.len(), 36, "a generated UUIDv4: {password}");
+    assert_eq!(password.len(), 36, "a generated UUIDv4");
     assert!(started["message"]
         .as_str()
         .unwrap()
@@ -1088,7 +1103,10 @@ fn serve_status_start_and_stop_follow_the_json_contract() {
     let config_path = wave.data_dir().join("wave-server.json");
     let state_path = wave.data_dir().join("wave-server-state.json");
     let config = read_json_file(&config_path);
-    assert_eq!(config["password"], password);
+    assert!(
+        config["password"].as_str() == Some(password),
+        "the generated password is saved"
+    );
     assert_eq!(config["name"], "Doc Test Wave");
     assert_eq!(config["service"], "both");
     assert_eq!(config["scope"], "lan");
@@ -1110,12 +1128,10 @@ fn serve_status_start_and_stop_follow_the_json_contract() {
 
     let control_port = state["control_port"].as_u64().unwrap() as u16;
     let denied = control_request(control_port, "not-the-token", "ping");
-    assert_eq!(denied["ok"], false, "a wrong token is refused: {denied}");
+    assert!(!denied.ok, "a wrong token is refused");
+    assert_eq!(denied.error.as_deref(), Some("unauthorized"));
     let accepted = control_request(control_port, state["token"].as_str().unwrap(), "ping");
-    assert_eq!(
-        accepted["ok"], true,
-        "the saved token is accepted: {accepted}"
-    );
+    assert!(accepted.ok, "the saved token is accepted");
 
     let still_running = wave.ok(&[
         "serve",

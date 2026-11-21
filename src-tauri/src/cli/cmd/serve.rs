@@ -22,7 +22,7 @@ const BEACON_HELP: &str = "`on` runs the Radii LAN discovery beacon so other Wav
 const PORT_HELP: &str = "TCP port for the enabled APIs. Defaults to 50800; if that port is taken, Wave picks a free one and reports it. Saved in wave-server.json.";
 const NAME_HELP: &str = "The name other devices see for this server. Saved in wave-server.json.";
 const USER_HELP: &str = "Subsonic login name. Defaults to `wave`. Saved in wave-server.json.";
-const PASSWORD_HELP: &str = "Subsonic password. On the first start, if omitted, Wave generates a random one, saves it owner-only in wave-server.json, and prints it once. Save it from the start output; it is never shown again by `status`.";
+const PASSWORD_HELP: &str = "Subsonic password. On the first start, if omitted, Wave generates a random one, saves it owner-only in wave-server.json, and prints it once. Save it from the start output; it is never shown again by `status`. If startup fails after generation, the password stays in wave-server.json.";
 const SHARE_HELP: &str = "What this server shares with a peer by default: `everything` (the default) or `nothing`. Changing this to `nothing` also stops automatic pairing unless --auto-accept on is given explicitly. Saved in wave-server.json.";
 const AUTO_ACCEPT_HELP: &str = "Answer incoming Wave pairing requests straight away with the --share scope. The default follows --share: auto with `everything`, wait for approval with `nothing`. An explicit `on` or `off` overrides that default; `off` leaves requests for `wave serve accept <id>`. Saved in wave-server.json.";
 

@@ -365,7 +365,7 @@ wave serve stop
 | `--port` | port number (50800) | TCP port for the API or APIs you enable. |
 | `--name` | text | Name other devices see. |
 | `--user` | text (`wave`) | Subsonic user name. |
-| `--password` | text (generated) | Subsonic password. On the first start a random one is generated and printed **once**; save it from the output or supply your own with `--password`. |
+| `--password` | text (generated) | Subsonic password. On the first start a random one is generated and printed **once**; save it from the output or supply your own with `--password`. If startup fails after generation, the password stays in the settings file. |
 | `--service` | `wave` \| `subsonic` \| `both` (`both`) | `wave` serves only the `/wave/` peer API, `subsonic` only `/rest/`, and `both` serves both. |
 | `--scope` | `loopback` \| `lan` \| `internet` (`lan`) | `loopback` binds only 127.0.0.1 and accepts only loopback clients. `lan` binds all interfaces but accepts only loopback, private (RFC 1918) and link-local clients, keeping the existing LAN restriction. `internet` accepts clients from any address. |
 | `--beacon` | `on` \| `off` (`on` for LAN Wave servers, otherwise `off`) | Radii LAN discovery beacon on UDP 7101. It runs only when the service is `wave` or `both` and the scope is `lan`; it is forced off for loopback, internet and Subsonic-only servers. |

@@ -811,21 +811,9 @@ pub fn start(options: &StartOptions) -> Result<StartResult, String> {
             std::thread::sleep(Duration::from_millis(100));
         }
     })();
-    let status = match ready {
-        Ok(status) => status,
-        Err(e) => {
-            // The password was just generated and saved, but a failure here
-            // means the success envelope that would have shown it never runs.
-            return Err(if generated {
-                format!(
-                    "{e} The generated Subsonic password is {}; save it now.",
-                    config.password
-                )
-            } else {
-                e
-            });
-        }
-    };
+    // Don't put a freshly generated password in an error message: errors are
+    // logged, and the password is already saved owner-only in wave-server.json.
+    let status = ready?;
     if generated {
         return Ok(StartResult {
             status: status.with_password(&config.password),
