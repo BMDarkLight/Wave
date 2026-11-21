@@ -42,6 +42,7 @@ pub struct Server {
     pub peers: Arc<crate::peers::api::PeerService>,
     pub library: Option<Arc<parking_lot::Mutex<crate::library::Library>>>,
     pub subsonic: Option<Arc<super::subsonic::Auth>>,
+    pub service: super::ServiceKind,
 }
 
 /// Whether `ip` can only be on this machine or its local network.
@@ -77,13 +78,18 @@ fn reserve_connection(active: &AtomicUsize) -> bool {
 }
 
 /// Accepts connections until `stop` is set.
-pub fn serve(listener: TcpListener, server: Arc<Server>, stop: Arc<AtomicBool>) {
+pub fn serve(
+    listener: TcpListener,
+    server: Arc<Server>,
+    stop: Arc<AtomicBool>,
+    scope: super::ServeScope,
+) {
     let _ = listener.set_nonblocking(true);
     let active = Arc::new(AtomicUsize::new(0));
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, peer)) => {
-                if !is_local(peer.ip()) {
+                if !scope.accepts(peer.ip()) {
                     tracing::debug!("Refused a request from {peer}");
                     continue;
                 }
@@ -217,10 +223,10 @@ fn handle(mut stream: TcpStream, server: &Server) -> io::Result<()> {
         .split_once('?')
         .unwrap_or((request.path.as_str(), ""));
     let path = path.to_string();
-    if path.starts_with("/wave/") {
+    if path.starts_with("/wave/") && server.service.allows_wave() {
         return wave(&mut stream, server, &request, &path, query, head_only);
     }
-    if path.starts_with("/rest/") {
+    if path.starts_with("/rest/") && server.service.allows_subsonic() {
         if let Some(auth) = &server.subsonic {
             return super::subsonic::handle(
                 &mut stream,
@@ -581,12 +587,15 @@ mod tests {
             )))),
             library: None,
             subsonic: None,
+            service: crate::share::ServiceKind::Both,
         });
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        std::thread::spawn(move || serve(listener, server, flag));
+        std::thread::spawn(move || {
+            serve(listener, server, flag, crate::share::ServeScope::Loopback)
+        });
         (port, stop, song)
     }
 
@@ -610,6 +619,24 @@ mod tests {
         assert!(is_local("::ffff:10.0.0.2".parse().unwrap()));
         assert!(!is_local("8.8.8.8".parse().unwrap()));
         assert!(!is_local("2001:db8::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn scope_accepts_only_its_own_clients() {
+        use crate::share::ServeScope;
+
+        let loopback = "127.0.0.1".parse().unwrap();
+        let lan = "192.168.1.9".parse().unwrap();
+        let internet = "8.8.8.8".parse().unwrap();
+        assert!(ServeScope::Loopback.accepts(loopback));
+        assert!(!ServeScope::Loopback.accepts(lan));
+        assert!(!ServeScope::Loopback.accepts(internet));
+        assert!(ServeScope::Lan.accepts(loopback));
+        assert!(ServeScope::Lan.accepts(lan));
+        assert!(!ServeScope::Lan.accepts(internet));
+        assert!(ServeScope::Internet.accepts(loopback));
+        assert!(ServeScope::Internet.accepts(lan));
+        assert!(ServeScope::Internet.accepts(internet));
     }
 
     #[test]
@@ -844,10 +871,18 @@ mod pairing_tests {
             peers: peers.clone(),
             library: None,
             subsonic: None,
+            service: crate::share::ServiceKind::Both,
         });
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || serve(listener, server, Arc::new(AtomicBool::new(false))));
+        std::thread::spawn(move || {
+            serve(
+                listener,
+                server,
+                Arc::new(AtomicBool::new(false)),
+                crate::share::ServeScope::Loopback,
+            )
+        });
         (host, peers, port)
     }
 
@@ -1111,10 +1146,18 @@ mod pairing_tests {
             }))),
             library: None,
             subsonic: None,
+            service: crate::share::ServiceKind::Both,
         });
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || serve(listener, server, Arc::new(AtomicBool::new(false))));
+        std::thread::spawn(move || {
+            serve(
+                listener,
+                server,
+                Arc::new(AtomicBool::new(false)),
+                crate::share::ServeScope::Loopback,
+            )
+        });
         crate::peers::PeerRecord {
             id: "desk".into(),
             name: "Wave on desk".into(),

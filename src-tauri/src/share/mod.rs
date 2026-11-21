@@ -22,9 +22,11 @@ pub mod subsonic;
 
 use crate::library::Library;
 use catalog::Snapshot;
+use clap::ValueEnum;
 use http::{Catalog, Opener, Server};
 use parking_lot::Mutex;
-use std::net::{Ipv4Addr, TcpListener};
+use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -39,6 +41,74 @@ pub(crate) const PREFERRED_PORT: u16 = 50800;
 /// still serving a slow client is detached after that: it cannot outlive the
 /// server process, and making `stop` wait forever would make it unreliable.
 const STOP_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Which API a hosted server answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceKind {
+    /// Paired Waves only: the `/wave/` peer API.
+    Wave,
+    /// Subsonic players only: the `/rest/` API.
+    Subsonic,
+    /// Both APIs on the same port.
+    Both,
+}
+
+impl ServiceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wave => "wave",
+            Self::Subsonic => "subsonic",
+            Self::Both => "both",
+        }
+    }
+
+    pub fn allows_wave(self) -> bool {
+        matches!(self, Self::Wave | Self::Both)
+    }
+
+    pub fn allows_subsonic(self) -> bool {
+        matches!(self, Self::Subsonic | Self::Both)
+    }
+}
+
+pub fn default_service() -> ServiceKind {
+    ServiceKind::Both
+}
+
+/// Who may connect to the HTTP listener.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum ServeScope {
+    /// This machine only: bind and accept on `127.0.0.1`.
+    Loopback,
+    /// This machine and its local network; the default.
+    Lan,
+    /// Any address. Only the Subsonic API is allowed in this scope.
+    Internet,
+}
+
+impl ServeScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Loopback => "loopback",
+            Self::Lan => "lan",
+            Self::Internet => "internet",
+        }
+    }
+
+    pub fn accepts(self, ip: IpAddr) -> bool {
+        match self {
+            Self::Loopback => ip.is_loopback(),
+            Self::Lan => http::is_local(ip),
+            Self::Internet => true,
+        }
+    }
+}
+
+pub fn default_scope() -> ServeScope {
+    ServeScope::Lan
+}
 
 /// What the server is started with.
 #[derive(Clone)]
@@ -55,6 +125,12 @@ pub struct ShareConfig {
     pub library: Option<Arc<parking_lot::Mutex<Library>>>,
     /// Credentials for Subsonic clients; absent on a desktop Wave.
     pub subsonic: Option<Arc<subsonic::Auth>>,
+    /// Which API this listener answers.
+    pub service: ServiceKind,
+    /// Who may connect to the listener.
+    pub scope: ServeScope,
+    /// Whether the LAN discovery beacon should run.
+    pub beacon: bool,
 }
 
 /// The settings screen's view of the server.
@@ -110,13 +186,23 @@ impl Catalog for LibraryCatalog {
 }
 
 struct Running {
-    config_key: (String, String, PathBuf, Option<u16>, Option<String>),
+    config_key: (
+        String,
+        String,
+        PathBuf,
+        Option<u16>,
+        Option<String>,
+        ServiceKind,
+        ServeScope,
+        bool,
+    ),
     port: u16,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
     catalog: Arc<LibraryCatalog>,
     name: String,
     error: Arc<Mutex<Option<String>>>,
+    beacon: bool,
 }
 
 fn state() -> &'static Mutex<Option<Running>> {
@@ -129,10 +215,14 @@ fn last_error() -> &'static Mutex<Option<String>> {
     ERROR.get_or_init(|| Mutex::new(None))
 }
 
-fn bind_http(port: Option<u16>) -> std::io::Result<TcpListener> {
+fn bind_http(scope: ServeScope, port: Option<u16>) -> std::io::Result<TcpListener> {
     let preferred = port.unwrap_or(PREFERRED_PORT);
-    TcpListener::bind((Ipv4Addr::UNSPECIFIED, preferred))
-        .or_else(|_| TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)))
+    let addr = if scope == ServeScope::Loopback {
+        Ipv4Addr::LOCALHOST
+    } else {
+        Ipv4Addr::UNSPECIFIED
+    };
+    TcpListener::bind((addr, preferred)).or_else(|_| TcpListener::bind((addr, 0)))
 }
 
 fn start(config: ShareConfig) -> Result<Running, String> {
@@ -146,8 +236,8 @@ fn start(config: ShareConfig) -> Result<Running, String> {
         library: Arc::clone(&library),
         cached: Mutex::new(None),
     });
-    let listener =
-        bind_http(config.port).map_err(|e| format!("Couldn't open a port to share on: {e}"))?;
+    let listener = bind_http(config.scope, config.port)
+        .map_err(|e| format!("Couldn't open a port to share on: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let stop = Arc::new(AtomicBool::new(false));
     let error = Arc::new(Mutex::new(None));
@@ -157,30 +247,42 @@ fn start(config: ShareConfig) -> Result<Running, String> {
         peers: config.peers.clone(),
         library: Some(library),
         subsonic: config.subsonic.clone(),
+        service: config.service,
     });
 
     let mut threads = Vec::new();
     let http_stop = stop.clone();
+    let http_scope = config.scope;
     threads.push(
         std::thread::Builder::new()
             .name("wave-share-http".into())
-            .spawn(move || http::serve(listener, server, http_stop))
+            .spawn(move || http::serve(listener, server, http_stop, http_scope))
             .map_err(|e| e.to_string())?,
     );
-    let peers = config.peers.clone();
-    let discovery_stop = stop.clone();
-    let discovery_error = error.clone();
-    threads.push(
-        std::thread::Builder::new()
-            .name("wave-peer-discovery".into())
-            .spawn(move || {
-                crate::peers::discovery::run(peers, port, discovery_stop, discovery_error)
-            })
-            .map_err(|e| e.to_string())?,
+    // The beacon announces the Wave peer API. Skip it when that API is off or
+    // the listener is not reachable from the LAN it advertises on.
+    let beacon = config.beacon && config.service.allows_wave() && config.scope == ServeScope::Lan;
+    if beacon {
+        let peers = config.peers.clone();
+        let discovery_stop = stop.clone();
+        let discovery_error = error.clone();
+        threads.push(
+            std::thread::Builder::new()
+                .name("wave-peer-discovery".into())
+                .spawn(move || {
+                    crate::peers::discovery::run(peers, port, discovery_stop, discovery_error)
+                })
+                .map_err(|e| e.to_string())?,
+        );
+        #[cfg(target_os = "android")]
+        crate::android::multicast::acquire();
+    }
+    tracing::info!(
+        "Sharing the library as \"{}\" on port {port} ({}, {})",
+        config.name,
+        config.service.as_str(),
+        config.scope.as_str()
     );
-    #[cfg(target_os = "android")]
-    crate::android::multicast::acquire();
-    tracing::info!("Sharing the library as \"{}\" on port {port}", config.name);
     Ok(Running {
         config_key: (
             config.name.clone(),
@@ -188,6 +290,9 @@ fn start(config: ShareConfig) -> Result<Running, String> {
             config.db_path,
             config.port,
             config.subsonic.as_ref().map(|a| a.user().to_string()),
+            config.service,
+            config.scope,
+            config.beacon,
         ),
         port,
         stop,
@@ -195,6 +300,7 @@ fn start(config: ShareConfig) -> Result<Running, String> {
         catalog,
         name: config.name,
         error,
+        beacon,
     })
 }
 
@@ -215,7 +321,11 @@ fn stop(running: Running) {
         }
     }
     #[cfg(target_os = "android")]
-    crate::android::multicast::release();
+    if running.beacon {
+        crate::android::multicast::release();
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = running.beacon;
     tracing::info!("Stopped sharing the library");
 }
 
@@ -229,6 +339,9 @@ pub fn apply(config: Option<ShareConfig>) {
             c.db_path.clone(),
             c.port,
             c.subsonic.as_ref().map(|a| a.user().to_string()),
+            c.service,
+            c.scope,
+            c.beacon,
         )
     });
     if slot.as_ref().map(|r| r.config_key.clone()) == wanted {

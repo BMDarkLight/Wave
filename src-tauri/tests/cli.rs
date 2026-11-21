@@ -929,7 +929,17 @@ fn serve_status_start_and_stop_follow_the_json_contract() {
 
     let before = wave.ok(&["serve", "status"]);
     assert_eq!(before["running"], false);
-    for field in ["mode", "name", "user", "port", "pid", "addresses"] {
+    for field in [
+        "mode",
+        "name",
+        "user",
+        "port",
+        "pid",
+        "service",
+        "scope",
+        "beacon",
+        "addresses",
+    ] {
         assert!(before.get(field).is_some(), "status before start: {before}");
     }
 
@@ -945,6 +955,9 @@ fn serve_status_start_and_stop_follow_the_json_contract() {
     assert_eq!(started["mode"], "server");
     assert_eq!(started["name"], "Doc Test Wave");
     assert_eq!(started["user"], "wave");
+    assert_eq!(started["service"], "both");
+    assert_eq!(started["scope"], "lan");
+    assert_eq!(started["beacon"], true);
     // The port can fall back if another process took the requested one.
     let port = started["port"].as_u64().unwrap() as u16;
     assert_eq!(started["port"], port);
@@ -962,6 +975,9 @@ fn serve_status_start_and_stop_follow_the_json_contract() {
     let config = read_json_file(&config_path);
     assert_eq!(config["password"], password);
     assert_eq!(config["name"], "Doc Test Wave");
+    assert_eq!(config["service"], "both");
+    assert_eq!(config["scope"], "lan");
+    assert_eq!(config["beacon"], true);
     #[cfg(unix)]
     {
         assert_owner_only(&config_path);
@@ -971,6 +987,9 @@ fn serve_status_start_and_stop_follow_the_json_contract() {
     assert_eq!(state["pid"], started["pid"]);
     assert!(state["control_port"].as_u64().unwrap() > 0);
     assert!(state["token"].as_str().unwrap().len() > 20);
+    assert_eq!(state["service"], "both");
+    assert_eq!(state["scope"], "lan");
+    assert_eq!(state["beacon"], true);
     assert!(state.get("password").is_none());
     assert!(wave.data_dir().join("wave-server.lock").exists());
 
@@ -1004,6 +1023,9 @@ fn serve_status_start_and_stop_follow_the_json_contract() {
     assert_eq!(status["mode"], "server");
     assert_eq!(status["name"], "Doc Test Wave");
     assert_eq!(status["user"], "wave");
+    assert_eq!(status["service"], "both");
+    assert_eq!(status["scope"], "lan");
+    assert_eq!(status["beacon"], true);
     assert_eq!(status["port"], port);
     assert_eq!(status["pid"], started["pid"]);
     assert!(status.get("password").is_none(), "status never prints it");
@@ -1234,6 +1256,181 @@ fn serve_keeps_saved_settings_and_reports_the_bound_port() {
     subsonic_ok(&rest(actual, "ping", "music", "secret", &[]));
     wave.ok(&["serve", "stop"]);
     drop(blocker);
+}
+
+#[test]
+fn serve_service_scope_and_beacon_control_what_is_exposed() {
+    let wave = Wave::new();
+    let port = free_port();
+    let started = wave.ok(&[
+        "serve",
+        "start",
+        "--port",
+        &port.to_string(),
+        "--service",
+        "subsonic",
+        "--scope",
+        "internet",
+        "--user",
+        "music",
+        "--password",
+        "secret",
+    ]);
+    let port = started["port"].as_u64().unwrap() as u16;
+    assert_eq!(started["service"], "subsonic");
+    assert_eq!(started["scope"], "internet");
+    assert_eq!(started["beacon"], false);
+    for field in ["service", "scope", "beacon"] {
+        assert_eq!(
+            wave.ok(&["serve", "status"])[field],
+            started[field],
+            "status must report the active {field}"
+        );
+    }
+    subsonic_ok(&rest(port, "ping", "music", "secret", &[]));
+    let (status, _) = http_get(port, "/wave/hello");
+    assert!(
+        status.contains("404"),
+        "internet never exposes /wave/: {status}"
+    );
+    // An impossible combination is rejected even while a server is up; it
+    // must not be silently accepted by the already-running shortcut.
+    let error = wave.fails(
+        &["serve", "start", "--scope", "internet", "--service", "both"],
+        2,
+    );
+    assert!(error.contains("unsupported"), "{error}");
+    assert_eq!(wave.ok(&["serve", "status"])["running"], true);
+    wave.ok(&["serve", "stop"]);
+
+    let port = free_port();
+    let started = wave.ok(&[
+        "serve",
+        "start",
+        "--port",
+        &port.to_string(),
+        "--service",
+        "wave",
+        "--scope",
+        "loopback",
+        "--beacon",
+        "off",
+        "--name",
+        "Loopback Wave",
+    ]);
+    let port = started["port"].as_u64().unwrap() as u16;
+    assert_eq!(started["service"], "wave");
+    assert_eq!(started["scope"], "loopback");
+    assert_eq!(started["beacon"], false);
+    let addresses = started["addresses"].as_array().unwrap();
+    assert_eq!(
+        addresses.len(),
+        1,
+        "loopback advertises one address: {addresses:?}"
+    );
+    assert!(addresses[0].as_str().unwrap().contains("127.0.0.1"));
+    let (status, _) = http_get(port, "/wave/hello");
+    assert!(status.contains("200 OK"), "the Wave API is on: {status}");
+    let (status, _) = http_get(
+        port,
+        "/rest/ping.view?u=wave&p=secret&v=1.16.1&c=wave-cli-test",
+    );
+    assert!(status.contains("404"), "Subsonic is off: {status}");
+    wave.ok(&["serve", "stop"]);
+
+    let error = wave.fails(
+        &["serve", "start", "--scope", "internet", "--service", "both"],
+        2,
+    );
+    assert!(error.contains("unsupported"), "{error}");
+    let error = wave.fails(
+        &["serve", "start", "--scope", "internet", "--beacon", "on"],
+        2,
+    );
+    assert!(error.contains("unsupported"), "{error}");
+    let error = wave.fails(
+        &["serve", "start", "--service", "subsonic", "--beacon", "on"],
+        2,
+    );
+    assert!(error.contains("unsupported"), "{error}");
+}
+
+#[test]
+fn serve_config_changes_saved_settings_and_reports_restart() {
+    let wave = Wave::new();
+    let port = free_port();
+    let started = wave.ok(&[
+        "serve",
+        "start",
+        "--port",
+        &port.to_string(),
+        "--name",
+        "Before",
+        "--password",
+        "secret",
+    ]);
+    let port = started["port"].as_u64().unwrap() as u16;
+    assert_eq!(started["service"], "both");
+    assert_eq!(started["scope"], "lan");
+    assert_eq!(started["beacon"], true);
+
+    let configured = wave.ok(&[
+        "serve",
+        "config",
+        "--name",
+        "After",
+        "--user",
+        "music",
+        "--password",
+        "changed",
+        "--scope",
+        "internet",
+        "--beacon",
+        "off",
+    ]);
+    assert_eq!(configured["applies_on_restart"], true);
+    assert_eq!(configured["name"], "After");
+    assert_eq!(configured["user"], "music");
+    assert_eq!(configured["service"], "subsonic");
+    assert_eq!(configured["scope"], "internet");
+    assert_eq!(configured["beacon"], false);
+    assert!(configured.get("password").is_none());
+
+    let active = wave.ok(&["serve", "status"]);
+    assert_eq!(active["name"], "Before");
+    assert_eq!(active["user"], "wave");
+    assert_eq!(active["service"], "both");
+    assert_eq!(active["scope"], "lan");
+    assert_eq!(active["beacon"], true);
+    subsonic_ok(&rest(port, "ping", "wave", "secret", &[]));
+
+    assert_eq!(wave.ok(&["serve", "stop"])["stopped"], true);
+    let saved = wave.ok(&["serve", "status"]);
+    assert_eq!(saved["running"], false);
+    assert!(saved["pid"].is_null());
+    assert_eq!(saved["name"], "After");
+    assert_eq!(saved["service"], "subsonic");
+    assert_eq!(saved["scope"], "internet");
+    assert_eq!(saved["beacon"], false);
+
+    let restarted = wave.ok(&["serve", "start"]);
+    let port = restarted["port"].as_u64().unwrap() as u16;
+    assert_eq!(restarted["name"], "After");
+    assert_eq!(restarted["user"], "music");
+    assert_eq!(restarted["service"], "subsonic");
+    assert_eq!(restarted["scope"], "internet");
+    assert_eq!(restarted["beacon"], false);
+    subsonic_ok(&rest(port, "ping", "music", "changed", &[]));
+    subsonic_error(&rest(port, "ping", "music", "secret", &[]), 40);
+    let (status, _) = http_get(port, "/wave/hello");
+    assert!(
+        status.contains("404"),
+        "the new service filter is active: {status}"
+    );
+    wave.ok(&["serve", "stop"]);
+
+    let configured = wave.ok(&["serve", "config", "--name", "Idle"]);
+    assert_eq!(configured["applies_on_restart"], false);
 }
 
 #[test]

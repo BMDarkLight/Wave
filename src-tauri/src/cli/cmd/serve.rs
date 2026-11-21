@@ -10,8 +10,8 @@
 
 use clap::Subcommand;
 
-use crate::cli::{json, ui};
-use crate::server::{self, ServerMode, StartOptions};
+use crate::cli::{json, ui, Switch};
+use crate::server::{self, ConfigOptions, ServeScope, ServerMode, ServiceKind, StartOptions};
 
 #[derive(Subcommand)]
 pub enum ServeCmd {
@@ -20,6 +20,15 @@ pub enum ServeCmd {
         /// `server` serves the library; `instance` also starts local playback
         #[arg(long, value_enum)]
         mode: Option<ServerMode>,
+        /// Which API is exposed: wave, subsonic, or both
+        #[arg(long, value_enum)]
+        service: Option<ServiceKind>,
+        /// Who may connect: loopback, lan, or internet
+        #[arg(long, value_enum)]
+        scope: Option<ServeScope>,
+        /// Advertise this server on the LAN (`internet` is Subsonic-only)
+        #[arg(long, value_enum)]
+        beacon: Option<Switch>,
         /// Port for Wave peers and Subsonic clients (default: 50800)
         #[arg(long)]
         port: Option<u16>,
@@ -33,16 +42,60 @@ pub enum ServeCmd {
         #[arg(long)]
         password: Option<String>,
     },
+    /// Change saved server settings (they take effect on the next start)
+    Config {
+        /// Which API is exposed: wave, subsonic, or both
+        #[arg(long, value_enum)]
+        service: Option<ServiceKind>,
+        /// Who may connect: loopback, lan, or internet
+        #[arg(long, value_enum)]
+        scope: Option<ServeScope>,
+        /// Advertise this server on the LAN (`internet` is Subsonic-only)
+        #[arg(long, value_enum)]
+        beacon: Option<Switch>,
+        /// Port for Wave peers and Subsonic clients
+        #[arg(long)]
+        port: Option<u16>,
+        /// Name other devices see
+        #[arg(long)]
+        name: Option<String>,
+        /// Subsonic user name
+        #[arg(long)]
+        user: Option<String>,
+        /// Subsonic password
+        #[arg(long)]
+        password: Option<String>,
+    },
     /// Stop the hosted server
     Stop,
     /// Show whether the hosted server is running and where
     Status,
 }
 
+fn switch(value: Option<Switch>) -> Option<bool> {
+    value.map(|value| matches!(value, Switch::On))
+}
+
+fn shape(status: &server::ServerStatus) -> String {
+    format!(
+        "{}, {}, beacon {}",
+        status.service.as_deref().unwrap_or("both"),
+        status.scope.as_deref().unwrap_or("lan"),
+        if status.beacon.unwrap_or(false) {
+            "on"
+        } else {
+            "off"
+        }
+    )
+}
+
 pub fn run(command: ServeCmd) {
     match command {
         ServeCmd::Start {
             mode,
+            service,
+            scope,
+            beacon,
             port,
             name,
             user,
@@ -50,6 +103,9 @@ pub fn run(command: ServeCmd) {
         } => {
             let options = StartOptions {
                 mode,
+                service,
+                scope,
+                beacon: switch(beacon),
                 port,
                 name,
                 user,
@@ -60,18 +116,20 @@ pub fn run(command: ServeCmd) {
             let detail = serde_json::to_value(status).unwrap_or_default();
             let message = if let Some(password) = &status.password {
                 format!(
-                    "Wave {} \"{}\" running on port {}. Subsonic login: {}/{} (save this password now)",
+                    "Wave {} \"{}\" running on port {} ({}). Subsonic login: {}/{} (save this password now)",
                     status.mode.as_deref().unwrap_or("server"),
                     status.name.as_deref().unwrap_or("Wave"),
                     status.port.unwrap_or_default(),
+                    shape(status),
                     status.user.as_deref().unwrap_or("wave"),
                     password
                 )
             } else if result.already_running {
                 format!(
-                    "Wave server already running on port {} ({})",
+                    "Wave server already running on port {} ({}) ({})",
                     status.port.unwrap_or_default(),
-                    status.name.as_deref().unwrap_or("Wave")
+                    status.name.as_deref().unwrap_or("Wave"),
+                    shape(status)
                 )
             } else {
                 format!(
@@ -79,12 +137,44 @@ pub fn run(command: ServeCmd) {
                     status.mode.as_deref().unwrap_or("server"),
                     status.name.as_deref().unwrap_or("Wave"),
                     status.port.unwrap_or_default(),
-                    status
-                        .addresses
-                        .first()
-                        .map(String::as_str)
-                        .unwrap_or("127.0.0.1")
+                    shape(status)
                 )
+            };
+            ui::done(message, detail);
+        }
+        ServeCmd::Config {
+            service,
+            scope,
+            beacon,
+            port,
+            name,
+            user,
+            password,
+        } => {
+            let options = ConfigOptions {
+                service,
+                scope,
+                beacon: switch(beacon),
+                port,
+                name,
+                user,
+                password,
+            };
+            let (config, applies_on_restart) =
+                server::configure(&options).unwrap_or_else(|e| ui::fail_with(e));
+            let detail = serde_json::json!({
+                "port": config.port,
+                "name": config.name,
+                "user": config.user,
+                "service": config.service.as_str(),
+                "scope": config.scope.as_str(),
+                "beacon": config.beacon,
+                "applies_on_restart": applies_on_restart,
+            });
+            let message = if applies_on_restart {
+                "Saved Wave server settings; they take effect on the next start."
+            } else {
+                "Saved Wave server settings."
             };
             ui::done(message, detail);
         }
@@ -106,11 +196,12 @@ pub fn run(command: ServeCmd) {
             }
             let message = if status.running {
                 format!(
-                    "Wave {} \"{}\" is running on port {} (pid {})",
+                    "Wave {} \"{}\" is running on port {} (pid {}, {})",
                     status.mode.as_deref().unwrap_or("server"),
                     status.name.as_deref().unwrap_or("Wave"),
                     status.port.unwrap_or_default(),
-                    status.pid.unwrap_or_default()
+                    status.pid.unwrap_or_default(),
+                    shape(&status)
                 )
             } else {
                 "Wave server is not running.".to_string()

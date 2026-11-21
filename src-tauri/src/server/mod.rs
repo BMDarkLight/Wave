@@ -15,6 +15,8 @@
 
 pub mod host;
 
+pub use crate::share::{ServeScope, ServiceKind};
+
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -47,6 +49,10 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(3);
 /// slow client. Give them enough time to finish before reporting failure.
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn default_beacon() -> bool {
+    true
+}
+
 /// What a hosted server is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -66,6 +72,18 @@ impl ServerMode {
     }
 }
 
+/// Settings accepted by both `serve start` and `serve config`.
+#[derive(Debug, Clone, Default)]
+pub struct ConfigOptions {
+    pub port: Option<u16>,
+    pub name: Option<String>,
+    pub user: Option<String>,
+    pub password: Option<String>,
+    pub service: Option<ServiceKind>,
+    pub scope: Option<ServeScope>,
+    pub beacon: Option<bool>,
+}
+
 /// Options accepted by `wave serve start`.
 #[derive(Debug, Clone, Default)]
 pub struct StartOptions {
@@ -74,6 +92,23 @@ pub struct StartOptions {
     pub name: Option<String>,
     pub user: Option<String>,
     pub password: Option<String>,
+    pub service: Option<ServiceKind>,
+    pub scope: Option<ServeScope>,
+    pub beacon: Option<bool>,
+}
+
+impl StartOptions {
+    fn settings(&self) -> ConfigOptions {
+        ConfigOptions {
+            port: self.port,
+            name: self.name.clone(),
+            user: self.user.clone(),
+            password: self.password.clone(),
+            service: self.service,
+            scope: self.scope,
+            beacon: self.beacon,
+        }
+    }
 }
 
 /// Persistent server settings. Deliberately has no `Debug`: it holds a password.
@@ -85,6 +120,12 @@ pub struct ServerConfig {
     pub user: String,
     pub password: String,
     pub device_id: String,
+    #[serde(default = "crate::share::default_service")]
+    pub service: ServiceKind,
+    #[serde(default = "crate::share::default_scope")]
+    pub scope: ServeScope,
+    #[serde(default = "default_beacon")]
+    pub beacon: bool,
     #[serde(default)]
     pub peers: Vec<PeerRecord>,
 }
@@ -99,6 +140,12 @@ struct ServerState {
     mode: ServerMode,
     name: String,
     user: String,
+    #[serde(default = "crate::share::default_service")]
+    service: ServiceKind,
+    #[serde(default = "crate::share::default_scope")]
+    scope: ServeScope,
+    #[serde(default = "default_beacon")]
+    beacon: bool,
     started_at: i64,
     /// True when this server spawned the playback daemon itself. A daemon that
     /// was already running belongs to the desktop app or another node and must
@@ -116,6 +163,9 @@ pub struct ServerStatus {
     pub user: Option<String>,
     pub port: Option<u16>,
     pub pid: Option<u32>,
+    pub service: Option<String>,
+    pub scope: Option<String>,
+    pub beacon: Option<bool>,
     pub addresses: Vec<String>,
     /// Only set on the first start, when a password was generated for them.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -270,21 +320,16 @@ fn default_config() -> ServerConfig {
         user: "wave".to_string(),
         password: uuid::Uuid::new_v4().to_string(),
         device_id: uuid::Uuid::new_v4().to_string(),
+        service: crate::share::default_service(),
+        scope: crate::share::default_scope(),
+        beacon: default_beacon(),
         peers: Vec::new(),
     }
 }
 
-/// Build or update the saved config. Returns true when a password was generated.
-fn prepare_config(options: &StartOptions) -> Result<(ServerConfig, bool), String> {
-    let existed = server_config_path().exists();
-    let mut config = if existed {
-        read_config()?
-    } else {
-        default_config()
-    };
-    if let Some(mode) = options.mode {
-        config.mode = mode;
-    }
+/// Apply the settings shared by `serve start` and `serve config`, including the
+/// rules that keep the internet scope Subsonic-only.
+fn apply_options(config: &mut ServerConfig, options: &ConfigOptions) -> Result<(), String> {
     if let Some(port) = options.port {
         if port == 0 {
             return Err("The port must be between 1 and 65535.".to_string());
@@ -311,13 +356,72 @@ fn prepare_config(options: &StartOptions) -> Result<(ServerConfig, bool), String
         }
         config.password = password.clone();
     }
+    if let Some(service) = options.service {
+        config.service = service;
+    }
+    if let Some(scope) = options.scope {
+        config.scope = scope;
+    }
+    if let Some(beacon) = options.beacon {
+        config.beacon = beacon;
+    }
+
+    if config.scope == ServeScope::Internet {
+        if options.service.is_some() && config.service != ServiceKind::Subsonic {
+            return Err(
+                "The wave service is unsupported with --scope internet; use --service subsonic."
+                    .to_string(),
+            );
+        }
+        config.service = ServiceKind::Subsonic;
+    }
+    if config.scope != ServeScope::Lan || !config.service.allows_wave() {
+        if options.beacon == Some(true) {
+            return Err(
+                "The beacon is unsupported without a LAN Wave service; use --beacon off."
+                    .to_string(),
+            );
+        }
+        config.beacon = false;
+    }
     if config.device_id.is_empty() {
         config.device_id = uuid::Uuid::new_v4().to_string();
     }
+    Ok(())
+}
+
+/// Build or update the saved config. Returns true when a password was generated.
+fn prepare_config(options: &StartOptions) -> Result<(ServerConfig, bool), String> {
+    let existed = server_config_path().exists();
+    let mut config = if existed {
+        read_config()?
+    } else {
+        default_config()
+    };
+    if let Some(mode) = options.mode {
+        config.mode = mode;
+    }
+    apply_options(&mut config, &options.settings())?;
     save_config(&config)?;
     // Only a password we made up needs to be shown; one the user chose is
     // already known to them.
     Ok((config, !existed && options.password.is_none()))
+}
+
+/// Change saved settings without touching a server that is already running.
+pub fn configure(options: &ConfigOptions) -> Result<(ServerConfig, bool), String> {
+    let _start_lock = acquire_start_lock()?;
+    let mut config = if server_config_path().exists() {
+        read_config()?
+    } else {
+        default_config()
+    };
+    apply_options(&mut config, options)?;
+    save_config(&config)?;
+    // `status` reads the settings we just saved when nothing is running, and
+    // the older runtime state when something is.
+    let applies_on_restart = status()?.running;
+    Ok((config, applies_on_restart))
 }
 
 fn read_state() -> Option<ServerState> {
@@ -400,9 +504,27 @@ fn cleanup_server(state: &ServerState) {
     clear_state_if_current(state);
 }
 
-/// Addresses the server can actually answer on, for status output.
-fn addresses(port: u16) -> Vec<String> {
+/// Normalize a saved config for display, including files written by an older
+/// build that didn't have these fields.
+fn effective_settings(config: &ServerConfig) -> (ServiceKind, ServeScope, bool) {
+    let scope = config.scope;
+    let service = if scope == ServeScope::Internet {
+        ServiceKind::Subsonic
+    } else {
+        config.service
+    };
+    let beacon = scope == ServeScope::Lan && service.allows_wave() && config.beacon;
+    (service, scope, beacon)
+}
+
+/// Addresses the server can actually answer on, for status output. In internet
+/// scope these are the local addresses to port-forward: Wave cannot know the
+/// router's public address without asking an outside service.
+fn addresses(port: u16, scope: ServeScope) -> Vec<String> {
     let mut result = vec![format!("http://127.0.0.1:{port}")];
+    if scope == ServeScope::Loopback {
+        return result;
+    }
     result.extend(
         crate::remote::dlna::multicast_interfaces()
             .into_iter()
@@ -426,6 +548,16 @@ pub fn start(options: &StartOptions) -> Result<StartResult, String> {
     // the first server is still reading it. The detached server holds the
     // separate, long-lived `wave-server.lock` instead.
     let _start_lock = acquire_start_lock()?;
+
+    // Validate the request before the already-running shortcut: an impossible
+    // combination is a usage error whether or not a server happens to be up.
+    // This is a dry run; only `prepare_config` writes the saved settings.
+    let mut requested = if server_config_path().exists() {
+        read_config()?
+    } else {
+        default_config()
+    };
+    apply_options(&mut requested, &options.settings())?;
 
     // Don't overwrite the saved settings when a server is already running:
     // it would keep listening on its old port while the file advertises the
@@ -581,21 +713,30 @@ pub fn status() -> Result<ServerStatus, String> {
         }
     }
     let config = read_config().unwrap_or_else(|_| default_config());
-    let (mode, name, user, port, pid) = match &state {
+    let (mode, name, user, port, pid, service, scope, beacon) = match &state {
         Some(current) => (
             current.mode.as_str().to_string(),
             current.name.clone(),
             current.user.clone(),
             current.port,
             Some(current.pid),
+            current.service,
+            current.scope,
+            current.beacon,
         ),
-        None => (
-            config.mode.as_str().to_string(),
-            config.name,
-            config.user,
-            config.port,
-            None,
-        ),
+        None => {
+            let (service, scope, beacon) = effective_settings(&config);
+            (
+                config.mode.as_str().to_string(),
+                config.name.clone(),
+                config.user.clone(),
+                config.port,
+                None,
+                service,
+                scope,
+                beacon,
+            )
+        }
     };
     Ok(ServerStatus {
         running: state.is_some(),
@@ -604,7 +745,10 @@ pub fn status() -> Result<ServerStatus, String> {
         user: Some(user),
         port: Some(port),
         pid,
-        addresses: addresses(port),
+        service: Some(service.as_str().to_string()),
+        scope: Some(scope.as_str().to_string()),
+        beacon: Some(beacon),
+        addresses: addresses(port, scope),
         password: None,
     })
 }
@@ -671,6 +815,13 @@ pub fn run_server() -> ! {
         .spawn(move || control_loop(control, control_token, control_stop))
         .expect("spawn server control loop");
 
+    let (service, scope, beacon) = effective_settings(&config);
+    let subsonic = service.allows_subsonic().then(|| {
+        Arc::new(crate::share::subsonic::Auth::new(
+            config.user.clone(),
+            config.password.clone(),
+        ))
+    });
     let share_config = crate::share::ShareConfig {
         name: config.name.clone(),
         uuid: config.device_id.clone(),
@@ -679,10 +830,10 @@ pub fn run_server() -> ! {
         peers,
         port: Some(config.port),
         library: Some(Arc::clone(&library)),
-        subsonic: Some(Arc::new(crate::share::subsonic::Auth::new(
-            config.user.clone(),
-            config.password.clone(),
-        ))),
+        subsonic,
+        service,
+        scope,
+        beacon,
     };
     crate::share::apply(Some(share_config));
 
@@ -709,6 +860,9 @@ pub fn run_server() -> ! {
         mode: config.mode,
         name: config.name.clone(),
         user: config.user.clone(),
+        service,
+        scope,
+        beacon,
         started_at: now_secs(),
         owns_daemon,
     };
@@ -850,7 +1004,10 @@ fn same_secret(a: &str, b: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_config, Control, ControlRequest, ServerMode};
+    use super::{
+        apply_options, default_config, ConfigOptions, Control, ControlRequest, ServeScope,
+        ServerMode, ServiceKind,
+    };
 
     #[test]
     fn control_requests_survive_the_wire() {
@@ -869,7 +1026,63 @@ mod tests {
         let config = default_config();
         assert_eq!(config.mode, ServerMode::Server);
         assert_eq!(config.port, 50800);
+        assert_eq!(config.service, ServiceKind::Both);
+        assert_eq!(config.scope, ServeScope::Lan);
+        assert!(config.beacon);
         assert!(!config.device_id.is_empty());
         assert!(!config.password.is_empty());
+    }
+
+    #[test]
+    fn internet_scope_forces_subsonic_and_disables_the_beacon() {
+        let mut config = default_config();
+        apply_options(
+            &mut config,
+            &ConfigOptions {
+                scope: Some(ServeScope::Internet),
+                ..ConfigOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(config.service, ServiceKind::Subsonic);
+        assert!(!config.beacon);
+
+        let mut config = default_config();
+        let error = apply_options(
+            &mut config,
+            &ConfigOptions {
+                scope: Some(ServeScope::Internet),
+                service: Some(ServiceKind::Both),
+                ..ConfigOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("unsupported"), "{error}");
+    }
+
+    #[test]
+    fn beacon_on_requires_a_lan_wave_service() {
+        let mut config = default_config();
+        let error = apply_options(
+            &mut config,
+            &ConfigOptions {
+                scope: Some(ServeScope::Loopback),
+                beacon: Some(true),
+                ..ConfigOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("unsupported"), "{error}");
+
+        let mut config = default_config();
+        apply_options(
+            &mut config,
+            &ConfigOptions {
+                service: Some(ServiceKind::Subsonic),
+                ..ConfigOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(!config.beacon);
     }
 }

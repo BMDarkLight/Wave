@@ -334,33 +334,103 @@ together in one run, so its output is the usual single import summary, and
 
 ## Hosting a Wave server
 
-`wave serve` hosts the library on this machine. Other Wave apps find it over
-the LAN and pair through the existing `/wave/` API; Subsonic-compatible players
-browse and stream it through `/rest/`. The server runs in the background and
-can coexist with the desktop app and the playback daemon.
+`wave serve` hosts the library on this machine in the background, with no
+window. On a LAN Wave server, other Wave apps find it and pair through the
+`/wave/` peer API; Subsonic-compatible players browse and stream through
+`/rest/`. The server can run alongside the desktop app and the playback daemon.
 
 ```bash
-wave serve start --mode server                # library server only (default)
-wave serve start --mode instance --port 50800 # also start local playback
+wave serve start                                  # both APIs, LAN scope, beacon on
+wave serve start --mode instance --port 50800 --name "Living Room"
+wave serve start --service subsonic --scope loopback --user music --password secret
+wave serve start --scope internet                 # Subsonic only, no beacon
 wave serve status
+wave serve config --port 60000 --beacon off
 wave serve stop
 ```
 
-`start` accepts `--port`, `--name`, `--user`, and `--password`. On the first
-start it generates a random Subsonic password and prints it **once**; save it
-from the output or supply your own with `--password`. If the server is already
-running, `start` reports it without changing the saved settings.
+### Flags
+
+`start` accepts the flags below. `config` accepts the same flags except
+`--mode`; both use the same values and validation rules.
+
+| Flag | Values (default) | Effect |
+|---|---|---|
+| `--mode` | `server` \| `instance` (`server`) | Playback: `instance` also starts the playback daemon when one isn't already running, and `stop` shuts down a daemon this server started. A daemon owned by the desktop app or another node is left running. |
+| `--port` | port number (50800) | TCP port for the API or APIs you enable. |
+| `--name` | text | Name other devices see. |
+| `--user` | text (`wave`) | Subsonic user name. |
+| `--password` | text (generated) | Subsonic password. On the first start a random one is generated and printed **once**; save it from the output or supply your own with `--password`. |
+| `--service` | `wave` \| `subsonic` \| `both` (`both`) | `wave` serves only the `/wave/` peer API, `subsonic` only `/rest/`, and `both` serves both. |
+| `--scope` | `loopback` \| `lan` \| `internet` (`lan`) | `loopback` binds only 127.0.0.1 and accepts only loopback clients. `lan` binds all interfaces but accepts only loopback, private (RFC 1918) and link-local clients, keeping the existing LAN restriction. `internet` accepts clients from any address. |
+| `--beacon` | `on` \| `off` (`on` for LAN Wave servers, otherwise `off`) | Radii LAN discovery beacon on UDP 7101. It runs only when the service is `wave` or `both` and the scope is `lan`; it is forced off for loopback, internet and Subsonic-only servers. |
+
+### Validation rules
+
+- `--scope internet` automatically sets the service to `subsonic`: it never
+  exposes `/wave/`, and it does not turn the beacon back on. An explicit
+  conflicting `--service wave` or `--service both` is rejected, as is
+  `--beacon on`.
+- The beacon cannot run at `--scope loopback`, nor with `--service subsonic` at
+  any scope. An explicit `--beacon on` in those cases is rejected.
+- The beacon runs, and defaults to `on`, only for `wave` or `both` at `lan`
+  scope; otherwise it defaults to `off`.
+
+### Saved settings and running servers
+
+`serve config` changes saved settings only:
+
+```bash
+$ wave --json serve config --port 60000 --name "Office" --beacon off
+{"message":"Saved Wave server settings.","ok":true,"port":60000,"name":"Office","user":"wave","service":"both","scope":"lan","beacon":false,"applies_on_restart":true}
+```
+
+It takes `--port`, `--name`, `--user`, `--password`, `--service`, `--scope` and
+`--beacon`, with the same values and validation rules as `start`. It never
+changes a running server's active settings: `applies_on_restart` is `true` when
+a server is currently running, and those settings take effect at the next
+start. It is `false` when no server is running. `serve start` while a server is
+already running still reports that server without changing the saved settings;
+invalid flag combinations are still rejected in that case.
 
 Settings live in `wave-server.json` next to the library database, with
 owner-only permissions; runtime details (pid, loopback control port, token) live
-in `wave-server-state.json`. Both are in the application data directory.
-`--mode instance` also starts the playback daemon when one isn't already
-running, and `stop` shuts down a daemon this server started. A daemon already
-owned by the desktop app or another node is left running.
+in `wave-server-state.json`. Both are in the application data directory. A
+generated `password` appears only in the first `start` output, never in `status`.
 
-`serve status` prints `running`, `mode`, `name`, `user`, `port`, `pid`, and
-`addresses`; a freshly generated `password` appears only on the first `start`.
-`serve stop` prints `stopped`.
+### JSON shape
+
+`serve status` is a **read**: under `--json` its stdout is the status object
+itself, with no `ok` or `message` wrapper. `start`, `config` and `stop` are
+**changes** and print the envelope described in
+[The JSON contract](#the-json-contract), with the fields below beside `ok` and
+`message`.
+
+```json
+{
+  "running": true,
+  "mode": "server",
+  "name": "Living Room",
+  "user": "music",
+  "port": 50800,
+  "pid": 41234,
+  "addresses": ["http://127.0.0.1:50800", "http://192.168.1.24:50800"],
+  "service": "both",
+  "scope": "lan",
+  "beacon": true
+}
+```
+
+The status fields are `running`, `mode`, `name`, `user`, `port`, `pid`,
+`addresses`, `service`, `scope` and `beacon` (a boolean). While running they report the
+active settings; when stopped they report the saved settings and `pid` is
+`null`. There is no `password` field. `addresses` lists local addresses for the
+enabled APIs. At `internet` scope, the address a remote client uses depends on
+the user's router and port forwarding — Wave does not discover a public IP
+automatically. `start` returns the status fields plus `password` when one was
+generated, `config` returns `applies_on_restart`, and `stop` returns `stopped`.
+
+### APIs and security
 
 The Subsonic API accepts `u`/`p` (plain or `enc:`-prefixed hex) and the salted
 `u`/`s`/`t` MD5 token form. It implements `ping`, `getLicense`, `getArtists`,
@@ -369,8 +439,14 @@ The Subsonic API accepts `u`/`p` (plain or `enc:`-prefixed hex) and the salted
 `getPlaylists`, `getPlaylist`, and `stream`/`download`. Write-intent Subsonic
 calls such as `scrobble` and `setRating` are not implemented and return an
 unsupported-endpoint error. Management stays on a token-authenticated loopback
-socket; the LAN listener serves only the `/wave/` peer API and the `/rest/`
-Subsonic API, never control commands.
+socket at every scope; the API listener serves only the APIs you enable, never
+control commands.
+
+Both APIs are plain HTTP: credentials and music are unencrypted. `loopback` and
+`lan` scopes keep the server on your machine or local network; `internet` is an
+explicit opt-in that accepts any client, so firewall it deliberately and put it
+behind a reverse proxy that terminates TLS whenever it is reachable beyond a
+trusted network. Wave itself does not terminate TLS.
 
 ## Command reference
 
@@ -446,12 +522,13 @@ or an id prefix.
 
 | Command | Output |
 |---|---|
-| `serve start [--mode ...] [--port N] [--name NAME] [--user USER] [--password PASSWORD]` | `running`, `mode`, `name`, `user`, `port`, `pid`, `addresses`, and `password` when one was generated. |
-| `serve status` | The same fields, without `password`; `running` is false when no server is up. |
-| `serve stop` | `stopped`, whether a server was stopped. |
+| `serve start [--mode server\|instance] [--port N] [--name NAME] [--user USER] [--password PASSWORD] [--service wave\|subsonic\|both] [--scope loopback\|lan\|internet] [--beacon on\|off]` | Change envelope with `running`, `mode`, `name`, `user`, `port`, `pid`, `addresses`, `service`, `scope`, `beacon`, plus `password` when one was generated. |
+| `serve status` | Read: the status object itself — `running`, `mode`, `name`, `user`, `port`, `pid` (null when stopped), `addresses`, `service`, `scope`, `beacon`; no `password`. |
+| `serve config [--port N] [--name NAME] [--user USER] [--password PASSWORD] [--service ...] [--scope ...] [--beacon on\|off]` | Change envelope with `applies_on_restart` (true when a server is running). |
+| `serve stop` | Change envelope with `stopped`, whether a server was stopped. |
 
-See [Hosting a Wave server](#hosting-a-wave-server) for modes, files, and the
-Subsonic endpoints.
+See [Hosting a Wave server](#hosting-a-wave-server) for every flag, the
+validation rules, the settings files and the Subsonic endpoints.
 
 ### Equalizer and playback settings
 

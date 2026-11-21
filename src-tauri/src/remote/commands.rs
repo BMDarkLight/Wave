@@ -1496,6 +1496,9 @@ fn sharing_config(app: &AppHandle) -> Option<crate::share::ShareConfig> {
         port: None,
         library: None,
         subsonic: None,
+        service: crate::share::ServiceKind::Wave,
+        scope: crate::share::ServeScope::Lan,
+        beacon: true,
     })
 }
 

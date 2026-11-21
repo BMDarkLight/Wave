@@ -225,10 +225,10 @@ this opens on your network, and its known limits, are in
 [SECURITY.md](SECURITY.md).
 
 A machine doesn't have to keep the app open to share. `wave serve start` runs a
-background server from the same binary: other Waves pair with it over the LAN,
-and Subsonic players can browse and stream the library. Choose `--mode instance`
-to also start the playback daemon, so the machine is an always-on Wave node.
-See [Hosting a server](#hosting-a-server) and
+background server from the same binary: by default, other Waves pair with it
+over the LAN and Subsonic players can browse and stream the library. Choose
+`--mode instance` to also start the playback daemon, so the machine is an
+always-on Wave node. See [Hosting a server](#hosting-a-server) and
 [`docs/cli.md`](docs/cli.md#hosting-a-wave-server).
 
 - Each device gets its own playlist, named after it, listing everything it
@@ -572,26 +572,38 @@ synced lyrics yet.
 The same `wave` binary can host the library in the background, without a window:
 
 ```bash
-wave serve start                          # music server on port 50800
-wave serve start --mode instance          # also start the playback daemon
-wave serve start --port 60000 --name "Living Room" --user music --password secret
+wave serve start                                  # both APIs, LAN scope, beacon on
+wave serve start --mode instance --name "Living Room" --port 50800
+wave serve start --service subsonic --scope loopback --user music --password secret
+wave serve start --scope internet                 # Subsonic only, no beacon
+wave serve config --port 60000 --beacon off       # saved for the next start
 wave serve status
 wave serve stop
 ```
 
-Other Wave apps find the server on the LAN and pair with it as usual.
+`--service` picks the API (`wave` peers, `subsonic` players, or `both`),
+`--scope` picks who may connect (`loopback`, `lan` by default, or `internet`),
+and `--beacon on|off` controls LAN discovery (on for LAN Wave servers, off
+otherwise). `--scope internet` forces Subsonic only: no `/wave/` API and no
+beacon, with conflicting `--service` or `--beacon on` rejected. `--mode instance`
+also starts the playback daemon.
+
+Other Wave apps find a LAN server and pair with it as usual.
 Subsonic-compatible players connect to `http://<address>:50800/rest/` with the
 user name and password printed on the first start (or set with `--user` and
 `--password`). The generated password is shown once, then stored owner-only in
 `wave-server.json`; `wave serve status` deliberately never prints it.
 
-`--mode server` is the default and only shares the library. `--mode instance`
-also starts the playback daemon, and `wave serve stop` shuts it down again.
-The server can run alongside the desktop app. Management stays on a
-token-authenticated loopback socket; only the Wave peer and Subsonic APIs are
-served on the LAN, and only to local-network addresses. See
-[`docs/cli.md`](docs/cli.md#hosting-a-wave-server) for the full command contract
-and supported Subsonic endpoints.
+`serve config` changes saved settings and prints `applies_on_restart`; it never
+changes a running server. `serve status` reports active settings while running
+and saved ones while stopped, including `service`, `scope` and `beacon`, with
+`pid` null when stopped. At `internet` scope the address clients use depends on
+your router and port forwarding — Wave does not discover a public IP. The APIs
+are plain HTTP, so credentials and music are unencrypted: keep the server on a
+trusted network, or put it behind a reverse proxy with TLS if you expose it
+beyond one. Management stays on a token-authenticated loopback socket at every
+scope. See [`docs/cli.md`](docs/cli.md#hosting-a-wave-server) for every flag,
+validation rule, JSON field and supported Subsonic endpoint.
 
 ### Tags and cover art
 
