@@ -20,6 +20,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use super::cast::{CastControlBody, CastPhase, CastPlay, CastState};
+use super::client;
 use super::{find_by_secret, scope_allows, PeerRecord, PendingRequest, Registry, ShareScope};
 use crate::share::catalog::{extension_of, Snapshot};
 use crate::sources::youtube::{Candidate, Stream};
@@ -249,6 +250,10 @@ pub struct CatalogPage {
 pub struct PeerService {
     host: Arc<dyn Host>,
     pub registry: Mutex<Registry>,
+    /// When set, pairing requests are accepted with this scope and answered
+    /// straight away. The headless server sets it; the GUI leaves it unset so
+    /// a window still asks the user what to share.
+    auto_accept: Mutex<Option<ShareScope>>,
 }
 
 fn json(status: &'static str, value: impl Serialize) -> PeerReply {
@@ -275,7 +280,14 @@ impl PeerService {
         Self {
             host,
             registry: Mutex::new(Registry::default()),
+            auto_accept: Mutex::new(None),
         }
+    }
+
+    /// Answer incoming pairing requests without a user. `None` restores the
+    /// interactive behaviour where the request waits for an explicit answer.
+    pub fn set_auto_accept(&self, share: Option<ShareScope>) {
+        *self.auto_accept.lock() = share;
     }
 
     pub fn host(&self) -> &Arc<dyn Host> {
@@ -466,6 +478,27 @@ impl PeerService {
             at: Instant::now(),
         };
         self.registry.lock().pending.insert(ask.id.clone(), pending);
+        // A headless server can answer on the user's behalf. Send the answer
+        // from a thread: a slow device must not hold up this HTTP request.
+        let auto_share = self.auto_accept.lock().clone();
+        if let Some(share) = auto_share {
+            match self.accept(&ask.id, share) {
+                Ok(record) => {
+                    let host = Arc::clone(&self.host);
+                    let answer_record = record.clone();
+                    if let Err(e) = std::thread::Builder::new()
+                        .name("wave-peer-auto-answer".into())
+                        .spawn(move || {
+                            let _ = answer_to(host, &answer_record, true);
+                        })
+                    {
+                        tracing::warn!("Couldn't send the pairing answer: {e}");
+                    }
+                    return json("200 OK", serde_json::json!({ "status": "paired" }));
+                }
+                Err(e) => tracing::warn!("Couldn't auto-accept a pairing request: {e}"),
+            }
+        }
         self.host.emit(
             "wave-peer-request",
             serde_json::json!({ "id": ask.id, "name": ask.name }),
@@ -706,6 +739,23 @@ impl PeerService {
     }
 }
 
+/// Send a device the result of its pairing request. Shared by the interactive
+/// GUI command and the headless server's auto-accept and CLI answers.
+pub fn answer_to(host: Arc<dyn Host>, record: &PeerRecord, accepted: bool) -> Result<(), String> {
+    let (own_id, own_name) = host.identity();
+    client::answer(
+        &record.address,
+        &AnswerBody {
+            id: own_id,
+            name: own_name,
+            port: crate::share::port().unwrap_or(0),
+            secret: record.secret.clone(),
+            accepted,
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
 fn record_from(pending: &PendingRequest, share: ShareScope) -> PeerRecord {
     PeerRecord {
         id: pending.id.clone(),
@@ -851,6 +901,29 @@ mod tests {
             .unwrap();
         assert!(pending.incoming);
         assert_eq!(pending.address, "http://10.0.0.7:50800");
+        assert_eq!(host.events.lock().as_slice(), ["wave-peer-request"]);
+    }
+
+    #[test]
+    fn auto_accept_pairs_a_request_without_waiting_for_a_user() {
+        let (host, service) = service();
+        service.set_auto_accept(Some(ShareScope::Everything));
+        let body = format!(
+            r#"{{"id":"phone","name":"Wave on Android","port":50800,"secret":"{SECRET}"}}"#
+        );
+        let reply = call(&service, "POST", "/wave/request", "", None, &body).unwrap();
+        assert!(matches!(reply, PeerReply::Json("200 OK", _)));
+        assert!(service.registry.lock().pending.is_empty());
+        assert_eq!(host.peers.lock()[0].share, ShareScope::Everything);
+        assert!(host.events.lock().is_empty());
+
+        service.set_auto_accept(None);
+        let body = format!(
+            r#"{{"id":"tablet","name":"Wave on tablet","port":50800,"secret":"{SECRET}"}}"#
+        );
+        let reply = call(&service, "POST", "/wave/request", "", None, &body).unwrap();
+        assert!(matches!(reply, PeerReply::Json("202 Accepted", _)));
+        assert!(service.registry.lock().pending.contains_key("tablet"));
         assert_eq!(host.events.lock().as_slice(), ["wave-peer-request"]);
     }
 

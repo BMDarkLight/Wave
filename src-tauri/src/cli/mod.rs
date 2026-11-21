@@ -135,8 +135,8 @@ pub enum Commands {
     /// Host a Wave server on this machine for Wave peers and Subsonic clients
     #[command(
         subcommand,
-        long_about = "Host the library in a background process with no window.\n\nUse `wave serve start --help` for every start flag and `wave serve config --help` for saved settings. `serve status` shows the active or saved service, scope and beacon; `serve stop` shuts the server down.",
-        after_help = "Quick reference:\n  --service wave|subsonic|both   which API is served (default: both)\n  --scope loopback|lan|internet  who may connect (default: lan)\n  --beacon on|off                LAN discovery (default: on for LAN Wave servers)\n\nSettings persist in wave-server.json, so a later `serve start` with no flags reuses them. The Wave GUI can only pair with the /wave/ API at LAN scope."
+        long_about = "Host the library in a background process with no window.\n\nUse `wave serve start --help` for every start flag and `wave serve config --help` for saved settings. `serve peers`, `serve accept` and `serve decline` manage pairing; `serve status` shows the active or saved settings; `serve stop` shuts the server down.",
+        after_help = "Quick reference:\n  --service wave|subsonic|both   which API is served (default: both)\n  --scope loopback|lan|internet  who may connect (default: lan)\n  --beacon on|off                LAN discovery (default: on for LAN Wave servers)\n  --share everything|nothing     default scope given to peers (default: everything)\n  --auto-accept on|off           pair arriving requests automatically (default: on)\n\nSettings persist in wave-server.json, so a later `serve start` with no flags reuses them. The Wave GUI can only pair with the /wave/ API at LAN scope."
     )]
     Serve(cmd::serve::ServeCmd),
 }

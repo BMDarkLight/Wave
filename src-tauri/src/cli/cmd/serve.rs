@@ -11,7 +11,9 @@
 use clap::Subcommand;
 
 use crate::cli::{json, ui, Switch};
-use crate::server::{self, ConfigOptions, ServeScope, ServerMode, ServiceKind, StartOptions};
+use crate::server::{
+    self, ConfigOptions, ServeScope, ServerMode, ServiceKind, ShareSetting, StartOptions,
+};
 
 const MODE_HELP: &str = "`server` (the default) shares the library only. `instance` also starts the playback daemon when one isn't already running; `wave serve stop` shuts down a daemon this server started, but leaves a daemon owned by the desktop app or another node alone.";
 const SERVICE_HELP: &str = "Which API this server answers. `wave` serves only the `/wave/` peer API used by the Wave GUI for discovery and pairing; `subsonic` serves only the `/rest/` API for Subsonic players; `both` (the default) serves both on one port. Saved in wave-server.json.";
@@ -21,6 +23,8 @@ const PORT_HELP: &str = "TCP port for the enabled APIs. Defaults to 50800; if th
 const NAME_HELP: &str = "The name other devices see for this server. Saved in wave-server.json.";
 const USER_HELP: &str = "Subsonic login name. Defaults to `wave`. Saved in wave-server.json.";
 const PASSWORD_HELP: &str = "Subsonic password. On the first start, if omitted, Wave generates a random one, saves it owner-only in wave-server.json, and prints it once. Save it from the start output; it is never shown again by `status`.";
+const SHARE_HELP: &str = "What this server shares with a peer by default: `everything` (the default) or `nothing`. Changing this to `nothing` also stops automatic pairing unless --auto-accept on is given explicitly. Saved in wave-server.json.";
+const AUTO_ACCEPT_HELP: &str = "Answer incoming Wave pairing requests straight away with the --share scope. The default follows --share: auto with `everything`, wait for approval with `nothing`. An explicit `on` or `off` overrides that default; `off` leaves requests for `wave serve accept <id>`. Saved in wave-server.json.";
 
 const CONFIG_SERVICE_HELP: &str = "Which API this server answers. `wave` serves only the `/wave/` peer API used by the Wave GUI; `subsonic` only `/rest/`; `both` serves both on one port. Omit to keep the saved value (initially `both`).";
 const CONFIG_SCOPE_HELP: &str = "Who may connect. `loopback` binds only 127.0.0.1; `lan` (initially the default) also accepts private and link-local clients and is what the Wave GUI needs; `internet` accepts any client and forces Subsonic-only with the beacon off. Omit to keep the saved value.";
@@ -32,11 +36,23 @@ const CONFIG_NAME_HELP: &str =
 const CONFIG_USER_HELP: &str =
     "Subsonic login name (initially `wave`). Omit to keep the saved value.";
 const CONFIG_PASSWORD_HELP: &str = "Subsonic password. Supplying one replaces the saved password; omit to keep it. Passwords are stored owner-only and are never printed.";
+const CONFIG_SHARE_HELP: &str = "Default scope for paired peers: `everything` or `nothing`. Omit to keep the saved value (initially `everything`). Changing it affects peers paired after the next start; existing peers keep their stored scope. Restricting it to `nothing` also stops automatic pairing unless --auto-accept on is set.";
+const CONFIG_AUTO_ACCEPT_HELP: &str = "Answer incoming pairing requests without anyone here: `on` or `off`. Omit to keep the saved policy, which is auto with share `everything` and manual with share `nothing`. Use `wave serve peers` and `wave serve accept` to approve held requests.";
+
+const ACCEPT_SHARE_HELP: &str = "What to share with this device: `everything` or `nothing`. Defaults to the server's configured --share scope; stored for this peer only.";
 
 const START_LONG_ABOUT: &str = "Start a headless Wave server on this machine and print its status. If a server is already running, this reports it and changes nothing.\n\nFlags you omit reuse the settings saved in wave-server.json; the first start creates that file. Use `wave serve config` to change saved settings without starting a server.";
-const START_AFTER_HELP: &str = "Defaults: --service both, --scope lan, --beacon on, --port 50800, --user wave.\n\nValidation: --scope internet forces --service subsonic, never serves /wave/, and turns the beacon off; an explicit conflicting --service or --beacon on is rejected. The beacon runs only for --service wave|both at --scope lan. --scope loopback binds 127.0.0.1 only.\n\nThe Wave GUI can only pair with the /wave/ API at LAN scope. Use --service wave or both with --scope lan; a Subsonic-only or internet-scoped server cannot be paired from the GUI.\n\nAll APIs are plain HTTP, so credentials and music are unencrypted. Internet scope accepts any client that can reach the port: firewall it deliberately and put a TLS-terminating reverse proxy in front of it.";
+const START_AFTER_HELP: &str = "Defaults: --service both, --scope lan, --beacon on, --port 50800, --user wave, --share everything, --auto-accept on.\n\nValidation: --scope internet forces --service subsonic, never serves /wave/, and turns the beacon off; an explicit conflicting --service or --beacon on is rejected. The beacon runs only for --service wave|both at --scope lan. --scope loopback binds 127.0.0.1 only.\n\nThe Wave GUI can only pair with the /wave/ API at LAN scope. Use --service wave or both with --scope lan; a Subsonic-only or internet-scoped server cannot be paired from the GUI. Incoming requests are paired automatically while the default share is `everything`. Restricting the share to `nothing` holds them for `wave serve accept`, as does --auto-accept off.\n\nAll APIs are plain HTTP, so credentials and music are unencrypted. Internet scope accepts any client that can reach the port: firewall it deliberately and put a TLS-terminating reverse proxy in front of it.";
 const CONFIG_LONG_ABOUT: &str = "Change saved server settings without touching a server that is already running. The new values take effect the next time `wave serve start` starts a server.";
 const CONFIG_AFTER_HELP: &str = "This command accepts the same flags as `serve start` except --mode. Omitted flags keep their current saved values. It prints `applies_on_restart: true` when a server is running.\n\nThe same validation rules apply: --scope internet forces --service subsonic with the beacon off, and --beacon on is rejected unless the service is wave|both and the scope is lan. A running server keeps its active settings until it is stopped and started again.";
+const PEERS_LONG_ABOUT: &str = "List Waves found by discovery, the pairing requests waiting on the running server, and the devices already paired with it.\n\nFound entries are nearby Waves seen by the LAN beacon and are not trusted or paired. Pending requests show a direction: `incoming` is a device that asked this server, `outgoing` is a request this server sent. Paired entries show the share scope this server gives that device.";
+const PEERS_AFTER_HELP: &str = "With --json, prints {\"found\": [...], \"pending\": [...], \"paired\": [...]} directly. Found entries include `name`, `address` and `last_seen_seconds`.\n\nAn unrestricted server answers incoming requests automatically, so the pending list is usually empty. Use `wave serve config --share nothing` or `--auto-accept off` first if you want to approve each device here.";
+const ACCEPT_LONG_ABOUT: &str = "Accept a waiting pairing request and share the chosen scope with that device. Sends the answer the other Wave is waiting for, which completes the pairing handshake.";
+const ACCEPT_AFTER_HELP: &str = "Run `wave serve peers` to find the id. Omit --share to use the server's configured default scope. Re-running for an id that is no longer waiting is an error.";
+const DECLINE_LONG_ABOUT: &str =
+    "Turn down a waiting pairing request and tell the other Wave so it stops waiting.";
+const DECLINE_AFTER_HELP: &str =
+    "Run `wave serve peers` to find the id. Declining does not remove an existing pairing.";
 
 #[derive(Subcommand)]
 pub enum ServeCmd {
@@ -67,6 +83,12 @@ pub enum ServeCmd {
         /// Subsonic password (a random one is generated and shown if omitted)
         #[arg(long, long_help = PASSWORD_HELP)]
         password: Option<String>,
+        /// Default share scope for peers (default: everything)
+        #[arg(long, value_enum, long_help = SHARE_HELP)]
+        share: Option<ShareSetting>,
+        /// Answer pairing requests automatically (default: on)
+        #[arg(long, value_enum, long_help = AUTO_ACCEPT_HELP)]
+        auto_accept: Option<Switch>,
     },
     /// Change saved server settings (they take effect on the next start)
     #[command(long_about = CONFIG_LONG_ABOUT, after_help = CONFIG_AFTER_HELP)]
@@ -92,6 +114,30 @@ pub enum ServeCmd {
         /// Subsonic password
         #[arg(long, long_help = CONFIG_PASSWORD_HELP)]
         password: Option<String>,
+        /// Default share scope for peers
+        #[arg(long, value_enum, long_help = CONFIG_SHARE_HELP)]
+        share: Option<ShareSetting>,
+        /// Answer pairing requests automatically
+        #[arg(long, value_enum, long_help = CONFIG_AUTO_ACCEPT_HELP)]
+        auto_accept: Option<Switch>,
+    },
+    /// List pending pairing requests and paired devices
+    #[command(long_about = PEERS_LONG_ABOUT, after_help = PEERS_AFTER_HELP)]
+    Peers,
+    /// Accept a pending pairing request
+    #[command(long_about = ACCEPT_LONG_ABOUT, after_help = ACCEPT_AFTER_HELP)]
+    Accept {
+        /// Device id from `serve peers`
+        id: String,
+        /// What to share with this device
+        #[arg(long, value_enum, long_help = ACCEPT_SHARE_HELP)]
+        share: Option<ShareSetting>,
+    },
+    /// Decline a pending pairing request
+    #[command(long_about = DECLINE_LONG_ABOUT, after_help = DECLINE_AFTER_HELP)]
+    Decline {
+        /// Device id from `serve peers`
+        id: String,
     },
     /// Stop the hosted server
     Stop,
@@ -127,6 +173,8 @@ pub fn run(command: ServeCmd) {
             name,
             user,
             password,
+            share,
+            auto_accept,
         } => {
             let options = StartOptions {
                 mode,
@@ -137,6 +185,8 @@ pub fn run(command: ServeCmd) {
                 name,
                 user,
                 password,
+                share,
+                auto_accept: switch(auto_accept),
             };
             let result = server::start(&options).unwrap_or_else(|e| ui::fail_with(e));
             let status = &result.status;
@@ -177,6 +227,8 @@ pub fn run(command: ServeCmd) {
             name,
             user,
             password,
+            share,
+            auto_accept,
         } => {
             let options = ConfigOptions {
                 service,
@@ -186,6 +238,8 @@ pub fn run(command: ServeCmd) {
                 name,
                 user,
                 password,
+                share,
+                auto_accept: switch(auto_accept),
             };
             let (config, applies_on_restart) =
                 server::configure(&options).unwrap_or_else(|e| ui::fail_with(e));
@@ -196,6 +250,8 @@ pub fn run(command: ServeCmd) {
                 "service": config.service.as_str(),
                 "scope": config.scope.as_str(),
                 "beacon": config.beacon,
+                "share": config.share.as_str(),
+                "auto_accept": config.auto_accepts(),
                 "applies_on_restart": applies_on_restart,
             });
             let message = if applies_on_restart {
@@ -203,6 +259,59 @@ pub fn run(command: ServeCmd) {
             } else {
                 "Saved Wave server settings."
             };
+            ui::done(message, detail);
+        }
+        ServeCmd::Peers => {
+            let list = server::peers().unwrap_or_else(|e| ui::fail_with(e));
+            json::maybe_emit(&list);
+            let mut parts = Vec::new();
+            if !list.found.is_empty() {
+                let found = list
+                    .found
+                    .iter()
+                    .map(|p| format!("{} ({})", p.name, p.address))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                parts.push(format!("Found: {found}"));
+            }
+            if !list.pending.is_empty() {
+                let pending = list
+                    .pending
+                    .iter()
+                    .map(|p| format!("{} ({}, {})", p.name, p.id, p.direction))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                parts.push(format!("Pending: {pending}"));
+            }
+            if !list.paired.is_empty() {
+                let paired = list
+                    .paired
+                    .iter()
+                    .map(|p| format!("{} ({}, shares {})", p.name, p.id, p.share))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                parts.push(format!("Paired: {paired}"));
+            }
+            let message = if parts.is_empty() {
+                "No pending requests or paired devices.".to_string()
+            } else {
+                parts.join("; ")
+            };
+            ui::done(message, serde_json::json!({}));
+        }
+        ServeCmd::Accept { id, share } => {
+            let peer = server::accept_peer(&id, share).unwrap_or_else(|e| ui::fail_with(e));
+            let detail = serde_json::to_value(&peer).unwrap_or_default();
+            let message = format!(
+                "Accepted {} ({}); sharing {}.",
+                peer.name, peer.id, peer.share
+            );
+            ui::done(message, detail);
+        }
+        ServeCmd::Decline { id } => {
+            let peer = server::decline_peer(&id).unwrap_or_else(|e| ui::fail_with(e));
+            let detail = serde_json::to_value(&peer).unwrap_or_default();
+            let message = format!("Declined {} ({}).", peer.name, peer.id);
             ui::done(message, detail);
         }
         ServeCmd::Stop => {

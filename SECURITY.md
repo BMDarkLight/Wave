@@ -51,10 +51,10 @@ clients authenticate with a user name and password saved owner-only in
 your own with `--password` if you prefer. `wave serve config` changes saved
 settings only, which take effect at the next start.
 
-`wave serve` also adds a management listener used by `wave serve stop`: a
-socket bound only to `127.0.0.1` that requires a random token stored owner-only
-in `wave-server-state.json`. It stays loopback-only and token-authenticated at
-every scope, including `internet`.
+`wave serve` also adds a management listener used by `wave serve stop`, `peers`,
+`accept` and `decline`: a socket bound only to `127.0.0.1` that requires a
+random token stored owner-only in `wave-server-state.json`. It stays
+loopback-only and token-authenticated at every scope, including `internet`.
 
 **By default, the LAN scope refuses non-local clients.** The listener checks
 each client's address before reading anything: `loopback` accepts only local
@@ -78,7 +78,7 @@ TLS.
 ## How Waves trust each other
 
 - **Finding is not trusting.** A beacon carries no proof of who sent it, by design, so a device that announces itself is only a hint. Wave asks it who it is over its API before listing it, and lists it as a device you have not paired with.
-- **Pairing needs both owners.** A Wave can ask to pair, but nothing is shared until the owner of the other device accepts, and each side then picks what the other may see: everything, nothing, or chosen songs.
+- **Pairing normally needs both owners.** In the desktop app, a Wave can ask to pair but nothing is shared until the other owner accepts, and each side then picks what the other may see: everything, nothing, or chosen songs. A headless `wave serve` has no one to ask, so an unrestricted LAN server answers incoming requests itself with its configured share. Use `--share nothing` or `--auto-accept off` to hold requests for `wave serve peers` and `wave serve accept`.
 - **Paired requests carry a secret.** Pairing gives the two Waves a random secret of 244 bits, which every later request must present. Wave compares it in constant time.
 - **Casting is limited to the songs played.** Playing on another Wave lets it stream only the songs you send it, even ones you don't share with it, and nothing else.
 - Forgetting a device, or deleting its playlist, removes the pairing on both sides.
@@ -89,7 +89,7 @@ These are open, and worth knowing before you use Devices on a network you don't 
 
 - **Traffic is not encrypted.** Wave's API is plain HTTP. Anyone who can watch your local network can see the music that moves between your devices, and can read a pairing's secret and use it to act as that device. The Subsonic API used by a hosted server is also plain HTTP: its salted MD5 token protects the password in a request, but not the music or the requests themselves. Use these features on networks you trust, such as your home Wi-Fi or your phone's hotspot, not on public or shared Wi-Fi. If you opt into `internet` scope, terminate TLS at a reverse proxy before exposing the server beyond a trusted network; Wave itself does not terminate TLS.
 - **`internet` scope accepts any client that reaches the port.** It serves Subsonic only, with no Wave peer API and no beacon, but anyone who reaches it can try credentials. Use a strong password, restrict access with a firewall, and remember that plain HTTP leaves the requests and the music unencrypted.
-- **A device's name is whatever it says.** Another device on your network can announce itself under any name, including one of yours. Check before you accept a pairing request you didn't expect.
+- **A device's name is whatever it says.** Another device on your network can announce itself under any name, including one of yours. Check before you accept a pairing request you didn't expect. An unrestricted hosted server pairs automatically, so restrict its share (`--share nothing`) on networks you do not fully trust and approve known devices from the CLI.
 - **Anyone on your network can see that Wave is running**, under this device's name. You can rename it on the Devices page.
 
 Radii offers mutual TLS for its own connections, but Wave's API does not use it yet. Moving Wave's traffic onto an authenticated, encrypted channel is the planned fix for the encryption and device-identity points above.

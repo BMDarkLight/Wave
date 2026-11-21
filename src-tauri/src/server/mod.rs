@@ -34,7 +34,8 @@ use crate::app_paths::{
     server_state_path,
 };
 use crate::cli::ui::EXIT_GENERAL;
-use crate::peers::PeerRecord;
+use crate::peers::api::PeerService;
+use crate::peers::{PeerRecord, ShareScope};
 
 /// Hidden argv switch used for the detached server process.
 pub const SERVER_FLAG: &str = "--wave-server";
@@ -51,6 +52,46 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn default_beacon() -> bool {
     true
+}
+
+/// What a hosted server shares with a peer by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareSetting {
+    /// Share the whole library, including songs added later.
+    Everything,
+    /// Share no songs with this peer.
+    Nothing,
+}
+
+impl ShareSetting {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Everything => "everything",
+            Self::Nothing => "nothing",
+        }
+    }
+
+    fn scope(self) -> ShareScope {
+        match self {
+            Self::Everything => ShareScope::Everything,
+            Self::Nothing => ShareScope::Nothing,
+        }
+    }
+}
+
+fn default_share() -> ShareSetting {
+    ShareSetting::Everything
+}
+
+/// A readable name for a stored share scope.
+fn share_name(scope: &ShareScope) -> &'static str {
+    match scope {
+        ShareScope::Everything => "everything",
+        ShareScope::Nothing => "nothing",
+        ShareScope::Tracks(ids) if ids.is_empty() => "nothing",
+        ShareScope::Tracks(_) => "tracks",
+    }
 }
 
 /// What a hosted server is for.
@@ -82,6 +123,8 @@ pub struct ConfigOptions {
     pub service: Option<ServiceKind>,
     pub scope: Option<ServeScope>,
     pub beacon: Option<bool>,
+    pub share: Option<ShareSetting>,
+    pub auto_accept: Option<bool>,
 }
 
 /// Options accepted by `wave serve start`.
@@ -95,6 +138,8 @@ pub struct StartOptions {
     pub service: Option<ServiceKind>,
     pub scope: Option<ServeScope>,
     pub beacon: Option<bool>,
+    pub share: Option<ShareSetting>,
+    pub auto_accept: Option<bool>,
 }
 
 impl StartOptions {
@@ -107,6 +152,8 @@ impl StartOptions {
             service: self.service,
             scope: self.scope,
             beacon: self.beacon,
+            share: self.share,
+            auto_accept: self.auto_accept,
         }
     }
 }
@@ -126,8 +173,24 @@ pub struct ServerConfig {
     pub scope: ServeScope,
     #[serde(default = "default_beacon")]
     pub beacon: bool,
+    /// Scope offered to a device whose pairing we accept automatically.
+    #[serde(default = "default_share")]
+    pub share: ShareSetting,
+    /// Explicit override of the default pairing policy. `None` means auto for
+    /// an unrestricted share, and hold requests when the share is `nothing`.
+    #[serde(default)]
+    pub auto_accept: Option<bool>,
     #[serde(default)]
     pub peers: Vec<PeerRecord>,
+}
+
+impl ServerConfig {
+    /// An unrestricted server pairs arriving devices on its own. Restricting
+    /// the default share to nothing turns that off until the user opts back in.
+    pub fn auto_accepts(&self) -> bool {
+        self.auto_accept
+            .unwrap_or(self.share == ShareSetting::Everything)
+    }
 }
 
 /// How a CLI client finds and authenticates with a running server.
@@ -146,6 +209,8 @@ struct ServerState {
     scope: ServeScope,
     #[serde(default = "default_beacon")]
     beacon: bool,
+    #[serde(default = "default_share")]
+    share: ShareSetting,
     started_at: i64,
     /// True when this server spawned the playback daemon itself. A daemon that
     /// was already running belongs to the desktop app or another node and must
@@ -178,11 +243,19 @@ struct ControlRequest {
     request: Control,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum Control {
     Ping,
     Shutdown,
+    Peers,
+    Accept {
+        id: String,
+        share: Option<ShareSetting>,
+    },
+    Decline {
+        id: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -190,6 +263,57 @@ struct ControlResponse {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<serde_json::Value>,
+}
+
+/// A Wave seen by discovery as reported by `serve peers`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FoundPeer {
+    pub name: String,
+    pub address: String,
+    pub last_seen_seconds: u64,
+}
+
+/// A pending pairing request as reported by `serve peers`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingPeer {
+    pub id: String,
+    pub name: String,
+    pub address: String,
+    pub direction: String,
+}
+
+/// A paired device as reported by `serve peers`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairedPeer {
+    pub id: String,
+    pub name: String,
+    pub address: String,
+    pub share: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PeerList {
+    pub found: Vec<FoundPeer>,
+    pub pending: Vec<PendingPeer>,
+    pub paired: Vec<PairedPeer>,
+}
+
+fn ok_response(data: Option<serde_json::Value>) -> ControlResponse {
+    ControlResponse {
+        ok: true,
+        error: None,
+        data,
+    }
+}
+
+fn error_response(error: impl Into<String>) -> ControlResponse {
+    ControlResponse {
+        ok: false,
+        error: Some(error.into()),
+        data: None,
+    }
 }
 
 fn open_server_lock() -> Result<std::fs::File, String> {
@@ -323,6 +447,8 @@ fn default_config() -> ServerConfig {
         service: crate::share::default_service(),
         scope: crate::share::default_scope(),
         beacon: default_beacon(),
+        share: default_share(),
+        auto_accept: None,
         peers: Vec::new(),
     }
 }
@@ -364,6 +490,12 @@ fn apply_options(config: &mut ServerConfig, options: &ConfigOptions) -> Result<(
     }
     if let Some(beacon) = options.beacon {
         config.beacon = beacon;
+    }
+    if let Some(share) = options.share {
+        config.share = share;
+    }
+    if let Some(auto_accept) = options.auto_accept {
+        config.auto_accept = Some(auto_accept);
     }
 
     if config.scope == ServeScope::Internet {
@@ -457,6 +589,72 @@ fn control_request(state: &ServerState, request: Control) -> Result<ControlRespo
         .read_line(&mut line)
         .map_err(|e| e.to_string())?;
     serde_json::from_str(line.trim()).map_err(|e| e.to_string())
+}
+
+/// An authenticated link to a running server, for peer management commands.
+fn peer_state() -> Result<ServerState, String> {
+    let state = read_state().ok_or("The Wave server isn't running.")?;
+    match control_request(&state, Control::Ping) {
+        Ok(response) if response.ok => Ok(state),
+        Ok(response) => Err(response
+            .error
+            .unwrap_or_else(|| "The stored control token was refused.".to_string())),
+        Err(_) if server_lock_held() => {
+            Err("The server is starting or stopping; try again.".to_string())
+        }
+        Err(_) => Err("The Wave server isn't running.".to_string()),
+    }
+}
+
+/// Pairing requests and paired devices of the running server.
+pub fn peers() -> Result<PeerList, String> {
+    let state = peer_state()?;
+    let response = control_request(&state, Control::Peers)?;
+    if !response.ok {
+        return Err(response
+            .error
+            .unwrap_or_else(|| "Couldn't list peers".to_string()));
+    }
+    response
+        .data
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or_else(|| "The server returned an invalid peer list.".to_string())
+}
+
+/// Accept a pending pairing request, sharing `share` with that device.
+pub fn accept_peer(id: &str, share: Option<ShareSetting>) -> Result<PairedPeer, String> {
+    let state = peer_state()?;
+    let response = control_request(
+        &state,
+        Control::Accept {
+            id: id.to_string(),
+            share,
+        },
+    )?;
+    if !response.ok {
+        return Err(response
+            .error
+            .unwrap_or_else(|| "Couldn't accept the request".to_string()));
+    }
+    response
+        .data
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or_else(|| "The server returned an invalid peer.".to_string())
+}
+
+/// Decline a pending pairing request.
+pub fn decline_peer(id: &str) -> Result<PendingPeer, String> {
+    let state = peer_state()?;
+    let response = control_request(&state, Control::Decline { id: id.to_string() })?;
+    if !response.ok {
+        return Err(response
+            .error
+            .unwrap_or_else(|| "Couldn't decline the request".to_string()));
+    }
+    response
+        .data
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or_else(|| "The server returned an invalid peer.".to_string())
 }
 
 /// Remove the state file only if it still describes this exact server. A slow
@@ -793,6 +991,7 @@ pub fn run_server() -> ! {
         Arc::clone(&library),
     ));
     let peers = Arc::new(crate::peers::api::PeerService::new(host));
+    peers.set_auto_accept(config.auto_accepts().then(|| config.share.scope()));
     let stop = Arc::new(AtomicBool::new(false));
     let signal_stop = Arc::clone(&stop);
     if let Err(e) = ctrlc::set_handler(move || signal_stop.store(true, Ordering::Relaxed)) {
@@ -810,9 +1009,19 @@ pub fn run_server() -> ! {
 
     let control_stop = Arc::clone(&stop);
     let control_token = token.clone();
+    let control_peers = Arc::clone(&peers);
+    let control_share = config.share;
     std::thread::Builder::new()
         .name("wave-server-control".into())
-        .spawn(move || control_loop(control, control_token, control_stop))
+        .spawn(move || {
+            control_loop(
+                control,
+                control_token,
+                control_stop,
+                control_peers,
+                control_share,
+            )
+        })
         .expect("spawn server control loop");
 
     let (service, scope, beacon) = effective_settings(&config);
@@ -863,6 +1072,7 @@ pub fn run_server() -> ! {
         service,
         scope,
         beacon,
+        share: config.share,
         started_at: now_secs(),
         owns_daemon,
     };
@@ -890,7 +1100,13 @@ pub fn run_server() -> ! {
     std::process::exit(0)
 }
 
-fn control_loop(listener: TcpListener, token: String, stop: Arc<AtomicBool>) {
+fn control_loop(
+    listener: TcpListener,
+    token: String,
+    stop: Arc<AtomicBool>,
+    peers: Arc<PeerService>,
+    default_share: ShareSetting,
+) {
     let _ = listener.set_nonblocking(true);
     let clients = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     while !stop.load(Ordering::Relaxed) {
@@ -903,10 +1119,11 @@ fn control_loop(listener: TcpListener, token: String, stop: Arc<AtomicBool>) {
                 let client_count = Arc::clone(&clients);
                 let token = token.clone();
                 let control_stop = Arc::clone(&stop);
+                let control_peers = Arc::clone(&peers);
                 let spawned = std::thread::Builder::new()
                     .name("wave-server-control-client".into())
                     .spawn(move || {
-                        control_client(stream, token, control_stop);
+                        control_client(stream, token, control_stop, &control_peers, default_share);
                         client_count.fetch_sub(1, Ordering::Release);
                     });
                 if let Err(e) = spawned {
@@ -939,7 +1156,13 @@ fn reserve_client(clients: &std::sync::atomic::AtomicUsize) -> bool {
     }
 }
 
-fn control_client(mut stream: TcpStream, token: String, stop: Arc<AtomicBool>) {
+fn control_client(
+    mut stream: TcpStream,
+    token: String,
+    stop: Arc<AtomicBool>,
+    peers: &PeerService,
+    default_share: ShareSetting,
+) {
     // Never inherit a listener's O_NONBLOCK: some platforms pass it to accepted
     // sockets, which would make a normal status request fail spuriously.
     if stream.set_nonblocking(false).is_err() {
@@ -956,28 +1179,12 @@ fn control_client(mut stream: TcpStream, token: String, stop: Arc<AtomicBool>) {
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(_) => match serde_json::from_str::<ControlRequest>(line.trim()) {
-                Ok(request) if same_secret(&request.token, &token) => (
-                    ControlResponse {
-                        ok: true,
-                        error: None,
-                    },
-                    request.request == Control::Shutdown,
-                ),
-                _ => (
-                    ControlResponse {
-                        ok: false,
-                        error: Some("unauthorized".to_string()),
-                    },
-                    false,
-                ),
+                Ok(request) if same_secret(&request.token, &token) => {
+                    handle_control(request.request, peers, default_share)
+                }
+                _ => (error_response("unauthorized"), false),
             },
-            Err(e) => (
-                ControlResponse {
-                    ok: false,
-                    error: Some(e.to_string()),
-                },
-                false,
-            ),
+            Err(e) => (error_response(e.to_string()), false),
         }
     };
 
@@ -994,6 +1201,129 @@ fn control_client(mut stream: TcpStream, token: String, stop: Arc<AtomicBool>) {
     }
 }
 
+/// Run an authenticated control request. Returns the response and whether the
+/// server should stop after it.
+fn handle_control(
+    request: Control,
+    peers: &PeerService,
+    configured_share: ShareSetting,
+) -> (ControlResponse, bool) {
+    match request {
+        Control::Ping => (ok_response(None), false),
+        Control::Shutdown => (ok_response(None), true),
+        Control::Peers => {
+            let now = Instant::now();
+            let (found, pending) = {
+                let registry = peers.registry.lock();
+                let mut found = registry
+                    .found
+                    .values()
+                    .map(|p| FoundPeer {
+                        name: p.name.clone(),
+                        address: p.address.clone(),
+                        last_seen_seconds: now.saturating_duration_since(p.last_seen).as_secs(),
+                    })
+                    .collect::<Vec<_>>();
+                found.sort_by(|a, b| (&a.name, &a.address).cmp(&(&b.name, &b.address)));
+                let mut pending = registry
+                    .pending
+                    .values()
+                    .map(|p| PendingPeer {
+                        id: p.id.clone(),
+                        name: p.name.clone(),
+                        address: p.address.clone(),
+                        direction: if p.incoming { "incoming" } else { "outgoing" }.to_string(),
+                    })
+                    .collect::<Vec<_>>();
+                pending.sort_by(|a, b| a.id.cmp(&b.id));
+                (found, pending)
+            };
+            let mut paired = peers
+                .host()
+                .peers()
+                .into_iter()
+                .map(|p| PairedPeer {
+                    share: share_name(&p.share).to_string(),
+                    id: p.id,
+                    name: p.name,
+                    address: p.address,
+                })
+                .collect::<Vec<_>>();
+            paired.sort_by(|a, b| a.id.cmp(&b.id));
+            let list = PeerList {
+                found,
+                pending,
+                paired,
+            };
+            match serde_json::to_value(list) {
+                Ok(value) => (ok_response(Some(value)), false),
+                Err(e) => (error_response(e.to_string()), false),
+            }
+        }
+        Control::Accept { id, share } => {
+            let scope = share.unwrap_or(configured_share).scope();
+            match peers.accept(&id, scope) {
+                Ok(record) => {
+                    let host = Arc::clone(peers.host());
+                    let answer_record = record.clone();
+                    if let Err(e) = std::thread::Builder::new()
+                        .name("wave-peer-cli-answer".into())
+                        .spawn(move || {
+                            let _ = crate::peers::api::answer_to(host, &answer_record, true);
+                        })
+                    {
+                        tracing::warn!("Couldn't send the pairing answer: {e}");
+                    }
+                    let dto = PairedPeer {
+                        share: share_name(&record.share).to_string(),
+                        id: record.id,
+                        name: record.name,
+                        address: record.address,
+                    };
+                    match serde_json::to_value(dto) {
+                        Ok(value) => (ok_response(Some(value)), false),
+                        Err(e) => (error_response(e.to_string()), false),
+                    }
+                }
+                Err(e) => (error_response(e), false),
+            }
+        }
+        Control::Decline { id } => match peers.decline(&id) {
+            Some(pending) => {
+                let host = Arc::clone(peers.host());
+                let answer_record = crate::peers::PeerRecord {
+                    id: pending.id.clone(),
+                    name: pending.name.clone(),
+                    address: pending.address.clone(),
+                    secret: pending.secret.clone(),
+                    share: ShareScope::Nothing,
+                    source_id: None,
+                    paired_at: 0,
+                };
+                if let Err(e) = std::thread::Builder::new()
+                    .name("wave-peer-cli-decline".into())
+                    .spawn(move || {
+                        let _ = crate::peers::api::answer_to(host, &answer_record, false);
+                    })
+                {
+                    tracing::warn!("Couldn't send the decline: {e}");
+                }
+                let dto = PendingPeer {
+                    direction: "incoming".to_string(),
+                    id: pending.id,
+                    name: pending.name,
+                    address: pending.address,
+                };
+                match serde_json::to_value(dto) {
+                    Ok(value) => (ok_response(Some(value)), false),
+                    Err(e) => (error_response(e.to_string()), false),
+                }
+            }
+            None => (error_response("That request is no longer waiting"), false),
+        },
+    }
+}
+
 fn same_secret(a: &str, b: &str) -> bool {
     a.len() == b.len()
         && a.bytes()
@@ -1005,20 +1335,61 @@ fn same_secret(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_options, default_config, ConfigOptions, Control, ControlRequest, ServeScope,
-        ServerMode, ServiceKind,
+        apply_options, default_config, ConfigOptions, Control, ControlRequest, PeerList,
+        ServeScope, ServerMode, ServiceKind, ShareSetting,
     };
 
     #[test]
     fn control_requests_survive_the_wire() {
-        let line = serde_json::to_string(&ControlRequest {
-            token: "secret".into(),
-            request: Control::Shutdown,
-        })
-        .unwrap();
-        let back: ControlRequest = serde_json::from_str(&line).unwrap();
-        assert_eq!(back.token, "secret");
-        assert_eq!(back.request, Control::Shutdown);
+        for request in [
+            Control::Ping,
+            Control::Shutdown,
+            Control::Peers,
+            Control::Accept {
+                id: "peer-1".into(),
+                share: Some(ShareSetting::Nothing),
+            },
+            Control::Decline {
+                id: "peer-2".into(),
+            },
+        ] {
+            let line = serde_json::to_string(&ControlRequest {
+                token: "secret".into(),
+                request: request.clone(),
+            })
+            .unwrap();
+            let back: ControlRequest = serde_json::from_str(&line).unwrap();
+            assert_eq!(back.token, "secret");
+            assert_eq!(back.request, request);
+        }
+    }
+
+    #[test]
+    fn peer_lists_survive_the_wire() {
+        let list = PeerList {
+            found: vec![super::FoundPeer {
+                name: "Nearby".into(),
+                address: "http://10.0.0.4:50800".into(),
+                last_seen_seconds: 3,
+            }],
+            pending: vec![super::PendingPeer {
+                id: "p".into(),
+                name: "Phone".into(),
+                address: "http://10.0.0.2:50800".into(),
+                direction: "incoming".into(),
+            }],
+            paired: vec![super::PairedPeer {
+                id: "x".into(),
+                name: "Laptop".into(),
+                address: "http://10.0.0.3:50800".into(),
+                share: "everything".into(),
+            }],
+        };
+        let line = serde_json::to_string(&list).unwrap();
+        let back: PeerList = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.found[0].last_seen_seconds, 3);
+        assert_eq!(back.pending[0].direction, "incoming");
+        assert_eq!(back.paired[0].share, "everything");
     }
 
     #[test]
@@ -1029,8 +1400,62 @@ mod tests {
         assert_eq!(config.service, ServiceKind::Both);
         assert_eq!(config.scope, ServeScope::Lan);
         assert!(config.beacon);
+        assert_eq!(config.share, ShareSetting::Everything);
+        assert!(config.auto_accepts());
         assert!(!config.device_id.is_empty());
         assert!(!config.password.is_empty());
+    }
+
+    #[test]
+    fn share_and_auto_accept_can_be_saved() {
+        let mut config = default_config();
+        apply_options(
+            &mut config,
+            &ConfigOptions {
+                share: Some(ShareSetting::Nothing),
+                auto_accept: Some(false),
+                ..ConfigOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(config.share, ShareSetting::Nothing);
+        assert!(!config.auto_accepts());
+    }
+
+    #[test]
+    fn restricting_the_share_turns_off_implicit_auto_accept() {
+        let mut config = default_config();
+        apply_options(
+            &mut config,
+            &ConfigOptions {
+                share: Some(ShareSetting::Nothing),
+                ..ConfigOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(!config.auto_accepts());
+
+        apply_options(
+            &mut config,
+            &ConfigOptions {
+                auto_accept: Some(true),
+                ..ConfigOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(config.auto_accepts());
+
+        apply_options(
+            &mut config,
+            &ConfigOptions {
+                share: Some(ShareSetting::Everything),
+                auto_accept: None,
+                ..ConfigOptions::default()
+            },
+        )
+        .unwrap();
+        // An explicit override still wins until it is cleared.
+        assert!(config.auto_accepts());
     }
 
     #[test]

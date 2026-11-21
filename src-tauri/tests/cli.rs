@@ -865,6 +865,11 @@ fn serve_help_documents_every_flag_and_rule() {
                 "--service wave|subsonic|both",
                 "--scope loopback|lan|internet",
                 "--beacon on|off",
+                "--share everything|nothing",
+                "--auto-accept on|off",
+                "serve peers",
+                "serve accept",
+                "serve decline",
                 "wave serve start --help",
                 "wave serve config --help",
                 "wave-server.json",
@@ -881,8 +886,12 @@ fn serve_help_documents_every_flag_and_rule() {
                 "--name <NAME>",
                 "--user <USER>",
                 "--password <PASSWORD>",
+                "--share <SHARE>",
+                "--auto-accept <AUTO_ACCEPT>",
                 "--scope internet forces --service subsonic",
                 "The Wave GUI can only pair with the /wave/ API at LAN scope",
+                "paired automatically while the default share is `everything`",
+                "Restricting the share to `nothing` holds them",
                 "plain HTTP",
             ],
         ),
@@ -896,9 +905,22 @@ fn serve_help_documents_every_flag_and_rule() {
                 "--name <NAME>",
                 "--user <USER>",
                 "--password <PASSWORD>",
+                "--share <SHARE>",
+                "--auto-accept <AUTO_ACCEPT>",
                 "applies_on_restart: true",
                 "Omit to keep the saved value",
                 "same validation rules apply",
+            ],
+        ),
+        (
+            &["serve", "peers", "--help"],
+            &[
+                "found",
+                "incoming",
+                "outgoing",
+                "paired",
+                "last_seen_seconds",
+                "--json",
             ],
         ),
     ];
@@ -942,6 +964,35 @@ fn http_get(port: u16, path: &str) -> (String, Vec<u8>) {
         .unwrap()
         .to_string();
     (status, response[split + 4..].to_vec())
+}
+
+/// One raw JSON POST, used to drive the Wave pairing API.
+fn http_post(port: u16, path: &str, body: &str) -> (String, String) {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).unwrap();
+    let split = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("HTTP headers");
+    let status = String::from_utf8_lossy(&response[..split])
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+    (
+        status,
+        String::from_utf8_lossy(&response[split + 4..]).into_owned(),
+    )
 }
 
 fn rest(port: u16, endpoint: &str, user: &str, password: &str, extra: &[(&str, &str)]) -> Value {
@@ -1451,6 +1502,10 @@ fn serve_config_changes_saved_settings_and_reports_restart() {
         "internet",
         "--beacon",
         "off",
+        "--share",
+        "nothing",
+        "--auto-accept",
+        "off",
     ]);
     assert_eq!(configured["applies_on_restart"], true);
     assert_eq!(configured["name"], "After");
@@ -1458,6 +1513,8 @@ fn serve_config_changes_saved_settings_and_reports_restart() {
     assert_eq!(configured["service"], "subsonic");
     assert_eq!(configured["scope"], "internet");
     assert_eq!(configured["beacon"], false);
+    assert_eq!(configured["share"], "nothing");
+    assert_eq!(configured["auto_accept"], false);
     assert!(configured.get("password").is_none());
 
     let active = wave.ok(&["serve", "status"]);
@@ -1495,6 +1552,138 @@ fn serve_config_changes_saved_settings_and_reports_restart() {
 
     let configured = wave.ok(&["serve", "config", "--name", "Idle"]);
     assert_eq!(configured["applies_on_restart"], false);
+}
+
+#[test]
+fn serve_auto_accepts_pairing_requests_by_default() {
+    let wave = Wave::new();
+    let port = free_port();
+    wave.ok(&[
+        "serve",
+        "start",
+        "--port",
+        &port.to_string(),
+        "--password",
+        "secret",
+    ]);
+    let port = wave.ok(&["serve", "status"])["port"].as_u64().unwrap() as u16;
+
+    let body =
+        r#"{"id":"gui-peer","name":"Wave GUI","port":50999,"secret":"at-least-sixteen-chars"}"#;
+    let (status, _) = http_post(port, "/wave/request", body);
+    assert!(
+        status.contains("200"),
+        "an arriving request is answered: {status}"
+    );
+
+    // The answer goes out on a thread. Poll until the pair is saved.
+    let mut list = serde_json::json!({});
+    for _ in 0..20 {
+        list = wave.ok(&["serve", "peers"]);
+        if list["paired"].as_array().is_some_and(|p| !p.is_empty()) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let peer = &list["paired"][0];
+    assert_eq!(peer["id"], "gui-peer");
+    assert_eq!(peer["name"], "Wave GUI");
+    assert_eq!(peer["share"], "everything");
+    assert!(list["pending"].as_array().unwrap().is_empty());
+    assert!(list["found"].is_array());
+
+    wave.ok(&["serve", "stop"]);
+}
+
+#[test]
+fn serve_holds_pairing_requests_when_sharing_is_restricted() {
+    let wave = Wave::new();
+    let port = free_port();
+    wave.ok(&[
+        "serve",
+        "start",
+        "--port",
+        &port.to_string(),
+        "--password",
+        "secret",
+        "--share",
+        "nothing",
+    ]);
+    let port = wave.ok(&["serve", "status"])["port"].as_u64().unwrap() as u16;
+    assert_eq!(wave.ok(&["serve", "config"])["auto_accept"], false);
+
+    let body =
+        r#"{"id":"restricted","name":"Wave GUI","port":50996,"secret":"at-least-sixteen-chars"}"#;
+    let (status, _) = http_post(port, "/wave/request", body);
+    assert!(
+        status.contains("202"),
+        "a restricted request waits: {status}"
+    );
+
+    let list = wave.ok(&["serve", "peers"]);
+    assert_eq!(list["pending"][0]["id"], "restricted");
+    assert!(list["paired"].as_array().unwrap().is_empty());
+
+    let accepted = wave.ok(&["serve", "accept", "restricted"]);
+    assert_eq!(accepted["id"], "restricted");
+    assert_eq!(accepted["share"], "nothing");
+
+    let list = wave.ok(&["serve", "peers"]);
+    assert!(list["pending"].as_array().unwrap().is_empty());
+    assert_eq!(list["paired"][0]["share"], "nothing");
+
+    wave.ok(&["serve", "stop"]);
+}
+
+#[test]
+fn serve_peers_accept_and_decline_pairing_requests() {
+    let wave = Wave::new();
+    let port = free_port();
+    wave.ok(&[
+        "serve",
+        "start",
+        "--port",
+        &port.to_string(),
+        "--password",
+        "secret",
+        "--auto-accept",
+        "off",
+    ]);
+    let port = wave.ok(&["serve", "status"])["port"].as_u64().unwrap() as u16;
+
+    let first = r#"{"id":"phone","name":"Phone","port":50998,"secret":"at-least-sixteen-chars"}"#;
+    let (status, _) = http_post(port, "/wave/request", first);
+    assert!(status.contains("202"), "a held request: {status}");
+
+    let list = wave.ok(&["serve", "peers"]);
+    assert_eq!(list["pending"][0]["id"], "phone");
+    assert_eq!(list["pending"][0]["direction"], "incoming");
+    assert!(list["paired"].as_array().unwrap().is_empty());
+
+    let accepted = wave.ok(&["serve", "accept", "phone", "--share", "nothing"]);
+    assert_eq!(accepted["id"], "phone");
+    assert_eq!(accepted["name"], "Phone");
+    assert_eq!(accepted["share"], "nothing");
+
+    let list = wave.ok(&["serve", "peers"]);
+    assert!(list["pending"].as_array().unwrap().is_empty());
+    assert_eq!(list["paired"][0]["id"], "phone");
+    assert_eq!(list["paired"][0]["share"], "nothing");
+
+    let second =
+        r#"{"id":"tablet","name":"Tablet","port":50997,"secret":"at-least-sixteen-chars"}"#;
+    let (status, _) = http_post(port, "/wave/request", second);
+    assert!(status.contains("202"), "{status}");
+    let declined = wave.ok(&["serve", "decline", "tablet"]);
+    assert_eq!(declined["id"], "tablet");
+    let list = wave.ok(&["serve", "peers"]);
+    assert!(list["pending"].as_array().unwrap().is_empty());
+    assert_eq!(list["paired"].as_array().unwrap().len(), 1);
+
+    let error = wave.fails(&["serve", "accept", "tablet"], EXIT_GENERAL);
+    assert!(error.contains("no longer waiting"), "{error}");
+
+    wave.ok(&["serve", "stop"]);
 }
 
 #[test]

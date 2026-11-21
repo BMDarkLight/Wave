@@ -576,8 +576,12 @@ wave serve start                                  # both APIs, LAN scope, beacon
 wave serve start --mode instance --name "Living Room" --port 50800
 wave serve start --service subsonic --scope loopback --user music --password secret
 wave serve start --scope internet                 # Subsonic only, no beacon
+wave serve start --share nothing                  # pair only after approval
 wave serve config --port 60000 --beacon off       # saved for the next start
 wave serve status
+wave serve peers                                  # found, pending and paired
+wave serve accept phone --share everything
+wave serve decline tablet
 wave serve stop
 ```
 
@@ -586,10 +590,17 @@ wave serve stop
 and `--beacon on|off` controls LAN discovery (on for LAN Wave servers, off
 otherwise). `--scope internet` forces Subsonic only: no `/wave/` API and no
 beacon, with conflicting `--service` or `--beacon on` rejected. `--mode instance`
-also starts the playback daemon.
+also starts the playback daemon. `--share` sets the default scope given to a
+paired device; `nothing` also holds new pairing requests for approval, as does
+`--auto-accept off`.
 
-Other Wave apps find a LAN server and pair with it as usual.
-Subsonic-compatible players connect to `http://<address>:50800/rest/` with the
+Other Wave apps find a LAN server and pair with it as usual. An unrestricted
+server answers the pairing request itself, so the GUI doesn't stall waiting for
+someone at the server. Use `serve peers` to see discovered, waiting and paired
+devices, then `serve accept ID [--share ...]` or `serve decline ID` when you've
+restricted sharing. These commands go through the same loopback management
+socket as `serve stop`. Subsonic-compatible players connect to
+`http://<address>:50800/rest/` with the
 user name and password printed on the first start (or set with `--user` and
 `--password`). The generated password is shown once, then stored owner-only in
 `wave-server.json`; `wave serve status` deliberately never prints it.
