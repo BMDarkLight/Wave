@@ -855,6 +855,70 @@ fn assert_owner_only(path: &Path) {
     assert_eq!(mode, 0o600, "{} has mode {mode:o}", path.display());
 }
 
+#[test]
+fn serve_help_documents_every_flag_and_rule() {
+    let wave = Wave::new();
+    let cases: &[(&[&str], &[&str])] = &[
+        (
+            &["serve", "help"],
+            &[
+                "--service wave|subsonic|both",
+                "--scope loopback|lan|internet",
+                "--beacon on|off",
+                "wave serve start --help",
+                "wave serve config --help",
+                "wave-server.json",
+            ],
+        ),
+        (
+            &["serve", "start", "--help"],
+            &[
+                "--mode <MODE>",
+                "--service <SERVICE>",
+                "--scope <SCOPE>",
+                "--beacon <BEACON>",
+                "--port <PORT>",
+                "--name <NAME>",
+                "--user <USER>",
+                "--password <PASSWORD>",
+                "--scope internet forces --service subsonic",
+                "The Wave GUI can only pair with the /wave/ API at LAN scope",
+                "plain HTTP",
+            ],
+        ),
+        (
+            &["serve", "config", "--help"],
+            &[
+                "--service <SERVICE>",
+                "--scope <SCOPE>",
+                "--beacon <BEACON>",
+                "--port <PORT>",
+                "--name <NAME>",
+                "--user <USER>",
+                "--password <PASSWORD>",
+                "applies_on_restart: true",
+                "Omit to keep the saved value",
+                "same validation rules apply",
+            ],
+        ),
+    ];
+    for (args, needles) in cases {
+        let out = wave.run(args);
+        assert!(
+            out.status.success(),
+            "wave {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        for needle in *needles {
+            assert!(
+                text.contains(needle),
+                "wave {args:?} help is missing {needle:?}:\n{text}"
+            );
+        }
+    }
+}
+
 /// One raw request, because Subsonic responses and media bytes share a port.
 fn http_get(port: u16, path: &str) -> (String, Vec<u8>) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
